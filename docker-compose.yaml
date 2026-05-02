@@ -1,0 +1,190 @@
+## Wrapper stack for sharing one Mysterium VPN namespace across SearxNG + Onyx.
+##
+## Use .env.wrapper for wrapper-specific image tags and host port mappings:
+##   docker compose --env-file .env.wrapper up -d
+
+services:
+  # VPN gateway for SearxNG-routed workloads
+  myst-client:
+    extends:
+      file: ./myst/docker-compose.yaml
+      service: myst-client
+    # Keep myst-client internal-only. Host port publishing is handled by
+    # dedicated bridge proxies below so host access remains stable even when
+    # VPN routing is active in this namespace.
+    ports: []
+    networks:
+      default:
+        aliases:
+          - api_server
+          - web_server
+          - background
+          - nginx
+          - code-interpreter
+
+  searxng-core:
+    extends:
+      file: ./searxng/docker-compose.yml
+      service: core
+    environment:
+      SEARXNG_PORT: ${SEARXNG_CONTAINER_PORT:-8888}
+    network_mode: "service:myst-client"
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
+  searxng-valkey:
+    extends:
+      file: ./searxng/docker-compose.yml
+      service: valkey
+
+  # Host-facing TCP bridges. These run on the normal compose network and
+  # forward host traffic to services inside the myst-client namespace.
+  host-web-proxy:
+    image: alpine/socat:1.8.0.3
+    restart: unless-stopped
+    command: tcp-listen:3000,fork,reuseaddr tcp-connect:myst-client:80
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    depends_on:
+      myst-client:
+        condition: service_started
+
+  host-searxng-proxy:
+    image: alpine/socat:1.8.0.3
+    restart: unless-stopped
+    command: tcp-listen:${SEARXNG_CONTAINER_PORT:-8888},fork,reuseaddr tcp-connect:myst-client:${SEARXNG_CONTAINER_PORT:-8888}
+    ports:
+      - ${SEARXNG_HOST:+${SEARXNG_HOST}:}${SEARXNG_PORT:-8080}:${SEARXNG_CONTAINER_PORT:-8888}
+    depends_on:
+      myst-client:
+        condition: service_started
+
+  # Onyx app tier (routed through the shared myst-client-vpn namespace)
+  api_server:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: api_server
+    image: ${ONYX_BACKEND_IMAGE:-onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:-v3.2.4}}
+    build: !reset null
+    network_mode: "service:myst-client"
+    extra_hosts: !reset []
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
+  background:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: background
+    image: ${ONYX_BACKEND_IMAGE:-onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:-v3.2.4}}
+    build: !reset null
+    network_mode: "service:myst-client"
+    extra_hosts: !reset []
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
+  web_server:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: web_server
+    image: ${ONYX_WEB_SERVER_IMAGE:-onyxdotapp/onyx-web-server:${ONYX_IMAGE_TAG:-v3.2.4}}
+    build: !reset null
+    network_mode: "service:myst-client"
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
+  nginx:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: nginx
+    network_mode: "service:myst-client"
+    ports: !reset []
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
+  code-interpreter:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: code-interpreter
+    #image: onyxdotapp/code-interpreter:${CODE_INTERPRETER_IMAGE_TAG:-v3.2.4}
+    image: onyxdotapp/code-interpreter:${CODE_INTERPRETER_IMAGE_TAG:-latest}
+    network_mode: "service:myst-client"
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
+  # Onyx internal/data services (remain on compose network)
+  inference_model_server:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: inference_model_server
+    image: ${ONYX_MODEL_SERVER_IMAGE:-onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:-v3.2.4}}
+    build: !reset null
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  indexing_model_server:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: indexing_model_server
+    image: ${ONYX_MODEL_SERVER_IMAGE:-onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:-v3.2.4}}
+    build: !reset null
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  relational_db:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: relational_db
+
+  index:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: index
+
+  opensearch:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: opensearch
+
+  cache:
+    extends:
+      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      service: cache
+
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_DEFAULT_BUCKETS: ${S3_FILE_STORE_BUCKET_NAME:-onyx-file-store-bucket}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+volumes:
+  core-data:
+  valkey-data:
+  db_volume:
+  vespa_volume:
+  minio_data:
+  model_cache_huggingface:
+  indexing_huggingface_model_cache:
+  api_server_logs:
+  background_logs:
+  inference_model_server_logs:
+  indexing_model_server_logs:
+  file-system:
+  opensearch-data:
+
+
