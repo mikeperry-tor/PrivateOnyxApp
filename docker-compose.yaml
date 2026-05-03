@@ -71,6 +71,27 @@ services:
     environment:
       # Generate with: openssl rand -hex 32
       USER_AUTH_SECRET: ${USER_AUTH_SECRET:-CHANGE_ME_DEV_ONLY_SET_A_LONG_RANDOM_SECRET}
+      # Disable optional telemetry/analytics integrations from wrapper layer.
+      DISABLE_TELEMETRY: "true"
+      SENTRY_DSN: ""
+      POSTHOG_API_KEY: ""
+      MARKETING_POSTHOG_API_KEY: ""
+      POSTHOG_HOST: ""
+      POSTHOG_DEBUG_LOGS_ENABLED: "false"
+      NEXT_PUBLIC_CLOUD_ENABLED: "false"
+      LICENSE_ENFORCEMENT_ENABLED: "false"
+      ENABLE_PAID_ENTERPRISE_EDITION_FEATURES: "false"
+      NEXT_PUBLIC_ENABLE_PAID_EE_FEATURES: "false"
+      NEXT_PUBLIC_POSTHOG_KEY: ""
+      NEXT_PUBLIC_POSTHOG_HOST: ""
+      NEXT_PUBLIC_GTM_ENABLED: "false"
+      NEXT_PUBLIC_SENTRY_DSN: ""
+      NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
+      CAPTCHA_ENABLED: "false"
+      RECAPTCHA_SECRET_KEY: ""
+      CUSTOM_ANALYTICS_SECRET_KEY: ""
+      STRIPE_SECRET_KEY: ""
+      STRIPE_PUBLISHABLE_KEY: ""
     extra_hosts: !reset []
     depends_on:
       myst-client:
@@ -86,6 +107,27 @@ services:
     environment:
       # Generate with: openssl rand -hex 32
       USER_AUTH_SECRET: ${USER_AUTH_SECRET:-CHANGE_ME_DEV_ONLY_SET_A_LONG_RANDOM_SECRET}
+      # Disable optional telemetry/analytics integrations from wrapper layer.
+      DISABLE_TELEMETRY: "true"
+      SENTRY_DSN: ""
+      POSTHOG_API_KEY: ""
+      MARKETING_POSTHOG_API_KEY: ""
+      POSTHOG_HOST: ""
+      POSTHOG_DEBUG_LOGS_ENABLED: "false"
+      NEXT_PUBLIC_CLOUD_ENABLED: "false"
+      LICENSE_ENFORCEMENT_ENABLED: "false"
+      ENABLE_PAID_ENTERPRISE_EDITION_FEATURES: "false"
+      NEXT_PUBLIC_ENABLE_PAID_EE_FEATURES: "false"
+      NEXT_PUBLIC_POSTHOG_KEY: ""
+      NEXT_PUBLIC_POSTHOG_HOST: ""
+      NEXT_PUBLIC_GTM_ENABLED: "false"
+      NEXT_PUBLIC_SENTRY_DSN: ""
+      NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
+      CAPTCHA_ENABLED: "false"
+      RECAPTCHA_SECRET_KEY: ""
+      CUSTOM_ANALYTICS_SECRET_KEY: ""
+      STRIPE_SECRET_KEY: ""
+      STRIPE_PUBLISHABLE_KEY: ""
     extra_hosts: !reset []
     depends_on:
       myst-client:
@@ -98,6 +140,17 @@ services:
     image: ${ONYX_WEB_SERVER_IMAGE:-onyxdotapp/onyx-web-server:${ONYX_IMAGE_TAG:-v3.2.4}}
     build: !reset null
     network_mode: "service:myst-client"
+    environment:
+      # Disable frontend analytics/instrumentation and cloud billing flows.
+      NEXT_PUBLIC_CLOUD_ENABLED: "false"
+      NEXT_PUBLIC_ENABLE_PAID_EE_FEATURES: "false"
+      NEXT_PUBLIC_POSTHOG_KEY: ""
+      NEXT_PUBLIC_POSTHOG_HOST: ""
+      NEXT_PUBLIC_GTM_ENABLED: "false"
+      NEXT_PUBLIC_SENTRY_DSN: ""
+      NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
+      CUSTOM_ANALYTICS_SECRET_KEY: ""
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ""
     depends_on:
       myst-client:
         condition: service_healthy
