@@ -68,6 +68,9 @@ services:
     image: ${ONYX_BACKEND_IMAGE:-onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:-v3.2.4}}
     build: !reset null
     network_mode: "service:myst-client"
+    environment:
+      # Generate with: openssl rand -hex 32
+      USER_AUTH_SECRET: ${USER_AUTH_SECRET:-CHANGE_ME_DEV_ONLY_SET_A_LONG_RANDOM_SECRET}
     extra_hosts: !reset []
     depends_on:
       myst-client:
@@ -80,6 +83,9 @@ services:
     image: ${ONYX_BACKEND_IMAGE:-onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:-v3.2.4}}
     build: !reset null
     network_mode: "service:myst-client"
+    environment:
+      # Generate with: openssl rand -hex 32
+      USER_AUTH_SECRET: ${USER_AUTH_SECRET:-CHANGE_ME_DEV_ONLY_SET_A_LONG_RANDOM_SECRET}
     extra_hosts: !reset []
     depends_on:
       myst-client:
