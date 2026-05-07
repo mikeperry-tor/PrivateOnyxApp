@@ -1,7 +1,9 @@
 ## Wrapper stack for sharing one Mysterium VPN namespace across SearxNG + Onyx.
 ##
-## Use .env.wrapper for wrapper-specific image tags and host port mappings:
-##   docker compose --env-file .env.wrapper up -d
+## Use .env.wrapper for wrapper-specific image tags and host port mappings.
+## Preferred entrypoints:
+##   make up       (default lite mode)
+##   make up-full  (full mode)
 
 services:
   # VPN gateway for SearxNG-routed workloads
@@ -71,7 +73,7 @@ services:
   # Onyx app tier (routed through the shared myst-client-vpn namespace)
   api_server:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: api_server
     image: ${ONYX_BACKEND_IMAGE:-onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:-v3.2.4}}
     build: !reset null
@@ -110,7 +112,7 @@ services:
 
   background:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: background
     image: ${ONYX_BACKEND_IMAGE:-onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:-v3.2.4}}
     build: !reset null
@@ -149,7 +151,7 @@ services:
 
   web_server:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: web_server
     image: ${ONYX_WEB_SERVER_IMAGE:-onyxdotapp/onyx-web-server:${ONYX_IMAGE_TAG:-v3.2.4}}
     build: !reset null
@@ -171,7 +173,7 @@ services:
 
   nginx:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: nginx
     network_mode: "service:myst-client"
     ports: !reset []
@@ -181,7 +183,7 @@ services:
 
   code-interpreter:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: code-interpreter
     #image: onyxdotapp/code-interpreter:${CODE_INTERPRETER_IMAGE_TAG:-v3.2.4}
     image: onyxdotapp/code-interpreter:${CODE_INTERPRETER_IMAGE_TAG:-latest}
@@ -193,7 +195,7 @@ services:
   # Onyx internal/data services (remain on compose network)
   inference_model_server:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: inference_model_server
     image: ${ONYX_MODEL_SERVER_IMAGE:-onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:-v3.2.4}}
     build: !reset null
@@ -205,7 +207,7 @@ services:
 
   indexing_model_server:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: indexing_model_server
     image: ${ONYX_MODEL_SERVER_IMAGE:-onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:-v3.2.4}}
     build: !reset null
@@ -217,28 +219,28 @@ services:
 
   relational_db:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: relational_db
     volumes: !override
       - ./docker-data/postgres:/var/lib/postgresql/data
 
   index:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: index
     volumes: !override
       - ./docker-data/vespa:/opt/vespa/var
 
   opensearch:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: opensearch
     volumes: !override
       - ./docker-data/opensearch:/usr/share/opensearch/data
 
   cache:
     extends:
-      file: ./git/onyx/deployment/docker_compose/docker-compose.yml
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: cache
 
   minio:
