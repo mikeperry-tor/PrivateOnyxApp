@@ -210,7 +210,7 @@ services:
     command: ["serve"]
     network_mode: "service:myst-client"
     environment:
-      TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-0.0.0.0:8337}"
+      TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-127.0.0.1:8337}"
       VENICE_API_KEY: "${VENICE_API_KEY:-}"
       NEARAI_API_KEY: "${NEARAI_API_KEY:-}"
       CHUTES_API_KEY: "${CHUTES_API_KEY:-}"
