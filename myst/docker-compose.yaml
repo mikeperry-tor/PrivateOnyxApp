@@ -542,6 +542,14 @@ services:
             OLDIFS="$$IFS"
             IFS=','
             for _provider in $${MYST_PROVIDER_IDS}; do
+              # A previous provider attempt may have connected asynchronously.
+              # Re-check before issuing another `connection up`.
+              if connection_is_up; then
+                IFS="$$OLDIFS"
+                echo "Connection is already established."
+                return 0
+              fi
+
               _provider="$$(printf '%s' "$${_provider}" | xargs)"
               [ -n "$${_provider}" ] || continue
               log_with_ts "Connection attempt using pinned provider: $${_provider}"
