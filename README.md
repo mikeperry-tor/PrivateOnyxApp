@@ -1,6 +1,8 @@
 # Private Onyx.App Compose Set
 
-Docker Compose wrapper for running [Onyx](https://github.com/onyx-dot-app/onyx) with the teep private inference proxy, with all traffic sent over a [Mysterium](https://github.com/mysteriumnetwork/node) VPN connection.
+Docker Compose wrapper for running
+[Onyx](https://github.com/onyx-dot-app/onyx) with the [teep private inference
+proxy](https://github.com/13rac1/teep), with all traffic sent over a [Mysterium](https://github.com/mysteriumnetwork/node) VPN connection.
 
 ## What This Stack Does
 
