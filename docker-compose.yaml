@@ -5,6 +5,8 @@
 ##   make up       (default lite mode)
 ##   make up-full  (full mode)
 
+name: onyx
+
 services:
   # VPN gateway for SearxNG-routed workloads
   myst-client:

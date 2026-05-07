@@ -1,10 +1,9 @@
 ENV_FILE ?= .env.wrapper
 WRAPPER_FILE := docker-compose.yaml
-ONYX_FULL_FILE := onyx/onyx_data/deployment/docker-compose.yml
 ONYX_LITE_FILE := onyx/onyx_data/deployment/docker-compose.onyx-lite.yml
 
-LITE_FILES := $(WRAPPER_FILE):$(ONYX_FULL_FILE):$(ONYX_LITE_FILE)
-FULL_FILES := $(WRAPPER_FILE):$(ONYX_FULL_FILE)
+LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
+FULL_FILES := $(WRAPPER_FILE)
 
 .PHONY: help up up-lite up-full down down-lite down-full ps-lite ps-full logs-lite logs-full config-lite config-full pull-lite pull-full
 
@@ -38,10 +37,10 @@ up-full:
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
 
 down-lite:
-	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) down
+	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) down --remove-orphans
 
 down-full:
-	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) down
+	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) down --remove-orphans
 
 ps-lite:
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) ps
