@@ -7,10 +7,15 @@ MYST_NODE_BRANCH ?= docker_host_fixes_with_logs
 MYST_DOCKERFILE ?= myst/build/Dockerfile
 MYST_IMAGE ?= mysteriumnetwork/myst:docker_host_fixes_with_logs
 
+TEEP_REPO ?= https://github.com/13rac1/teep.git
+TEEP_REF ?= main
+TEEP_DOCKERFILE ?= teep/build/Dockerfile
+TEEP_IMAGE ?= 13rac1/teep:main
+
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up up-lite up-full down down-lite down-full ps-lite ps-full logs-lite logs-full config-lite config-full pull-lite pull-full myst-image-ready myst-build
+.PHONY: help up up-lite up-full down down-lite down-full ps-lite ps-full logs-lite logs-full config-lite config-full pull-lite pull-full myst-image-ready myst-build teep-image-ready teep-build
 
 help:
 	@echo "Targets:"
@@ -30,18 +35,21 @@ help:
 	@echo "  make pull-full    # Pull images for full mode"
 	@echo "  make myst-image-ready # Build Myst image only if missing"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
+	@echo "  make teep-image-ready # Build teep image only if missing"
+	@echo "  make teep-build   # Build teep image from teep/build/Dockerfile"
 	@echo ""
 	@echo "Override env file: make up ENV_FILE=.env.wrapper"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
+	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 
 up: up-lite
 
 down: down-lite
 
-up-lite: myst-image-ready
+up-lite: myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
 
-up-full: myst-image-ready
+up-full: myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
 
 down-lite:
@@ -89,4 +97,21 @@ myst-build:
 		--build-arg MYST_NODE_REPO="$(MYST_NODE_REPO)" \
 		--build-arg MYST_NODE_BRANCH="$(MYST_NODE_BRANCH)" \
 		--tag "$(MYST_IMAGE)" \
+		.
+
+teep-image-ready:
+	@if docker image inspect "$(TEEP_IMAGE)" >/dev/null 2>&1; then \
+		echo "teep image already present: $(TEEP_IMAGE)"; \
+	else \
+		echo "teep image not found: $(TEEP_IMAGE). Building..."; \
+		$(MAKE) teep-build TEEP_IMAGE="$(TEEP_IMAGE)" TEEP_REPO="$(TEEP_REPO)" TEEP_REF="$(TEEP_REF)" TEEP_DOCKERFILE="$(TEEP_DOCKERFILE)"; \
+	fi
+
+teep-build:
+	@echo "Building $(TEEP_IMAGE) using $(TEEP_DOCKERFILE) (repo=$(TEEP_REPO), ref=$(TEEP_REF))..."
+	@docker build \
+		--file "$(TEEP_DOCKERFILE)" \
+		--build-arg TEEP_REPO="$(TEEP_REPO)" \
+		--build-arg TEEP_REF="$(TEEP_REF)" \
+		--tag "$(TEEP_IMAGE)" \
 		.

@@ -72,6 +72,16 @@ services:
       myst-client:
         condition: service_started
 
+  host-teep-proxy:
+    image: alpine/socat:1.8.0.3
+    restart: unless-stopped
+    command: tcp-listen:${TEEP_CONTAINER_PORT:-8337},fork,reuseaddr tcp-connect:myst-client:${TEEP_CONTAINER_PORT:-8337}
+    ports:
+      - ${TEEP_HOST:+${TEEP_HOST}:}${TEEP_PORT:-8337}:${TEEP_CONTAINER_PORT:-8337}
+    depends_on:
+      myst-client:
+        condition: service_started
+
   # Onyx app tier (routed through the shared myst-client-vpn namespace)
   api_server:
     extends:
@@ -190,6 +200,20 @@ services:
     #image: onyxdotapp/code-interpreter:${CODE_INTERPRETER_IMAGE_TAG:-v3.2.4}
     image: onyxdotapp/code-interpreter:${CODE_INTERPRETER_IMAGE_TAG:-latest}
     network_mode: "service:myst-client"
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
+  teep:
+    image: ${TEEP_IMAGE:-13rac1/teep:main}
+    restart: unless-stopped
+    command: ["serve"]
+    network_mode: "service:myst-client"
+    environment:
+      TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-0.0.0.0:8337}"
+      VENICE_API_KEY: "${VENICE_API_KEY:-}"
+      NEARAI_API_KEY: "${NEARAI_API_KEY:-}"
+      CHUTES_API_KEY: "${CHUTES_API_KEY:-}"
     depends_on:
       myst-client:
         condition: service_healthy
