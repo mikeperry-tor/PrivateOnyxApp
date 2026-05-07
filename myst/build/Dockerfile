@@ -6,10 +6,10 @@ RUN apk add --no-cache git bash gcc musl-dev make linux-headers
 ARG MYST_NODE_REPO=https://github.com/mikeperry-tor/node.git
 ARG MYST_NODE_BRANCH=docker_host_fixes_with_logs
 
-ARG BUILD_BRANCH=$BUILD_BRANCH
-ARG BUILD_COMMIT=$BUILD_COMMIT
-ARG BUILD_NUMBER=$BUILD_NUMBER
-ARG BUILD_VERSION=$BUILD_VERSION
+ARG BUILD_BRANCH=""
+ARG BUILD_COMMIT=""
+ARG BUILD_NUMBER=""
+ARG BUILD_VERSION=""
 
 # Compile application
 WORKDIR /go/src/github.com/mysteriumnetwork/node
