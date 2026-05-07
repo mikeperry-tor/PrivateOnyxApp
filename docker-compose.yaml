@@ -21,6 +21,9 @@ services:
           - background
           - nginx
           - code-interpreter
+    volumes: !override
+      - ./docker-data/myst-data:/var/lib/mysterium-node
+      - ./docker-data/myst-data:/root/.mysterium
 
   searxng-core:
     extends:
@@ -29,6 +32,9 @@ services:
     environment:
       SEARXNG_PORT: ${SEARXNG_CONTAINER_PORT:-8888}
     network_mode: "service:myst-client"
+    volumes: !override
+      - ./searxng/core-config/:/etc/searxng/:Z
+      - ./docker-data/searxng-cache:/var/cache/searxng
     depends_on:
       myst-client:
         condition: service_healthy
@@ -37,6 +43,8 @@ services:
     extends:
       file: ./searxng/docker-compose.yml
       service: valkey
+    volumes: !override
+      - ./docker-data/valkey:/data
 
   # Host-facing TCP bridges. These run on the normal compose network and
   # forward host traffic to services inside the myst-client namespace.
@@ -96,6 +104,9 @@ services:
     depends_on:
       myst-client:
         condition: service_healthy
+    volumes: !override
+      - ./docker-data/file-system:/app/file-system
+      - api_server_logs:/var/log/onyx
 
   background:
     extends:
@@ -132,6 +143,9 @@ services:
     depends_on:
       myst-client:
         condition: service_healthy
+    volumes: !override
+      - ./docker-data/file-system:/app/file-system
+      - background_logs:/var/log/onyx
 
   web_server:
     extends:
@@ -185,6 +199,9 @@ services:
     build: !reset null
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes: !override
+      - ./docker-data/model-cache:/app/.cache/huggingface
+      - inference_model_server_logs:/var/log/onyx
 
   indexing_model_server:
     extends:
@@ -194,21 +211,30 @@ services:
     build: !reset null
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes: !override
+      - ./docker-data/indexing-model-cache:/app/.cache/huggingface
+      - indexing_model_server_logs:/var/log/onyx
 
   relational_db:
     extends:
       file: ./git/onyx/deployment/docker_compose/docker-compose.yml
       service: relational_db
+    volumes: !override
+      - ./docker-data/postgres:/var/lib/postgresql/data
 
   index:
     extends:
       file: ./git/onyx/deployment/docker_compose/docker-compose.yml
       service: index
+    volumes: !override
+      - ./docker-data/vespa:/opt/vespa/var
 
   opensearch:
     extends:
       file: ./git/onyx/deployment/docker_compose/docker-compose.yml
       service: opensearch
+    volumes: !override
+      - ./docker-data/opensearch:/usr/share/opensearch/data
 
   cache:
     extends:
@@ -223,7 +249,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_DEFAULT_BUCKETS: ${S3_FILE_STORE_BUCKET_NAME:-onyx-file-store-bucket}
     volumes:
-      - minio_data:/data
+      - ./docker-data/minio:/data
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
@@ -232,18 +258,9 @@ services:
       retries: 3
 
 volumes:
-  core-data:
-  valkey-data:
-  db_volume:
-  vespa_volume:
-  minio_data:
-  model_cache_huggingface:
-  indexing_huggingface_model_cache:
   api_server_logs:
   background_logs:
   inference_model_server_logs:
   indexing_model_server_logs:
-  file-system:
-  opensearch-data:
 
 
