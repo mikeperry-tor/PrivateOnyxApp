@@ -12,10 +12,17 @@ TEEP_REF ?= main
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
 TEEP_IMAGE ?= 13rac1/teep:main
 
+ONYX_IMAGE_TAG ?= v3.2.12
+ONYX_BACKEND_IMAGE ?= onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
+ONYX_WEB_SERVER_IMAGE ?= onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
+ONYX_MODEL_SERVER_IMAGE ?= onyxdotapp/onyx-model-server:$(ONYX_IMAGE_TAG)
+ONYX_INSTALL_SCRIPT ?= ./install.sh
+ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
+
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full myst-image-ready myst-build teep-image-ready teep-build
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
 
 help:
 	@echo "Targets:"
@@ -27,17 +34,23 @@ help:
 	@echo "  make ps-full      # Show full mode containers"
 	@echo "  make logs-lite    # Tail lite mode logs"
 	@echo "  make logs-full    # Tail full mode logs"
+	@echo "  make onyx-build   # Pull/build Onyx images via onyx/install.sh"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
 	@echo "  make teep-build   # Build teep image from teep/build/Dockerfile"
 	@echo ""
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
+	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 
-up-lite: myst-image-ready teep-image-ready
+up-lite: ONYX_INSTALL_ARGS=--lite
+up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
+up-lite: onyx-image-ready myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
 
-up-full: myst-image-ready teep-image-ready
+up-full: ONYX_INSTALL_ARGS=
+up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(ONYX_MODEL_SERVER_IMAGE)
+up-full: onyx-image-ready myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
 
 down-lite:
@@ -57,6 +70,43 @@ logs-lite:
 
 logs-full:
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) logs -f --tail=200
+
+onyx-image-ready:
+	@set -eu; \
+	missing=0; \
+	for image in $(ONYX_REQUIRED_IMAGES); do \
+		if docker image inspect "$$image" >/dev/null 2>&1; then \
+			echo "Onyx image already present: $$image"; \
+		else \
+			echo "Onyx image missing: $$image"; \
+			missing=1; \
+		fi; \
+	done; \
+	if [ "$$missing" -eq 1 ]; then \
+		echo "Missing Onyx image(s) detected. Running onyx-build..."; \
+		$(MAKE) onyx-build ONYX_INSTALL_ARGS="$(ONYX_INSTALL_ARGS)" ONYX_REQUIRED_IMAGES="$(ONYX_REQUIRED_IMAGES)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)"; \
+	fi; \
+	for image in $(ONYX_REQUIRED_IMAGES); do \
+		docker image inspect "$$image" >/dev/null 2>&1 || { echo "ERROR: Onyx image still missing after onyx-build: $$image"; exit 1; }; \
+	done
+
+onyx-build:
+	@if [ -f "$(ONYX_ENV_FILE)" ]; then \
+		if grep -q '^IMAGE_TAG=' "$(ONYX_ENV_FILE)"; then \
+			sed -i.bak "s|^IMAGE_TAG=.*|IMAGE_TAG=$(ONYX_IMAGE_TAG)|" "$(ONYX_ENV_FILE)"; \
+		else \
+			printf '\nIMAGE_TAG=%s\n' "$(ONYX_IMAGE_TAG)" >> "$(ONYX_ENV_FILE)"; \
+		fi; \
+		echo "Updated $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"; \
+	fi
+	@echo "Running Onyx install script to prepare images (args: $(ONYX_INSTALL_ARGS))..."
+	@cd onyx && bash "$(ONYX_INSTALL_SCRIPT)" --no-prompt $(ONYX_INSTALL_ARGS)
+	@set -eu; \
+	for image in $(ONYX_REQUIRED_IMAGES); do \
+		echo "Ensuring Onyx image tag is present: $$image"; \
+		docker pull "$$image"; \
+	done
+	@cd onyx && bash "$(ONYX_INSTALL_SCRIPT)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
 
 myst-image-ready:
 	@if docker image inspect "$(MYST_IMAGE)" >/dev/null 2>&1; then \
