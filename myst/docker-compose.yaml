@@ -154,7 +154,7 @@
 
 services:
   myst-client:
-    image: mysteriumnetwork/myst:rebasedfixes
+    image: ${MYST_CLIENT_IMAGE:-mysteriumnetwork/myst:docker_host_fixes_with_logs}
     container_name: myst-client-vpn
     restart: unless-stopped
     cap_add:

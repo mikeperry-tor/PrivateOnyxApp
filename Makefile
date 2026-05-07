@@ -2,10 +2,15 @@ ENV_FILE ?= .env.wrapper
 WRAPPER_FILE := docker-compose.yaml
 ONYX_LITE_FILE := onyx/onyx_data/deployment/docker-compose.onyx-lite.yml
 
+MYST_NODE_REPO ?= https://github.com/mikeperry-tor/node.git
+MYST_NODE_BRANCH ?= docker_host_fixes_with_logs
+MYST_DOCKERFILE ?= myst/build/Dockerfile
+MYST_IMAGE ?= mysteriumnetwork/myst:docker_host_fixes_with_logs
+
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up up-lite up-full down down-lite down-full ps-lite ps-full logs-lite logs-full config-lite config-full pull-lite pull-full
+.PHONY: help up up-lite up-full down down-lite down-full ps-lite ps-full logs-lite logs-full config-lite config-full pull-lite pull-full myst-build
 
 help:
 	@echo "Targets:"
@@ -23,8 +28,10 @@ help:
 	@echo "  make config-full  # Render full compose config"
 	@echo "  make pull-lite    # Pull images for lite mode"
 	@echo "  make pull-full    # Pull images for full mode"
+	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
 	@echo ""
 	@echo "Override env file: make up ENV_FILE=.env.wrapper"
+	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 
 up: up-lite
 
@@ -65,3 +72,12 @@ pull-lite:
 
 pull-full:
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) pull
+
+myst-build:
+	@echo "Building $(MYST_IMAGE) using $(MYST_DOCKERFILE) (repo=$(MYST_NODE_REPO), branch=$(MYST_NODE_BRANCH))..."
+	@docker build \
+		--file "$(MYST_DOCKERFILE)" \
+		--build-arg MYST_NODE_REPO="$(MYST_NODE_REPO)" \
+		--build-arg MYST_NODE_BRANCH="$(MYST_NODE_BRANCH)" \
+		--tag "$(MYST_IMAGE)" \
+		.
