@@ -15,36 +15,24 @@ TEEP_IMAGE ?= 13rac1/teep:main
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up up-lite up-full down down-lite down-full ps-lite ps-full logs-lite logs-full config-lite config-full pull-lite pull-full myst-image-ready myst-build teep-image-ready teep-build
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full myst-image-ready myst-build teep-image-ready teep-build
 
 help:
 	@echo "Targets:"
-	@echo "  make up           # Start in lite mode (default)"
 	@echo "  make up-lite      # Start wrapper + Onyx lite"
 	@echo "  make up-full      # Start wrapper + Onyx full"
-	@echo "  make down         # Stop lite mode stack (default)"
 	@echo "  make down-lite    # Stop wrapper + Onyx lite"
 	@echo "  make down-full    # Stop wrapper + Onyx full"
 	@echo "  make ps-lite      # Show lite mode containers"
 	@echo "  make ps-full      # Show full mode containers"
 	@echo "  make logs-lite    # Tail lite mode logs"
 	@echo "  make logs-full    # Tail full mode logs"
-	@echo "  make config-lite  # Render lite compose config"
-	@echo "  make config-full  # Render full compose config"
-	@echo "  make pull-lite    # Pull images for lite mode"
-	@echo "  make pull-full    # Pull images for full mode"
-	@echo "  make myst-image-ready # Build Myst image only if missing"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
-	@echo "  make teep-image-ready # Build teep image only if missing"
 	@echo "  make teep-build   # Build teep image from teep/build/Dockerfile"
 	@echo ""
-	@echo "Override env file: make up ENV_FILE=.env.wrapper"
+	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
-
-up: up-lite
-
-down: down-lite
 
 up-lite: myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
@@ -69,18 +57,6 @@ logs-lite:
 
 logs-full:
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) logs -f --tail=200
-
-config-lite:
-	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) config
-
-config-full:
-	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) config
-
-pull-lite:
-	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) pull
-
-pull-full:
-	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) pull
 
 myst-image-ready:
 	@if docker image inspect "$(MYST_IMAGE)" >/dev/null 2>&1; then \
