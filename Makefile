@@ -10,7 +10,7 @@ MYST_IMAGE ?= mysteriumnetwork/myst:docker_host_fixes_with_logs
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up up-lite up-full down down-lite down-full ps-lite ps-full logs-lite logs-full config-lite config-full pull-lite pull-full myst-build
+.PHONY: help up up-lite up-full down down-lite down-full ps-lite ps-full logs-lite logs-full config-lite config-full pull-lite pull-full myst-image-ready myst-build
 
 help:
 	@echo "Targets:"
@@ -28,6 +28,7 @@ help:
 	@echo "  make config-full  # Render full compose config"
 	@echo "  make pull-lite    # Pull images for lite mode"
 	@echo "  make pull-full    # Pull images for full mode"
+	@echo "  make myst-image-ready # Build Myst image only if missing"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
 	@echo ""
 	@echo "Override env file: make up ENV_FILE=.env.wrapper"
@@ -37,10 +38,10 @@ up: up-lite
 
 down: down-lite
 
-up-lite:
+up-lite: myst-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
 
-up-full:
+up-full: myst-image-ready
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
 
 down-lite:
@@ -72,6 +73,14 @@ pull-lite:
 
 pull-full:
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) pull
+
+myst-image-ready:
+	@if docker image inspect "$(MYST_IMAGE)" >/dev/null 2>&1; then \
+		echo "Myst image already present: $(MYST_IMAGE)"; \
+	else \
+		echo "Myst image not found: $(MYST_IMAGE). Building..."; \
+		$(MAKE) myst-build MYST_IMAGE="$(MYST_IMAGE)" MYST_NODE_REPO="$(MYST_NODE_REPO)" MYST_NODE_BRANCH="$(MYST_NODE_BRANCH)" MYST_DOCKERFILE="$(MYST_DOCKERFILE)"; \
+	fi
 
 myst-build:
 	@echo "Building $(MYST_IMAGE) using $(MYST_DOCKERFILE) (repo=$(MYST_NODE_REPO), branch=$(MYST_NODE_BRANCH))..."
