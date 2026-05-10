@@ -6,6 +6,10 @@ OS_DIR_RUN="/var/run/mysterium-node"
 OS_DIR_CONFIG="/etc/mysterium-node"
 MYST="myst --config-dir=${OS_DIR_DATA} --script-dir=${OS_DIR_CONFIG} --data-dir=${OS_DIR_DATA} --runtime-dir=${OS_DIR_RUN}"
 
+myst_cli() {
+  $MYST cli --agreed-terms-and-conditions "$@"
+}
+
 # Myst wireguard DNS manager invokes <script-dir>/update-resolv-conf on Unix.
 # In containerized namespace-sharing mode, keep DNS managed by Docker.
 if [ "${MYST_SKIP_UPDATE_RESOLV_CONF:-false}" = "true" ]; then
@@ -85,23 +89,27 @@ echo "Waiting for TequilAPI to be reachable..."
 until $MYST connection info >/dev/null 2>&1; do
   sleep 2
 done
+
+# Accept consumer/provider terms on first run via the supported `myst cli` flag.
+myst_cli identities list >/dev/null 2>&1 || true
+
 echo "TequilAPI is ready."
 
-IDS="$($MYST cli identities list 2>/dev/null | grep -Eo '0x[0-9a-fA-F]{40}' || true)"
+IDS="$(myst_cli identities list 2>/dev/null | grep -Eo '0x[0-9a-fA-F]{40}' || true)"
 if [ -z "$IDS" ]; then
   echo "No Myst identity found in /var/lib/mysterium-node; creating one."
-  $MYST cli identities new
-  IDS="$($MYST cli identities list 2>/dev/null | grep -Eo '0x[0-9a-fA-F]{40}' || true)"
+  myst_cli identities new
+  IDS="$(myst_cli identities list 2>/dev/null | grep -Eo '0x[0-9a-fA-F]{40}' || true)"
 fi
 
 ID="$(printf '%s\n' "$IDS" | head -n1)"
 if [ -n "$ID" ]; then
-  $MYST cli identities unlock "$ID" || true
+  myst_cli identities unlock "$ID" || true
 fi
 
 # Registration
 # Attempt on-chain registration (Mysterium sponsors gas for new identities).
-REG_STATUS="$($MYST cli identities get "$ID" 2>/dev/null \
+REG_STATUS="$(myst_cli identities get "$ID" 2>/dev/null \
   | grep -i 'Registration Status' | grep -oE '[A-Za-z]+$' | tr '[:upper:]' '[:lower:]' || true)"
 
 if [ "$REG_STATUS" != "registered" ]; then
@@ -137,7 +145,7 @@ if [ "$REG_STATUS" != "registered" ]; then
   if [ "$_timeout" = "0" ]; then
     echo "Waiting for registration to confirm on-chain (no timeout)."
     while true; do
-      REG_STATUS="$($MYST cli identities get "$ID" 2>/dev/null \
+      REG_STATUS="$(myst_cli identities get "$ID" 2>/dev/null \
         | grep -i 'Registration Status' | grep -oE '[A-Za-z]+$' | tr '[:upper:]' '[:lower:]' || true)"
       echo "Registration status after ${_elapsed}s: ${REG_STATUS:-unknown}"
       [ "$REG_STATUS" = "registered" ] && break
@@ -145,7 +153,7 @@ if [ "$REG_STATUS" != "registered" ]; then
       # `inprogress` with zero balance means registration has started
       # but requires a payment-channel top-up to complete.
       if [ "$REG_STATUS" = "inprogress" ]; then
-        REG_BALANCE="$($MYST cli identities get "$ID" 2>/dev/null \
+        REG_BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
           | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true)"
         case "${REG_BALANCE:-0}" in
           ''|0|0.0|0.00|0.000|0.0000|0.00000|0.000000)
@@ -170,13 +178,13 @@ if [ "$REG_STATUS" != "registered" ]; then
   else
     echo "Waiting up to ${_timeout}s for registration to confirm on-chain..."
     while [ "$_elapsed" -lt "$_timeout" ]; do
-      REG_STATUS="$($MYST cli identities get "$ID" 2>/dev/null \
+        REG_STATUS="$(myst_cli identities get "$ID" 2>/dev/null \
         | grep -i 'Registration Status' | grep -oE '[A-Za-z]+$' | tr '[:upper:]' '[:lower:]' || true)"
       echo "Registration status after ${_elapsed}s: ${REG_STATUS:-unknown}"
       [ "$REG_STATUS" = "registered" ] && break
 
       if [ "$REG_STATUS" = "inprogress" ]; then
-        REG_BALANCE="$($MYST cli identities get "$ID" 2>/dev/null \
+          REG_BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
           | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true)"
         case "${REG_BALANCE:-0}" in
           ''|0|0.0|0.00|0.000|0.0000|0.00000|0.000000)
@@ -215,7 +223,7 @@ else
 fi
 
 # Balance / Funding
-BALANCE="$($MYST cli identities get "$ID" 2>/dev/null \
+BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
   | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true)"
 echo "Identity: $ID  |  Balance: ${BALANCE:-unknown} MYST"
 
@@ -224,14 +232,14 @@ case "${BALANCE:-0}" in
 
     # Show any existing orders so the user can track pending payments.
     echo "Balance is 0. Checking existing payment orders..."
-    EXISTING="$($MYST cli orders get-all "$ID" 2>/dev/null || true)"
+    EXISTING="$(myst_cli orders get-all "$ID" 2>/dev/null || true)"
     [ -n "$EXISTING" ] && echo "$EXISTING"
 
     # Auto-create a new order if all four required vars are set.
     if [ -n "${MYST_ORDER_AMOUNT:-}" ] && [ -n "${MYST_ORDER_CURRENCY:-}" ] && \
        [ -n "${MYST_ORDER_GATEWAY:-}" ] && [ -n "${MYST_ORDER_COUNTRY:-}" ]; then
       echo "Creating order: ${MYST_ORDER_AMOUNT} MYST via ${MYST_ORDER_GATEWAY} (${MYST_ORDER_CURRENCY}, country=${MYST_ORDER_COUNTRY})..."
-      $MYST cli orders create \
+      myst_cli orders create \
         "$ID" \
         "${MYST_ORDER_AMOUNT}" \
         "${MYST_ORDER_CURRENCY}" \
@@ -240,7 +248,7 @@ case "${BALANCE:-0}" in
     else
       echo "Set MYST_ORDER_AMOUNT / MYST_ORDER_CURRENCY / MYST_ORDER_GATEWAY / MYST_ORDER_COUNTRY"
       echo "to auto-create a funding order on next start. Available gateways:"
-      $MYST cli orders gateways 2>/dev/null | sed 's/^/  /' || true
+      myst_cli orders gateways 2>/dev/null | sed 's/^/  /' || true
     fi
 
     # Optionally block until balance is funded before attempting to connect.
@@ -248,7 +256,7 @@ case "${BALANCE:-0}" in
       echo "MYST_WAIT_FOR_FUNDS=true - polling every 30s until balance > 0..."
       while true; do
         sleep 30
-        BALANCE="$($MYST cli identities get "$ID" 2>/dev/null \
+        BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
           | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true)"
         echo "Funding check: current balance is ${BALANCE:-0} MYST"
         case "${BALANCE:-0}" in

@@ -28,6 +28,7 @@ services:
     volumes: !override
       - ./docker-data/myst-data:/var/lib/mysterium-node
       - ./docker-data/myst-data:/root/.mysterium
+      - ./myst/myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
 
   searxng-core:
     extends:
