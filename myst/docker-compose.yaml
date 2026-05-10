@@ -209,22 +209,26 @@ services:
       MYST_REFERRAL_TOKEN: ""
       # Optional max wait (seconds) for registration confirmation.
       # 0 means no timeout (wait indefinitely until registered).
-      MYST_REGISTRATION_TIMEOUT: "5"
+      MYST_REGISTRATION_TIMEOUT: "0"
       # Re-submit registration every N seconds while still unregistered.
       MYST_REGISTRATION_RETRY_INTERVAL: "10"
       # Funding / order creation.
-      # Set all four to automatically create a payment order when balance is 0.
+      # Set all four to automatically create a payment order when registration
+      # is not yet registered or balance is 0.
       # Gateway names/currencies are discovered dynamically from Mysterium via:
       #   ./print-order-gateways.sh
       # or:
       #   docker exec myst-client-vpn myst cli orders gateways
       # CoinGate is a known example, but not the only possible gateway name.
-      MYST_ORDER_AMOUNT: ""     # Amount of MYST to purchase (e.g. "10")
-      MYST_ORDER_CURRENCY: ""   # Payment currency (e.g. "BTC", "ETH", "USDT")
-      MYST_ORDER_GATEWAY: ""    # Payment gateway name from `orders gateways` (e.g. "coingate")
-      MYST_ORDER_COUNTRY: ""    # 2-letter ISO country code for tax (e.g. "US")
+      MYST_ORDER_AMOUNT: "${MYST_ORDER_AMOUNT:-}"     # Amount of MYST to purchase (e.g. "10")
+      MYST_ORDER_CURRENCY: "${MYST_ORDER_CURRENCY:-}"   # Payment currency (e.g. "BTC", "ETH", "USDT")
+      MYST_ORDER_GATEWAY: "${MYST_ORDER_GATEWAY:-}"    # Payment gateway name from `orders gateways` (e.g. "coingate")
+      MYST_ORDER_COUNTRY: "${MYST_ORDER_COUNTRY:-}"    # 2-letter ISO country code for tax (e.g. "US")
+      # Gateway-specific metadata (e.g. custom_id for coingate, lightning_network=true)
+      # Coingate requires this field; common pattern: custom_id=uniquevalue
+      MYST_ORDER_GATEWAY_DATA: "${MYST_ORDER_GATEWAY_DATA:-custom_id=mysterium-onyx}"
       # Set to "true" to block startup until balance > 0 before attempting to connect.
-      MYST_WAIT_FOR_FUNDS: "false"
+      MYST_WAIT_FOR_FUNDS: "${MYST_WAIT_FOR_FUNDS:-false}"
     healthcheck:
       test: ["CMD-SHELL", "myst connection info 2>/dev/null | grep -Eiq '\"status\"[[:space:]]*:[[:space:]]*\"Connected\"|Status:[[:space:]]*Connected' || exit 1"]
       interval: 15s

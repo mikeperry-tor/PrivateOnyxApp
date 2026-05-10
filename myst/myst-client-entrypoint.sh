@@ -107,10 +107,25 @@ if [ -n "$ID" ]; then
   myst_cli identities unlock "$ID" || true
 fi
 
+strip_ansi() {
+  sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g'
+}
+
+registration_status() {
+  myst_cli identities get "$ID" 2>/dev/null \
+    | strip_ansi \
+    | grep -i 'Registration Status' | grep -oE '[A-Za-z]+$' | tr '[:upper:]' '[:lower:]' || true
+}
+
+identity_balance() {
+  myst_cli identities get "$ID" 2>/dev/null \
+    | strip_ansi \
+    | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true
+}
+
 # Registration
 # Attempt on-chain registration (Mysterium sponsors gas for new identities).
-REG_STATUS="$(myst_cli identities get "$ID" 2>/dev/null \
-  | grep -i 'Registration Status' | grep -oE '[A-Za-z]+$' | tr '[:upper:]' '[:lower:]' || true)"
+REG_STATUS="$(registration_status)"
 
 if [ "$REG_STATUS" != "registered" ]; then
   submit_registration() {
@@ -145,16 +160,14 @@ if [ "$REG_STATUS" != "registered" ]; then
   if [ "$_timeout" = "0" ]; then
     echo "Waiting for registration to confirm on-chain (no timeout)."
     while true; do
-      REG_STATUS="$(myst_cli identities get "$ID" 2>/dev/null \
-        | grep -i 'Registration Status' | grep -oE '[A-Za-z]+$' | tr '[:upper:]' '[:lower:]' || true)"
+      REG_STATUS="$(registration_status)"
       echo "Registration status after ${_elapsed}s: ${REG_STATUS:-unknown}"
       [ "$REG_STATUS" = "registered" ] && break
 
       # `inprogress` with zero balance means registration has started
       # but requires a payment-channel top-up to complete.
       if [ "$REG_STATUS" = "inprogress" ]; then
-        REG_BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
-          | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true)"
+        REG_BALANCE="$(identity_balance)"
         case "${REG_BALANCE:-0}" in
           ''|0|0.0|0.00|0.000|0.0000|0.00000|0.000000)
             echo "Registration is inprogress with zero balance; proceeding to funding/order creation."
@@ -178,14 +191,12 @@ if [ "$REG_STATUS" != "registered" ]; then
   else
     echo "Waiting up to ${_timeout}s for registration to confirm on-chain..."
     while [ "$_elapsed" -lt "$_timeout" ]; do
-        REG_STATUS="$(myst_cli identities get "$ID" 2>/dev/null \
-        | grep -i 'Registration Status' | grep -oE '[A-Za-z]+$' | tr '[:upper:]' '[:lower:]' || true)"
+      REG_STATUS="$(registration_status)"
       echo "Registration status after ${_elapsed}s: ${REG_STATUS:-unknown}"
       [ "$REG_STATUS" = "registered" ] && break
 
       if [ "$REG_STATUS" = "inprogress" ]; then
-          REG_BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
-          | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true)"
+        REG_BALANCE="$(identity_balance)"
         case "${REG_BALANCE:-0}" in
           ''|0|0.0|0.00|0.000|0.0000|0.00000|0.000000)
             echo "Registration is inprogress with zero balance; proceeding to funding/order creation."
@@ -222,29 +233,61 @@ else
   echo "Identity $ID is already registered."
 fi
 
+REG_FINAL_STATUS="${REG_STATUS:-unknown}"
+
 # Balance / Funding
-BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
-  | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true)"
+BALANCE="$(identity_balance)"
 echo "Identity: $ID  |  Balance: ${BALANCE:-unknown} MYST"
+
+NEEDS_ORDER_CHECK=false
+case "${REG_FINAL_STATUS}" in
+  registered) ;;
+  *)
+    NEEDS_ORDER_CHECK=true
+    echo "Registration status is ${REG_FINAL_STATUS}; checking payment orders before connect attempts."
+  ;;
+esac
 
 case "${BALANCE:-0}" in
   ''|0|0.0|0.00|0.000|0.0000|0.00000|0.000000)
+    NEEDS_ORDER_CHECK=true
+  ;;
+esac
 
+if [ "$NEEDS_ORDER_CHECK" = "true" ]; then
     # Show any existing orders so the user can track pending payments.
-    echo "Balance is 0. Checking existing payment orders..."
+    echo "Checking existing payment orders..."
     EXISTING="$(myst_cli orders get-all "$ID" 2>/dev/null || true)"
+    HAS_EXISTING_ORDERS=false
+    if [ -n "$EXISTING" ] && ! printf '%s' "$EXISTING" | grep -qi 'no orders found'; then
+      HAS_EXISTING_ORDERS=true
+    fi
     [ -n "$EXISTING" ] && echo "$EXISTING"
 
     # Auto-create a new order if all four required vars are set.
     if [ -n "${MYST_ORDER_AMOUNT:-}" ] && [ -n "${MYST_ORDER_CURRENCY:-}" ] && \
        [ -n "${MYST_ORDER_GATEWAY:-}" ] && [ -n "${MYST_ORDER_COUNTRY:-}" ]; then
-      echo "Creating order: ${MYST_ORDER_AMOUNT} MYST via ${MYST_ORDER_GATEWAY} (${MYST_ORDER_CURRENCY}, country=${MYST_ORDER_COUNTRY})..."
-      myst_cli orders create \
-        "$ID" \
-        "${MYST_ORDER_AMOUNT}" \
-        "${MYST_ORDER_CURRENCY}" \
-        "${MYST_ORDER_GATEWAY}" \
-        "${MYST_ORDER_COUNTRY}" || true
+      if [ "$HAS_EXISTING_ORDERS" = "true" ]; then
+        echo "Skipping auto-create: existing order(s) found."
+      else
+        echo "Creating order: amount=${MYST_ORDER_AMOUNT} pay_currency=${MYST_ORDER_CURRENCY} gateway=${MYST_ORDER_GATEWAY} country=${MYST_ORDER_COUNTRY}..."
+        set +e
+        CREATE_OUT="$(myst_cli orders create \
+          "$ID" \
+          "${MYST_ORDER_AMOUNT}" \
+          "${MYST_ORDER_CURRENCY}" \
+          "${MYST_ORDER_GATEWAY}" \
+          "${MYST_ORDER_COUNTRY}" \
+          "${MYST_ORDER_GATEWAY_DATA}" 2>&1)"
+        CREATE_RC=$?
+        set -e
+        if [ -n "$CREATE_OUT" ]; then
+          printf '%s\n' "$CREATE_OUT"
+        fi
+        if [ "$CREATE_RC" -ne 0 ]; then
+          echo "WARNING: Order creation failed (exit ${CREATE_RC})."
+        fi
+      fi
     else
       echo "Set MYST_ORDER_AMOUNT / MYST_ORDER_CURRENCY / MYST_ORDER_GATEWAY / MYST_ORDER_COUNTRY"
       echo "to auto-create a funding order on next start. Available gateways:"
@@ -257,6 +300,7 @@ case "${BALANCE:-0}" in
       while true; do
         sleep 30
         BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
+          | strip_ansi \
           | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true)"
         echo "Funding check: current balance is ${BALANCE:-0} MYST"
         case "${BALANCE:-0}" in
@@ -265,8 +309,7 @@ case "${BALANCE:-0}" in
         esac
       done
     fi
-  ;;
-esac
+fi
 
 connection_is_up() {
   $MYST connection info 2>/dev/null \
@@ -360,6 +403,9 @@ connect_one_attempt() {
 }
 
 if [ "${MYST_AUTO_CONNECT:-true}" = "true" ] && [ -n "$ID" ]; then
+  if [ "${REG_FINAL_STATUS:-unknown}" != "registered" ]; then
+    log_with_ts "Skipping auto-connect: registration status is ${REG_FINAL_STATUS:-unknown}."
+  else
   _max_attempts="${MYST_CONNECT_MAX_ATTEMPTS:-6}"
   _retry_interval="${MYST_CONNECT_RETRY_INTERVAL:-10}"
   case "$_max_attempts" in ''|0) _max_attempts=1 ;; esac
@@ -385,6 +431,7 @@ if [ "${MYST_AUTO_CONNECT:-true}" = "true" ] && [ -n "$ID" ]; then
   fi
 
   apply_route_exemptions
+  fi
 fi
 
 # Keep service in foreground; Myst kill-switch stays enabled unless explicitly disabled.
