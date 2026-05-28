@@ -12,7 +12,11 @@ TEEP_REF ?= main
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
 TEEP_IMAGE ?= 13rac1/teep:main
 
-ONYX_IMAGE_TAG ?= v3.2.12
+# Source of truth: ONYX_IMAGE_TAG in $(ENV_FILE). Allow CLI override.
+ONYX_IMAGE_TAG ?= $(strip $(shell sed -n 's/^ONYX_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1))
+ifeq ($(strip $(ONYX_IMAGE_TAG)),)
+$(error ONYX_IMAGE_TAG is not set. Add ONYX_IMAGE_TAG=... to $(ENV_FILE), or pass ONYX_IMAGE_TAG=... on the make command line)
+endif
 ONYX_BACKEND_IMAGE ?= onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
 ONYX_WEB_SERVER_IMAGE ?= onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
 ONYX_MODEL_SERVER_IMAGE ?= onyxdotapp/onyx-model-server:$(ONYX_IMAGE_TAG)
@@ -22,7 +26,7 @@ ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full sync-onyx-env myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
 
 help:
 	@echo "Targets:"
@@ -45,13 +49,25 @@ help:
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
-up-lite: onyx-image-ready myst-image-ready teep-image-ready
+up-lite: sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(ONYX_MODEL_SERVER_IMAGE)
-up-full: onyx-image-ready myst-image-ready teep-image-ready
+up-full: sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
+
+sync-onyx-env:
+	@if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
+		echo "ERROR: missing $(ONYX_ENV_FILE)"; \
+		exit 1; \
+	fi
+	@if grep -q '^IMAGE_TAG=' "$(ONYX_ENV_FILE)"; then \
+		sed -i.bak "s|^IMAGE_TAG=.*|IMAGE_TAG=$(ONYX_IMAGE_TAG)|" "$(ONYX_ENV_FILE)"; \
+	else \
+		printf '\nIMAGE_TAG=%s\n' "$(ONYX_IMAGE_TAG)" >> "$(ONYX_ENV_FILE)"; \
+	fi
+	@echo "Synced $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"
 
 down-lite:
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) down --remove-orphans
