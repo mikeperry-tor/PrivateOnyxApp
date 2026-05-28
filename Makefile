@@ -27,7 +27,7 @@ ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade-onyx myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
 
 help:
 	@echo "Targets:"
@@ -39,6 +39,7 @@ help:
 	@echo "  make ps-full      # Show full mode containers"
 	@echo "  make logs-lite    # Tail lite mode logs"
 	@echo "  make logs-full    # Tail full mode logs"
+	@echo "  make upgrade      # Rebuild Myst + teep images and refresh Onyx deployment files"
 	@echo "  make upgrade-onyx # Download fresh Onyx deployment files for ONYX_IMAGE_TAG"
 	@echo "  make onyx-build   # Pull/build Onyx images via onyx/install.sh"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
@@ -49,6 +50,8 @@ help:
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
+
+upgrade: myst-build teep-build upgrade-onyx
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
