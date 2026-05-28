@@ -23,11 +23,13 @@ ONYX_MODEL_SERVER_IMAGE ?= onyxdotapp/onyx-model-server:$(ONYX_IMAGE_TAG)
 ONYX_INSTALL_SCRIPT ?= ./install.sh
 ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
 ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
+SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
+SEARXNG_ENV_FILE := searxng/.env
 
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx searxng-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
 
 help:
 	@echo "Targets:"
@@ -39,7 +41,7 @@ help:
 	@echo "  make ps-full      # Show full mode containers"
 	@echo "  make logs-lite    # Tail lite mode logs"
 	@echo "  make logs-full    # Tail full mode logs"
-	@echo "  make upgrade      # Rebuild Myst + teep images and refresh Onyx deployment files"
+	@echo "  make upgrade      # Rebuild Myst + teep images, refresh Onyx deployment files, and pull SearxNG"
 	@echo "  make upgrade-onyx # Download fresh Onyx deployment files for ONYX_IMAGE_TAG"
 	@echo "  make onyx-build   # Pull/build Onyx images via onyx/install.sh"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
@@ -51,7 +53,7 @@ help:
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 
-upgrade: myst-build teep-build upgrade-onyx
+upgrade: myst-build teep-build searxng-image-ready upgrade-onyx
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
@@ -125,6 +127,16 @@ upgrade-onyx:
 	install -m 0755 "$$tmp_dir/run-nginx.sh" onyx/onyx_data/data/nginx/run-nginx.sh; \
 	echo "Downloaded Onyx deployment files for ref $$config_ref"
 	@$(MAKE) sync-onyx-env
+
+searxng-image-ready:
+	@set -eu; \
+	image=$$(docker compose --env-file "$(SEARXNG_ENV_FILE)" -f "$(SEARXNG_COMPOSE_FILE)" config | sed -n 's/^    image: //p' | head -1); \
+	if [ -z "$$image" ]; then \
+		echo "ERROR: could not resolve SearxNG image from $(SEARXNG_COMPOSE_FILE)"; \
+		exit 1; \
+	fi; \
+	echo "Pulling SearxNG image: $$image"; \
+	docker pull "$$image"
 
 down-lite:
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) down --remove-orphans
