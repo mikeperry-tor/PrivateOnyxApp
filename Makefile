@@ -22,11 +22,12 @@ ONYX_WEB_SERVER_IMAGE ?= onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
 ONYX_MODEL_SERVER_IMAGE ?= onyxdotapp/onyx-model-server:$(ONYX_IMAGE_TAG)
 ONYX_INSTALL_SCRIPT ?= ./install.sh
 ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
+ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
 
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full sync-onyx-env myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full sync-onyx-env upgrade-onyx myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
 
 help:
 	@echo "Targets:"
@@ -38,12 +39,14 @@ help:
 	@echo "  make ps-full      # Show full mode containers"
 	@echo "  make logs-lite    # Tail lite mode logs"
 	@echo "  make logs-full    # Tail full mode logs"
+	@echo "  make upgrade-onyx # Download fresh Onyx deployment files for ONYX_IMAGE_TAG"
 	@echo "  make onyx-build   # Pull/build Onyx images via onyx/install.sh"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
 	@echo "  make teep-build   # Build teep image from teep/build/Dockerfile"
 	@echo ""
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
+	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 
@@ -68,6 +71,39 @@ sync-onyx-env:
 		printf '\nIMAGE_TAG=%s\n' "$(ONYX_IMAGE_TAG)" >> "$(ONYX_ENV_FILE)"; \
 	fi
 	@echo "Synced $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"
+
+upgrade-onyx:
+	@set -eu; \
+	config_ref="$(ONYX_CONFIG_REF)"; \
+	if [ -z "$$config_ref" ]; then \
+		echo "ERROR: could not determine Onyx config ref"; \
+		exit 1; \
+	fi; \
+	compose_base="https://raw.githubusercontent.com/onyx-dot-app/onyx/$$config_ref/deployment/docker_compose"; \
+	nginx_base="https://raw.githubusercontent.com/onyx-dot-app/onyx/$$config_ref/deployment/data/nginx"; \
+	tmp_dir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp_dir"' EXIT; \
+	mkdir -p onyx/onyx_data/deployment onyx/onyx_data/data/nginx/local; \
+	echo "Downloading Onyx deployment files for ref $$config_ref..."; \
+	curl -fsSL "$$compose_base/docker-compose.yml" -o "$$tmp_dir/docker-compose.yml"; \
+	curl -fsSL "$$compose_base/docker-compose.onyx-lite.yml" -o "$$tmp_dir/docker-compose.onyx-lite.yml"; \
+	if curl -fsSL "$$compose_base/docker-compose.craft.yml" -o "$$tmp_dir/docker-compose.craft.yml" 2>/dev/null; then \
+		install -m 0644 "$$tmp_dir/docker-compose.craft.yml" onyx/onyx_data/deployment/docker-compose.craft.yml; \
+	else \
+		echo "No docker-compose.craft.yml at ref $$config_ref; keeping existing local file if present"; \
+	fi; \
+	curl -fsSL "$$compose_base/env.template" -o "$$tmp_dir/env.template"; \
+	curl -fsSL "$$compose_base/README.md" -o "$$tmp_dir/README.md"; \
+	curl -fsSL "$$nginx_base/app.conf.template" -o "$$tmp_dir/app.conf.template"; \
+	curl -fsSL "$$nginx_base/run-nginx.sh" -o "$$tmp_dir/run-nginx.sh"; \
+	install -m 0644 "$$tmp_dir/docker-compose.yml" onyx/onyx_data/deployment/docker-compose.yml; \
+	install -m 0644 "$$tmp_dir/docker-compose.onyx-lite.yml" onyx/onyx_data/deployment/docker-compose.onyx-lite.yml; \
+	install -m 0644 "$$tmp_dir/env.template" onyx/onyx_data/deployment/env.template; \
+	install -m 0644 "$$tmp_dir/README.md" onyx/onyx_data/README.md; \
+	install -m 0644 "$$tmp_dir/app.conf.template" onyx/onyx_data/data/nginx/app.conf.template; \
+	install -m 0755 "$$tmp_dir/run-nginx.sh" onyx/onyx_data/data/nginx/run-nginx.sh; \
+	echo "Downloaded Onyx deployment files for ref $$config_ref"
+	@$(MAKE) sync-onyx-env
 
 down-lite:
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) down --remove-orphans
