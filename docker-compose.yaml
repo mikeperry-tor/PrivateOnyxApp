@@ -13,6 +13,8 @@ services:
     extends:
       file: ./myst/docker-compose.yaml
       service: myst-client
+    labels:
+      autoheal: "true"
     # Keep myst-client internal-only. Host port publishing is handled by
     # dedicated bridge proxies below so host access remains stable even when
     # VPN routing is active in this namespace.
@@ -79,6 +81,21 @@ services:
     command: tcp-listen:${TEEP_CONTAINER_PORT:-8337},fork,reuseaddr tcp-connect:myst-client:${TEEP_CONTAINER_PORT:-8337}
     ports:
       - ${TEEP_HOST:+${TEEP_HOST}:}${TEEP_PORT:-8337}:${TEEP_CONTAINER_PORT:-8337}
+    depends_on:
+      myst-client:
+        condition: service_started
+
+  # Restarts containers marked with autoheal=true when Docker health is unhealthy.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 15
+      AUTOHEAL_START_PERIOD: 300
+      AUTOHEAL_ONLY_MONITOR_RUNNING: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       myst-client:
         condition: service_started
@@ -180,6 +197,18 @@ services:
       NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ""
+    # In shared netns mode, Next.js may bind eth0 only (not loopback), so
+    # healthcheck probes the namespace IP instead of 127.0.0.1.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "ip=$$(hostname -i | awk '{print $1}'); wget -q -T 5 -O /dev/null http://$$ip:3000/ || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     depends_on:
       myst-client:
         condition: service_healthy
@@ -256,13 +285,6 @@ services:
       service: relational_db
     volumes: !override
       - ./docker-data/postgres:/var/lib/postgresql/data
-
-  index:
-    extends:
-      file: ./onyx/onyx_data/deployment/docker-compose.yml
-      service: index
-    volumes: !override
-      - ./docker-data/vespa:/opt/vespa/var
 
   opensearch:
     extends:
