@@ -27,7 +27,7 @@ ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
 LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
 FULL_FILES := $(WRAPPER_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full sync-onyx-env upgrade-onyx myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade-onyx myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
 
 help:
 	@echo "Targets:"
@@ -52,13 +52,31 @@ help:
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
-up-lite: sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
+up-lite: ensure-onyx-config sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(ONYX_MODEL_SERVER_IMAGE)
-up-full: sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
+up-full: ensure-onyx-config sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
+
+ensure-onyx-config:
+	@set -eu; \
+	if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
+		echo "$(ONYX_ENV_FILE) missing; running upgrade-onyx for $(ONYX_IMAGE_TAG)"; \
+		$(MAKE) upgrade-onyx ONYX_CONFIG_REF="$(ONYX_IMAGE_TAG)"; \
+		exit 0; \
+	fi; \
+	current_tag=$$(sed -n 's/^IMAGE_TAG=//p' "$(ONYX_ENV_FILE)" | head -1); \
+	if [ -z "$$current_tag" ]; then \
+		echo "IMAGE_TAG missing in $(ONYX_ENV_FILE); running upgrade-onyx for $(ONYX_IMAGE_TAG)"; \
+		$(MAKE) upgrade-onyx ONYX_CONFIG_REF="$(ONYX_IMAGE_TAG)"; \
+	elif [ "$$current_tag" != "$(ONYX_IMAGE_TAG)" ]; then \
+		echo "IMAGE_TAG mismatch ($$current_tag != $(ONYX_IMAGE_TAG)); running upgrade-onyx"; \
+		$(MAKE) upgrade-onyx ONYX_CONFIG_REF="$(ONYX_IMAGE_TAG)"; \
+	else \
+		echo "Onyx deployment files already match ONYX_IMAGE_TAG=$(ONYX_IMAGE_TAG)"; \
+	fi
 
 sync-onyx-env:
 	@if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
