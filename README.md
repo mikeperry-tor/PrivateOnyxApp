@@ -4,11 +4,11 @@ Docker Compose wrapper for running [Onyx](https://github.com/onyx-dot-app/onyx) 
 
 This stack gets you a private deep research agent with a clean web interface.
 
-## Deep Research Agent vs Chat Agent
+## Deep Research Mode Support
 
-A Deep Research Agent is different than a typical ChatGPT interaction in that it creates a plan for multi-stage research on a topic, and iterates on that plan until it has gathered enough information for a comprehensive response.  This is most useful when you need to research something that would normally take several rounds of search+read iterations (where you search, learn a bit, and then search some more based on the previous information). Deep Research Agents typically take around 10-15 minutes to produce a report, for a given query.
+The main reason I created this stack is because none of the private chat providers offer a "Deep Research Mode" (aka multi-agent multi-round research report generation), and I didn't like going back to non-private chat providers when I needed this functionality.
 
-The Deep Research mode in Onyx is optional, but if you do not need this kind of intense research functionality at all, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
+The Deep Research Mode in Onyx is optional, but if you do not need intense multi-agent deep research functionality at all, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 
 ## Components
 
