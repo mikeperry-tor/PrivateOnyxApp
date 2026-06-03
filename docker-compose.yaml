@@ -27,6 +27,9 @@ services:
           - background
           - nginx
           - code-interpreter
+    environment:
+      # Optional LAN access bypass for local inference APIs / services.
+      ALLOW_LAN_ACCESS: "${ALLOW_LAN_ACCESS:-false}"
     volumes: !override
       - ./docker-data/myst-data:/var/lib/mysterium-node
       - ./docker-data/myst-data:/root/.mysterium

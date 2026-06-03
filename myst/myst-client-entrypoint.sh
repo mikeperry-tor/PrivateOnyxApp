@@ -10,6 +10,20 @@ myst_cli() {
   $MYST cli --agreed-terms-and-conditions "$@"
 }
 
+# Optional LAN access: append common private network CIDRs to route exemptions.
+# When ALLOW_LAN_ACCESS=true, LMStudio and other local inference APIs can be
+# reached without VPN routing, while remaining connections stay fail-closed.
+if [ "${ALLOW_LAN_ACCESS:-false}" = "true" ]; then
+  # Common private network ranges per RFC 1918
+  LAN_CIDRS="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+  if [ -n "${MYST_ROUTE_EXEMPT_CIDRS:-}" ]; then
+    MYST_ROUTE_EXEMPT_CIDRS="${MYST_ROUTE_EXEMPT_CIDRS},${LAN_CIDRS}"
+  else
+    MYST_ROUTE_EXEMPT_CIDRS="${LAN_CIDRS}"
+  fi
+  echo "ALLOW_LAN_ACCESS=true: added LAN CIDRs to route exemptions"
+fi
+
 # Myst wireguard DNS manager invokes <script-dir>/update-resolv-conf on Unix.
 # In containerized namespace-sharing mode, keep DNS managed by Docker.
 if [ "${MYST_SKIP_UPDATE_RESOLV_CONF:-false}" = "true" ]; then

@@ -43,6 +43,8 @@ Edit `.env.wrapper` as needed:
   - `DOC_DROP_DIR` (host directory to expose read-only, default `./doc-drop`)
 - Optional Myst provider pinning:
   - `MYST_PROVIDER_IDS`
+- **Optional LAN access** (for local inference APIs):
+  - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs running locally (e.g., LMStudio) while maintaining fail-closed behavior for all other traffic. Default: `false`
 - Optional Myst funding order auto-creation:
   - `MYST_ORDER_AMOUNT`
   - `MYST_ORDER_CURRENCY`
