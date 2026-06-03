@@ -113,6 +113,8 @@ The best privacy preserving provider supported by teep is currently `neardirect`
 
 Teep will also soon add support for [Tinfoil](https://tinfoil.sh), which also has an excellent security architecture, as well as excellent mobile and web apps.
 
+This stack can also be used with LMStudio or any other local LLM provider. Simply use `host.docker.internal` to connect to your localhost instance, using the Onyx Admin UI configuration. The OpenAI Compatible endpoint in Onyx works the best.
+
 ## LLM recommendations
 
 Verifiable private inference is only currently possible with Open Weight models. While it is [technically possible](https://www.anthropic.com/research/confidential-inference-trusted-vms) for closed weight models to support attestation-based verification, proprietary LLM labs [do not seem to be interested](https://www.anthropic.com/news/activating-asl3-protections) in offering privacy to end users.
