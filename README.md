@@ -36,8 +36,11 @@ Edit `.env.wrapper` as needed:
   - `HOST_PORT` (Onyx UI bridge)
   - `SEARXNG_PORT`
   - `TEEP_PORT`
+  - `DOC_DROP_WEB_PORT` (local docs bridge for Web connector)
 - Provider/API config:
   - Set at least one teep key (for example `NEARAI_API_KEY`, `VENICE_API_KEY`, or `CHUTES_API_KEY`)
+- Optional local documents directory for Web connector indexing:
+  - `DOC_DROP_DIR` (host directory to expose read-only, default `./doc-drop`)
 - Optional Myst provider pinning:
   - `MYST_PROVIDER_IDS`
 - Optional Myst funding order auto-creation:
@@ -107,6 +110,26 @@ make logs-full
 
 3. Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
 
+### Local Documents via Web Connector
+
+The full version of Onyx supports search and retrieval (RAG) over PDF, DOC, EPUB, and other document types.
+
+Setup steps:
+
+1. Put PDFs into `DOC_DROP_DIR` (default `./doc-drop`).
+2. Start or restart full stack: `make up-full`.
+3. In Onyx Admin → Connectors → Web, create a connector.
+4. Set Web connector type to **Recursive**.
+5. Set URL to `http://localhost:8091/` (or `http://localhost:<DOC_DROP_WEB_PORT>/`).
+6. Sync the connector.
+
+Notes:
+
+- Directory listing pages are crawlable; you can also target specific files
+  directly, e.g. `http://localhost:8091/my-paper.pdf`.
+- In this wrapper, `WEB_CONNECTOR_VALIDATE_URLS` is set empty for Onyx backend
+  containers so localhost crawling is allowed for this local-only use case.
+
 ## Inference Provider Recommendations
 
 The best privacy preserving provider supported by teep is currently `neardirect`, which is the direct completions version of [NearAI](https://cloud.near.ai). NearAI is also useful in that it can be used with cryptocurrency.
@@ -130,7 +153,7 @@ The following endpoints are exposed to your docker host:
 - Onyx WebUI: [`http://localhost:3000`](http://localhost:3000)
 - SearxNG WebUI: [`http://localhost:8080`](http://localhost:8080)
 - teep human-readable stats page: [`http://localhost:8337`](http://localhost:8337)
-- teep OpenAI API base: `http://localhost:8337/v1`(http://localhost:8337/v1)
+- teep OpenAI API base: `http://localhost:8337/v1`
 - teep health check: `http://localhost:8337/health`
 - teep prometheus metrics: `http://localhost:8337/metrics`
 

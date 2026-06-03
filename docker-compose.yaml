@@ -85,6 +85,16 @@ services:
       myst-client:
         condition: service_started
 
+  host-doc-drop-web-proxy:
+    image: alpine/socat:1.8.0.3
+    restart: unless-stopped
+    command: tcp-listen:${DOC_DROP_WEB_PORT:-8091},fork,reuseaddr tcp-connect:myst-client:${DOC_DROP_WEB_CONTAINER_PORT:-8091}
+    ports:
+      - ${DOC_DROP_WEB_HOST:+${DOC_DROP_WEB_HOST}:}${DOC_DROP_WEB_PORT:-8091}:${DOC_DROP_WEB_CONTAINER_PORT:-8091}
+    depends_on:
+      myst-client:
+        condition: service_started
+
   # Restarts containers marked with autoheal=true when Docker health is unhealthy.
   autoheal:
     image: willfarrell/autoheal:latest
@@ -131,6 +141,9 @@ services:
       NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
       CAPTCHA_ENABLED: "false"
       RECAPTCHA_SECRET_KEY: ""
+      # Controls Web connector SSRF-style URL checks. Empty disables checks;
+      # non-empty enables global-IP validation (blocks localhost/private IPs).
+      WEB_CONNECTOR_VALIDATE_URLS: ${WEB_CONNECTOR_VALIDATE_URLS:-}
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
@@ -173,6 +186,9 @@ services:
       NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
       CAPTCHA_ENABLED: "false"
       RECAPTCHA_SECRET_KEY: ""
+      # Controls Web connector SSRF-style URL checks. Empty disables checks;
+      # non-empty enables global-IP validation (blocks localhost/private IPs).
+      WEB_CONNECTOR_VALIDATE_URLS: ${WEB_CONNECTOR_VALIDATE_URLS:-}
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
@@ -259,6 +275,28 @@ services:
       myst-client:
         condition: service_healthy
 
+  # Read-only HTTP view of DOC_DROP_DIR from inside the shared myst namespace.
+  # Use with Onyx Web connector at http://localhost:${DOC_DROP_WEB_PORT:-8091}/
+  # so source links stay host-clickable while crawler access remains local.
+  doc-drop-web:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    network_mode: "service:myst-client"
+    volumes:
+      - ${DOC_DROP_DIR:-./doc-drop}:/import/docs:ro
+    command:
+      - python
+      - -m
+      - http.server
+      - ${DOC_DROP_WEB_CONTAINER_PORT:-8091}
+      - --bind
+      - 0.0.0.0
+      - --directory
+      - /import/docs
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
   # Onyx internal/data services (remain on compose network)
   inference_model_server:
     extends:
@@ -309,6 +347,7 @@ services:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: cache
 
+  # Required by upstream Onyx service dependencies inherited via extends.
   minio:
     image: minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1
     restart: unless-stopped
