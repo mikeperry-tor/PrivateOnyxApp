@@ -114,6 +114,8 @@ services:
       # Disable optional telemetry/analytics integrations from wrapper layer.
       DISABLE_TELEMETRY: "true"
       SENTRY_DSN: ""
+      SENTRY_TRACES_SAMPLE_RATE: "0"
+      HUBSPOT_TRACKING_URL: ""
       POSTHOG_API_KEY: ""
       MARKETING_POSTHOG_API_KEY: ""
       POSTHOG_HOST: ""
@@ -153,6 +155,9 @@ services:
       # Disable optional telemetry/analytics integrations from wrapper layer.
       DISABLE_TELEMETRY: "true"
       SENTRY_DSN: ""
+      SENTRY_TRACES_SAMPLE_RATE: "0"
+      SENTRY_CELERY_TRACES_SAMPLE_RATE: "0"
+      HUBSPOT_TRACKING_URL: ""
       POSTHOG_API_KEY: ""
       MARKETING_POSTHOG_API_KEY: ""
       POSTHOG_HOST: ""
@@ -261,6 +266,9 @@ services:
       service: inference_model_server
     image: onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
+    environment:
+      SENTRY_DSN: ""
+      SENTRY_TRACES_SAMPLE_RATE: "0"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes: !override
@@ -273,6 +281,9 @@ services:
       service: indexing_model_server
     image: onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
+    environment:
+      SENTRY_DSN: ""
+      SENTRY_TRACES_SAMPLE_RATE: "0"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes: !override
