@@ -132,6 +132,55 @@ Notes:
 - In this wrapper, `WEB_CONNECTOR_VALIDATE_URLS` is set empty for Onyx backend
   containers so localhost crawling is allowed for this local-only use case.
 
+#### Local Embedding Shim (release images)
+
+If you want query/passage prefix control for embeddings while running stock
+Onyx release images, use the local embedding shim path.
+
+Why: Onyx's LiteLLM/cloud embedding path rejects manual prefix strings. The shim
+keeps Onyx on the local model-server code path and forwards to a local
+OpenAI-compatible `/v1/embeddings` API.
+
+Required `.env.wrapper` settings:
+
+```bash
+# Query/passage prefixes used by the shim
+ONYX_EMBEDDING_QUERY_PREFIX="Instruct: Given a document query, retrieve the most relevant chunk.\nQuery: "
+ONYX_EMBEDDING_PASSAGE_PREFIX=""
+
+# Local endpoint (adjust host/port to your embedding server)
+LOCAL_EMBEDDINGS_URL="http://host.docker.internal:12340/v1/embeddings"
+
+# Optional
+#LOCAL_EMBEDDING_API_KEY=""
+#LOCAL_EMBEDDING_MODEL="text-embedding-qwen3-embedding-4b"
+```
+
+Restart services after editing:
+
+```bash
+make up-full
+```
+
+Index Settings configuration in Onyx Admin:
+
+1. Go to **Index Settings**.
+2. Stage/select your embedding model as **Self-Hosted / Custom Model** (local)
+  so Onyx uses the local model-server path.
+3. Use the same model name as your local embedding model (for example
+  `text-embedding-qwen3-embedding-4b`).
+4. Do **not** configure embeddings through LiteLLM for this flow.
+
+Quick verification:
+
+```bash
+# Shim health
+curl -sSf http://localhost:9101/health
+
+# Live debug logs (text type, prefix source, vector dims)
+docker compose --env-file .env.wrapper logs -f lmstudio-embedding-shim
+```
+
 ## Inference Provider Recommendations
 
 The best privacy preserving provider supported by teep is currently `neardirect`, which is the direct completions version of [NearAI](https://cloud.near.ai). NearAI is also useful in that it can be used with cryptocurrency.

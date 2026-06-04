@@ -215,12 +215,22 @@ services:
       # Controls Web connector SSRF-style URL checks. Empty disables checks;
       # non-empty enables global-IP validation (blocks localhost/private IPs).
       WEB_CONNECTOR_VALIDATE_URLS: ${WEB_CONNECTOR_VALIDATE_URLS:-}
+      # Wrapper-level alias for Onyx's asymmetric query prefix setting.
+      ASYM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
+      # Route embedding calls through local shim so release images can use
+      # prefix-compatible local embedding APIs (for example LM Studio).
+      MODEL_SERVER_HOST: "127.0.0.1"
+      MODEL_SERVER_PORT: "9101"
+      INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
+      INDEXING_MODEL_SERVER_PORT: "9101"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
     extra_hosts: !reset []
     depends_on:
       myst-client:
+        condition: service_healthy
+      lmstudio-embedding-shim:
         condition: service_healthy
     volumes: !override
       - ./docker-data/file-system:/app/file-system
@@ -263,12 +273,22 @@ services:
       # Controls Web connector SSRF-style URL checks. Empty disables checks;
       # non-empty enables global-IP validation (blocks localhost/private IPs).
       WEB_CONNECTOR_VALIDATE_URLS: ${WEB_CONNECTOR_VALIDATE_URLS:-}
+      # Wrapper-level alias for Onyx's asymmetric query prefix setting.
+      ASYM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
+      # Route embedding calls through local shim so release images can use
+      # prefix-compatible local embedding APIs (for example LM Studio).
+      MODEL_SERVER_HOST: "127.0.0.1"
+      MODEL_SERVER_PORT: "9101"
+      INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
+      INDEXING_MODEL_SERVER_PORT: "9101"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
     extra_hosts: !reset []
     depends_on:
       myst-client:
+        condition: service_healthy
+      lmstudio-embedding-shim:
         condition: service_healthy
     volumes: !override
       - ./docker-data/file-system:/app/file-system
@@ -394,6 +414,35 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
+  # Model-server-compatible embedding shim for LM Studio/OpenAI-style endpoints.
+  lmstudio-embedding-shim:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
+      netns-shared-myst: "true"
+    network_mode: "service:myst-client"
+    environment:
+      LOCAL_EMBEDDINGS_URL: "${LOCAL_EMBEDDINGS_URL:-http://host.docker.internal:1234/v1/embeddings}"
+      LOCAL_EMBEDDING_API_KEY: "${LOCAL_EMBEDDING_API_KEY:-}"
+      LOCAL_EMBEDDING_MODEL: "${LOCAL_EMBEDDING_MODEL:-}"
+      SHIM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
+      SHIM_PASSAGE_PREFIX: "${ONYX_EMBEDDING_PASSAGE_PREFIX:-}"
+    volumes:
+      - ./shim/lmstudio_embedding_shim.py:/app/lmstudio_embedding_shim.py:ro
+    command:
+      - python
+      - /app/lmstudio_embedding_shim.py
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:9101/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
     depends_on:
       myst-client:
         condition: service_healthy
