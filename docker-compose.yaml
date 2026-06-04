@@ -128,7 +128,8 @@ services:
       - /bin/sh
       - -ec
       - |
-        prev_started=""
+        last_started=""
+        applied_started=""
         while true; do
           myst_id="$$(docker ps -q \
             --filter label=com.docker.compose.project=$${COMPOSE_PROJECT_NAME} \
@@ -136,20 +137,37 @@ services:
 
           if [ -n "$$myst_id" ]; then
             started="$$(docker inspect -f '{{.State.StartedAt}}' "$$myst_id" 2>/dev/null || true)"
-            if [ -n "$$started" ] && [ -n "$$prev_started" ] && [ "$$started" != "$$prev_started" ]; then
-              echo "myst-netns-watchdog: myst-client started_at changed ($$prev_started -> $$started); restarting shared-netns services"
-              for cid in $$(docker ps -q \
-                --filter label=com.docker.compose.project=$${COMPOSE_PROJECT_NAME} \
-                --filter label=netns-shared-myst=true); do
-                svc="$$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "$$cid" 2>/dev/null || true)"
-                if [ "$$svc" = "myst-client" ]; then
-                  continue
-                fi
-                echo "myst-netns-watchdog: restarting $$svc ($$cid)"
-                docker restart "$$cid" >/dev/null || true
-              done
+            health="$$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$$myst_id" 2>/dev/null || true)"
+
+            if [ -n "$$started" ] && [ -z "$$applied_started" ]; then
+              applied_started="$$started"
+              last_started="$$started"
+              echo "myst-netns-watchdog: baseline myst started_at=$$started health=$$health"
             fi
-            prev_started="$$started"
+
+            if [ -n "$$started" ] && [ "$$started" != "$$last_started" ]; then
+              echo "myst-netns-watchdog: observed myst-client started_at=$$started health=$$health"
+              last_started="$$started"
+            fi
+
+            if [ -n "$$started" ] && [ "$$started" != "$$applied_started" ]; then
+              if [ "$$health" != "healthy" ]; then
+                echo "myst-netns-watchdog: waiting for myst-client healthy before restarting dependents (started_at=$$started health=$$health)"
+              else
+                echo "myst-netns-watchdog: myst-client healthy for started_at=$$started; restarting shared-netns services"
+                for cid in $$(docker ps -q \
+                  --filter label=com.docker.compose.project=$${COMPOSE_PROJECT_NAME} \
+                  --filter label=netns-shared-myst=true); do
+                  svc="$$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "$$cid" 2>/dev/null || true)"
+                  if [ "$$svc" = "myst-client" ]; then
+                    continue
+                  fi
+                  echo "myst-netns-watchdog: restarting $$svc ($$cid)"
+                  docker restart "$$cid" >/dev/null || true
+                done
+                applied_started="$$started"
+              fi
+            fi
           fi
 
           sleep "$${MYST_NETNS_WATCH_INTERVAL}"
