@@ -18,7 +18,9 @@ FROM alpine:3.22
 RUN apk add --no-cache ca-certificates
 
 COPY --from=builder /out/teep /usr/local/bin/teep
+COPY teep/build/entrypoint.sh /usr/local/bin/teep-entrypoint.sh
+RUN chmod +x /usr/local/bin/teep-entrypoint.sh
 
 EXPOSE 8337
-ENTRYPOINT ["/usr/local/bin/teep"]
+ENTRYPOINT ["/usr/local/bin/teep-entrypoint.sh"]
 CMD ["serve"]

@@ -350,10 +350,10 @@ services:
     labels:
       autoheal: "true"
       netns-shared-myst: "true"
-    command: ["serve"]
     network_mode: "service:myst-client"
     environment:
       TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-127.0.0.1:8337}"
+      TEEP_SERVE_FLAGS: "${TEEP_SERVE_FLAGS:-}"
       VENICE_API_KEY: "${VENICE_API_KEY:-}"
       NEARAI_API_KEY: "${NEARAI_API_KEY:-}"
       CHUTES_API_KEY: "${CHUTES_API_KEY:-}"
