@@ -34,7 +34,7 @@ EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx searxng-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-serve
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx searxng-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve
 
 help:
 	@echo "Targets:"
@@ -52,6 +52,7 @@ help:
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
 	@echo "  make teep-build   # Build teep image from teep/build/Dockerfile"
 	@echo "  make embedserv-install # Create embedserv venv with uv and download the MLX embedding model"
+	@echo "  make embedserv-verify-model # Verify embedserv/models copy for the selected MLX embedding model"
 	@echo "  make embedserv-serve   # Launch mlx-openai-server on LOCAL_EMBEDDINGS_URL"
 	@echo ""
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
@@ -258,7 +259,30 @@ embedserv-install:
 	MODEL_REPO="$$model_repo" MODEL_DIR="$$model_dir" "$$venv_python" -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["MODEL_REPO"], local_dir=os.environ["MODEL_DIR"])'; \
 	echo "Model ready at $$model_dir"
 
-embedserv-serve: embedserv-install
+embedserv-verify-model: embedserv-install
+	@set -eu; \
+	if [ ! -f "$(ENV_FILE)" ]; then \
+		echo "ERROR: missing $(ENV_FILE)"; \
+		exit 1; \
+	fi; \
+	set -a; . "$(ENV_FILE)"; set +a; \
+	model_repo="$${MLX_EMBEDDING_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
+	if [ ! -d "$$model_dir" ]; then \
+		echo "ERROR: model directory missing: $$model_dir"; \
+		exit 1; \
+	fi; \
+	echo "Verifying served model directory: $$model_dir"; \
+	verify_out=$$("$(PWD)/$(EMBEDSERV_VENV)/bin/hf" cache verify "$$model_repo" \
+		--local-dir "$$model_dir" \
+		--fail-on-missing-files 2>&1 || true); \
+	printf '%s\n' "$$verify_out"; \
+	if ! printf '%s\n' "$$verify_out" | grep -q "All checksums match."; then \
+		echo "ERROR: local embedserv model verification failed"; \
+		exit 1; \
+	fi
+
+embedserv-serve: embedserv-verify-model
 	@set -eu; \
 	if [ ! -f "$(ENV_FILE)" ]; then \
 		echo "ERROR: missing $(ENV_FILE)"; \

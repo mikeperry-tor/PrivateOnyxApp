@@ -1,3 +1,4 @@
 mlx-openai-server
 mlx-embeddings
 huggingface_hub
+typer==0.20.0 # Pin to avoid a sys.exit() traceback
