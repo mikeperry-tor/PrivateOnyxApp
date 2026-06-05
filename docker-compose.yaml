@@ -30,6 +30,9 @@ services:
     environment:
       # Optional LAN access bypass for local inference APIs / services.
       ALLOW_LAN_ACCESS: "${ALLOW_LAN_ACCESS:-false}"
+      # WireGuard MTU override to fix HTTPS timeouts on path MTU constraints
+      # Set to 1280 to work around ISP upstream path MTU constraints
+      MYST_WIREGUARD_MTU: "1280"
     volumes: !override
       - ./docker-data/myst-data:/var/lib/mysterium-node
       - ./docker-data/myst-data:/root/.mysterium
@@ -213,11 +216,21 @@ services:
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
     extra_hosts: !reset []
+    # Full-mode shim + tokenizer bootstrap can exceed upstream healthcheck grace.
+    # Give API startup enough time so autoheal does not recycle it mid-init.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 240s
     depends_on:
       myst-client:
         condition: service_healthy
     volumes: !override
       - ./docker-data/file-system:/app/file-system
+      - ./docker-data/model-cache:/app/.cache/huggingface
+      - ./docker-data/model-cache:/root/.cache/huggingface
       - api_server_logs:/var/log/onyx
 
   web_server:

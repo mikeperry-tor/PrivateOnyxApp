@@ -58,6 +58,8 @@ services:
         condition: service_healthy
     volumes: !override
       - ./docker-data/file-system:/app/file-system
+      - ./docker-data/model-cache:/app/.cache/huggingface
+      - ./docker-data/model-cache:/root/.cache/huggingface
       - background_logs:/var/log/onyx
 
   # Onyx internal/data services (full mode only)
