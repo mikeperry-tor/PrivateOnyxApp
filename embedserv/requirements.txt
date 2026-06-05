@@ -1,0 +1,3 @@
+mlx-openai-server
+mlx-embeddings
+huggingface_hub

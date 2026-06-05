@@ -26,11 +26,15 @@ ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
 ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
 SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
 SEARXNG_ENV_FILE := searxng/.env
+EMBEDSERV_DIR := embedserv
+EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
+EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
+EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx searxng-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx searxng-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-serve
 
 help:
 	@echo "Targets:"
@@ -47,12 +51,15 @@ help:
 	@echo "  make onyx-build   # Pull/build Onyx images via onyx/install.sh"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
 	@echo "  make teep-build   # Build teep image from teep/build/Dockerfile"
+	@echo "  make embedserv-install # Create embedserv venv with uv and download the MLX embedding model"
+	@echo "  make embedserv-serve   # Launch mlx-openai-server on LOCAL_EMBEDDINGS_URL"
 	@echo ""
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
+	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
 
 upgrade: myst-build teep-build searxng-image-ready upgrade-onyx
 
@@ -227,3 +234,65 @@ teep-build:
 		--build-arg TEEP_REF="$(TEEP_REF)" \
 		--tag "$(TEEP_IMAGE)" \
 		.
+
+embedserv-install:
+	@set -eu; \
+	if [ ! -f "$(ENV_FILE)" ]; then \
+		echo "ERROR: missing $(ENV_FILE)"; \
+		exit 1; \
+	fi; \
+	if ! command -v uv >/dev/null 2>&1; then \
+		echo "ERROR: uv is required for embedserv-install"; \
+		exit 1; \
+	fi; \
+	set -a; . "$(ENV_FILE)"; set +a; \
+	model_repo="$${MLX_EMBEDDING_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	venv_python="$(PWD)/$(EMBEDSERV_VENV)/bin/python"; \
+	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
+	mkdir -p "$(EMBEDSERV_DIR)" "$$(dirname "$$model_dir")"; \
+	if [ ! -x "$$venv_python" ]; then \
+		uv venv --python 3.12 "$(EMBEDSERV_VENV)"; \
+	fi; \
+	uv pip install --python "$$venv_python" -r "$(EMBEDSERV_REQUIREMENTS)"; \
+	echo "Downloading MLX embedding model: $$model_repo"; \
+	MODEL_REPO="$$model_repo" MODEL_DIR="$$model_dir" "$$venv_python" -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["MODEL_REPO"], local_dir=os.environ["MODEL_DIR"])'; \
+	echo "Model ready at $$model_dir"
+
+embedserv-serve: embedserv-install
+	@set -eu; \
+	if [ ! -f "$(ENV_FILE)" ]; then \
+		echo "ERROR: missing $(ENV_FILE)"; \
+		exit 1; \
+	fi; \
+	set -a; . "$(ENV_FILE)"; set +a; \
+	model_repo="$${MLX_EMBEDDING_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	served_model="$${LOCAL_EMBEDDING_MODEL:-$$model_repo}"; \
+	embeddings_url="$${LOCAL_EMBEDDINGS_URL:-http://host.docker.internal:1234/v1/embeddings}"; \
+	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
+	parsed_url=$$(URL="$$embeddings_url" python3 -c 'from urllib.parse import urlparse; import os; parsed = urlparse(os.environ["URL"]); print(parsed.scheme); print(parsed.hostname or ""); print("" if parsed.port is None else parsed.port); print(parsed.path.rstrip("/"))'); \
+	scheme=$$(printf '%s\n' "$$parsed_url" | sed -n '1p'); \
+	host=$$(printf '%s\n' "$$parsed_url" | sed -n '2p'); \
+	port=$$(printf '%s\n' "$$parsed_url" | sed -n '3p'); \
+	path=$$(printf '%s\n' "$$parsed_url" | sed -n '4p'); \
+	if [ "$$scheme" != "http" ]; then \
+		echo "ERROR: LOCAL_EMBEDDINGS_URL must use http: $$embeddings_url"; \
+		exit 1; \
+	fi; \
+	if [ -z "$$host" ] || [ -z "$$port" ]; then \
+		echo "ERROR: LOCAL_EMBEDDINGS_URL must include a host and explicit port: $$embeddings_url"; \
+		exit 1; \
+	fi; \
+	if [ "$$path" != "/v1/embeddings" ]; then \
+		echo "ERROR: LOCAL_EMBEDDINGS_URL must end with /v1/embeddings: $$embeddings_url"; \
+		exit 1; \
+	fi; \
+	if [ "$$host" = "host.docker.internal" ]; then \
+		host="0.0.0.0"; \
+	fi; \
+	echo "Launching mlx-openai-server for $$served_model on $$host:$$port (source URL: $$embeddings_url)"; \
+	exec "$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server" launch \
+		--model-type embeddings \
+		--model-path "$$model_dir" \
+		--served-model-name "$$served_model" \
+		--host "$$host" \
+		--port "$$port"
