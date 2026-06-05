@@ -45,6 +45,8 @@ services:
       MODEL_SERVER_PORT: "9101"
       INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
       INDEXING_MODEL_SERVER_PORT: "9101"
+      # code-interpreter runs on 7000 in the shared netns (8000 is taken by background prometheus).
+      CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
