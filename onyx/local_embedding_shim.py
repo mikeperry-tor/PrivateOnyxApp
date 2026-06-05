@@ -131,11 +131,15 @@ class Handler(BaseHTTPRequestHandler):
             body_raw = self.rfile.read(content_length)
             payload = json.loads(body_raw.decode("utf-8"))
 
-            model_name = str(payload.get("model_name") or "").strip() or DEFAULT_MODEL
-            if not model_name:
+            requested_model = str(payload.get("model_name") or "").strip() or DEFAULT_MODEL
+            if not requested_model:
                 raise ValueError(
                     "Missing model_name in request and LOCAL_EMBEDDING_MODEL is not set"
                 )
+
+            # If LOCAL_EMBEDDING_MODEL is configured, use it for upstream requests.
+            # Otherwise pass through the requested model name as-is.
+            upstream_model = DEFAULT_MODEL if DEFAULT_MODEL else requested_model
 
             text_type = str(payload.get("text_type", "")).upper()
             input_count = len(payload.get("texts", [])) if isinstance(payload.get("texts"), list) else 0
@@ -143,16 +147,17 @@ class Handler(BaseHTTPRequestHandler):
             log_line(
                 "embed_request"
                 f" text_type={text_type}"
-                f" model={model_name}"
+                f" requested_model={requested_model}"
+                f" upstream_model={upstream_model}"
                 f" inputs={input_count}"
                 f" prefix_source={prefix_source}"
                 f" prefix_len={prefix_len}"
             )
-            embeddings = request_local_embeddings(model_name, prefixed_texts)
+            embeddings = request_local_embeddings(upstream_model, prefixed_texts)
             first_dim = len(embeddings[0]) if embeddings else 0
             log_line(
                 "embed_success"
-                f" model={model_name}"
+                f" model={upstream_model}"
                 f" inputs={len(prefixed_texts)}"
                 f" vectors={len(embeddings)}"
                 f" dim={first_dim}"
