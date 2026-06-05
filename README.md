@@ -181,7 +181,7 @@ Quick verification:
 curl -sSf http://localhost:9101/health
 
 # Live debug logs (text type, prefix source, vector dims)
-docker compose --env-file .env.wrapper logs -f lmstudio-embedding-shim
+docker compose --env-file .env.wrapper logs -f local-embedding-shim
 ```
 
 ## Inference Provider Recommendations
