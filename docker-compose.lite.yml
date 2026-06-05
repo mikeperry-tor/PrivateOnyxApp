@@ -11,3 +11,8 @@ services:
       FILE_STORE_BACKEND: "postgres"
       CACHE_BACKEND: "postgres"
       AUTH_BACKEND: "postgres"
+      PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"
+    volumes: !override
+      - ./docker-data/file-system:/app/file-system
+      - api_server_logs:/var/log/onyx
+      - ./onyx/patches/sitecustomize:/app/wrapper-patches:ro
