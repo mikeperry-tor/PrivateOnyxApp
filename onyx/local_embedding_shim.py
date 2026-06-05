@@ -25,6 +25,7 @@ DEFAULT_PASSAGE_PREFIX = os.environ.get("SHIM_PASSAGE_PREFIX", "")
 HTTP_TIMEOUT_SECONDS = 30.0
 UPSTREAM_POOL_SIZE = max(1, int(os.environ.get("SHIM_UPSTREAM_POOL_SIZE", "8")))
 METRICS_LOG_EVERY = max(1, int(os.environ.get("SHIM_METRICS_LOG_EVERY", "50")))
+GPU_AVAILABLE = True
 
 
 class UpstreamHTTPError(Exception):
@@ -278,9 +279,86 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._send_json(200, {"status": "ok"})
             return
+        if self.path == "/api/gpu-status":
+            # Onyx startup probes this endpoint before indexing setup.
+            self._send_json(200, {"gpu_available": GPU_AVAILABLE})
+            return
         self._send_json(404, {"detail": "Not found"})
 
     def do_POST(self) -> None:
+        if self.path == "/encoder/cross-encoder-scores":
+            content_length = int(self.headers.get("Content-Length", "0"))
+            body_raw = self.rfile.read(content_length)
+            payload: dict = {}
+            if body_raw:
+                try:
+                    payload = json.loads(body_raw.decode("utf-8"))
+                except Exception:
+                    payload = {}
+
+            passages = payload.get("passages")
+            passage_count = len(passages) if isinstance(passages, list) else 0
+            query = payload.get("query")
+            query_len = len(query) if isinstance(query, str) else 0
+            payload_keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+
+            log_line(
+                "rerank_stub_called"
+                f" remote={self.client_address[0]}"
+                f" path={self.path}"
+                f" query_len={query_len}"
+                f" passages={passage_count}"
+                f" body_bytes={content_length}"
+                f" payload_keys={payload_keys}"
+            )
+            self._send_json(
+                501,
+                {
+                    "detail": (
+                        "Reranking endpoint is not implemented in local embedding shim. "
+                        "Route this call to an Onyx model-server that supports "
+                        "/encoder/cross-encoder-scores."
+                    )
+                },
+            )
+            return
+
+        if self.path == "/custom/query-analysis":
+            content_length = int(self.headers.get("Content-Length", "0"))
+            body_raw = self.rfile.read(content_length)
+            payload: dict = {}
+            if body_raw:
+                try:
+                    payload = json.loads(body_raw.decode("utf-8"))
+                except Exception:
+                    payload = {}
+
+            user_query = payload.get("query")
+            query_len = len(user_query) if isinstance(user_query, str) else 0
+            has_history = isinstance(payload.get("history"), list)
+            payload_keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+
+            log_line(
+                "query_analysis_stub_called"
+                f" remote={self.client_address[0]}"
+                f" path={self.path}"
+                f" query_len={query_len}"
+                f" has_history={has_history}"
+                f" body_bytes={content_length}"
+                f" payload_keys={payload_keys}"
+            )
+            self._send_json(
+                501,
+                {
+                    "detail": (
+                        "Query-analysis endpoint is not implemented in local embedding shim. "
+                        "Route this call to an Onyx model-server that supports "
+                        "/custom/query-analysis."
+                    )
+                },
+            )
+            return
+
         if self.path != "/encoder/bi-encoder-embed":
             self._send_json(404, {"detail": "Not found"})
             return
@@ -404,7 +482,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     log_line(
-        f"Starting local embedding shim on {HOST}:{PORT}, upstream={EMBEDDINGS_URL}, upstream_pool_size={UPSTREAM_POOL_SIZE}, metrics_log_every={METRICS_LOG_EVERY}"
+        f"Starting local embedding shim on {HOST}:{PORT}, upstream={EMBEDDINGS_URL}, upstream_pool_size={UPSTREAM_POOL_SIZE}, metrics_log_every={METRICS_LOG_EVERY}, gpu_available={GPU_AVAILABLE}"
     )
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.serve_forever()
