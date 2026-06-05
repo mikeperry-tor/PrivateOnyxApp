@@ -1,6 +1,7 @@
 ENV_FILE ?= .env.wrapper
 WRAPPER_FILE := docker-compose.yaml
-ONYX_LITE_FILE := onyx/onyx_data/deployment/docker-compose.onyx-lite.yml
+FULL_OVERRIDE_FILE := docker-compose.full.yml
+LITE_OVERRIDE_FILE := docker-compose.lite.yml
 
 MYST_NODE_REPO ?= https://github.com/mikeperry-tor/node.git
 MYST_NODE_BRANCH ?= docker_host_fixes_with_logs
@@ -26,8 +27,8 @@ ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
 SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
 SEARXNG_ENV_FILE := searxng/.env
 
-LITE_FILES := $(WRAPPER_FILE):$(ONYX_LITE_FILE)
-FULL_FILES := $(WRAPPER_FILE)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)
 
 .PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx searxng-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build
 

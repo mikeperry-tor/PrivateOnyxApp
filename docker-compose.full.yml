@@ -1,0 +1,200 @@
+## Full-mode override: local embedding shim and model-server routing
+## Applied by `make up-full` via COMPOSE_FILE layering.
+
+services:
+  background:
+    extends:
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
+      service: background
+    labels:
+      autoheal: "true"
+      netns-shared-myst: "true"
+    image: onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
+    build: !reset null
+    network_mode: "service:myst-client"
+    environment:
+      # Generate with: openssl rand -hex 32
+      USER_AUTH_SECRET: ${USER_AUTH_SECRET:-CHANGE_ME_DEV_ONLY_SET_A_LONG_RANDOM_SECRET}
+      # Disable optional telemetry/analytics integrations from wrapper layer.
+      DISABLE_TELEMETRY: "true"
+      SENTRY_DSN: ""
+      SENTRY_TRACES_SAMPLE_RATE: "0"
+      SENTRY_CELERY_TRACES_SAMPLE_RATE: "0"
+      HUBSPOT_TRACKING_URL: ""
+      POSTHOG_API_KEY: ""
+      MARKETING_POSTHOG_API_KEY: ""
+      POSTHOG_HOST: ""
+      POSTHOG_DEBUG_LOGS_ENABLED: "false"
+      NEXT_PUBLIC_CLOUD_ENABLED: "false"
+      LICENSE_ENFORCEMENT_ENABLED: "false"
+      ENABLE_PAID_ENTERPRISE_EDITION_FEATURES: "false"
+      NEXT_PUBLIC_ENABLE_PAID_EE_FEATURES: "false"
+      NEXT_PUBLIC_POSTHOG_KEY: ""
+      NEXT_PUBLIC_POSTHOG_HOST: ""
+      NEXT_PUBLIC_GTM_ENABLED: "false"
+      NEXT_PUBLIC_SENTRY_DSN: ""
+      NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
+      CAPTCHA_ENABLED: "false"
+      RECAPTCHA_SECRET_KEY: ""
+      # Controls Web connector SSRF-style URL checks. Empty disables checks;
+      # non-empty enables global-IP validation (blocks localhost/private IPs).
+      WEB_CONNECTOR_VALIDATE_URLS: ${WEB_CONNECTOR_VALIDATE_URLS:-}
+      # Wrapper-level alias for Onyx's asymmetric query prefix setting.
+      ASYM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
+      MODEL_SERVER_HOST: "127.0.0.1"
+      MODEL_SERVER_PORT: "9101"
+      INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
+      INDEXING_MODEL_SERVER_PORT: "9101"
+      CUSTOM_ANALYTICS_SECRET_KEY: ""
+      STRIPE_SECRET_KEY: ""
+      STRIPE_PUBLISHABLE_KEY: ""
+    extra_hosts: !reset []
+    depends_on:
+      myst-client:
+        condition: service_healthy
+      lmstudio-embedding-shim:
+        condition: service_healthy
+    volumes: !override
+      - ./docker-data/file-system:/app/file-system
+      - background_logs:/var/log/onyx
+
+  # Onyx internal/data services (full mode only)
+  inference_model_server:
+    extends:
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
+      service: inference_model_server
+    image: onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
+    build: !reset null
+    environment:
+      SENTRY_DSN: ""
+      SENTRY_TRACES_SAMPLE_RATE: "0"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes: !override
+      - ./docker-data/model-cache:/app/.cache/huggingface
+      - inference_model_server_logs:/var/log/onyx
+
+  indexing_model_server:
+    extends:
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
+      service: indexing_model_server
+    image: onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
+    build: !reset null
+    environment:
+      SENTRY_DSN: ""
+      SENTRY_TRACES_SAMPLE_RATE: "0"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes: !override
+      - ./docker-data/indexing-model-cache:/app/.cache/huggingface
+      - indexing_model_server_logs:/var/log/onyx
+
+  opensearch:
+    extends:
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
+      service: opensearch
+    volumes: !override
+      - ./docker-data/opensearch:/usr/share/opensearch/data
+
+  cache:
+    extends:
+      file: ./onyx/onyx_data/deployment/docker-compose.yml
+      service: cache
+
+  # Required by upstream Onyx service dependencies inherited via extends.
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_DEFAULT_BUCKETS: ${S3_FILE_STORE_BUCKET_NAME:-onyx-file-store-bucket}
+    volumes:
+      - ./docker-data/minio:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  host-doc-drop-web-proxy:
+    image: alpine/socat:1.8.0.3
+    restart: unless-stopped
+    command: tcp-listen:${DOC_DROP_WEB_PORT:-8091},fork,reuseaddr tcp-connect:myst-client:${DOC_DROP_WEB_CONTAINER_PORT:-8091}
+    ports:
+      - ${DOC_DROP_WEB_HOST:+${DOC_DROP_WEB_HOST}:}${DOC_DROP_WEB_PORT:-8091}:${DOC_DROP_WEB_CONTAINER_PORT:-8091}
+    depends_on:
+      myst-client:
+        condition: service_started
+
+  # Read-only HTTP view of DOC_DROP_DIR from inside the shared myst namespace.
+  # Use with Onyx Web connector at http://localhost:${DOC_DROP_WEB_PORT:-8091}/
+  # so source links stay host-clickable while crawler access remains local.
+  doc-drop-web:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
+      netns-shared-myst: "true"
+    network_mode: "service:myst-client"
+    volumes:
+      - ${DOC_DROP_DIR:-./doc-drop}:/import/docs:ro
+    command:
+      - python
+      - -m
+      - http.server
+      - ${DOC_DROP_WEB_CONTAINER_PORT:-8091}
+      - --bind
+      - 0.0.0.0
+      - --directory
+      - /import/docs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:${DOC_DROP_WEB_CONTAINER_PORT:-8091}/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      myst-client:
+        condition: service_healthy
+
+  api_server:
+    environment:
+      MODEL_SERVER_HOST: "127.0.0.1"
+      MODEL_SERVER_PORT: "9101"
+      INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
+      INDEXING_MODEL_SERVER_PORT: "9101"
+    depends_on:
+      lmstudio-embedding-shim:
+        condition: service_healthy
+
+  # Model-server-compatible embedding shim for local OpenAI-compatible
+  # /v1/embeddings endpoints.
+  lmstudio-embedding-shim:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
+      netns-shared-myst: "true"
+    network_mode: "service:myst-client"
+    environment:
+      LOCAL_EMBEDDINGS_URL: "${LOCAL_EMBEDDINGS_URL:-http://host.docker.internal:1234/v1/embeddings}"
+      LOCAL_EMBEDDING_API_KEY: "${LOCAL_EMBEDDING_API_KEY:-}"
+      LOCAL_EMBEDDING_MODEL: "${LOCAL_EMBEDDING_MODEL:-}"
+      SHIM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
+      SHIM_PASSAGE_PREFIX: "${ONYX_EMBEDDING_PASSAGE_PREFIX:-}"
+    volumes:
+      - ./shim/lmstudio_embedding_shim.py:/app/lmstudio_embedding_shim.py:ro
+    command:
+      - python
+      - /app/lmstudio_embedding_shim.py
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:9101/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      myst-client:
+        condition: service_healthy

@@ -134,6 +134,9 @@ Notes:
 
 #### Local Embedding Shim (release images)
 
+This shim is enabled in **full mode only** (`make up-full`). It is not started
+for lite mode (`make up-lite`).
+
 If you want query/passage prefix control for embeddings while running stock
 Onyx release images, use the local embedding shim path.
 

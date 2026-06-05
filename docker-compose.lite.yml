@@ -1,0 +1,13 @@
+## Lite-mode override for wrapper stack.
+## Applied by `make up-lite` via COMPOSE_FILE layering.
+
+services:
+  api_server:
+    depends_on: !reset
+      myst-client:
+        condition: service_healthy
+    environment:
+      DISABLE_VECTOR_DB: "true"
+      FILE_STORE_BACKEND: "postgres"
+      CACHE_BACKEND: "postgres"
+      AUTH_BACKEND: "postgres"
