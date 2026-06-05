@@ -82,8 +82,30 @@ apply_route_exemptions() {
   fi
 }
 
+apply_wireguard_mtu() {
+  [ -n "${MYST_WIREGUARD_MTU:-}" ] || return 0
+
+  if ! ip link show myst0 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  _current_mtu="$(ip -o link show myst0 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "mtu") {print $(i+1); exit}}')"
+  if [ -z "${_current_mtu}" ]; then
+    return 0
+  fi
+
+  if [ "${_current_mtu}" != "${MYST_WIREGUARD_MTU}" ]; then
+    if ip link set dev myst0 mtu "${MYST_WIREGUARD_MTU}" >/dev/null 2>&1; then
+      echo "WireGuard MTU: set myst0 mtu=${MYST_WIREGUARD_MTU} (was ${_current_mtu})"
+    else
+      echo "WireGuard MTU: failed to set myst0 mtu=${MYST_WIREGUARD_MTU} (current ${_current_mtu})"
+    fi
+  fi
+}
+
 (
   while true; do
+    apply_wireguard_mtu
     apply_route_exemptions
     sleep 20
   done
@@ -108,6 +130,10 @@ done
 myst_cli identities list >/dev/null 2>&1 || true
 
 echo "TequilAPI is ready."
+
+# The daemon accepts --wireguard.mtu, but some peers/sessions still come up
+# with default interface MTU. Enforce requested MTU on the live tunnel.
+apply_wireguard_mtu
 
 IDS="$(myst_cli identities list 2>/dev/null | grep -Eo '0x[0-9a-fA-F]{40}' || true)"
 if [ -z "$IDS" ]; then
@@ -337,8 +363,10 @@ wait_for_connected() {
   _elapsed=0
   while [ "$_elapsed" -lt "$_status_timeout" ]; do
     if connection_is_up; then
+      apply_wireguard_mtu
       return 0
     fi
+    apply_wireguard_mtu
     sleep 2
     _elapsed="$(( _elapsed + 2 ))"
   done
@@ -388,6 +416,8 @@ connect_one_attempt() {
         --runtime-dir="${OS_DIR_RUN}" \
         connection up "${_provider}" --service-type="${_svc}" --location-type="${_loc}" || true
       if wait_for_connected; then
+        apply_wireguard_mtu
+        apply_route_exemptions
         IFS="$OLDIFS"
         return 0
       fi
@@ -413,7 +443,12 @@ connect_one_attempt() {
       --runtime-dir="${OS_DIR_RUN}" \
       connection up --service-type="${_svc}" --location-type="${_loc}" || true
   fi
-  wait_for_connected
+  if wait_for_connected; then
+    apply_wireguard_mtu
+    apply_route_exemptions
+    return 0
+  fi
+  return 1
 }
 
 if [ "${MYST_AUTO_CONNECT:-true}" = "true" ] && [ -n "$ID" ]; then

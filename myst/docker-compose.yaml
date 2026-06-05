@@ -181,7 +181,7 @@ services:
     environment:
       MYST_AUTO_CONNECT: "true"
       # Optional WireGuard interface MTU override passed to the daemon.
-      MYST_WIREGUARD_MTU: ""
+      MYST_WIREGUARD_MTU: "${MYST_WIREGUARD_MTU:-}"
       # Diagnostic override to skip peer route exclusion during P2P setup.
       MYST_SKIP_PEER_ROUTE_EXCLUDE: "false"
       # Comma-separated hostnames that should bypass myst0 and stay on eth0.
