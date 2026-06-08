@@ -31,6 +31,15 @@ if [ "${MYST_SKIP_UPDATE_RESOLV_CONF:-false}" = "true" ]; then
   chmod +x "${OS_DIR_CONFIG}/update-resolv-conf"
 fi
 
+# Capture the Docker bridge gateway before removing its default route so the
+# kill-switch and route exemptions keep using the host-side path only.
+DOCKER_BRIDGE_GW="$(ip -4 route show default dev eth0 2>/dev/null | awk '/default/ {print $3; exit}')"
+DOCKER_BRIDGE_DEV="$(ip -4 route show default dev eth0 2>/dev/null | awk '/default/ {print $5; exit}')"
+if [ -z "${DOCKER_BRIDGE_GW:-}" ] || [ -z "${DOCKER_BRIDGE_DEV:-}" ]; then
+  DOCKER_BRIDGE_GW="$(ip -4 route show default 2>/dev/null | awk '/default/ {print $3; exit}')"
+  DOCKER_BRIDGE_DEV="$(ip -4 route show default 2>/dev/null | awk '/default/ {print $5; exit}')"
+fi
+
 # Start daemon in consumer-only mode (no provider services).
 # Disable LAN discovery to avoid mDNS/Bonjour conflicts in host-network tests.
 set -- --local-service-discovery=false --consumer
@@ -43,8 +52,8 @@ set -- "$@" daemon
 svc_pid="$!"
 
 apply_route_exemptions() {
-  _gw="$(ip -4 route show default 2>/dev/null | awk '/default/ {print $3; exit}')"
-  _dev="$(ip -4 route show default 2>/dev/null | awk '/default/ {print $5; exit}')"
+  _gw="${DOCKER_BRIDGE_GW:-}"
+  _dev="${DOCKER_BRIDGE_DEV:-}"
   [ -n "${_gw:-}" ] || return 0
   [ -n "${_dev:-}" ] || return 0
 
