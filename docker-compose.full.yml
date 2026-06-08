@@ -6,12 +6,9 @@ services:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: background
-    labels:
-      autoheal: "true"
-      netns-shared-myst: "true"
     image: onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
-    network_mode: "service:myst-client"
+    network_mode: "service:netns-holder"
     environment:
       # Generate with: openssl rand -hex 32
       USER_AUTH_SECRET: ${USER_AUTH_SECRET:-CHANGE_ME_DEV_ONLY_SET_A_LONG_RANDOM_SECRET}
@@ -53,8 +50,11 @@ services:
       STRIPE_PUBLISHABLE_KEY: ""
     extra_hosts: !reset []
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true
       local-embedding-shim:
         condition: service_healthy
     volumes: !override
@@ -130,8 +130,11 @@ services:
     ports:
       - ${DOC_DROP_WEB_HOST:+${DOC_DROP_WEB_HOST}:}${DOC_DROP_WEB_PORT:-8091}:${DOC_DROP_WEB_CONTAINER_PORT:-8091}
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_started
+        restart: true
 
   # Read-only HTTP view of DOC_DROP_DIR from inside the shared myst namespace.
   # Use with Onyx Web connector at http://localhost:${DOC_DROP_WEB_PORT:-8091}/
@@ -139,10 +142,7 @@ services:
   doc-drop-web:
     image: python:3.12-alpine
     restart: unless-stopped
-    labels:
-      autoheal: "true"
-      netns-shared-myst: "true"
-    network_mode: "service:myst-client"
+    network_mode: "service:netns-holder"
     volumes:
       - ${DOC_DROP_DIR:-./doc-drop}:/import/docs:ro
     command:
@@ -161,8 +161,11 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true
 
   api_server:
     environment:
@@ -180,10 +183,7 @@ services:
   local-embedding-shim:
     image: python:3.12-alpine
     restart: unless-stopped
-    labels:
-      autoheal: "true"
-      netns-shared-myst: "true"
-    network_mode: "service:myst-client"
+    network_mode: "service:netns-holder"
     environment:
       LOCAL_EMBEDDINGS_URL: "${LOCAL_EMBEDDINGS_URL:-http://host.docker.internal:1234/v1/embeddings}"
       LOCAL_EMBEDDING_API_KEY: "${LOCAL_EMBEDDING_API_KEY:-}"
@@ -202,5 +202,8 @@ services:
       retries: 5
       start_period: 10s
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true

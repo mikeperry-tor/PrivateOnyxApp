@@ -4,8 +4,11 @@
 services:
   api_server:
     depends_on: !reset
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true
     environment:
       DISABLE_VECTOR_DB: "true"
       FILE_STORE_BACKEND: "postgres"

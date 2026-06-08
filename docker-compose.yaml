@@ -8,6 +8,23 @@
 name: onyx
 
 services:
+  # Stable owner for the shared network namespace.
+  # All VPN-routed services join this namespace so myst-client can restart
+  # without invalidating other containers' network namespace references.
+  netns-holder:
+    image: alpine:3.20
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - myst-client
+          - api_server
+          - web_server
+          - background
+          - nginx
+          - code-interpreter
+
   # VPN gateway for SearxNG-routed workloads
   myst-client:
     extends:
@@ -15,18 +32,12 @@ services:
       service: myst-client
     labels:
       autoheal: "true"
+    # Join the stable namespace owned by netns-holder.
+    network_mode: "service:netns-holder"
     # Keep myst-client internal-only. Host port publishing is handled by
     # dedicated bridge proxies below so host access remains stable even when
     # VPN routing is active in this namespace.
     ports: []
-    networks:
-      default:
-        aliases:
-          - api_server
-          - web_server
-          - background
-          - nginx
-          - code-interpreter
     environment:
       # Optional LAN access bypass for local inference APIs / services.
       ALLOW_LAN_ACCESS: "${ALLOW_LAN_ACCESS:-false}"
@@ -37,23 +48,26 @@ services:
       - ./docker-data/myst-data:/var/lib/mysterium-node
       - ./docker-data/myst-data:/root/.mysterium
       - ./myst/myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
+    depends_on:
+      netns-holder:
+        condition: service_started
 
   searxng-core:
     extends:
       file: ./searxng/docker-compose.yml
       service: core
-    labels:
-      autoheal: "true"
-      netns-shared-myst: "true"
     environment:
       SEARXNG_PORT: ${SEARXNG_CONTAINER_PORT:-8888}
-    network_mode: "service:myst-client"
+    network_mode: "service:netns-holder"
     volumes: !override
       - ./searxng/core-config/:/etc/searxng/:Z
       - ./docker-data/searxng-cache:/var/cache/searxng
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true
 
   searxng-valkey:
     extends:
@@ -63,7 +77,8 @@ services:
       - ./docker-data/valkey:/data
 
   # Host-facing TCP bridges. These run on the normal compose network and
-  # forward host traffic to services inside the myst-client namespace.
+  # forward host traffic to services inside the shared netns-holder namespace
+  # (reachable through the myst-client alias on the default network).
   host-web-proxy:
     image: alpine/socat:1.8.0.3
     restart: unless-stopped
@@ -71,8 +86,11 @@ services:
     ports:
       - "${HOST_PORT:-3000}:3000"
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_started
+        restart: true
 
   host-searxng-proxy:
     image: alpine/socat:1.8.0.3
@@ -81,8 +99,11 @@ services:
     ports:
       - ${SEARXNG_HOST:+${SEARXNG_HOST}:}${SEARXNG_PORT:-8080}:${SEARXNG_CONTAINER_PORT:-8888}
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_started
+        restart: true
 
   host-teep-proxy:
     image: alpine/socat:1.8.0.3
@@ -91,8 +112,11 @@ services:
     ports:
       - ${TEEP_HOST:+${TEEP_HOST}:}${TEEP_PORT:-8337}:${TEEP_CONTAINER_PORT:-8337}
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_started
+        restart: true
 
   # Restarts containers marked with autoheal=true when Docker health is unhealthy.
   autoheal:
@@ -109,79 +133,14 @@ services:
       myst-client:
         condition: service_started
 
-  # Watches myst-client lifecycle and restarts containers sharing its netns
-  # when myst-client is restarted/recreated.
-  myst-netns-watchdog:
-    image: docker:27-cli
-    restart: unless-stopped
-    environment:
-      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-onyx}
-      MYST_NETNS_WATCH_INTERVAL: ${MYST_NETNS_WATCH_INTERVAL:-15}
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        last_started=""
-        applied_started=""
-        while true; do
-          myst_id="$$(docker ps -q \
-            --filter label=com.docker.compose.project=$${COMPOSE_PROJECT_NAME} \
-            --filter label=com.docker.compose.service=myst-client | head -n1)"
-
-          if [ -n "$$myst_id" ]; then
-            started="$$(docker inspect -f '{{.State.StartedAt}}' "$$myst_id" 2>/dev/null || true)"
-            health="$$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$$myst_id" 2>/dev/null || true)"
-
-            if [ -n "$$started" ] && [ -z "$$applied_started" ]; then
-              applied_started="$$started"
-              last_started="$$started"
-              echo "myst-netns-watchdog: baseline myst started_at=$$started health=$$health"
-            fi
-
-            if [ -n "$$started" ] && [ "$$started" != "$$last_started" ]; then
-              echo "myst-netns-watchdog: observed myst-client started_at=$$started health=$$health"
-              last_started="$$started"
-            fi
-
-            if [ -n "$$started" ] && [ "$$started" != "$$applied_started" ]; then
-              if [ "$$health" != "healthy" ]; then
-                echo "myst-netns-watchdog: waiting for myst-client healthy before restarting dependents (started_at=$$started health=$$health)"
-              else
-                echo "myst-netns-watchdog: myst-client healthy for started_at=$$started; restarting shared-netns services"
-                for cid in $$(docker ps -q \
-                  --filter label=com.docker.compose.project=$${COMPOSE_PROJECT_NAME} \
-                  --filter label=netns-shared-myst=true); do
-                  svc="$$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "$$cid" 2>/dev/null || true)"
-                  if [ "$$svc" = "myst-client" ]; then
-                    continue
-                  fi
-                  echo "myst-netns-watchdog: restarting $$svc ($$cid)"
-                  docker restart "$$cid" >/dev/null || true
-                done
-                applied_started="$$started"
-              fi
-            fi
-          fi
-
-          sleep "$${MYST_NETNS_WATCH_INTERVAL}"
-        done
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      myst-client:
-        condition: service_started
-
-  # Onyx app tier (routed through the shared myst-client-vpn namespace)
+  # Onyx app tier (routed through the shared netns-holder namespace)
   api_server:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: api_server
-    labels:
-      autoheal: "true"
-      netns-shared-myst: "true"
     image: onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
-    network_mode: "service:myst-client"
+    network_mode: "service:netns-holder"
     environment:
       # code-interpreter runs on 7000 in the shared netns (8000 is taken by background prometheus).
       CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
@@ -225,8 +184,11 @@ services:
       retries: 3
       start_period: 240s
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true
     volumes: !override
       - ./docker-data/file-system:/app/file-system
       - ./docker-data/model-cache:/app/.cache/huggingface
@@ -237,12 +199,9 @@ services:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: web_server
-    labels:
-      autoheal: "true"
-      netns-shared-myst: "true"
     image: onyxdotapp/onyx-web-server:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
-    network_mode: "service:myst-client"
+    network_mode: "service:netns-holder"
     environment:
       # Disable frontend analytics/instrumentation and cloud billing flows.
       NEXT_PUBLIC_CLOUD_ENABLED: "false"
@@ -267,17 +226,17 @@ services:
       retries: 5
       start_period: 30s
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true
 
   nginx:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: nginx
-    labels:
-      autoheal: "true"
-      netns-shared-myst: "true"
-    network_mode: "service:myst-client"
+    network_mode: "service:netns-holder"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/ || exit 1"]
       interval: 30s
@@ -286,19 +245,19 @@ services:
       start_period: 30s
     ports: !reset []
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true
 
   code-interpreter:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: code-interpreter
-    labels:
-      autoheal: "true"
-      netns-shared-myst: "true"
     #image: onyxdotapp/code-interpreter:${CODE_INTERPRETER_IMAGE_TAG:?CODE_INTERPRETER_IMAGE_TAG must be set}
     image: onyxdotapp/code-interpreter:${CODE_INTERPRETER_IMAGE_TAG:?CODE_INTERPRETER_IMAGE_TAG must be set}
-    network_mode: "service:myst-client"
+    network_mode: "service:netns-holder"
     # Port 8000 is occupied in the shared myst netns by background's Prometheus
     # metrics server (hardcoded start_http_server(8000) in slack/listener.py).
     # Redirect code-interpreter to 7000 and point api_server/background at it.
@@ -306,16 +265,16 @@ services:
       PORT: "7000"
       CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true
 
   teep:
     image: ${TEEP_IMAGE:-13rac1/teep:main}
     restart: unless-stopped
-    labels:
-      autoheal: "true"
-      netns-shared-myst: "true"
-    network_mode: "service:myst-client"
+    network_mode: "service:netns-holder"
     environment:
       TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-127.0.0.1:8337}"
       TEEP_SERVE_FLAGS: "${TEEP_SERVE_FLAGS:-}"
@@ -329,8 +288,11 @@ services:
       retries: 3
       start_period: 20s
     depends_on:
+      netns-holder:
+        condition: service_started
       myst-client:
         condition: service_healthy
+        restart: true
 
   relational_db:
     extends:
