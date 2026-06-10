@@ -365,23 +365,6 @@ connection_is_up() {
     | grep -Eiq '"status"[[:space:]]*:[[:space:]]*"Connected"|Status:[[:space:]]*Connected'
 }
 
-wait_for_connected() {
-  _status_timeout="${MYST_CONNECT_STATUS_TIMEOUT:-30}"
-  case "$_status_timeout" in ''|0) _status_timeout=30 ;; esac
-
-  _elapsed=0
-  while [ "$_elapsed" -lt "$_status_timeout" ]; do
-    if connection_is_up; then
-      apply_wireguard_mtu
-      return 0
-    fi
-    apply_wireguard_mtu
-    sleep 2
-    _elapsed="$(( _elapsed + 2 ))"
-  done
-  return 1
-}
-
 ts_utc() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
@@ -390,69 +373,194 @@ log_with_ts() {
   echo "[$(ts_utc)] $*"
 }
 
+connection_status_line() {
+  $MYST connection info 2>/dev/null \
+    | strip_ansi \
+    | grep -E 'Status:|"status"' \
+    | head -n1 || true
+}
+
+connection_is_up_stable() {
+  # Use multiple probes to avoid transient false negatives while TequilAPI settles.
+  _probe_connected=0
+  _probe=1
+  while [ "$_probe" -le 3 ]; do
+    if connection_is_up; then
+      _probe_connected="$(( _probe_connected + 1 ))"
+    fi
+    if [ "$_probe" -lt 3 ]; then
+      sleep 1
+    fi
+    _probe="$(( _probe + 1 ))"
+  done
+  [ "$_probe_connected" -ge 2 ]
+}
+
+wait_for_connected() {
+  _status_timeout="${MYST_CONNECT_STATUS_TIMEOUT:-30}"
+  case "$_status_timeout" in ''|0) _status_timeout=30 ;; esac
+
+  log_with_ts "Waiting up to ${_status_timeout}s for Connected status."
+  _elapsed=0
+  while [ "$_elapsed" -lt "$_status_timeout" ]; do
+    if connection_is_up; then
+      _status_line="$(connection_status_line)"
+      log_with_ts "Connected status observed after ${_elapsed}s: ${_status_line:-unknown}"
+      apply_wireguard_mtu
+      return 0
+    fi
+
+    # Emit periodic diagnostics so we can trace status-check drift/regressions.
+    if [ "$(( _elapsed % 6 ))" -eq 0 ]; then
+      _status_line="$(connection_status_line)"
+      log_with_ts "Still waiting for Connected status at ${_elapsed}s: ${_status_line:-unknown}"
+    fi
+
+    apply_wireguard_mtu
+    sleep 2
+    _elapsed="$(( _elapsed + 2 ))"
+  done
+
+  _status_line="$(connection_status_line)"
+  log_with_ts "Connected status not observed within ${_status_timeout}s. Last status: ${_status_line:-unknown}"
+  return 1
+}
+
 connect_one_attempt() {
+  _attempt_num="${1:-1}"
   _svc="${MYST_SERVICE_TYPE:-wireguard}"
   _loc="${MYST_LOCATION_TYPE:-residential}"
   _up_timeout="${MYST_CONNECT_UP_TIMEOUT:-45}"
   case "$_up_timeout" in ''|0) _up_timeout=45 ;; esac
 
+  run_connection_up() {
+    # shellcheck disable=SC2039
+    set +e
+    _connect_out="$($@ 2>&1)"
+    _connect_rc=$?
+    set -e
+
+    if [ -n "${_connect_out:-}" ]; then
+      printf '%s\n' "${_connect_out}"
+    fi
+
+    if printf '%s' "${_connect_out:-}" | grep -Eiq 'err_connection_already_exists|connection already exists'; then
+      # If daemon says connection already exists, avoid any further retry/provider churn.
+      log_with_ts "connect command returned already_exists; treating as successful no-op and stopping retries for this cycle."
+      return 0
+    fi
+
+    if [ "$_connect_rc" -eq 0 ]; then
+      if wait_for_connected; then
+        return 0
+      fi
+      log_with_ts "connect command exited 0 but Connected status was not observed before timeout."
+      return 1
+    fi
+
+    if [ "$_connect_rc" -eq 124 ]; then
+      log_with_ts "connect command timed out after ${_up_timeout}s (exit 124)."
+    else
+      log_with_ts "connect command failed with exit ${_connect_rc}."
+    fi
+
+    if connection_is_up_stable; then
+      log_with_ts "Connected status became stable after connect command failure; treating as success."
+      return 0
+    fi
+    return 1
+  }
+
   # Avoid tearing down an already-established tunnel during retry cycles.
-  if connection_is_up; then
-    echo "Connection is already established."
+  if connection_is_up_stable; then
+    log_with_ts "Connection is already established before attempting connect."
     return 0
   fi
 
   if [ -n "${MYST_PROVIDER_IDS:-}" ]; then
     OLDIFS="$IFS"
     IFS=','
+    _provider_list=""
+    _provider_count=0
     for _provider in ${MYST_PROVIDER_IDS}; do
-      # A previous provider attempt may have connected asynchronously.
-      # Re-check before issuing another `connection up`.
-      if connection_is_up; then
-        IFS="$OLDIFS"
-        echo "Connection is already established."
-        return 0
-      fi
-
       _provider="$(printf '%s' "${_provider}" | xargs)"
       [ -n "${_provider}" ] || continue
-      log_with_ts "Connection attempt using pinned provider: ${_provider}"
-      $MYST connection down >/dev/null 2>&1 || true
-      timeout ${_up_timeout} myst \
-        --config-dir="${OS_DIR_DATA}" \
-        --script-dir="${OS_DIR_CONFIG}" \
-        --data-dir="${OS_DIR_DATA}" \
-        --runtime-dir="${OS_DIR_RUN}" \
-        connection up "${_provider}" --service-type="${_svc}" --location-type="${_loc}" || true
-      if wait_for_connected; then
-        apply_wireguard_mtu
-        apply_route_exemptions
-        IFS="$OLDIFS"
-        return 0
+      _provider_count="$(( _provider_count + 1 ))"
+      if [ -z "${_provider_list}" ]; then
+        _provider_list="${_provider}"
+      else
+        _provider_list="${_provider_list}\n${_provider}"
       fi
     done
     IFS="$OLDIFS"
+
+    if [ "$_provider_count" -eq 0 ]; then
+      log_with_ts "MYST_PROVIDER_IDS was set but no valid provider IDs were parsed."
+      return 1
+    fi
+
+    # Strict no-fan-out policy: exactly one provider attempt per retry cycle.
+    _selected_index="$(( (( _attempt_num - 1 ) % _provider_count) + 1 ))"
+    _selected_provider="$(printf '%b' "${_provider_list}" | sed -n "${_selected_index}p")"
+    log_with_ts "Pinned providers enabled (count=${_provider_count}); attempt ${_attempt_num} selecting provider ${_selected_index}/${_provider_count}: ${_selected_provider}"
+
+    if connection_is_up_stable; then
+      log_with_ts "Connection is already established before provider ${_selected_provider}; skipping down/up."
+      return 0
+    fi
+
+    $MYST connection down >/dev/null 2>&1 || true
+
+    if run_connection_up timeout ${_up_timeout} myst \
+      --config-dir="${OS_DIR_DATA}" \
+      --script-dir="${OS_DIR_CONFIG}" \
+      --data-dir="${OS_DIR_DATA}" \
+      --runtime-dir="${OS_DIR_RUN}" \
+      connection up "${_selected_provider}" --service-type="${_svc}" --location-type="${_loc}"; then
+      apply_wireguard_mtu
+      apply_route_exemptions
+      return 0
+    fi
+
+    log_with_ts "Pinned provider ${_selected_provider} did not reach stable Connected status in attempt ${_attempt_num}."
     return 1
   fi
 
   log_with_ts "Connection attempt using provider selection filters (provider_id=auto country=${MYST_COUNTRY:-any})"
-  $MYST connection down >/dev/null 2>&1 || true
-  if [ -n "${MYST_COUNTRY:-}" ]; then
-    timeout ${_up_timeout} myst \
-      --config-dir="${OS_DIR_DATA}" \
-      --script-dir="${OS_DIR_CONFIG}" \
-      --data-dir="${OS_DIR_DATA}" \
-      --runtime-dir="${OS_DIR_RUN}" \
-      connection up --country="${MYST_COUNTRY}" --service-type="${_svc}" --location-type="${_loc}" || true
+
+  if ! connection_is_up_stable; then
+    $MYST connection down >/dev/null 2>&1 || true
   else
-    timeout ${_up_timeout} myst \
+    log_with_ts "Connection is already established before auto-selection connect; skipping down/up."
+    return 0
+  fi
+
+  if [ -n "${MYST_COUNTRY:-}" ]; then
+    if run_connection_up timeout ${_up_timeout} myst \
       --config-dir="${OS_DIR_DATA}" \
       --script-dir="${OS_DIR_CONFIG}" \
       --data-dir="${OS_DIR_DATA}" \
       --runtime-dir="${OS_DIR_RUN}" \
-      connection up --service-type="${_svc}" --location-type="${_loc}" || true
+      connection up --country="${MYST_COUNTRY}" --service-type="${_svc}" --location-type="${_loc}"; then
+      apply_wireguard_mtu
+      apply_route_exemptions
+      return 0
+    fi
+  else
+    if run_connection_up timeout ${_up_timeout} myst \
+      --config-dir="${OS_DIR_DATA}" \
+      --script-dir="${OS_DIR_CONFIG}" \
+      --data-dir="${OS_DIR_DATA}" \
+      --runtime-dir="${OS_DIR_RUN}" \
+      connection up --service-type="${_svc}" --location-type="${_loc}"; then
+      apply_wireguard_mtu
+      apply_route_exemptions
+      return 0
+    fi
   fi
-  if wait_for_connected; then
+
+  if connection_is_up_stable; then
+    log_with_ts "Connected status became stable after provider auto-selection failure; treating as success."
     apply_wireguard_mtu
     apply_route_exemptions
     return 0
@@ -471,14 +579,18 @@ if [ "${MYST_AUTO_CONNECT:-true}" = "true" ] && [ -n "$ID" ]; then
 
   _attempt=1
   while [ "$_attempt" -le "$_max_attempts" ]; do
-    log_with_ts "Connect attempt $_attempt/$_max_attempts provider_id=${MYST_PROVIDER_IDS:-auto}"
-    if connect_one_attempt; then
-      log_with_ts "Connection established on attempt $_attempt provider_id=${MYST_PROVIDER_IDS:-auto}"
+    if [ -n "${MYST_PROVIDER_IDS:-}" ]; then
+      log_with_ts "Connect attempt $_attempt/$_max_attempts mode=pinned-single-provider"
+    else
+      log_with_ts "Connect attempt $_attempt/$_max_attempts mode=auto-provider-selection"
+    fi
+    if connect_one_attempt "$_attempt"; then
+      log_with_ts "Connection established on attempt $_attempt"
       break
     fi
 
     if [ "$_attempt" -lt "$_max_attempts" ]; then
-      log_with_ts "Connect attempt $_attempt failed, retrying in ${_retry_interval}s provider_id=${MYST_PROVIDER_IDS:-auto}"
+      log_with_ts "Connect attempt $_attempt failed, retrying in ${_retry_interval}s"
       sleep "$_retry_interval"
     fi
     _attempt="$(( _attempt + 1 ))"
