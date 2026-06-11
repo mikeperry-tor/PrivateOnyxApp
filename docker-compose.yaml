@@ -171,6 +171,8 @@ services:
       WEB_CONNECTOR_VALIDATE_URLS: ${WEB_CONNECTOR_VALIDATE_URLS:-}
       # Wrapper-level alias for Onyx's asymmetric query prefix setting.
       ASYM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
+      # Interactive chat + deep-research tool-call loop cap (per request); we want long research capability
+      MAX_LLM_CYCLES: "${MAX_LLM_CYCLES:-50}"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
@@ -277,6 +279,7 @@ services:
     network_mode: "service:netns-holder"
     environment:
       TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-127.0.0.1:8337}"
+      TEEP_MAX_CONNS: "${TEEP_MAX_CONNS:-6}"
       TEEP_SERVE_FLAGS: "${TEEP_SERVE_FLAGS:-}"
       VENICE_API_KEY: "${VENICE_API_KEY:-}"
       NEARAI_API_KEY: "${NEARAI_API_KEY:-}"
