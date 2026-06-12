@@ -173,6 +173,12 @@ services:
       ASYM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
       # Interactive chat + deep-research tool-call loop cap (per request); we want long research capability
       MAX_LLM_CYCLES: "${MAX_LLM_CYCLES:-50}"
+      # Optional wrapper-level overrides for open_url content truncation.
+      # Leave empty to use Onyx defaults.
+      OPEN_URL_MAX_CHARS_PER_URL: "${OPEN_URL_MAX_CHARS_PER_URL:-}"
+      OPEN_URL_MAX_CHARS_ACROSS_URLS: "${OPEN_URL_MAX_CHARS_ACROSS_URLS:-}"
+      # Base wrapper sitecustomize patches (applies to full and lite compose).
+      PYTHONPATH: "/app/wrapper-patches-base:${PYTHONPATH:-}"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
@@ -195,6 +201,7 @@ services:
       - ./docker-data/file-system:/app/file-system
       - ./docker-data/model-cache:/app/.cache/huggingface
       - ./docker-data/model-cache:/root/.cache/huggingface
+      - ./onyx/patches/sitecustomize_base:/app/wrapper-patches-base:ro
       - api_server_logs:/var/log/onyx
 
   web_server:
