@@ -1,8 +1,8 @@
 # Private Onyx.App Docker Compose Set
 
-Docker Compose wrapper for running [Onyx](https://github.com/onyx-dot-app/onyx) with the [teep](https://github.com/13rac1/teep) private verified LLM inference proxy and [SearXNG](https://github.com/searxng/searxng). All search, web, and inference traffic is sent over a [Mysterium](https://github.com/mysteriumnetwork/node) VPN connection.
+Docker Compose wrapper for running [Onyx](https://github.com/onyx-dot-app/onyx) with the [teep](https://github.com/13rac1/teep) private verified LLM inference proxy and [SearXNG](https://github.com/searxng/searxng). All search, web, and inference traffic is sent over a [Mysterium](https://github.com/mysteriumnetwork/node) VPN connection. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely.
 
-This stack gets you a private deep research agent with a clean web interface.
+This stack gets you a private deep research agent and RAG document searching via a decent web interface that you can access from anywhere.
 
 ## Deep Research Mode Support
 
@@ -14,13 +14,15 @@ The Deep Research Mode in Onyx is optional, but if you do not need intense multi
 
 The Docker Compose files in this stack rely on four components:
 
-1. [Onyx](https://github.com/onyx-dot-app/onyx) provides a [top-ranking Deep Research Agent](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard), with a decent web interface and comprehensive connector and RAG support. While other open source deep research agents rank slightly higher than Onyx, it is the only provider-neutral option with a complete user interface.
+1. [Onyx](https://github.com/onyx-dot-app/onyx) provides a [top-ranking Deep Research Agent](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard), with a decent web interface and comprehensive connector and RAG-based local document search support. While other open source deep research agents rank slightly higher than Onyx, it is the only provider-neutral option with a complete user interface.
 
 2. [Teep](https://github.com/13rac1/teep) provides private verified LLM inference via a local OpenAI-compatible proxy on port 8337. Teep supports [multiple private inference providers](https://github.com/13rac1/teep#supported-providers), and verifies attestation, encryption, and remote runtime properties before requests are allowed to proceed.
 
 3. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends (Bing, DuckDuckGo, Brave, and Google are enabled by default).
 
 4. [Mysterium](https://github.com/mysteriumnetwork/node) is a Wireguard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. The use of residential IP addresses reduces the rate of captchas and rate limiting by search engines and websites. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
+
+5. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to the Onyx web interface. The TLS key is generated locally and signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
 
 ## Prerequisites
 
@@ -45,7 +47,7 @@ Edit `.env.wrapper` as needed:
   - `MYST_PROVIDER_IDS`
 - Optional Tailscale Funnel exposure (public HTTPS 443 -> Onyx UI):
   - Set `TAILSCALE_FUNNEL_ENABLED=true`
-  - Set `TAILSCALE_AUTHKEY` using a key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
+  - Set `TAILSCALE_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
   - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
 - **Optional LAN access** (for local inference APIs):
   - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs running locally (e.g., LMStudio) while maintaining fail-closed behavior for all other traffic. Default: `false`
@@ -58,45 +60,11 @@ Edit `.env.wrapper` as needed:
 
 ## Running the Stack
 
-The stack comes in two flavors: lite and full. This specifies the mode of the Onyx app. Lite mode provides Chat, Web, and Research only. Full mode also provides RAG, external app connectors, and groupware. Lite mode uses significantly less RAM (~2GB vs ~20GB).
+The stack comes in two flavors: lite and full. This specifies the mode of the Onyx app. Lite mode provides Chat, Web, and Research only. Full mode also provides RAG, external app connectors, and groupware. Lite mode uses significantly less RAM (~1GB vs ~20GB).
 
 It is possible to switch between full and lite modes.
 
 All persistent data is bind-mounted to subdirectories in `./docker-data`
-
-### Optional: Tailscale Funnel
-
-This wrapper can optionally publish only the Onyx WebUI through Tailscale Funnel.
-
-- Public endpoint: `https://<device>.<tailnet>.ts.net` on port 443
-- Internal target: `host-web-proxy:3000` (Onyx UI bridge)
-- Namespace behavior: `tailscale-funnel` runs on the default compose network and does **not** join `service:netns-holder`, so it does not route through Myst VPN.
-- Networking mode: userspace (`TS_USERSPACE=true`) by default.
-
-Tailscale prerequisites:
-
-- MagicDNS enabled
-- HTTPS certificates enabled for your tailnet
-- Funnel node attribute enabled for your user/device in ACL policy
-
-Enable it in `.env.wrapper`:
-
-```bash
-TAILSCALE_FUNNEL_ENABLED=true
-TAILSCALE_AUTHKEY=tskey-client-...
-```
-
-Bring the stack up as usual (`make up-lite` or `make up-full`).
-
-Useful logs:
-
-```bash
-make logs-tailscale-lite
-# or
-make logs-tailscale-full
-```
-
-Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The service will remain idle and will not publish Funnel routes.
 
 ### Lite Mode
 
@@ -150,7 +118,52 @@ make logs-full
 
 3. Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
 
-### Local Documents via Web Connector
+### Inference Provider Recommendations
+
+The best privacy preserving provider supported by teep is currently `neardirect`, which is the direct completions version of [NearAI](https://cloud.near.ai). NearAI is also useful in that it can be used with cryptocurrency.
+
+Teep will also soon add support for [Tinfoil](https://tinfoil.sh), which also has an excellent security architecture, as well as excellent mobile and web apps.
+
+This stack can also be used with LMStudio or any other local LLM provider. Simply use `host.docker.internal` to connect to your localhost instance, using the Onyx Admin UI configuration. The OpenAI Compatible endpoint in Onyx works the best.
+
+### LLM recommendations
+
+Verifiable private inference is only currently possible with Open Weight models. While it is [technically possible](https://www.anthropic.com/research/confidential-inference-trusted-vms) for closed weight models to support attestation-based verification, proprietary LLM labs [do not seem to be interested](https://www.anthropic.com/news/activating-asl3-protections) in offering privacy to end users.
+
+For a research agent like Onyx, the primary desirable property is a low hallucination rate. The [Artificial Analysis Omniscience Index](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) provides a [Hallucination Rate benchmark](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) that is worth tracking for this purpose.
+
+Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.1 is the best option for text, and Kimi-2.6 is the best multimodal option.
+
+## Optional Configuration
+
+The following sections detail additional optional feature configuration, including remote access via TailScale Funnel, and RAG document search.
+
+### Optional: Tailscale Funnel
+
+You can publish only the Onyx WebUI through Tailscale Funnel to access it remotely.
+
+- Public endpoint: `https://<device>.<tailnet>.ts.net` on port 443
+- The tailscale service does not route through Mysterium VPN, to avoid linking your tailscale account to your search actvity at the Myst VPN exit server.
+- Tailscale uses the userspace networking mode, so no VPN activity is involved.
+
+Tailscale Funnel prerequisites:
+
+- MagicDNS enabled
+- HTTPS certificates enabled for your tailnet
+- Funnel node attribute enabled for your user/device in ACL policy
+
+Enable it in `.env.wrapper`:
+
+```bash
+TAILSCALE_FUNNEL_ENABLED=true
+TAILSCALE_AUTHKEY=tskey-client-...
+```
+
+Bring the stack up as usual (`make up-lite` or `make up-full`).
+
+Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The service will remain idle and will not publish Funnel routes.
+
+### Optional: Local Document RAG via Web Connector
 
 The full version of Onyx supports search and retrieval (RAG) over PDF, DOC, EPUB, and other document types.
 
@@ -170,73 +183,39 @@ Notes:
 - In this wrapper, `WEB_CONNECTOR_VALIDATE_URLS` is set empty for Onyx backend
   containers so localhost crawling is allowed for this local-only use case.
 
-#### Local Embedding Shim (release images)
+### Optional: Running a Local Embedding Model Server (Mac)
 
-This shim is enabled in **full mode only** (`make up-full`). It is not started
-for lite mode (`make up-lite`).
+If you are on a Mac, the makefile has rules that can install [Harrier-oss-v1-0.6b](https://huggingface.co/microsoft/harrier-oss-v1-0.6b), which is a SOTA open weight embedding model:
 
-If you want query/passage prefix control for embeddings while running stock
-Onyx release images, use the local embedding shim path.
-
-Why: Onyx's LiteLLM/cloud embedding path rejects manual prefix strings. The shim
-keeps Onyx on the local model-server code path and forwards to a local
-OpenAI-compatible `/v1/embeddings` API.
-
-Required `.env.wrapper` settings:
-
-```bash
-# Query/passage prefixes used by the shim
-ONYX_EMBEDDING_QUERY_PREFIX="Instruct: Given a document query, retrieve the most relevant chunk.\nQuery: "
-ONYX_EMBEDDING_PASSAGE_PREFIX=""
-
-# Local endpoint (adjust host/port to your embedding server)
-LOCAL_EMBEDDINGS_URL="http://host.docker.internal:12340/v1/embeddings"
-
-# Optional
-#LOCAL_EMBEDDING_API_KEY=""
-#LOCAL_EMBEDDING_MODEL="text-embedding-qwen3-embedding-4b"
+```sh
+# Install mlx-openai-server and mlx-embeddings in ./embedserv using `uv`
+make embedserv-install
+# Verify the model was downloaded correctly
+make embedserv-verify-model
+# Launch the embedding server
+make embedserv-serve
 ```
 
-Restart services after editing:
+These rules use `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs), and LM Studio's is non-existent.
 
-```bash
-make up-full
-```
+### Optional: Using Teep for Embeddings
 
-Index Settings configuration in Onyx Admin:
+If you are not on a Mac, your best bet is to use `Qwen/Qwen3-Embedding-0.6B` with the `neardirect` provider.
 
-1. Go to **Index Settings**.
-2. Stage/select your embedding model as **Self-Hosted / Custom Model** (local)
-  so Onyx uses the local model-server path.
-3. Use the same model name as your local embedding model (for example
-  `text-embedding-qwen3-embedding-4b`).
-4. Do **not** configure embeddings through LiteLLM for this flow.
+TODO: Document this in more detail
 
-Quick verification:
+### Optional: Local/Custom Embedding Model Configuration
 
-```bash
-# Shim health
-curl -sSf http://localhost:9101/health
+Properly configuring an open-weight frontier embedding model for RAG is a minefield. Almost no one gets it right, including Onyx and LiteLLM. Do **not** configure embeddings through LiteLLM.
 
-# Live debug logs (text type, prefix source, vector dims)
-docker compose --env-file .env.wrapper logs -f local-embedding-shim
-```
+Frontier embedding models require an instruction prefix when generating queries, but unfortunately, Onyx has an issue with handling this prefix for generic LLM providers. To address this, the stack contains a local shim which allows you to set the query prefix via an environment instead. The prefixes in `.env.wrapper.example` should be good for either Harrier or Qwen3.
 
-## Inference Provider Recommendations
+To use this shim:
 
-The best privacy preserving provider supported by teep is currently `neardirect`, which is the direct completions version of [NearAI](https://cloud.near.ai). NearAI is also useful in that it can be used with cryptocurrency.
-
-Teep will also soon add support for [Tinfoil](https://tinfoil.sh), which also has an excellent security architecture, as well as excellent mobile and web apps.
-
-This stack can also be used with LMStudio or any other local LLM provider. Simply use `host.docker.internal` to connect to your localhost instance, using the Onyx Admin UI configuration. The OpenAI Compatible endpoint in Onyx works the best.
-
-## LLM recommendations
-
-Verifiable private inference is only currently possible with Open Weight models. While it is [technically possible](https://www.anthropic.com/research/confidential-inference-trusted-vms) for closed weight models to support attestation-based verification, proprietary LLM labs [do not seem to be interested](https://www.anthropic.com/news/activating-asl3-protections) in offering privacy to end users.
-
-For a research agent like Onyx, the primary desirable property is a low hallucination rate. The [Artificial Analysis Omniscience Index](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) provides a [Hallucination Rate benchmark](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) that is worth tracking for this purpose.
-
-Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.1 is the best option for text, and Kimi-2.6 is the best multimodal option.
+1. Go to [Onyx Admin Index Settings](http://localhost:3000/admin/configuration/index-settings)
+2. Select your embedding model as **Self-Hosted / Custom Model** (local)
+3. Enter `nomic-ai/nomic-embed-text-v23` as the model type (Onyx has special hardcoded features for nomic-ai...)
+4. For both `Harrier-OSS-V1-0.6B` and `Qwen3-Embedding-0.6B`, the embedding dimension is 1024.
 
 ## Docker Host Endpoints
 
