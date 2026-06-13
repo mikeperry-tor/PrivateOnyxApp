@@ -2,7 +2,7 @@
 
 Docker Compose wrapper for running [Onyx](https://github.com/onyx-dot-app/onyx) with the [teep](https://github.com/13rac1/teep) private verified LLM inference proxy and [SearXNG](https://github.com/searxng/searxng). All search, web, and inference traffic is sent over a [Mysterium](https://github.com/mysteriumnetwork/node) VPN connection. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely.
 
-This stack gets you a private deep research agent and RAG document searching via a decent web interface that you can access from anywhere.
+This stack gets you a private deep research agent and RAG document searching via a responsive web interface that you can access from anywhere.
 
 ## Deep Research Mode Support
 
@@ -29,34 +29,6 @@ The Docker Compose files in this stack rely on four components:
 - Docker or Podman
 - Internet access for image builds and provider APIs
 - `make`
-
-## Configure Environment
-
-Edit `.env.wrapper` as needed:
-
-- Host ports:
-  - `HOST_PORT` (Onyx UI bridge)
-  - `SEARXNG_PORT`
-  - `TEEP_PORT`
-  - `DOC_DROP_WEB_PORT` (local docs bridge for Web connector)
-- Provider/API config:
-  - Set at least one teep key (for example `NEARAI_API_KEY`, `VENICE_API_KEY`, or `CHUTES_API_KEY`)
-- Optional local documents directory for Web connector indexing:
-  - `DOC_DROP_DIR` (host directory to expose read-only, default `./doc-drop`)
-- Optional Myst provider pinning:
-  - `MYST_PROVIDER_IDS`
-- Optional Tailscale Funnel exposure (public HTTPS 443 -> Onyx UI):
-  - Set `TAILSCALE_FUNNEL_ENABLED=true`
-  - Set `TAILSCALE_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
-  - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
-- **Optional LAN access** (for local inference APIs):
-  - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs running locally (e.g., LMStudio) while maintaining fail-closed behavior for all other traffic. Default: `false`
-- Optional Myst funding order auto-creation:
-  - `MYST_ORDER_AMOUNT`
-  - `MYST_ORDER_CURRENCY`
-  - `MYST_ORDER_GATEWAY`
-  - `MYST_ORDER_COUNTRY`
-  - `MYST_WAIT_FOR_FUNDS`
 
 ## Running the Stack
 
@@ -118,13 +90,34 @@ make logs-full
 
 3. Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
 
+### Configure Environment
+
+Edit `.env.wrapper` as needed, based on the `.env.wrapper.example` template.
+
+Most likely variables you want to change:
+
+- Teep LLM Provider/API config:
+  - Set at least one teep key (for example `NEARAI_API_KEY`, `VENICE_API_KEY`, or `CHUTES_API_KEY`)
+- Optional Tailscale Funnel exposure (public HTTPS 443 -> Onyx UI):
+  - Set `TAILSCALE_FUNNEL_ENABLED=true`
+  - Set `TAILSCALE_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
+  - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
+- **Optional LAN access** (for local inference APIs):
+  - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs running locally (e.g., LMStudio) while maintaining fail-closed behavior for all other traffic. Default: `false`
+- Optional Myst funding order auto-creation:
+  - `MYST_ORDER_AMOUNT`
+  - `MYST_ORDER_CURRENCY`
+  - `MYST_ORDER_GATEWAY`
+  - `MYST_ORDER_COUNTRY`
+  - `MYST_WAIT_FOR_FUNDS`
+
 ### Inference Provider Recommendations
 
 The best privacy preserving provider supported by teep is currently `neardirect`, which is the direct completions version of [NearAI](https://cloud.near.ai). NearAI is also useful in that it can be used with cryptocurrency.
 
 Teep will also soon add support for [Tinfoil](https://tinfoil.sh), which also has an excellent security architecture, as well as excellent mobile and web apps.
 
-This stack can also be used with LMStudio or any other local LLM provider. Simply use `host.docker.internal` to connect to your localhost instance, using the Onyx Admin UI configuration. The OpenAI Compatible endpoint in Onyx works the best.
+This stack can also be used with LMStudio or any other local LLM provider.  Simply use `host.docker.internal` to connect to your localhost instance, using the Onyx Admin UI configuration.
 
 ### LLM recommendations
 
@@ -140,9 +133,9 @@ The following sections detail additional optional feature configuration, includi
 
 ### Optional: Tailscale Funnel
 
-You can publish only the Onyx WebUI through Tailscale Funnel to access it remotely.
+You can publish the Onyx WebUI through Tailscale Funnel to access it remotely.
 
-- Public endpoint: `https://<device>.<tailnet>.ts.net` on port 443
+- Public endpoint: `https://onyx.your-tailnet.ts.net` on port 443
 - The tailscale service does not route through Mysterium VPN, to avoid linking your tailscale account to your search actvity at the Myst VPN exit server.
 - Tailscale uses the userspace networking mode, so no VPN activity is involved.
 
