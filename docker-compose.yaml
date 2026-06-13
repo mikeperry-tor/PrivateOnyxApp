@@ -133,6 +133,42 @@ services:
       myst-client:
         condition: service_started
 
+  # Optional Tailscale Funnel bridge for exposing the Onyx WebUI publicly.
+  # This service intentionally stays on the default compose network so it
+  # does not inherit Myst VPN routing from netns-holder.
+  tailscale-funnel:
+    image: tailscale/tailscale:stable
+    entrypoint: ["/usr/local/bin/tailscale-entrypoint.sh"]
+    restart: unless-stopped
+    environment:
+      TAILSCALE_FUNNEL_ENABLED: "${TAILSCALE_FUNNEL_ENABLED:-false}"
+      TAILSCALE_FUNNEL_TARGET_HOST: "host-web-proxy"
+      TAILSCALE_FUNNEL_TARGET_PORT: "3000"
+      TAILSCALE_FUNNEL_HTTPS_PORT: "443"
+      TS_AUTHKEY: "${TAILSCALE_AUTHKEY:-}"
+      TS_HOSTNAME: "${TAILSCALE_HOSTNAME:-onyx-funnel}"
+      TS_AUTH_ONCE: "true"
+      TS_ACCEPT_DNS: "false"
+      TS_USERSPACE: "true"
+      TS_STATE_DIR: "/var/lib/tailscale"
+      TS_EXTRA_ARGS: "${TAILSCALE_EXTRA_ARGS:-}"
+    volumes:
+      - ./docker-data/tailscale:/var/lib/tailscale
+      - ./tailscale/entrypoint.sh:/usr/local/bin/tailscale-entrypoint.sh:ro
+    depends_on:
+      host-web-proxy:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "enabled=$$(printf '%s' \"$${TAILSCALE_FUNNEL_ENABLED:-false}\" | tr '[:upper:]' '[:lower:]'); if [ \"$$enabled\" != \"1\" ] && [ \"$$enabled\" != \"true\" ] && [ \"$$enabled\" != \"yes\" ] && [ \"$$enabled\" != \"on\" ]; then exit 0; fi; tailscale status >/dev/null 2>&1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
   # Onyx app tier (routed through the shared netns-holder namespace)
   api_server:
     extends:

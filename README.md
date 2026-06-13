@@ -43,6 +43,10 @@ Edit `.env.wrapper` as needed:
   - `DOC_DROP_DIR` (host directory to expose read-only, default `./doc-drop`)
 - Optional Myst provider pinning:
   - `MYST_PROVIDER_IDS`
+- Optional Tailscale Funnel exposure (public HTTPS 443 -> Onyx UI):
+  - Set `TAILSCALE_FUNNEL_ENABLED=true`
+  - Set `TAILSCALE_AUTHKEY` using a key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
+  - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
 - **Optional LAN access** (for local inference APIs):
   - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs running locally (e.g., LMStudio) while maintaining fail-closed behavior for all other traffic. Default: `false`
 - Optional Myst funding order auto-creation:
@@ -59,6 +63,40 @@ The stack comes in two flavors: lite and full. This specifies the mode of the On
 It is possible to switch between full and lite modes.
 
 All persistent data is bind-mounted to subdirectories in `./docker-data`
+
+### Optional: Tailscale Funnel
+
+This wrapper can optionally publish only the Onyx WebUI through Tailscale Funnel.
+
+- Public endpoint: `https://<device>.<tailnet>.ts.net` on port 443
+- Internal target: `host-web-proxy:3000` (Onyx UI bridge)
+- Namespace behavior: `tailscale-funnel` runs on the default compose network and does **not** join `service:netns-holder`, so it does not route through Myst VPN.
+- Networking mode: userspace (`TS_USERSPACE=true`) by default.
+
+Tailscale prerequisites:
+
+- MagicDNS enabled
+- HTTPS certificates enabled for your tailnet
+- Funnel node attribute enabled for your user/device in ACL policy
+
+Enable it in `.env.wrapper`:
+
+```bash
+TAILSCALE_FUNNEL_ENABLED=true
+TAILSCALE_AUTHKEY=tskey-client-...
+```
+
+Bring the stack up as usual (`make up-lite` or `make up-full`).
+
+Useful logs:
+
+```bash
+make logs-tailscale-lite
+# or
+make logs-tailscale-full
+```
+
+Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The service will remain idle and will not publish Funnel routes.
 
 ### Lite Mode
 

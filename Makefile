@@ -12,6 +12,7 @@ TEEP_REPO ?= https://github.com/13rac1/teep.git
 TEEP_REF ?= main
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
 TEEP_IMAGE ?= 13rac1/teep:main
+TAILSCALE_IMAGE ?= tailscale/tailscale:stable
 
 # Source of truth: ONYX_IMAGE_TAG in $(ENV_FILE). Allow CLI override.
 ONYX_IMAGE_TAG ?= $(strip $(shell sed -n 's/^ONYX_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1))
@@ -34,7 +35,7 @@ EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx searxng-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve
 
 help:
 	@echo "Targets:"
@@ -46,7 +47,7 @@ help:
 	@echo "  make ps-full      # Show full mode containers"
 	@echo "  make logs-lite    # Tail lite mode logs"
 	@echo "  make logs-full    # Tail full mode logs"
-	@echo "  make upgrade      # Rebuild Myst + teep images, refresh Onyx deployment files, and pull SearxNG"
+	@echo "  make upgrade      # Rebuild Myst + teep images, refresh Onyx deployment files, pull SearxNG, and pull Tailscale"
 	@echo "  make upgrade-onyx # Download fresh Onyx deployment files for ONYX_IMAGE_TAG"
 	@echo "  make onyx-build   # Pull/build Onyx images via onyx/install.sh"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
@@ -62,7 +63,11 @@ help:
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
 
-upgrade: myst-build teep-build searxng-image-ready upgrade-onyx
+upgrade: myst-build teep-build searxng-image-ready tailscale-image-ready upgrade-onyx
+
+tailscale-image-ready:
+	@echo "Pulling Tailscale image: $(TAILSCALE_IMAGE)"; \
+	docker pull "$(TAILSCALE_IMAGE)"
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
