@@ -2,6 +2,7 @@ ENV_FILE ?= .env.wrapper
 WRAPPER_FILE := docker-compose.yaml
 FULL_OVERRIDE_FILE := docker-compose.full.yml
 LITE_OVERRIDE_FILE := docker-compose.lite.yml
+PODMAN_OVERRIDE_FILE := docker-compose.podman.yml
 
 MYST_NODE_REPO ?= https://github.com/mikeperry-tor/node.git
 MYST_NODE_BRANCH ?= docker_host_fixes_with_logs
@@ -14,11 +15,23 @@ TEEP_DOCKERFILE ?= teep/build/Dockerfile
 TEEP_IMAGE ?= 13rac1/teep:main
 TAILSCALE_IMAGE ?= tailscale/tailscale:stable
 CONTAINER_BIN ?= $(strip $(shell sed -n 's/^CONTAINER_BIN=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+DOCKER_SOCK_PATH ?= $(strip $(shell sed -n 's/^DOCKER_SOCK_PATH=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
 endif
+ifeq ($(strip $(DOCKER_SOCK_PATH)),)
+ifneq ($(findstring podman,$(CONTAINER_BIN)),)
+DOCKER_SOCK_PATH := $(strip $(shell "$(CONTAINER_BIN)" machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | head -1))
+endif
+endif
 export CONTAINER_BIN
+export DOCKER_SOCK_PATH
+
+PODMAN_COMPOSE_SUFFIX :=
+ifneq ($(findstring podman,$(CONTAINER_BIN)),)
+PODMAN_COMPOSE_SUFFIX :=:$(PODMAN_OVERRIDE_FILE)
+endif
 
 # Source of truth: ONYX_IMAGE_TAG in $(ENV_FILE). Allow CLI override.
 ONYX_IMAGE_TAG ?= $(strip $(shell sed -n 's/^ONYX_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1))
@@ -40,8 +53,8 @@ EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)
 
 .PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve
 
@@ -69,6 +82,8 @@ help:
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override install-time low-port remap: make up-full ONYX_INSTALL_HOST_PORT_80=3001"
 	@echo "Override container engine: make up-lite CONTAINER_BIN=/opt/homebrew/bin/podman"
+	@echo "Override socket path: make up-lite DOCKER_SOCK_PATH=/path/to/docker-or-podman.sock"
+	@echo "Note: podman mode applies $(PODMAN_OVERRIDE_FILE) (disables code-interpreter + autoheal by default)"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"

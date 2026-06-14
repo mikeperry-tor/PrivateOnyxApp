@@ -100,6 +100,7 @@ Most likely variables you want to change:
   - Set `CONTAINER_BIN` to the docker or podman executable you want the wrapper to use.
   - Examples: `CONTAINER_BIN=docker` or `CONTAINER_BIN=/opt/homebrew/bin/podman`
   - The bundled installer shim exposes that executable to the upstream Onyx installer as `docker`, so local updates to `onyx/install.sh` do not need to be re-patched.
+  - In podman mode, the wrapper also applies `docker-compose.podman.yml`, which disables `code-interpreter` and `autoheal` by default because they require a functional Docker daemon socket inside containers.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `NEARAI_API_KEY`, `VENICE_API_KEY`, or `CHUTES_API_KEY`)
 - Optional Tailscale Funnel exposure (public HTTPS 443 -> Onyx UI):

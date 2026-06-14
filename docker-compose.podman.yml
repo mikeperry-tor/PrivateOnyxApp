@@ -1,0 +1,8 @@
+services:
+  # These services require a functional Docker daemon socket inside containers.
+  # In podman machine mode on macOS, that socket path is not reliably usable.
+  autoheal:
+    profiles: ["requires-docker-socket"]
+
+  code-interpreter:
+    profiles: ["requires-docker-socket"]
