@@ -14,10 +14,12 @@ TEEP_DOCKERFILE ?= teep/build/Dockerfile
 TEEP_IMAGE ?= 13rac1/teep:main
 TAILSCALE_IMAGE ?= tailscale/tailscale:stable
 CONTAINER_BIN ?= $(strip $(shell sed -n 's/^CONTAINER_BIN=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
 endif
 export CONTAINER_BIN
+export PODMAN_COMPOSE_PROVIDER
 
 # Source of truth: ONYX_IMAGE_TAG in $(ENV_FILE). Allow CLI override.
 ONYX_IMAGE_TAG ?= $(strip $(shell sed -n 's/^ONYX_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1))

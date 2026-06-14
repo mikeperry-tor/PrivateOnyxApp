@@ -3,6 +3,7 @@
 set -eo pipefail
 
 CONTAINER_BIN="${CONTAINER_BIN:-docker}"
+PODMAN_COMPOSE_PROVIDER="${PODMAN_COMPOSE_PROVIDER:-podman}"
 INSTALL_SCRIPT="${ONYX_INSTALL_SCRIPT:-./install.sh}"
 
 if [[ "$CONTAINER_BIN" == */* ]]; then
@@ -32,4 +33,4 @@ trap cleanup EXIT
 
 ln -s "$RESOLVED_CONTAINER_BIN" "$SHIM_DIR/docker"
 
-PATH="$SHIM_DIR:$PATH" exec bash "$INSTALL_SCRIPT" "$@"
+PATH="$SHIM_DIR:$PATH" PODMAN_COMPOSE_PROVIDER="$PODMAN_COMPOSE_PROVIDER" exec bash "$INSTALL_SCRIPT" "$@"
