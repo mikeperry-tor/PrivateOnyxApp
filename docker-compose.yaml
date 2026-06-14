@@ -202,9 +202,10 @@ services:
       NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
       CAPTCHA_ENABLED: "false"
       RECAPTCHA_SECRET_KEY: ""
-      # Controls Web connector SSRF-style URL checks. Empty disables checks;
-      # non-empty enables global-IP validation (blocks localhost/private IPs).
-      WEB_CONNECTOR_VALIDATE_URLS: ${WEB_CONNECTOR_VALIDATE_URLS:-}
+      # Controls Web connector SSRF-style URL checks.
+      OPEN_URL_VALIDATE_SSRF: ${OPEN_URL_VALIDATE_SSRF:-}
+      MCP_SERVER_ALLOW_PRIVATE_NETWORK: ${MCP_SERVER_ALLOW_PRIVATE_NETWORK:-}
+      MCP_SERVER_ALLOW_LOOPBACK: ${MCP_SERVER_ALLOW_LOOPBACK:-}
       # Wrapper-level alias for Onyx's asymmetric query prefix setting.
       ASYM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
       # Interactive chat + deep-research tool-call loop cap (per request); we want long research capability

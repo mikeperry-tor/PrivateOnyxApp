@@ -103,7 +103,11 @@ Most likely variables you want to change:
   - Set `TAILSCALE_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
   - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
 - **Optional LAN access** (for local inference APIs):
-  - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs running locally (e.g., LMStudio) while maintaining fail-closed behavior for all other traffic. Default: `false`
+  - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
+- Optional Onyx SSRF defaults (for MCP servers and local doc-drop crawling):
+  - `OPEN_URL_VALIDATE_SSRF`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK`, and `MCP_SERVER_ALLOW_LOOPBACK` seed Onyx's default SSRF Protection level at startup.
+  - After you save a value in Onyx Admin -> Security Hardening, the saved UI setting becomes the effective runtime policy and overrides these defaults.
+  - If you want both MCP servers on `host.docker.internal` and the doc-drop connector at `http://localhost:8091/`, use `OPEN_URL_VALIDATE_SSRF=true`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, and `MCP_SERVER_ALLOW_LOOPBACK=false`. That yields the `Allow Private Network` posture by default.
 - Optional Myst funding order auto-creation:
   - `MYST_ORDER_AMOUNT`
   - `MYST_ORDER_CURRENCY`
@@ -119,6 +123,8 @@ Teep will also soon add support for [Tinfoil](https://tinfoil.sh), which also ha
 
 This stack can also be used with LMStudio or any other local LLM provider.  Simply use `host.docker.internal` to connect to your localhost instance, using the Onyx Admin UI configuration.
 
+If the local provider is running on a private/LAN address, you will usually also want `ALLOW_LAN_ACCESS=true` so traffic can bypass the Myst VPN firewall to reach your host or LAN service.
+
 ### LLM recommendations
 
 Verifiable private inference is only currently possible with Open Weight models. While it is [technically possible](https://www.anthropic.com/research/confidential-inference-trusted-vms) for closed weight models to support attestation-based verification, proprietary LLM labs [do not seem to be interested](https://www.anthropic.com/news/activating-asl3-protections) in offering privacy to end users.
@@ -127,7 +133,7 @@ For a research agent like Onyx, the primary desirable property is a low hallucin
 
 Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.1 is the best option for text, and Kimi-2.6 is the best multimodal option.
 
-## Optional Configuration
+## Optional Configurations
 
 The following sections detail additional optional feature configuration, including remote access via TailScale Funnel, and RAG document search.
 
@@ -173,8 +179,14 @@ Notes:
 
 - Directory listing pages are crawlable; you can also target specific files
   directly, e.g. `http://localhost:8091/my-paper.pdf`.
-- In this wrapper, `WEB_CONNECTOR_VALIDATE_URLS` is set empty for Onyx backend
-  containers so localhost crawling is allowed for this local-only use case.
+- Onyx v4.1+ has SSRF Protection that can block this service if you save a
+  Security Hardening override in the Admin UI.
+- The defaults in `.env.wrapper.example` seed the `Allow Private Network` posture
+  in the Security Hardening UI, which allows this localhost connector while still keeping
+  loopback/link-local protections on LLM-initiated fetch paths.
+- If you already saved a different value in Onyx Admin -> Security Hardening,
+  that saved setting takes precedence. For doc-drop crawling, avoid the strict
+  `Validate All` setting.
 
 ### Optional: Running a Local Embedding Model Server (Mac)
 
@@ -190,6 +202,8 @@ make embedserv-serve
 ```
 
 These rules use `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs), and LM Studio's is non-existent.
+
+You must also set `ALLOW_LAN_ACCESS=true` in `.env.wrapper`, so traffic can bypass the Myst VPN firewall to reach this embedding service.
 
 ### Optional: Using Teep for Embeddings
 
