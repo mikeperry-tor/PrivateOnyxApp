@@ -139,7 +139,12 @@ upgrade-onyx:
 	install -m 0644 "$$tmp_dir/README.md" onyx/onyx_data/README.md; \
 	install -m 0644 "$$tmp_dir/app.conf.template" onyx/onyx_data/data/nginx/app.conf.template; \
 	install -m 0755 "$$tmp_dir/run-nginx.sh" onyx/onyx_data/data/nginx/run-nginx.sh; \
-	echo "Downloaded Onyx deployment files for ref $$config_ref"
+	echo "Downloaded Onyx deployment files for ref $$config_ref"; \
+	if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
+		echo "Creating .env from template..."; \
+		cp onyx/onyx_data/deployment/env.template "$(ONYX_ENV_FILE)"; \
+		echo "Created $(ONYX_ENV_FILE) from template"; \
+	fi
 	@$(MAKE) sync-onyx-env
 
 searxng-image-ready:
