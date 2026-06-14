@@ -108,7 +108,7 @@ services:
   host-teep-proxy:
     image: alpine/socat:1.8.0.3
     restart: unless-stopped
-    command: tcp-listen:${TEEP_CONTAINER_PORT:-8337},fork,reuseaddr tcp-connect:myst-client:${TEEP_CONTAINER_PORT:-8337}
+    command: tcp-listen:${TEEP_PORT:-8337},fork,reuseaddr tcp-connect:myst-client:${TEEP_CONTAINER_PORT:-8337}
     ports:
       - ${TEEP_HOST:+${TEEP_HOST}:}${TEEP_PORT:-8337}:${TEEP_CONTAINER_PORT:-8337}
     depends_on:
@@ -324,7 +324,7 @@ services:
     restart: unless-stopped
     network_mode: "service:netns-holder"
     environment:
-      TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-127.0.0.1:8337}"
+      TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-0.0.0.0:${TEEP_CONTAINER_PORT:-8337}}"
       TEEP_MAX_CONNS: "${TEEP_MAX_CONNS:-6}"
       TEEP_SERVE_FLAGS: "${TEEP_SERVE_FLAGS:-}"
       VENICE_API_KEY: "${VENICE_API_KEY:-}"
