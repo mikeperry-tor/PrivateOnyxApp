@@ -96,6 +96,10 @@ Edit `.env.wrapper` as needed, based on the `.env.wrapper.example` template.
 
 Most likely variables you want to change:
 
+- Container engine selection:
+  - Set `CONTAINER_BIN` to the docker or podman executable you want the wrapper to use.
+  - Examples: `CONTAINER_BIN=docker` or `CONTAINER_BIN=/opt/homebrew/bin/podman`
+  - The bundled installer shim exposes that executable to the upstream Onyx installer as `docker`, so local updates to `onyx/install.sh` do not need to be re-patched.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `NEARAI_API_KEY`, `VENICE_API_KEY`, or `CHUTES_API_KEY`)
 - Optional Tailscale Funnel exposure (public HTTPS 443 -> Onyx UI):

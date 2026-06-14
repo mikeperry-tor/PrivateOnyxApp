@@ -13,6 +13,11 @@ TEEP_REF ?= main
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
 TEEP_IMAGE ?= 13rac1/teep:main
 TAILSCALE_IMAGE ?= tailscale/tailscale:stable
+CONTAINER_BIN ?= $(strip $(shell sed -n 's/^CONTAINER_BIN=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+ifeq ($(strip $(CONTAINER_BIN)),)
+CONTAINER_BIN := docker
+endif
+export CONTAINER_BIN
 
 # Source of truth: ONYX_IMAGE_TAG in $(ENV_FILE). Allow CLI override.
 ONYX_IMAGE_TAG ?= $(strip $(shell sed -n 's/^ONYX_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1))
@@ -23,6 +28,7 @@ ONYX_BACKEND_IMAGE ?= onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
 ONYX_WEB_SERVER_IMAGE ?= onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
 ONYX_MODEL_SERVER_IMAGE ?= onyxdotapp/onyx-model-server:$(ONYX_IMAGE_TAG)
 ONYX_INSTALL_SCRIPT ?= ./install.sh
+ONYX_INSTALL_WRAPPER ?= ./install-with-container-bin.sh
 ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
 ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
 ONYX_INSTALL_HOST_PORT_80 ?= 3001
@@ -61,6 +67,7 @@ help:
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override install-time low-port remap: make up-full ONYX_INSTALL_HOST_PORT_80=3001"
+	@echo "Override container engine: make up-lite CONTAINER_BIN=/opt/homebrew/bin/podman"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
@@ -69,17 +76,17 @@ upgrade: myst-build teep-build searxng-image-ready tailscale-image-ready upgrade
 
 tailscale-image-ready:
 	@echo "Pulling Tailscale image: $(TAILSCALE_IMAGE)"; \
-	docker pull "$(TAILSCALE_IMAGE)"
+	"$(CONTAINER_BIN)" pull "$(TAILSCALE_IMAGE)"
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
 up-lite: ensure-onyx-config sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
-	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(ONYX_MODEL_SERVER_IMAGE)
 up-full: ensure-onyx-config sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
-	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) up -d --wait
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d --wait
 
 ensure-onyx-config:
 	@set -eu; \
@@ -105,8 +112,8 @@ init-onyx-env:
 		exit 0; \
 	fi
 	@echo "Running Onyx install script to initialize $(ONYX_ENV_FILE)..."
-	@cd onyx && HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_SCRIPT)" --no-prompt --local $(ONYX_INSTALL_ARGS)
-	@cd onyx && HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_SCRIPT)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
+	@cd onyx && CONTAINER_BIN="$(CONTAINER_BIN)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)" HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_WRAPPER)" --no-prompt --local $(ONYX_INSTALL_ARGS)
+	@cd onyx && CONTAINER_BIN="$(CONTAINER_BIN)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)" HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_WRAPPER)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
 
 sync-onyx-env:
 	@if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
@@ -174,37 +181,37 @@ upgrade-onyx:
 
 searxng-image-ready:
 	@set -eu; \
-	image=$$(docker compose --env-file "$(SEARXNG_ENV_FILE)" -f "$(SEARXNG_COMPOSE_FILE)" config | sed -n 's/^    image: //p' | head -1); \
+	image=$$("$(CONTAINER_BIN)" compose --env-file "$(SEARXNG_ENV_FILE)" -f "$(SEARXNG_COMPOSE_FILE)" config | sed -n 's/^    image: //p' | head -1); \
 	if [ -z "$$image" ]; then \
 		echo "ERROR: could not resolve SearxNG image from $(SEARXNG_COMPOSE_FILE)"; \
 		exit 1; \
 	fi; \
 	echo "Pulling SearxNG image: $$image"; \
-	docker pull "$$image"
+	"$(CONTAINER_BIN)" pull "$$image"
 
 down-lite:
-	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) down --remove-orphans
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) down --remove-orphans
 
 down-full:
-	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) down --remove-orphans
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) down --remove-orphans
 
 ps-lite:
-	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) ps
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) ps
 
 ps-full:
-	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) ps
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) ps
 
 logs-lite:
-	@COMPOSE_FILE=$(LITE_FILES) docker compose --env-file $(ENV_FILE) logs -f --tail=200
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) logs -f --tail=200
 
 logs-full:
-	@COMPOSE_FILE=$(FULL_FILES) docker compose --env-file $(ENV_FILE) logs -f --tail=200
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) logs -f --tail=200
 
 onyx-image-ready:
 	@set -eu; \
 	missing=0; \
 	for image in $(ONYX_REQUIRED_IMAGES); do \
-		if docker image inspect "$$image" >/dev/null 2>&1; then \
+		if "$(CONTAINER_BIN)" image inspect "$$image" >/dev/null 2>&1; then \
 			echo "Onyx image already present: $$image"; \
 		else \
 			echo "Onyx image missing: $$image"; \
@@ -216,7 +223,7 @@ onyx-image-ready:
 		$(MAKE) onyx-build ONYX_INSTALL_ARGS="$(ONYX_INSTALL_ARGS)" ONYX_REQUIRED_IMAGES="$(ONYX_REQUIRED_IMAGES)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)"; \
 	fi; \
 	for image in $(ONYX_REQUIRED_IMAGES); do \
-		docker image inspect "$$image" >/dev/null 2>&1 || { echo "ERROR: Onyx image still missing after onyx-build: $$image"; exit 1; }; \
+		"$(CONTAINER_BIN)" image inspect "$$image" >/dev/null 2>&1 || { echo "ERROR: Onyx image still missing after onyx-build: $$image"; exit 1; }; \
 	done
 
 onyx-build:
@@ -229,16 +236,16 @@ onyx-build:
 		echo "Updated $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"; \
 	fi
 	@echo "Running Onyx install script to prepare images (args: $(ONYX_INSTALL_ARGS))..."
-	@cd onyx && HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_SCRIPT)" --no-prompt $(ONYX_INSTALL_ARGS)
+	@cd onyx && CONTAINER_BIN="$(CONTAINER_BIN)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)" HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_WRAPPER)" --no-prompt $(ONYX_INSTALL_ARGS)
 	@set -eu; \
 	for image in $(ONYX_REQUIRED_IMAGES); do \
 		echo "Ensuring Onyx image tag is present: $$image"; \
-		docker pull "$$image"; \
+		"$(CONTAINER_BIN)" pull "$$image"; \
 	done
-	@cd onyx && HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_SCRIPT)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
+	@cd onyx && CONTAINER_BIN="$(CONTAINER_BIN)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)" HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_WRAPPER)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
 
 myst-image-ready:
-	@if docker image inspect "$(MYST_IMAGE)" >/dev/null 2>&1; then \
+	@if "$(CONTAINER_BIN)" image inspect "$(MYST_IMAGE)" >/dev/null 2>&1; then \
 		echo "Myst image already present: $(MYST_IMAGE)"; \
 	else \
 		echo "Myst image not found: $(MYST_IMAGE). Building..."; \
@@ -247,7 +254,7 @@ myst-image-ready:
 
 myst-build:
 	@echo "Building $(MYST_IMAGE) using $(MYST_DOCKERFILE) (repo=$(MYST_NODE_REPO), branch=$(MYST_NODE_BRANCH))..."
-	@docker build \
+	@"$(CONTAINER_BIN)" build \
 		--file "$(MYST_DOCKERFILE)" \
 		--build-arg MYST_NODE_REPO="$(MYST_NODE_REPO)" \
 		--build-arg MYST_NODE_BRANCH="$(MYST_NODE_BRANCH)" \
@@ -255,7 +262,7 @@ myst-build:
 		.
 
 teep-image-ready:
-	@if docker image inspect "$(TEEP_IMAGE)" >/dev/null 2>&1; then \
+	@if "$(CONTAINER_BIN)" image inspect "$(TEEP_IMAGE)" >/dev/null 2>&1; then \
 		echo "teep image already present: $(TEEP_IMAGE)"; \
 	else \
 		echo "teep image not found: $(TEEP_IMAGE). Building..."; \
@@ -264,7 +271,7 @@ teep-image-ready:
 
 teep-build:
 	@echo "Building $(TEEP_IMAGE) using $(TEEP_DOCKERFILE) (repo=$(TEEP_REPO), ref=$(TEEP_REF))..."
-	@docker build \
+	@"$(CONTAINER_BIN)" build \
 		--file "$(TEEP_DOCKERFILE)" \
 		--build-arg TEEP_REPO="$(TEEP_REPO)" \
 		--build-arg TEEP_REF="$(TEEP_REF)" \
