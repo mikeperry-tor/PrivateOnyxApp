@@ -25,6 +25,7 @@ ONYX_MODEL_SERVER_IMAGE ?= onyxdotapp/onyx-model-server:$(ONYX_IMAGE_TAG)
 ONYX_INSTALL_SCRIPT ?= ./install.sh
 ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
 ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
+ONYX_INSTALL_HOST_PORT_80 ?= 3001
 SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
 SEARXNG_ENV_FILE := searxng/.env
 EMBEDSERV_DIR := embedserv
@@ -59,6 +60,7 @@ help:
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
+	@echo "Override install-time low-port remap: make up-full ONYX_INSTALL_HOST_PORT_80=3001"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
@@ -103,8 +105,8 @@ init-onyx-env:
 		exit 0; \
 	fi
 	@echo "Running Onyx install script to initialize $(ONYX_ENV_FILE)..."
-	@cd onyx && bash "$(ONYX_INSTALL_SCRIPT)" --no-prompt --local $(ONYX_INSTALL_ARGS)
-	@cd onyx && bash "$(ONYX_INSTALL_SCRIPT)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
+	@cd onyx && HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_SCRIPT)" --no-prompt --local $(ONYX_INSTALL_ARGS)
+	@cd onyx && HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_SCRIPT)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
 
 sync-onyx-env:
 	@if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
@@ -227,13 +229,13 @@ onyx-build:
 		echo "Updated $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"; \
 	fi
 	@echo "Running Onyx install script to prepare images (args: $(ONYX_INSTALL_ARGS))..."
-	@cd onyx && bash "$(ONYX_INSTALL_SCRIPT)" --no-prompt $(ONYX_INSTALL_ARGS)
+	@cd onyx && HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_SCRIPT)" --no-prompt $(ONYX_INSTALL_ARGS)
 	@set -eu; \
 	for image in $(ONYX_REQUIRED_IMAGES); do \
 		echo "Ensuring Onyx image tag is present: $$image"; \
 		docker pull "$$image"; \
 	done
-	@cd onyx && bash "$(ONYX_INSTALL_SCRIPT)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
+	@cd onyx && HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_SCRIPT)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
 
 myst-image-ready:
 	@if docker image inspect "$(MYST_IMAGE)" >/dev/null 2>&1; then \
