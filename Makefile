@@ -35,7 +35,7 @@ EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve
 
 help:
 	@echo "Targets:"
@@ -82,7 +82,7 @@ up-full: ensure-onyx-config sync-onyx-env onyx-image-ready myst-image-ready teep
 ensure-onyx-config:
 	@set -eu; \
 	if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
-		echo "$(ONYX_ENV_FILE) missing; running upgrade-onyx for $(ONYX_IMAGE_TAG)"; \
+		echo "$(ONYX_ENV_FILE) missing; downloading deployment files and initializing with install.sh"; \
 		$(MAKE) upgrade-onyx ONYX_CONFIG_REF="$(ONYX_IMAGE_TAG)"; \
 		exit 0; \
 	fi; \
@@ -97,6 +97,15 @@ ensure-onyx-config:
 		echo "Onyx deployment files already match ONYX_IMAGE_TAG=$(ONYX_IMAGE_TAG)"; \
 	fi
 
+init-onyx-env:
+	@if [ -f "$(ONYX_ENV_FILE)" ]; then \
+		echo "$(ONYX_ENV_FILE) already exists; skipping install.sh initialization"; \
+		exit 0; \
+	fi
+	@echo "Running Onyx install script to initialize $(ONYX_ENV_FILE)..."
+	@cd onyx && bash "$(ONYX_INSTALL_SCRIPT)" --no-prompt --local $(ONYX_INSTALL_ARGS)
+	@cd onyx && bash "$(ONYX_INSTALL_SCRIPT)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
+
 sync-onyx-env:
 	@if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
 		echo "ERROR: missing $(ONYX_ENV_FILE)"; \
@@ -106,6 +115,22 @@ sync-onyx-env:
 		sed -i.bak "s|^IMAGE_TAG=.*|IMAGE_TAG=$(ONYX_IMAGE_TAG)|" "$(ONYX_ENV_FILE)"; \
 	else \
 		printf '\nIMAGE_TAG=%s\n' "$(ONYX_IMAGE_TAG)" >> "$(ONYX_ENV_FILE)"; \
+	fi
+	@set -eu; \
+	secret_raw=$$(sed -n 's/^USER_AUTH_SECRET=//p' "$(ONYX_ENV_FILE)" | head -1 || true); \
+	secret_trimmed=$$(printf '%s' "$$secret_raw" | sed 's/^"//; s/"$$//'); \
+	if [ -z "$$secret_trimmed" ]; then \
+		if ! command -v openssl >/dev/null 2>&1; then \
+			echo "ERROR: USER_AUTH_SECRET is unset and openssl was not found"; \
+			exit 1; \
+		fi; \
+		new_secret=$$(openssl rand -hex 32); \
+		if grep -q '^USER_AUTH_SECRET=' "$(ONYX_ENV_FILE)"; then \
+			sed -i.bak "s|^USER_AUTH_SECRET=.*|USER_AUTH_SECRET=\"$$new_secret\"|" "$(ONYX_ENV_FILE)"; \
+		else \
+			printf '\nUSER_AUTH_SECRET="%s"\n' "$$new_secret" >> "$(ONYX_ENV_FILE)"; \
+		fi; \
+		echo "Generated USER_AUTH_SECRET in $(ONYX_ENV_FILE)"; \
 	fi
 	@echo "Synced $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"
 
@@ -139,11 +164,9 @@ upgrade-onyx:
 	install -m 0644 "$$tmp_dir/README.md" onyx/onyx_data/README.md; \
 	install -m 0644 "$$tmp_dir/app.conf.template" onyx/onyx_data/data/nginx/app.conf.template; \
 	install -m 0755 "$$tmp_dir/run-nginx.sh" onyx/onyx_data/data/nginx/run-nginx.sh; \
-	echo "Downloaded Onyx deployment files for ref $$config_ref"; \
-	if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
-		echo "Creating .env from template..."; \
-		cp onyx/onyx_data/deployment/env.template "$(ONYX_ENV_FILE)"; \
-		echo "Created $(ONYX_ENV_FILE) from template"; \
+	echo "Downloaded Onyx deployment files for ref $$config_ref"
+	@if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
+		$(MAKE) init-onyx-env ONYX_INSTALL_ARGS="$(ONYX_INSTALL_ARGS)"; \
 	fi
 	@$(MAKE) sync-onyx-env
 
