@@ -180,8 +180,6 @@ services:
     environment:
       # code-interpreter runs on 7000 in the shared netns (8000 is taken by background prometheus).
       CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
-      # Generate with: openssl rand -hex 32
-      USER_AUTH_SECRET: ${USER_AUTH_SECRET:-CHANGE_ME_DEV_ONLY_SET_A_LONG_RANDOM_SECRET}
       # Disable optional telemetry/analytics integrations from wrapper layer.
       DISABLE_TELEMETRY: "true"
       SENTRY_DSN: ""

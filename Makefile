@@ -158,27 +158,7 @@ sync-onyx-env:
 		echo "Generated USER_AUTH_SECRET in $(ONYX_ENV_FILE)"; \
 	fi
 	@set -eu; \
-	wrapper_secret_raw=$$(sed -n 's/^USER_AUTH_SECRET=//p' "$(ENV_FILE)" | head -1 || true); \
-	wrapper_secret_trimmed=$$(printf '%s' "$$wrapper_secret_raw" | sed 's/^"//; s/"$$//'); \
-	if [ -z "$$wrapper_secret_trimmed" ]; then \
-		onyx_secret=$$(sed -n 's/^USER_AUTH_SECRET=//p' "$(ONYX_ENV_FILE)" | head -1 || true); \
-		share_secret=$$(printf '%s' "$$onyx_secret" | sed 's/^"//; s/"$$//'); \
-		if [ -z "$$share_secret" ]; then \
-			if ! command -v openssl >/dev/null 2>&1; then \
-				echo "ERROR: USER_AUTH_SECRET missing in both env files and openssl not found"; \
-				exit 1; \
-			fi; \
-			share_secret=$$(openssl rand -hex 32); \
-		fi; \
-		if grep -q '^USER_AUTH_SECRET=' "$(ENV_FILE)"; then \
-			sed -i.bak "s|^USER_AUTH_SECRET=.*|USER_AUTH_SECRET=\"$$share_secret\"|" "$(ENV_FILE)"; \
-		else \
-			printf '\nUSER_AUTH_SECRET="%s"\n' "$$share_secret" >> "$(ENV_FILE)"; \
-		fi; \
-		echo "Propagated USER_AUTH_SECRET to $(ENV_FILE)"; \
-	fi
-	@set -eu; \
-	minio_user_raw=$$(sed -n 's/^MINIO_ROOT_USER=//p' "$(ENV_FILE)" | head -1 || true); \
+	minio_user_raw=$$(sed -n 's/^MINIO_ROOT_USER=//p' "$(ONYX_ENV_FILE)" | head -1 || true); \
 	minio_user_trimmed=$$(printf '%s' "$$minio_user_raw" | sed 's/^"//; s/"$$//'); \
 	if [ -z "$$minio_user_trimmed" ] || [ "$$minio_user_trimmed" = "minioadmin" ]; then \
 		if ! command -v openssl >/dev/null 2>&1; then \
@@ -187,22 +167,20 @@ sync-onyx-env:
 		fi; \
 		new_mu=$$(openssl rand -hex 16); \
 		new_mp=$$(openssl rand -hex 32); \
-		for f in "$(ENV_FILE)" "$(ONYX_ENV_FILE)"; do \
-			for entry in "MINIO_ROOT_USER:$$new_mu" "MINIO_ROOT_PASSWORD:$$new_mp" "S3_AWS_ACCESS_KEY_ID:$$new_mu" "S3_AWS_SECRET_ACCESS_KEY:$$new_mp"; do \
-				k=$${entry%%:*}; v=$${entry#*:}; \
-				if grep -q "^$$k=" "$$f"; then \
-					sed -i.bak "s|^$$k=.*|$$k=\"$$v\"|" "$$f"; \
-				else \
-					printf '\n%s="%s"\n' "$$k" "$$v" >> "$$f"; \
-				fi; \
-			done; \
+		for entry in "MINIO_ROOT_USER:$$new_mu" "MINIO_ROOT_PASSWORD:$$new_mp" "S3_AWS_ACCESS_KEY_ID:$$new_mu" "S3_AWS_SECRET_ACCESS_KEY:$$new_mp"; do \
+			k=$${entry%%:*}; v=$${entry#*:}; \
+			if grep -q "^$$k=" "$(ONYX_ENV_FILE)"; then \
+				sed -i.bak "s|^$$k=.*|$$k=\"$$v\"|" "$(ONYX_ENV_FILE)"; \
+			else \
+				printf '\n%s="%s"\n' "$$k" "$$v" >> "$(ONYX_ENV_FILE)"; \
+			fi; \
 		done; \
 		if [ -d "./docker-data/minio" ]; then \
-			echo "Replaced default MinIO credentials in $(ENV_FILE) and $(ONYX_ENV_FILE)."; \
+			echo "Replaced default MinIO credentials in $(ONYX_ENV_FILE)."; \
 			echo "Restart MinIO (make down-full && make up-full) for new credentials to take effect."; \
 			echo "Existing MinIO data is NOT affected — credentials are access control only, not encryption keys."; \
 		else \
-			echo "Generated MinIO/S3 credentials in $(ENV_FILE) and $(ONYX_ENV_FILE)"; \
+			echo "Generated MinIO/S3 credentials in $(ONYX_ENV_FILE)"; \
 		fi; \
 	fi
 	@echo "Synced $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"
