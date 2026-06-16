@@ -97,12 +97,12 @@ tailscale-image-ready:
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
 up-lite: ensure-onyx-config sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d --wait
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(ONYX_MODEL_SERVER_IMAGE)
 up-full: ensure-onyx-config sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d --wait
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) up -d --wait
 
 ensure-onyx-config:
 	@set -eu; \
@@ -232,22 +232,22 @@ searxng-image-ready:
 	"$(CONTAINER_BIN)" pull "$$image"
 
 down-lite:
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) down --remove-orphans
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) down --remove-orphans
 
 down-full:
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) down --remove-orphans
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) down --remove-orphans
 
 ps-lite:
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) ps
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) ps
 
 ps-full:
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) ps
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) ps
 
 logs-lite:
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) logs -f --tail=200
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) logs -f --tail=200
 
 logs-full:
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) logs -f --tail=200
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) logs -f --tail=200
 
 onyx-image-ready:
 	@set -eu; \
