@@ -218,19 +218,6 @@ services:
         condition: service_started
         restart: true
 
-  host-teep-proxy:
-    image: alpine/socat:1.8.0.3
-    restart: unless-stopped
-    command: tcp-listen:${TEEP_PORT:-8337},fork,reuseaddr tcp-connect:myst-client:${TEEP_CONTAINER_PORT:-8337}
-    ports:
-      - ${TEEP_HOST:+${TEEP_HOST}:}${TEEP_PORT:-8337}:${TEEP_CONTAINER_PORT:-8337}
-    depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_started
-        restart: true
-
   # Restarts containers marked with autoheal=true when Docker health is unhealthy.
   autoheal:
     image: willfarrell/autoheal:latest
@@ -247,8 +234,12 @@ services:
         condition: service_started
 
   # Optional Tailscale Funnel bridge for exposing the Onyx WebUI publicly.
-  # This service intentionally stays on the default compose network so it
-  # does not inherit Myst VPN routing from netns-holder.
+  # Default: stays on the default compose network so it does not inherit
+  # Myst VPN routing from netns-holder (keeps Tailscale identity separate
+  # from the VPN exit IP).
+  # Set TAILSCALE_VPN_ROUTED=true in .env.wrapper to route Tailscale through
+  # the Mysterium VPN namespace (applies docker-compose.tailscale-vpn.yml
+  # via Makefile layering).
   tailscale-funnel:
     image: tailscale/tailscale:stable
     entrypoint: ["/usr/local/bin/tailscale-entrypoint.sh"]
@@ -435,10 +426,16 @@ services:
         condition: service_healthy
         restart: true
 
+  # Teep: private verified LLM inference proxy.
+  # Default: runs on the default Docker network (no VPN). Teep traffic egresses
+  # directly, and the port is published to the host directly.
+  # Set TEEP_VPN_ROUTED=true in .env.wrapper to route teep through the Mysterium
+  # VPN namespace (applies docker-compose.teep-vpn.yml via Makefile layering).
   teep:
     image: ${TEEP_IMAGE:-13rac1/teep:main}
     restart: unless-stopped
-    network_mode: "service:netns-holder"
+    ports:
+      - ${TEEP_HOST:+${TEEP_HOST}:}${TEEP_PORT:-8337}:${TEEP_CONTAINER_PORT:-8337}
     environment:
       TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-0.0.0.0:${TEEP_CONTAINER_PORT:-8337}}"
       TEEP_MAX_CONNS: "${TEEP_MAX_CONNS:-6}"
@@ -452,12 +449,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-    depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
 
   relational_db:
     extends:

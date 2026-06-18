@@ -105,6 +105,11 @@ Most likely variables you want to change:
   - Set `TAILSCALE_FUNNEL_ENABLED=true`
   - Set `TAILSCALE_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
   - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
+- **VPN routing for teep and tailscale** (optional):
+  - By default, teep and tailscale run on the default Docker network (no Myst VPN). Their traffic egresses directly via the docker host's networking stack (or host VPN).
+  - Set `TEEP_VPN_ROUTED=true` to route teep LLM API traffic through the Mysterium VPN namespace.
+  - Set `TAILSCALE_VPN_ROUTED=true` to route Tailscale Funnel traffic through the VPN namespace. **Warning:** this links your Tailscale identity to the VPN exit IP.
+  - See [VPN Routing Configuration](#vpn-routing-configuration) for details.
 - **Optional LAN access** (for local inference APIs):
   - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
 - Optional Onyx SSRF defaults (for MCP servers and local doc-drop crawling):
@@ -122,7 +127,12 @@ Most likely variables you want to change:
 
 ## Onyx UI Configuration
 
-Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). The BiFrost provider is compatible. Use `http://127.0.0.1:8337/v1`. The models supported by your API key from `.env.wraper` should then be listed if you refresh the dropdown.
+Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). The BiFrost provider is compatible. The URL depends on your `TEEP_VPN_ROUTED` setting:
+
+- **Default (`TEEP_VPN_ROUTED=false`):** Use `http://teep:8337/v1` (Docker DNS resolves the teep service on the default network).
+- **VPN-routed (`TEEP_VPN_ROUTED=true`):** Use `http://127.0.0.1:8337/v1` (shared loopback in the VPN namespace).
+
+The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown.
 
 ### Inference Provider Recommendations
 
@@ -163,8 +173,9 @@ The following sections detail additional optional feature configuration, includi
 You can publish the Onyx WebUI through Tailscale Funnel to access it remotely.
 
 - Public endpoint: `https://onyx.your-tailnet.ts.net` on port 443
-- The tailscale service does not route through Mysterium VPN, to avoid linking your tailscale account to your search actvity at the Myst VPN exit server.
+- By default, the tailscale service does not route through Mysterium VPN, to avoid linking your tailscale account to your search actvity at the Myst VPN exit server.
 - Tailscale uses the userspace networking mode, so no VPN activity is involved.
+- To route Tailscale through the VPN namespace instead, set `TAILSCALE_VPN_ROUTED=true` in `.env.wrapper`. **Warning:** this links your Tailscale identity to the VPN exit IP.
 
 Tailscale Funnel prerequisites:
 
@@ -182,6 +193,26 @@ TAILSCALE_AUTHKEY=tskey-client-...
 Bring the stack up as usual (`make up-lite` or `make up-full`).
 
 Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The service will remain idle and will not publish Funnel routes.
+
+### Optional: VPN Routing for Teep and Tailscale
+
+By default, **teep** and **tailscale** run on the default Docker network without VPN routing. This means:
+
+- Teep LLM API traffic egresses directly (not through Mysterium).
+- Tailscale Funnel traffic egresses directly, keeping your Tailscale identity separate from the VPN exit IP.
+
+You can optionally route either or both services through the Mysterium VPN namespace by setting these variables in `.env.wrapper`:
+
+```bash
+# Route teep LLM proxy traffic through the VPN
+TEEP_VPN_ROUTED=true
+
+# Route Tailscale Funnel through the VPN
+# WARNING: This links your Tailscale identity to the VPN exit IP
+TAILSCALE_VPN_ROUTED=true
+```
+
+The Makefile conditionally applies `docker-compose.teep-vpn.yml` and/or `docker-compose.tailscale-vpn.yml` override files when these are set to `true`. These override files properly adjust host and port mappings of teep and tailscale for the VPN interface. Restart the stack after changing these settings.
 
 ### Optional: Local Document RAG via Web Connector
 

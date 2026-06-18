@@ -1,0 +1,26 @@
+## Tailscale VPN routing override.
+## Applied when TAILSCALE_VPN_ROUTED=true in .env.wrapper (via Makefile
+## COMPOSE_FILE layering). Moves tailscale-funnel into the shared
+## netns-holder namespace so Tailscale traffic egresses through the
+## Mysterium VPN tunnel, and retargets the funnel proxy to nginx directly
+## in the shared namespace.
+##
+## WARNING: When this override is applied, your Tailscale identity becomes
+## linked to the VPN exit IP address. The default (no override) keeps
+## Tailscale on the default network to avoid this linkage.
+
+services:
+  tailscale-funnel:
+    # Join the shared VPN namespace instead of the default network.
+    network_mode: "service:netns-holder"
+    environment:
+      # Proxy directly to nginx in the shared namespace (port 80) instead
+      # of going through the host-web-proxy socat bridge.
+      TAILSCALE_FUNNEL_TARGET_HOST: "127.0.0.1"
+      TAILSCALE_FUNNEL_TARGET_PORT: "80"
+    depends_on: !override
+      netns-holder:
+        condition: service_started
+      myst-client:
+        condition: service_healthy
+        restart: true
