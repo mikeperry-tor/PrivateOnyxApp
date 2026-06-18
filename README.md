@@ -24,7 +24,7 @@ The Docker Compose files in this stack relies on the following components:
 
 4. [Obscura](https://github.com/h4ckf0r0day/obscura) is combined with [crw](https://github.com/us/crw) to provide the Onyx agent with an actual headless browser with anti-fingerprinting defenses, as a Firecrawl-compatible API endpoint. This helps reduce fingerprint-based bans by websites. Both run inside the shared Myst namespace so scrape/crawl traffic egresses through the VPN endpoint IP.
 
-5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends (DuckDuckGo, Brave, Startpage, and Google are enabled by default). Obscura+crw are used to fetch search results from DuckDuckGo, Brave, and Google, which significantly reduces captchas and bans by these search engines.
+5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends. The DuckDuckGo, Brave, and Google engines of SearXNG have been [monkey-patched](https://github.com/searxng/searxng/discussions/5651) to use the Obscura+crw instance to fetch their search results, which significantly reduces captchas and bans by these search engines.
 
 6. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to the Onyx web interface. The TLS key is generated locally and signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
 
