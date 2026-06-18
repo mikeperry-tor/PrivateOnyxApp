@@ -58,10 +58,22 @@ services:
       service: core
     environment:
       SEARXNG_PORT: ${SEARXNG_CONTAINER_PORT:-8888}
+      # crw API key shared with the stub engines (searxng/engines/_crw.py).
+      # Mirrors CRW_ONYX_API_KEY from .env.wrapper so a future auth-required
+      # crw flip keeps the engines working without a code change.
+      CRW_ONYX_API_KEY: ${CRW_ONYX_API_KEY:-local-crw}
     network_mode: "service:netns-holder"
     volumes: !override
       - ./searxng/core-config/:/etc/searxng/:Z
       - ./docker-data/searxng-cache:/var/cache/searxng
+      # crw + obscura stealth-browser backed stub engines. Mounted as
+      # individual files (not the whole dir) so the image's built-in engines
+      # are preserved. Loaded by SearXNG via the `engine:` field in
+      # settings.yml -- no image rebuild needed. See searxng/engines/_crw.py.
+      - ./searxng/engines/_crw.py:/usr/local/searxng/searx/engines/_crw.py:ro
+      - ./searxng/engines/google2.py:/usr/local/searxng/searx/engines/google2.py:ro
+      - ./searxng/engines/brave2.py:/usr/local/searxng/searx/engines/brave2.py:ro
+      - ./searxng/engines/duckduckgo2.py:/usr/local/searxng/searx/engines/duckduckgo2.py:ro
     depends_on:
       netns-holder:
         condition: service_started

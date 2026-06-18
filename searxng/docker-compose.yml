@@ -12,6 +12,12 @@ services:
     volumes:
       - ./core-config/:/etc/searxng/:Z
       - core-data:/var/cache/searxng/
+      # crw + obscura stealth-browser backed stub engines (see _crw.py).
+      # Mounted as individual files to preserve the image's built-in engines.
+      - ./engines/_crw.py:/usr/local/searxng/searx/engines/_crw.py:ro
+      - ./engines/google2.py:/usr/local/searxng/searx/engines/google2.py:ro
+      - ./engines/brave2.py:/usr/local/searxng/searx/engines/brave2.py:ro
+      - ./engines/duckduckgo2.py:/usr/local/searxng/searx/engines/duckduckgo2.py:ro
 
   valkey:
     container_name: searxng-valkey

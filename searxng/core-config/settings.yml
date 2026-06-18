@@ -816,6 +816,36 @@ engines:
     engine: duckduckgo
     shortcut: ddg
 
+  # ── crw + obscura stealth-browser backed stubs ─────────────────────────
+  # These engines fetch the SERP via the local crw Firecrawl-compatible
+  # scraper (http://127.0.0.1:3010/v1/scrape), which drives the obscura
+  # stealth CDP browser. They bypass the bot walls that block the stock
+  # engines on VPN exit IPs. Engine modules are bind-mounted from
+  # ./searxng/engines/ (see docker-compose.yaml searxng-core volumes) so
+  # they load without rebuilding the SearXNG image. See discussion #5651.
+  # `enable_http: true` is required because the engine POSTs to crw over
+  # plain HTTP on loopback.
+  - name: google2
+    engine: google2
+    shortcut: go2
+    timeout: 30.0
+    disabled: false
+    enable_http: true
+
+  - name: brave2
+    engine: brave2
+    shortcut: br2
+    timeout: 30.0
+    disabled: false
+    enable_http: true
+
+  - name: duckduckgo2
+    engine: duckduckgo2
+    shortcut: ddg2
+    timeout: 30.0
+    disabled: false
+    enable_http: true
+
   - name: duckduckgo images
     engine: duckduckgo_extra
     categories: [images]
