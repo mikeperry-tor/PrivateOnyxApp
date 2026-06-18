@@ -18,11 +18,13 @@ The Docker Compose files in this stack rely on four components:
 
 2. [Teep](https://github.com/13rac1/teep) provides private verified LLM inference via a local OpenAI-compatible proxy on port 8337. Teep supports [multiple private inference providers](https://github.com/13rac1/teep#supported-providers), and verifies attestation, encryption, and remote runtime properties before requests are allowed to proceed.
 
-3. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends (Bing, DuckDuckGo, Brave, and Google are enabled by default).
+3. [Mysterium](https://github.com/mysteriumnetwork/node) is a Wireguard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. The use of residential IP addresses reduces the rate of captchas and rate limiting by search engines and websites. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
-4. [Mysterium](https://github.com/mysteriumnetwork/node) is a Wireguard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. The use of residential IP addresses reduces the rate of captchas and rate limiting by search engines and websites. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
+4. [Obscura](https://github.com/h4ckf0r0day/obscura) is combined with [crw](https://github.com/us/crw) to provide the Onyx agent with an actual headless browser with anti-fingerprinting defenses, as a Firecrawl-compatible API endpoint. This helps reduce fingerprint-based bans by websites. Both run inside the shared Myst namespace so scrape/crawl traffic egresses through the VPN endpoint IP.
 
-5. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to the Onyx web interface. The TLS key is generated locally and signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
+5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends (DuckDuckGo, Brave, Startpage, and Google are enabled by default). Obscura+crw are used to fetch search results from DuckDuckGo, Brave, and Google, which significantly reduces captchas and bans by these search engines.
+
+6. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to the Onyx web interface. The TLS key is generated locally and signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
 
 ## Prerequisites
 
@@ -86,8 +88,6 @@ make logs-full
 
 1. Mysterium will create a new cryptographic identity, register it, and create an order URL on coingate for 100 $MYST (currently ~$20 USD). The order URL will be visible via `docker logs myst-client-vpn`.  This order URL can be paid in several different major cryptocurrencies, though an email is required. It may be possible to transfer $MYST directly to the VPN identity yourself, but I have not verified this.
 
-2. Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its Web-based Admin Interface. The BiFrost provider is compatible. Use `http://127.0.0.1:8337/v1`. The models supported by your API key from `.env.wraper` should then be listed if you refresh the dropdown.
-
 3. Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
 
 ### Configure Environment
@@ -113,12 +113,10 @@ Most likely variables you want to change:
   - `OPEN_URL_VALIDATE_SSRF`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK`, and `MCP_SERVER_ALLOW_LOOPBACK` seed Onyx's default SSRF Protection level at startup.
   - After you save a value in Onyx Admin -> Security Hardening, the saved UI setting becomes the effective runtime policy and overrides these defaults.
   - If you want both MCP servers on `host.docker.internal` and the doc-drop connector at `http://localhost:8091/`, use `OPEN_URL_VALIDATE_SSRF=true`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, and `MCP_SERVER_ALLOW_LOOPBACK=false`. That yields the `Allow Private Network` posture by default.
-- Optional Myst funding order auto-creation:
-  - `MYST_ORDER_AMOUNT`
-  - `MYST_ORDER_CURRENCY`
-  - `MYST_ORDER_GATEWAY`
-  - `MYST_ORDER_COUNTRY`
-  - `MYST_WAIT_FOR_FUNDS`
+
+## Onyx UI Configuration
+
+Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). The BiFrost provider is compatible. Use `http://127.0.0.1:8337/v1`. The models supported by your API key from `.env.wraper` should then be listed if you refresh the dropdown.
 
 ### Inference Provider Recommendations
 
@@ -137,6 +135,18 @@ Verifiable private inference is only currently possible with Open Weight models.
 For a research agent like Onyx, the primary desirable property is a low hallucination rate. The [Artificial Analysis Omniscience Index](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) provides a [Hallucination Rate benchmark](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) that is worth tracking for this purpose.
 
 Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.1 is the best option for text, and Kimi-2.6 is the best multimodal option.
+
+### Web Search Provider Configuration
+
+To make use of the provided crw and obscura anti-fingerprinting web search tools, you will need to select SearXNG and Firecrawl from the [Web Search Admin Panel](http://localhost:3000/admin/configuration/web-search):
+
+1. Go to **Admin Panel -> Web Search -> Web Crawler**.
+2. Open **SearXNG** and click **Connect**
+3. Set the **SearXNG Base URL** to `http://localhost:8080`.
+4. Open **Firecrawl** and click **Connect**.
+5. Set **API Base URL** to `http://localhost:3010/v1/scrape`.
+6. Set **API Key** to the value of `CRW_ONYX_API_KEY` (default: `local-crw`).
+7. Click **Connect**, then **Set as Default** on the Firecrawl card.
 
 ## Optional Configurations
 
@@ -193,16 +203,7 @@ Notes:
   that saved setting takes precedence. For doc-drop crawling, avoid the strict
   `Validate All` setting.
 
-### Optional: fastCRW (crw) Firecrawl-compatible Scraper
-
-The stack includes a self-hosted [fastCRW](https://github.com/us/crw) (crw)
-deployment — a Rust-native, Firecrawl-compatible web scraper — plus
-[obscura](https://github.com/h4ckf0r0day/obscura), a Rust-native headless
-browser with built-in stealth mode that replaces crw's upstream
-browserless/chrome-stealth renderer tier. Both run inside the shared Myst
-namespace so scrape/crawl traffic egresses through the VPN endpoint IP.
-Both services are defined in the base `docker-compose.yaml`, so they are
-available in **both lite and full modes**.
+### Using fastCRW (crw) Firecrawl-compatible Scraper with Obscura
 
 Architecture:
 
@@ -222,26 +223,6 @@ Architecture:
 
 Both images are pulled automatically by `make up-lite` (or `make up-full`)
 and refreshed by `make upgrade` — no manual build step is required.
-
-Setup steps in Onyx Admin:
-
-1. Go to **Admin Panel -> Web Search -> Web Crawler**.
-2. Open **Firecrawl** and click **Connect**.
-3. Set **API Base URL** to `http://localhost:3010/v1/scrape`.
-4. Set **API Key** to the value of `CRW_ONYX_API_KEY` (default: `local-crw`).
-5. Click **Connect**, then **Set as Default** on the Firecrawl card.
-
-Notes:
-
-- Onyx currently requires a non-empty API key field for Firecrawl, even when
-  the backend is self-hosted with auth bypass.
-- crw is configured via `CRW_*` env vars in `docker-compose.yaml`. The
-  Figment env layer has the highest precedence (see crw's
-  `AppConfig::load()`), so it overrides the baked-in `config.default.toml`
-  without needing a config file mount.
-- obscura's stealth mode is a compile-time cargo feature, but release builds
-  (including the published Docker image) include it, so `--stealth` at
-  runtime enables the full anti-fingerprint + tracker-blocking domain.
 
 ### Optional: Running a Local Embedding Model Server (Mac)
 
