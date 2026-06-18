@@ -531,7 +531,7 @@ engines:
   - name: bing
     engine: bing
     shortcut: bi
-    disabled: false
+    disabled: true
 
   - name: bing images
     engine: bing_images
@@ -815,6 +815,7 @@ engines:
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
+    disabled: true
 
   # ── crw + obscura stealth-browser backed stubs ─────────────────────────
   # These engines fetch the SERP via the local crw Firecrawl-compatible
@@ -1077,6 +1078,7 @@ engines:
   - name: google
     engine: google
     shortcut: go
+    disabled: true
 
   - name: google images
     engine: google_images
@@ -2638,6 +2640,7 @@ engines:
     paging: true
     categories: [general, web]
     brave_category: search
+    disabled: true
     # brave_spellcheck: true
 
   - name: brave.images
