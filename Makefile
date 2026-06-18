@@ -14,6 +14,8 @@ TEEP_REF ?= main
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
 TEEP_IMAGE ?= 13rac1/teep:main
 TAILSCALE_IMAGE ?= tailscale/tailscale:stable
+OBSCURA_IMAGE ?= h4ckf0r0day/obscura:latest
+CRW_IMAGE ?= ghcr.io/us/crw:latest
 CONTAINER_BIN ?= $(strip $(shell sed -n 's/^CONTAINER_BIN=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 DOCKER_SOCK_PATH ?= $(strip $(shell sed -n 's/^DOCKER_SOCK_PATH=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 PODMAN_COMPOSE_PROVIDER ?= podman
@@ -56,7 +58,7 @@ EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve
 
 help:
 	@echo "Targets:"
@@ -68,7 +70,7 @@ help:
 	@echo "  make ps-full      # Show full mode containers"
 	@echo "  make logs-lite    # Tail lite mode logs"
 	@echo "  make logs-full    # Tail full mode logs"
-	@echo "  make upgrade      # Rebuild Myst + teep images, refresh Onyx deployment files, pull SearxNG, and pull Tailscale"
+	@echo "  make upgrade      # Rebuild Myst + teep images, refresh Onyx deployment files, pull SearxNG, Tailscale, obscura, and crw"
 	@echo "  make upgrade-onyx # Download fresh Onyx deployment files for ONYX_IMAGE_TAG"
 	@echo "  make onyx-build   # Pull/build Onyx images via onyx/install.sh"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
@@ -88,11 +90,17 @@ help:
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
 
-upgrade: myst-build teep-build searxng-image-ready tailscale-image-ready upgrade-onyx
+upgrade: myst-build teep-build searxng-image-ready tailscale-image-ready crw-image-ready upgrade-onyx
 
 tailscale-image-ready:
 	@echo "Pulling Tailscale image: $(TAILSCALE_IMAGE)"; \
 	"$(CONTAINER_BIN)" pull "$(TAILSCALE_IMAGE)"
+
+crw-image-ready:
+	@echo "Pulling obscura image: $(OBSCURA_IMAGE)"; \
+	"$(CONTAINER_BIN)" pull "$(OBSCURA_IMAGE)"
+	@echo "Pulling crw image: $(CRW_IMAGE)"; \
+	"$(CONTAINER_BIN)" pull "$(CRW_IMAGE)"
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)

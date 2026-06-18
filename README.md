@@ -193,6 +193,56 @@ Notes:
   that saved setting takes precedence. For doc-drop crawling, avoid the strict
   `Validate All` setting.
 
+### Optional: fastCRW (crw) Firecrawl-compatible Scraper
+
+The stack includes a self-hosted [fastCRW](https://github.com/us/crw) (crw)
+deployment — a Rust-native, Firecrawl-compatible web scraper — plus
+[obscura](https://github.com/h4ckf0r0day/obscura), a Rust-native headless
+browser with built-in stealth mode that replaces crw's upstream
+browserless/chrome-stealth renderer tier. Both run inside the shared Myst
+namespace so scrape/crawl traffic egresses through the VPN endpoint IP.
+Both services are defined in the base `docker-compose.yaml`, so they are
+available in **both lite and full modes**.
+
+Architecture:
+
+- `obscura` runs from the published `h4ckf0r0day/obscura` Docker Hub image
+  (release builds include the stealth feature). It serves a Chrome DevTools
+  Protocol (CDP) WebSocket on port 9222 with `--stealth` enabled.
+- `crw` runs from the published `ghcr.io/us/crw` image (built with the `cdp`
+  cargo feature upstream) and is configured entirely via `CRW_*` environment
+  variables — no local build or config file mount needed.
+- crw connects to obscura's CDP endpoint at `ws://obscura:9222/devtools/browser`
+  (a direct `/devtools/` URL, so crw skips `/json/version` discovery and
+  connects straight to the browser socket).
+- crw exposes Firecrawl-compatible `/v1/scrape`, `/v1/crawl`, `/v1/map`, and
+  `/v1/search` endpoints on port 3010 (3000 is taken by the Onyx web server
+  in the shared netns). `/v1/search` is backed by the wrapper's bundled
+  SearXNG sidecar.
+
+Both images are pulled automatically by `make up-lite` (or `make up-full`)
+and refreshed by `make upgrade` — no manual build step is required.
+
+Setup steps in Onyx Admin:
+
+1. Go to **Admin Panel -> Web Search -> Web Crawler**.
+2. Open **Firecrawl** and click **Connect**.
+3. Set **API Base URL** to `http://localhost:3010/v1/scrape`.
+4. Set **API Key** to the value of `CRW_ONYX_API_KEY` (default: `local-crw`).
+5. Click **Connect**, then **Set as Default** on the Firecrawl card.
+
+Notes:
+
+- Onyx currently requires a non-empty API key field for Firecrawl, even when
+  the backend is self-hosted with auth bypass.
+- crw is configured via `CRW_*` env vars in `docker-compose.yaml`. The
+  Figment env layer has the highest precedence (see crw's
+  `AppConfig::load()`), so it overrides the baked-in `config.default.toml`
+  without needing a config file mount.
+- obscura's stealth mode is a compile-time cargo feature, but release builds
+  (including the published Docker image) include it, so `--stealth` at
+  runtime enables the full anti-fingerprint + tracker-blocking domain.
+
 ### Optional: Running a Local Embedding Model Server (Mac)
 
 If you are on a Mac, the makefile has rules that can install [Harrier-oss-v1-0.6b](https://huggingface.co/microsoft/harrier-oss-v1-0.6b), which is a SOTA open weight embedding model:

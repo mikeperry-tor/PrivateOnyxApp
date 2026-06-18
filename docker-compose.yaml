@@ -76,6 +76,100 @@ services:
     volumes: !override
       - ./docker-data/valkey:/data
 
+  # ── fastCRW (crw) + obscura stealth CDP browser ─────────────────────────
+  # Self-hosted Firecrawl-compatible scraper (available in both lite and full
+  # mode), routed through Myst. crw exposes the Firecrawl-compatible
+  # /v1/scrape, /v1/crawl, /v1/map, and /v1/search endpoints that Onyx's Web
+  # Search connector can target.
+  #
+  # The JS renderer tier is obscura (a Rust-native headless browser with
+  # built-in stealth), replacing crw's upstream browserless/chrome-stealth
+  # profile. obscura exposes a CDP WebSocket on port 9222 that crw drives via
+  # its `cdp` cargo feature. Both services run inside the shared netns-holder
+  # namespace so scrape/crawl traffic egresses through the VPN endpoint IP.
+  #
+  # Both images are pulled from their upstream registries (no local builds):
+  #   - obscura: h4ckf0r0day/obscura (release builds include the stealth feature)
+  #   - crw:     ghcr.io/us/crw (built with --features cdp upstream)
+  # crw is configured entirely via CRW_* env vars (Figment env layer has the
+  # highest precedence — see crates/crw-core/src/config.rs AppConfig::load).
+
+  # Stealth headless browser: serves a Chrome DevTools Protocol WebSocket.
+  # Release binaries include the stealth feature, so --stealth at runtime
+  # enables the full anti-fingerprint + tracker-blocking domain.
+  # crw connects to ws://obscura:9222/devtools/browser.
+  obscura:
+    image: h4ckf0r0day/obscura:latest
+    restart: unless-stopped
+    network_mode: "service:netns-holder"
+    command:
+      - "serve"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "9222"
+      - "--stealth"
+    healthcheck:
+      # The obscura image is distroless (no shell, no wget/curl), so the
+      # healthcheck uses the obscura binary's own `fetch` subcommand against
+      # the /json/version HTTP endpoint. --dump original bypasses the JS/DOM
+      # layer (raw response body); --allow-private-network permits loopback;
+      # --quiet suppresses the banner. /json/version is served on the
+      # dedicated accept thread (issue #62) so it stays responsive even while
+      # V8 JS evaluation blocks the LocalSet.
+      test: ["CMD", "/obscura", "fetch", "http://127.0.0.1:9222/json/version", "--dump", "original", "--allow-private-network", "--quiet"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      netns-holder:
+        condition: service_started
+      myst-client:
+        condition: service_healthy
+        restart: true
+
+  # Firecrawl-compatible API server. Configured entirely via CRW_* env vars
+  # (no config file mount needed — env layer wins over the baked-in
+  # config.default.toml). CRW_SERVER__PORT moves it off 3000 (taken by
+  # web_server in the shared netns). CRW_RENDERER__CHROME__WS_URL points at
+  # the obscura CDP endpoint; CRW_SEARCH__SEARXNG_URL points /v1/search at
+  # the wrapper's bundled SearXNG sidecar (127.0.0.1:8888 in the netns).
+  crw:
+    image: ghcr.io/us/crw:latest
+    restart: unless-stopped
+    network_mode: "service:netns-holder"
+    environment:
+      RUST_LOG: "info"
+      # Override the baked-in config.default.toml via env vars (highest precedence).
+      # Move crw off port 3000 (taken by web_server in the shared netns).
+      CRW_SERVER__PORT: "3010"
+      # Point the chrome renderer at obscura's CDP endpoint. The /devtools/
+      # path makes crw skip /json/version discovery and connect directly.
+      CRW_RENDERER__CHROME__WS_URL: "ws://127.0.0.1:9222/devtools/browser"
+      # /v1/search backed by the wrapper's bundled SearXNG sidecar.
+      CRW_SEARCH__SEARXNG_URL: "http://127.0.0.1:8888"
+    healthcheck:
+      # The crw image (debian:bookworm-slim) has no wget/curl, but has
+      # /bin/sh + grep + the crw CLI. We scrape the server's own /health
+      # endpoint via the crw binary and grep for the status field. The crw
+      # CLI always exits 0, so the grep exit code is the real signal: when
+      # the server is down, the scrape produces no stdout (connection refused)
+      # and grep fails; when up, /health returns {"status":"ok",...}.
+      test: ["CMD-SHELL", "crw scrape http://127.0.0.1:3010/health --format json 2>/dev/null | grep -q status || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      netns-holder:
+        condition: service_started
+      myst-client:
+        condition: service_healthy
+        restart: true
+      obscura:
+        condition: service_healthy
+
   # Host-facing TCP bridges. These run on the normal compose network and
   # forward host traffic to services inside the shared netns-holder namespace
   # (reachable through the myst-client alias on the default network).
@@ -232,6 +326,11 @@ services:
       myst-client:
         condition: service_healthy
         restart: true
+      # crw (Firecrawl-compatible scraper) is optional for Onyx, but wiring
+      # the dependency avoids a first-request race if Onyx's Web Search
+      # connector is configured to point at crw's /v1/scrape endpoint.
+      crw:
+        condition: service_started
     volumes: !override
       - ./docker-data/file-system:/app/file-system
       - ./docker-data/model-cache:/app/.cache/huggingface

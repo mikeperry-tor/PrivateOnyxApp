@@ -175,6 +175,16 @@ services:
       INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
       INDEXING_MODEL_SERVER_PORT: "9101"
     depends_on:
+      netns-holder:
+        condition: service_started
+      myst-client:
+        condition: service_healthy
+        restart: true
+      # crw (Firecrawl-compatible scraper) is optional for Onyx, but wiring
+      # the dependency avoids a first-request race if Onyx's Web Search
+      # connector is configured to point at crw's /v1/scrape endpoint.
+      crw:
+        condition: service_started
       local-embedding-shim:
         condition: service_healthy
 
