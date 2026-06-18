@@ -1,18 +1,20 @@
 # Private Onyx.App Docker Compose Set
 
-Docker Compose wrapper for running [Onyx](https://github.com/onyx-dot-app/onyx) with the [teep](https://github.com/13rac1/teep) private verified LLM inference proxy and [SearXNG](https://github.com/searxng/searxng). All search, web, and inference traffic is sent over a [Mysterium](https://github.com/mysteriumnetwork/node) VPN connection. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely.
+Docker Compose wrapper for running [Onyx](https://github.com/onyx-dot-app/onyx) with the [teep](https://github.com/13rac1/teep) private verified LLM inference proxy and [SearXNG](https://github.com/searxng/searxng). All search and web traffic is fetched using [Obscura](https://github.com/h4ckf0r0day/obscura) over a [Mysterium](https://github.com/mysteriumnetwork/node) VPN connection. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely.
 
 This stack gets you a private deep research agent and RAG document searching via a responsive web interface that you can access from anywhere.
 
-## Deep Research Mode Support
+## Deep Research, RAG, and Code Agent Support
 
 The main reason I created this stack is because none of the private chat providers offer a "Deep Research Mode" (aka multi-agent multi-round research report generation), and I didn't like going back to non-private chat providers when I needed this functionality.
 
-The Deep Research Mode in Onyx is optional, but if you do not need intense multi-agent deep research functionality at all, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
+Additionally, the full mode of Onyx provides RAG search results to the agent from local collection of PDFs and other documents, and has a Code Agent tool that allows the chat agent to spawn multiple sub-agents to clone and investigate git repositories. Onyx has many other connectors as well.
+
+If you do not need intense multi-agent deep research functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 
 ## Components
 
-The Docker Compose files in this stack rely on four components:
+The Docker Compose files in this stack relies on the following components:
 
 1. [Onyx](https://github.com/onyx-dot-app/onyx) provides a [top-ranking Deep Research Agent](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard), with a decent web interface and comprehensive connector and RAG-based local document search support. While other open source deep research agents rank slightly higher than Onyx, it is the only provider-neutral option with a complete user interface.
 
@@ -48,17 +50,17 @@ Build and run lite mode:
 make up-lite
 ```
 
+Stop all lite containers:
+
+```bash
+make down-lite
+```
+
 Status/logs:
 
 ```bash
 make ps-lite
 make logs-lite
-```
-
-Stop all lite containers:
-
-```bash
-make down-lite
 ```
 
 ### Full Mode
@@ -84,11 +86,7 @@ make logs-full
 
 ## First-run configuration
 
-0. The container build process may take some time to build all components on first run. Makefile dependency checks are used by `make up-lite` (or `make up-full`) build images on first run, but not after the images exist.
-
-1. Mysterium will create a new cryptographic identity, register it, and create an order URL on coingate for 100 $MYST (currently ~$20 USD). The order URL will be visible via `docker logs myst-client-vpn`.  This order URL can be paid in several different major cryptocurrencies, though an email is required. It may be possible to transfer $MYST directly to the VPN identity yourself, but I have not verified this.
-
-3. Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
+The first time you run the stack, you need to do some configuration of the .env and of the Myst VPN, before the Onyx WebUI will start.
 
 ### Configure Environment
 
@@ -110,9 +108,17 @@ Most likely variables you want to change:
 - **Optional LAN access** (for local inference APIs):
   - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
 - Optional Onyx SSRF defaults (for MCP servers and local doc-drop crawling):
-  - `OPEN_URL_VALIDATE_SSRF`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK`, and `MCP_SERVER_ALLOW_LOOPBACK` seed Onyx's default SSRF Protection level at startup.
-  - After you save a value in Onyx Admin -> Security Hardening, the saved UI setting becomes the effective runtime policy and overrides these defaults.
   - If you want both MCP servers on `host.docker.internal` and the doc-drop connector at `http://localhost:8091/`, use `OPEN_URL_VALIDATE_SSRF=true`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, and `MCP_SERVER_ALLOW_LOOPBACK=false`. That yields the `Allow Private Network` posture by default.
+    - `OPEN_URL_VALIDATE_SSRF`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK`, and `MCP_SERVER_ALLOW_LOOPBACK` seed Onyx's default SSRF Protection level at startup.
+    - After you save a value in Onyx Admin -> Security Hardening, the saved UI setting becomes the effective runtime policy and overrides these defaults.
+
+### Initial VPN Connection (Myst Payment)
+
+0. The container build process may take some time to build all components on first run. Makefile dependency checks are used by `make up-lite` (or `make up-full`) to build images on first run, but not after the images exist.
+
+1. Mysterium will create a new cryptographic identity, register it, and create an order URL on coingate for 100 $MYST (currently ~$20 USD). The order URL will be visible via `docker logs myst-client-vpn`.  This order URL can be paid in several different major cryptocurrencies, though an email is required. It may be possible to transfer $MYST directly to the VPN identity yourself, but I have not verified this.
+
+3. Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
 
 ## Onyx UI Configuration
 
@@ -202,27 +208,6 @@ Notes:
 - If you already saved a different value in Onyx Admin -> Security Hardening,
   that saved setting takes precedence. For doc-drop crawling, avoid the strict
   `Validate All` setting.
-
-### Using fastCRW (crw) Firecrawl-compatible Scraper with Obscura
-
-Architecture:
-
-- `obscura` runs from the published `h4ckf0r0day/obscura` Docker Hub image
-  (release builds include the stealth feature). It serves a Chrome DevTools
-  Protocol (CDP) WebSocket on port 9222 with `--stealth` enabled.
-- `crw` runs from the published `ghcr.io/us/crw` image (built with the `cdp`
-  cargo feature upstream) and is configured entirely via `CRW_*` environment
-  variables — no local build or config file mount needed.
-- crw connects to obscura's CDP endpoint at `ws://obscura:9222/devtools/browser`
-  (a direct `/devtools/` URL, so crw skips `/json/version` discovery and
-  connects straight to the browser socket).
-- crw exposes Firecrawl-compatible `/v1/scrape`, `/v1/crawl`, `/v1/map`, and
-  `/v1/search` endpoints on port 3010 (3000 is taken by the Onyx web server
-  in the shared netns). `/v1/search` is backed by the wrapper's bundled
-  SearXNG sidecar.
-
-Both images are pulled automatically by `make up-lite` (or `make up-full`)
-and refreshed by `make upgrade` — no manual build step is required.
 
 ### Optional: Running a Local Embedding Model Server (Mac)
 
