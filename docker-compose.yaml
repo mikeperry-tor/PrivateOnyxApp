@@ -156,6 +156,13 @@ services:
       # Override the baked-in config.default.toml via env vars (highest precedence).
       # Move crw off port 3000 (taken by web_server in the shared netns).
       CRW_SERVER__PORT: "3010"
+      # Force the chrome renderer (obscura) for ALL crw requests, including
+      # Onyx's /v1/scrape calls. The default "auto" mode tries a plain HTTP
+      # fetch first, which 429s on Google and returns empty SPA shells for
+      # JS-rendered SERPs (Brave). Pinning "chrome" sends every request
+      # through obscura's stealth CDP browser. Per-request renderer pins in
+      # the searxng stub engines are now redundant but harmless.
+      CRW_RENDERER__MODE: "chrome"
       # Point the chrome renderer at obscura's CDP endpoint. The /devtools/
       # path makes crw skip /json/version discovery and connect directly.
       CRW_RENDERER__CHROME__WS_URL: "ws://127.0.0.1:9222/devtools/browser"
