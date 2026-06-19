@@ -29,11 +29,14 @@
 # ── Wallet / identity storage ─────────────────────────────────────────────────
 # Wallet keys and node state are persisted via a bind mount:
 #
-#   ./docker-data/myst-data  →  /var/lib/mysterium-node  (inside the container)
-#   ./docker-data/myst-data  →  /root/.mysterium         (inside the container)
+#   ../docker-data/myst-data  →  /var/lib/mysterium-node  (inside the container)
+#   ../docker-data/myst-data  →  /root/.mysterium         (inside the container)
+#
+# Paths are relative to this file's directory (myst/), so ../docker-data/
+# resolves to <project-root>/docker-data/.
 #
 # The keystore (Ethereum-compatible wallet files) lives under:
-#   ./docker-data/myst-data/keystore/
+#   ../docker-data/myst-data/keystore/
 #
 # Back up this directory to preserve your identity and any funded balance.
 # On first start the container creates a new identity automatically if none
@@ -75,12 +78,12 @@
 # Rebuild / recreate the container:
 #   docker compose up -d --force-recreate
 #
-# Delete the container but keep wallet/state in ./docker-data/myst-data:
+# Delete the container but keep wallet/state in ../docker-data/myst-data:
 #   docker compose down
 #
 # Delete the container and local wallet/state data:
 #   docker compose down
-#   rm -rf ./docker-data/myst-data
+#   rm -rf ../docker-data/myst-data
 #
 # ── Environment variables ─────────────────────────────────────────────────────
 #
@@ -174,13 +177,14 @@ services:
       - net.ipv4.conf.default.rp_filter=0
       - net.ipv6.conf.all.disable_ipv6=1
       - net.ipv6.conf.default.disable_ipv6=1
-    # NOTE: This compose file is always invoked from the project root directory
-    # (via the wrapper docker-compose.yaml or the Makefile). Volume paths are
-    # project-root-relative. If running standalone from myst/, adjust paths.
+    # NOTE: Docker Compose resolves relative volume paths relative to this
+    # file's directory (myst/). The paths below use ../ to reach the project
+    # root, so they work both when run standalone and when extended by the
+    # wrapper docker-compose.yaml.
     volumes:
-      - ./docker-data/myst-data:/var/lib/mysterium-node
-      - ./docker-data/myst-data:/root/.mysterium
-      - ./myst/myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
+      - ../docker-data/myst-data:/var/lib/mysterium-node
+      - ../docker-data/myst-data:/root/.mysterium
+      - ./myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
     environment:
       # Master switch for the Mysterium VPN. When "false", the entrypoint
       # starts the daemon in idle mode: no kill-switch is armed, no connect
