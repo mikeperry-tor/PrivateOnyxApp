@@ -601,7 +601,7 @@ cmd_blockchain() {
     myst_cli identities get "$ID" 2>&1 | sed 's/^/         /'
     echo ""
     echo "       The channel address is the CREATE2-derived consumer channel contract"
-    echo "       where $MYST must be sent. If the CLI does not print it, you can"
+    echo "       where \$MYST must be sent. If the CLI does not print it, you can"
     echo "       compute it or check the TequilAPI JSON response."
     exit 1
   fi
@@ -613,13 +613,13 @@ cmd_blockchain() {
   echo ""
   echo "  Chain:           Polygon Mainnet (Chain ID $MYST_POLYGON_CHAIN_ID)"
   echo "  MYST token:      $MYST_POLYGON_TOKEN_ADDR"
-  echo "  Send $MYST to:   $CHANNEL_ADDR"
+  echo "  Send \$MYST to:   $CHANNEL_ADDR"
   echo ""
   echo "  ⚠  Do NOT send to your identity address ($ID)."
   echo "     The node tracks balance on the channel contract, not the identity."
   echo "     Sending to the identity address will lose your funds."
   echo ""
-  echo "  Acquire $MYST on QuickSwap (Polygon), or bridge from Ethereum/BSC."
+  echo "  Acquire \$MYST on QuickSwap (Polygon), or bridge from Ethereum/BSC."
   echo "  You need a small amount of MATIC for gas if sending from your own wallet."
   echo ""
   banner
@@ -653,7 +653,7 @@ case "${1:-}" in
     echo "  signup       — Wait for daemon, show/create order, print payment URL"
     echo "  orderstatus  — Show identity, balance, all orders + payment URLs"
     echo "  balance      — Quick identity + balance check"
-    echo "  blockchain   — Register identity, print channel address for direct $MYST transfer"
+    echo "  blockchain   — Register identity, print channel address for direct \$MYST transfer"
     exit 1
     ;;
 esac
