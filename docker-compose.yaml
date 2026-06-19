@@ -47,10 +47,6 @@ services:
       # Master VPN switch. When "false", myst-client idles the daemon without
       # arming the kill-switch or connecting. See .env.wrapper.example.
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
-    volumes: !override
-      - ./docker-data/myst-data:/var/lib/mysterium-node
-      - ./docker-data/myst-data:/root/.mysterium
-      - ./myst/myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
     depends_on:
       netns-holder:
         condition: service_started

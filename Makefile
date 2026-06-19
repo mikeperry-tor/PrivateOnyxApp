@@ -87,7 +87,6 @@ ONYX_INSTALL_HOST_PORT_80 ?= 3001
 SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
 SEARXNG_ENV_FILE := searxng/.env
 MYST_COMPOSE_FILE := myst/docker-compose.yaml
-MYST_SIGNUP_OVERRIDE := myst/docker-compose.signup.yml
 MYST_VPN_CLI := myst/myst-vpn-cli.sh
 MYST_CONTAINER_NAME := myst-client-vpn
 MYST_DATA_DIR := docker-data/myst-data
@@ -472,6 +471,7 @@ embedserv-serve: embedserv-verify-model
 # Start standalone Myst container for initial signup/payment, then run the
 # signup helper which creates an identity, registers it, and creates a
 # payment order. The payment URL is printed to stdout.
+# MYST_AUTO_CONNECT and MYST_WAIT_FOR_FUNDS are disabled during signup.
 vpn-signup-orderform: myst-image-ready
 	@set -eu; \
 	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
@@ -479,7 +479,8 @@ vpn-signup-orderform: myst-image-ready
 	else \
 		echo "Starting standalone Myst signup container..."; \
 		mkdir -p $(MYST_DATA_DIR); \
-		COMPOSE_FILE=$(MYST_COMPOSE_FILE):$(MYST_SIGNUP_OVERRIDE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
+		MYST_AUTO_CONNECT=false MYST_WAIT_FOR_FUNDS=false \
+			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
 		echo "Waiting for container to initialize..."; \
 		sleep 3; \
 	fi
@@ -490,6 +491,9 @@ vpn-signup-orderform: myst-image-ready
 # helper which creates an identity, registers it, and prints the consumer
 # channel address for direct on-chain $MYST transfer (Polygon). No payment
 # order is created.
+# MYST_AUTO_CONNECT and MYST_WAIT_FOR_FUNDS are disabled during signup.
+# MYST_SKIP_ORDER_CREATION prevents the entrypoint from auto-creating a
+# CoinGate order.
 vpn-signup-blockchain: myst-image-ready
 	@set -eu; \
 	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
@@ -497,7 +501,8 @@ vpn-signup-blockchain: myst-image-ready
 	else \
 		echo "Starting standalone Myst signup container..."; \
 		mkdir -p $(MYST_DATA_DIR); \
-		MYST_SKIP_ORDER_CREATION=true COMPOSE_FILE=$(MYST_COMPOSE_FILE):$(MYST_SIGNUP_OVERRIDE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
+		MYST_AUTO_CONNECT=false MYST_WAIT_FOR_FUNDS=false MYST_SKIP_ORDER_CREATION=true \
+			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
 		echo "Waiting for container to initialize..."; \
 		sleep 3; \
 	fi
@@ -526,7 +531,7 @@ ensure-myst-funded:
 	fi; \
 	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
 		echo "Stopping standalone Myst signup container (wallet data is preserved)..."; \
-		COMPOSE_FILE=$(MYST_COMPOSE_FILE):$(MYST_SIGNUP_OVERRIDE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) down --remove-orphans 2>/dev/null || \
+		COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) down --remove-orphans 2>/dev/null || \
 			"$(CONTAINER_BIN)" stop $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
 		"$(CONTAINER_BIN)" rm -f $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
 	fi; \

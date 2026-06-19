@@ -29,11 +29,11 @@
 # ── Wallet / identity storage ─────────────────────────────────────────────────
 # Wallet keys and node state are persisted via a bind mount:
 #
-#   ./myst-data  →  /var/lib/mysterium-node  (inside the container)
-#   ./myst-data  →  /root/.mysterium         (inside the container)
+#   ./docker-data/myst-data  →  /var/lib/mysterium-node  (inside the container)
+#   ./docker-data/myst-data  →  /root/.mysterium         (inside the container)
 #
 # The keystore (Ethereum-compatible wallet files) lives under:
-#   ./myst-data/keystore/
+#   ./docker-data/myst-data/keystore/
 #
 # Back up this directory to preserve your identity and any funded balance.
 # On first start the container creates a new identity automatically if none
@@ -75,12 +75,12 @@
 # Rebuild / recreate the container:
 #   docker compose up -d --force-recreate
 #
-# Delete the container but keep wallet/state in ./myst-data:
+# Delete the container but keep wallet/state in ./docker-data/myst-data:
 #   docker compose down
 #
 # Delete the container and local wallet/state data:
 #   docker compose down
-#   rm -rf ./myst-data
+#   rm -rf ./docker-data/myst-data
 #
 # ── Environment variables ─────────────────────────────────────────────────────
 #
@@ -174,10 +174,13 @@ services:
       - net.ipv4.conf.default.rp_filter=0
       - net.ipv6.conf.all.disable_ipv6=1
       - net.ipv6.conf.default.disable_ipv6=1
+    # NOTE: This compose file is always invoked from the project root directory
+    # (via the wrapper docker-compose.yaml or the Makefile). Volume paths are
+    # project-root-relative. If running standalone from myst/, adjust paths.
     volumes:
-      - ./myst-data:/var/lib/mysterium-node
-      - ./myst-data:/root/.mysterium
-      - ./myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
+      - ./docker-data/myst-data:/var/lib/mysterium-node
+      - ./docker-data/myst-data:/root/.mysterium
+      - ./myst/myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
     environment:
       # Master switch for the Mysterium VPN. When "false", the entrypoint
       # starts the daemon in idle mode: no kill-switch is armed, no connect
@@ -185,7 +188,7 @@ services:
       # TequilAPI reachability. The container still joins netns-holder so
       # namespace references stay valid. See myst/myst-client-entrypoint.sh.
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
-      MYST_AUTO_CONNECT: "true"
+      MYST_AUTO_CONNECT: "${MYST_AUTO_CONNECT:-true}"
       # Optional WireGuard interface MTU override passed to the daemon.
       MYST_WIREGUARD_MTU: "${MYST_WIREGUARD_MTU:-}"
       # Diagnostic override to skip peer route exclusion during P2P setup.
