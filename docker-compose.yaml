@@ -357,7 +357,7 @@ services:
       # Wrapper-level alias for Onyx's asymmetric query prefix setting.
       ASYM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
       # Interactive chat + deep-research tool-call loop cap (per request); we want long research capability
-      MAX_LLM_CYCLES: "${MAX_LLM_CYCLES:-50}"
+      MAX_LLM_CYCLES: "${MAX_LLM_CYCLES:-200}"
       # Optional wrapper-level overrides for open_url content truncation.
       # Leave empty to use Onyx defaults.
       OPEN_URL_MAX_CHARS_PER_URL: "${OPEN_URL_MAX_CHARS_PER_URL:-}"
