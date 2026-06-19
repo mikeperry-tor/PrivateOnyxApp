@@ -28,3 +28,13 @@ services:
       - ${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock
       # The sitecustomize patch that rewrites --network none.
       - ./onyx/patches/sitecustomize_code_interpreter:/app/wrapper-patches:ro
+
+  # The api_server also needs CODE_INTERPRETER_VPN_ROUTED=true so its
+  # sitecustomize patch updates the Python/Bash tool descriptions and coding
+  # agent prompts to advertise network access (otherwise the LLM would keep
+  # avoiding network commands based on the stale "no network" descriptions).
+  # The wrapper-patches-base volume is already mounted in docker-compose.yaml;
+  # this override only adds the env var.
+  api_server:
+    environment:
+      CODE_INTERPRETER_VPN_ROUTED: "true"

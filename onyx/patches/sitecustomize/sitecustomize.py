@@ -8,9 +8,11 @@ from __future__ import annotations
 
 def _apply_base_env_patches() -> None:
     try:
+        from wrapper_env_patches import apply_code_interpreter_network_description_patches
         from wrapper_env_patches import apply_open_url_char_limit_patches
 
         apply_open_url_char_limit_patches()
+        apply_code_interpreter_network_description_patches()
     except Exception as e:  # pragma: no cover
         # In lite mode this should usually succeed because base patch path is
         # included after this directory. If not, proceed with lite-only patches.

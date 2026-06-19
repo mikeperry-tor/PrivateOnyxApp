@@ -83,3 +83,125 @@ def apply_open_url_char_limit_patches() -> None:
         f"(per_url={ws_utils.MAX_CHARS_PER_URL}, across_urls={across_urls})",
         flush=True,
     )
+
+
+def _is_vpn_routed() -> bool:
+    return os.environ.get("CODE_INTERPRETER_VPN_ROUTED", "").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def apply_code_interpreter_network_description_patches() -> None:
+    """Update tool descriptions and coding-agent prompts when the
+    code-interpreter executor pods are VPN-routed.
+
+    By default, Onyx's code-interpreter hardcodes ``--network none`` on every
+    executor pod, so the Python tool, BashTool, and coding-agent bash sessions
+    have no network access. The upstream tool descriptions and coding-agent
+    system prompts all advertise this ("network-restricted", "no network
+    access", "network-isolated sandbox").
+
+    When ``CODE_INTERPRETER_VPN_ROUTED=true`` is set on the api_server
+    container, a companion sitecustomize patch in the code-interpreter
+    container rewrites ``--network none`` to ``--network container:<self>``,
+    giving executor pods VPN-routed internet access. This function updates the
+    api_server-side descriptions and prompts so the LLM is told it has network
+    access and can use network commands (curl, pip install, etc.) — otherwise
+    the LLM would continue to avoid network commands based on the stale
+    "no network" descriptions.
+    """
+    if not _is_vpn_routed():
+        return
+
+    # ── PythonTool ──────────────────────────────────────────────────────
+    try:
+        from onyx.tools.tool_implementations.python.python_tool import PythonTool
+
+        PythonTool.DESCRIPTION = PythonTool.DESCRIPTION.replace(
+            "Execute Python code in an isolated sandbox environment.",
+            "Execute Python code in a sandbox environment with internet access "
+            "via VPN. Network operations (requests, urllib, pip, etc.) are "
+            "permitted and egress through the VPN tunnel."
+        )
+        print("sitecustomize: patched PythonTool.DESCRIPTION for VPN routing", flush=True)
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed to patch PythonTool.DESCRIPTION: {e}", flush=True)
+
+    # ── BashTool ────────────────────────────────────────────────────────
+    try:
+        from onyx.tools.tool_implementations.bash.bash_tool import BashTool
+
+        BashTool.DESCRIPTION = BashTool.DESCRIPTION.replace(
+            "Execute a bash command inside an isolated, network-restricted session.",
+            "Execute a bash command inside a session with internet access via "
+            "VPN. Network commands (curl, wget, pip install, npm install, git "
+            "clone, etc.) are permitted and egress through the VPN tunnel."
+        )
+        print("sitecustomize: patched BashTool.DESCRIPTION for VPN routing", flush=True)
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed to patch BashTool.DESCRIPTION: {e}", flush=True)
+
+    # ── Coding agent bash tool description ──────────────────────────────
+    # Upstream: "Run a bash command in the sandboxed session containing the
+    # checked-out repository. The session has no network access. Use commands
+    # like `ls`, `cat`, `grep -r`, `find`, `wc -l`, etc. to inspect the code.
+    # Filesystem state persists across calls within the same session."
+    # We replace "The session has no network access." with VPN access info.
+    # Using .replace() preserves the rest of the description.
+    try:
+        from onyx.coding_agent import mock_tools
+
+        mock_tools.BASH_TOOL_DESCRIPTION["function"]["description"] = (
+            "Run a bash command in the sandboxed session containing the "
+            "checked-out repository. The session has internet access via VPN. "
+            "Network commands (curl, pip install, npm install, git clone, "
+            "etc.) are permitted and egress through the VPN tunnel. Use "
+            "commands like `ls`, `cat`, `grep -r`, `find`, `wc -l`, etc. to "
+            "inspect the code. Filesystem state persists across calls within "
+            "the same session."
+        )
+        print(
+            "sitecustomize: patched coding-agent BASH_TOOL_DESCRIPTION for VPN routing",
+            flush=True,
+        )
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed to patch coding-agent BASH_TOOL_DESCRIPTION: {e}",
+            flush=True,
+        )
+
+    # ── Coding agent system prompts ─────────────────────────────────────
+    # The prompts are module-level string constants. They are imported by name
+    # in fake_tools/coding_agent.py, so we must patch the module attributes
+    # BEFORE that import happens (sitecustomize runs at interpreter startup,
+    # before any onyx module is imported by the application).
+    try:
+        from onyx.prompts.coding_agent import coding_agent as ca_prompts
+
+        ca_prompts.CODING_AGENT_PROMPT = ca_prompts.CODING_AGENT_PROMPT.replace(
+            "network-isolated sandbox",
+            "sandbox with VPN-routed internet access",
+        ).replace(
+            "Network commands (`curl`, `pip install`, `npm install`, `git pull`) — the sandbox has no network.",
+            "Network commands (`curl`, `pip install`, `npm install`, `git pull`) are permitted — the sandbox has VPN-routed internet access.",
+        )
+
+        ca_prompts.CODING_AGENT_PROMPT_REASONING = (
+            ca_prompts.CODING_AGENT_PROMPT_REASONING.replace(
+                "network-isolated sandbox",
+                "sandbox with VPN-routed internet access",
+            ).replace(
+                "No network.",
+                "VPN-routed internet access is available.",
+            )
+        )
+
+        print(
+            "sitecustomize: patched coding-agent prompts for VPN routing",
+            flush=True,
+        )
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed to patch coding-agent prompts: {e}", flush=True)

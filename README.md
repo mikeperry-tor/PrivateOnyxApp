@@ -280,6 +280,13 @@ The code-interpreter already runs inside the shared `netns-holder` VPN namespace
 
 The patch monkeypatches `DockerExecutor._build_run_command` to rewrite the hardcoded `--network none` flag to `--network container:<self>`, where `<self>` is the code-interpreter's own container ID (auto-discovered from `HOSTNAME`). This makes every executor pod inherit the code-interpreter's network namespace — and since that namespace is the VPN netns, executor pods egress through the Mysterium tunnel.
 
+The override also passes `CODE_INTERPRETER_VPN_ROUTED=true` to the **api_server** container. This activates a companion patch in the api_server's [`wrapper_env_patches.py`](onyx/patches/sitecustomize_base/wrapper_env_patches.py) that updates the LLM-facing tool descriptions and coding-agent system prompts to advertise network access. Without this, the LLM would continue to avoid network commands based on the stale "no network" / "network-restricted" / "network-isolated" descriptions hardcoded upstream:
+
+- **PythonTool** description → "Execute Python code in a sandbox environment with internet access via VPN..."
+- **BashTool** description → "Execute a bash command inside a session with internet access via VPN..."
+- **Coding agent bash tool** description → "The session has internet access via VPN..."
+- **Coding agent system prompts** → "sandbox with VPN-routed internet access" (replaces "network-isolated sandbox"), and "Network commands are permitted" (replaces "the sandbox has no network")
+
 > **Why not just use `PYTHON_EXECUTOR_DOCKER_RUN_ARGS`?** The code-interpreter exposes this env var for extra `docker run` args, and it is appended *after* `--network none`. However, Docker **errors out** when `--network none` is combined with any other `--network` flag (it does not use "last flag wins" for `none`). So the env var alone cannot override the network isolation — the `sitecustomize` patch is required to mutate the command list before it is executed.
 
 **Security considerations:**
