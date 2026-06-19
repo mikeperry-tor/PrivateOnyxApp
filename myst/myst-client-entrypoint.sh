@@ -303,6 +303,57 @@ case "${BALANCE:-0}" in
   ;;
 esac
 
+# Extract a payment URL from order output (the "Data: {json}" line).
+# Tries python3 for structured JSON parsing, falls back to grep for any https URL.
+extract_payment_url() {
+  _input="$1"
+  _url=""
+  if command -v python3 >/dev/null 2>&1; then
+    _url="$(printf '%s' "$_input" | python3 -c '
+import sys, json
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for key in ("payment_url", "pay_url", "url", "payment_link", "redirect_url", "checkout_url"):
+    val = data.get(key)
+    if val and isinstance(val, str) and val.startswith("http"):
+        print(val)
+        sys.exit(0)
+def find_url(obj):
+    if isinstance(obj, dict):
+        for v in obj.values():
+            r = find_url(v)
+            if r:
+                return r
+    elif isinstance(obj, list):
+        for v in obj:
+            r = find_url(v)
+            if r:
+                return r
+    elif isinstance(obj, str) and obj.startswith("http"):
+        return obj
+    return None
+r = find_url(data)
+if r:
+    print(r)
+' 2>/dev/null || true)"
+  fi
+  if [ -z "$_url" ]; then
+    _url="$(printf '%s' "$_input" | grep -oE 'https://[^"[:space:]]+' | head -n1 || true)"
+  fi
+  [ -n "$_url" ] && printf '%s' "$_url" && return 0
+  return 1
+}
+
+# Print a payment URL in a prominent, greppable banner.
+print_payment_banner() {
+  _url="$1"
+  printf '%s\n' "═══════════════════════════════════════════════════════════"
+  printf 'PAYMENT URL: %s\n' "$_url"
+  printf '%s\n' "═══════════════════════════════════════════════════════════"
+}
+
 if [ "$NEEDS_ORDER_CHECK" = "true" ]; then
     # Show any existing orders so the user can track pending payments.
     echo "Checking existing payment orders..."
@@ -312,6 +363,23 @@ if [ "$NEEDS_ORDER_CHECK" = "true" ]; then
       HAS_EXISTING_ORDERS=true
     fi
     [ -n "$EXISTING" ] && echo "$EXISTING"
+
+    # For existing unpaid orders, try to extract and display the payment URL.
+    if [ "$HAS_EXISTING_ORDERS" = "true" ]; then
+      _existing_ids="$(printf '%s' "$EXISTING" | grep -oE "Order ID '[^']+'" | sed "s/Order ID '//; s/'//" || true)"
+      for _oid in $_existing_ids; do
+        _detail="$(myst_cli orders get "$ID" "$_oid" 2>/dev/null || true)"
+        _data_line="$(printf '%s' "$_detail" | grep -i '^.*Data:' || true)"
+        if [ -n "$_data_line" ]; then
+          _json_part="$(printf '%s' "$_data_line" | sed 's/^.*Data:[[:space:]]*//' || true)"
+          _pay_url="$(extract_payment_url "$_json_part" || true)"
+          if [ -n "$_pay_url" ]; then
+            print_payment_banner "$_pay_url"
+            break
+          fi
+        fi
+      done
+    fi
 
     # Auto-create a new order if all four required vars are set.
     if [ -n "${MYST_ORDER_AMOUNT:-}" ] && [ -n "${MYST_ORDER_CURRENCY:-}" ] && \
@@ -335,6 +403,16 @@ if [ "$NEEDS_ORDER_CHECK" = "true" ]; then
         fi
         if [ "$CREATE_RC" -ne 0 ]; then
           echo "WARNING: Order creation failed (exit ${CREATE_RC})."
+        else
+          # Extract and display the payment URL from the newly created order.
+          _data_line="$(printf '%s' "$CREATE_OUT" | grep -i '^.*Data:' || true)"
+          if [ -n "$_data_line" ]; then
+            _json_part="$(printf '%s' "$_data_line" | sed 's/^.*Data:[[:space:]]*//' || true)"
+            _pay_url="$(extract_payment_url "$_json_part" || true)"
+            if [ -n "$_pay_url" ]; then
+              print_payment_banner "$_pay_url"
+            fi
+          fi
         fi
       fi
     else

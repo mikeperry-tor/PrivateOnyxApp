@@ -1,0 +1,26 @@
+# Override for standalone VPN signup mode.
+#
+# Used by: make vpn-signup
+# Base:   myst/docker-compose.yaml
+#
+# This override:
+#   1. Repoints wallet/data volumes to ../docker-data/myst-data so the identity
+#      and balance persist when transitioning to the full wrapper stack.
+#   2. Disables auto-connect (no balance yet during signup).
+#   3. Disables wait-for-funds (user checks status via make vpn-orderstatus).
+#
+# Usage:
+#   docker compose --env-file .env.wrapper \
+#     -f myst/docker-compose.yaml -f myst/docker-compose.signup.yml up -d
+
+services:
+  myst-client:
+    volumes: !override
+      - ../docker-data/myst-data:/var/lib/mysterium-node
+      - ../docker-data/myst-data:/root/.mysterium
+      - ./myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
+    environment:
+      # Don't attempt VPN connection during signup (no balance yet).
+      MYST_AUTO_CONNECT: "false"
+      # Don't block waiting for funds; user checks status separately.
+      MYST_WAIT_FOR_FUNDS: "false"

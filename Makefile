@@ -65,6 +65,11 @@ ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
 ONYX_INSTALL_HOST_PORT_80 ?= 3001
 SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
 SEARXNG_ENV_FILE := searxng/.env
+MYST_COMPOSE_FILE := myst/docker-compose.yaml
+MYST_SIGNUP_OVERRIDE := myst/docker-compose.signup.yml
+MYST_VPN_CLI := myst/myst-vpn-cli.sh
+MYST_CONTAINER_NAME := myst-client-vpn
+MYST_DATA_DIR := docker-data/myst-data
 EMBEDSERV_DIR := embedserv
 EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
@@ -73,7 +78,7 @@ EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -93,6 +98,11 @@ help:
 	@echo "  make embedserv-install # Create embedserv venv with uv and download the MLX embedding model"
 	@echo "  make embedserv-verify-model # Verify embedserv/models copy for the selected MLX embedding model"
 	@echo "  make embedserv-serve   # Launch mlx-openai-server on LOCAL_EMBEDDINGS_URL"
+	@echo ""
+	@echo "VPN signup & payment:"
+	@echo "  make vpn-signup      # Start standalone Myst container, create identity + order, show payment URL"
+	@echo "  make vpn-orderstatus # Show balance, order status, and payment URL"
+	@echo "  make vpn-balance     # Quick balance check"
 	@echo ""
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
@@ -120,12 +130,12 @@ crw-image-ready:
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
-up-lite: ensure-onyx-config sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
+up-lite: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(ONYX_MODEL_SERVER_IMAGE)
-up-full: ensure-onyx-config sync-onyx-env onyx-image-ready myst-image-ready teep-image-ready
+up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) up -d --wait
 
 ensure-onyx-config:
@@ -428,3 +438,60 @@ embedserv-serve: embedserv-verify-model
 		--served-model-name "$$served_model" \
 		--host "$$host" \
 		--port "$$port"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VPN signup, order status, and balance
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Start standalone Myst container for initial signup/payment, then run the
+# signup helper which creates an identity, registers it, and creates a
+# payment order. The payment URL is printed to stdout.
+vpn-signup: myst-image-ready
+	@set -eu; \
+	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
+		echo "Myst container '$(MYST_CONTAINER_NAME)' is already running."; \
+	else \
+		echo "Starting standalone Myst signup container..."; \
+		mkdir -p $(MYST_DATA_DIR); \
+		COMPOSE_FILE=$(MYST_COMPOSE_FILE):$(MYST_SIGNUP_OVERRIDE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
+		echo "Waiting for container to initialize..."; \
+		sleep 3; \
+	fi
+	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
+		$(MYST_VPN_CLI) signup
+
+# Show identity, balance, registration status, all orders, and payment URLs
+# for any unpaid orders. Works against whichever myst container is running.
+vpn-orderstatus:
+	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
+		$(MYST_VPN_CLI) orderstatus
+
+# Quick balance check. Works against whichever myst container is running.
+vpn-balance:
+	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
+		$(MYST_VPN_CLI) balance
+
+# Prerequisite for up-lite/up-full: stop signup container if running and
+# verify that a Myst identity (keystore) exists. If no keystore is found,
+# instruct the user to run 'make vpn-signup' first.
+ensure-myst-funded:
+	@set -eu; \
+	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
+		echo "Stopping standalone Myst signup container (wallet data is preserved)..."; \
+		COMPOSE_FILE=$(MYST_COMPOSE_FILE):$(MYST_SIGNUP_OVERRIDE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) down --remove-orphans 2>/dev/null || \
+			"$(CONTAINER_BIN)" stop $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
+		"$(CONTAINER_BIN)" rm -f $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
+	fi; \
+	if [ ! -d "$(MYST_DATA_DIR)/keystore" ] || [ -z "$$(ls -A $(MYST_DATA_DIR)/keystore 2>/dev/null)" ]; then \
+		echo ""; \
+		echo "ERROR: No Myst identity found in $(MYST_DATA_DIR)/keystore/"; \
+		echo "       You need to sign up and fund your VPN wallet first."; \
+		echo ""; \
+		echo "       Run: make vpn-signup"; \
+		echo "       Then pay at the displayed URL and run: make vpn-orderstatus"; \
+		echo "       Once funded, run: make up-lite (or make up-full)"; \
+		echo ""; \
+		exit 1; \
+	else \
+		echo "Myst identity found in $(MYST_DATA_DIR)/keystore/ — proceeding."; \
+	fi

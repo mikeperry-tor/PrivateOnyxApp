@@ -119,11 +119,55 @@ Most likely variables you want to change:
 
 ### Initial VPN Connection (Myst Payment)
 
-0. The container build process may take some time to build all components on first run. Makefile dependency checks are used by `make up-lite` (or `make up-full`) to build images on first run, but not after the images exist.
+The Mysterium VPN requires a funded wallet (paid in cryptocurrency) before it can connect. The signup process is handled by a standalone container that creates a cryptographic identity, registers it on-chain, and generates a payment order.
 
-1. Mysterium will create a new cryptographic identity, register it, and create an order URL on coingate for 100 $MYST (currently ~$20 USD). The order URL will be visible via `docker logs myst-client-vpn`.  This order URL can be paid in several different major cryptocurrencies, though an email is required. It may be possible to transfer $MYST directly to the VPN identity yourself, but I have not verified this.
+**Step 1: Run the signup process**
 
-3. Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
+```bash
+make vpn-signup
+```
+
+This launches a standalone Myst container, creates a new identity, registers it (Mysterium sponsors the gas fees), and creates a payment order. The payment URL is displayed in a banner:
+
+```
+═══════════════════════════════════════════════════════════
+PAYMENT URL: https://coingate.com/pay/invoice/abc123...
+═══════════════════════════════════════════════════════════
+```
+
+The default order is for 100 $MYST (currently ~$20 USD), payable via CoinGate in several major cryptocurrencies. An email is required by the payment gateway. You can customize the order amount, currency, and gateway via `MYST_ORDER_*` variables in `.env.wrapper`.
+
+**Step 2: Pay at the URL**
+
+Open the payment URL in a browser and complete the cryptocurrency payment.
+
+**Step 3: Check payment status**
+
+```bash
+make vpn-orderstatus
+```
+
+This shows your identity, balance, registration status, and all orders with their payment status. For unpaid orders, the payment URL is displayed again. Repeat until your balance is non-zero. For a quick balance check:
+
+```bash
+make vpn-balance
+```
+
+**Step 4: Start the full stack**
+
+```bash
+make up-lite   # or make up-full
+```
+
+This automatically stops the standalone signup container (your wallet data is preserved) and starts the full stack. If no Myst identity is found, it will tell you to run `make vpn-signup` first.
+
+**Notes:**
+
+- If the payment order expires before you pay, just run `make vpn-signup` again. It reuses your existing identity and creates a new order.
+- The container build process may take some time to build all components on first run. Makefile dependency checks are used by `make up-lite` (or `make up-full`) to build images on first run, but not after the images exist.
+- Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
+- It may be possible to transfer $MYST directly to the VPN identity yourself, but this has not been verified.
+- The payment URL is also printed in the container logs as a fallback: `docker logs myst-client-vpn 2>&1 | grep PAYMENT_URL`
 
 ## Onyx UI Configuration
 
