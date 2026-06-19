@@ -141,6 +141,52 @@ services:
         condition: service_healthy
         restart: true
 
+  # Obscura MCP server: exposes obscura's browser automation tools
+  # (browser_navigate, browser_snapshot, browser_click, browser_fill, etc.)
+  # as a Model Context Protocol HTTP server that Onyx chat agents can use
+  # directly. Runs a separate obscura process from the CDP `serve` instance
+  # above so crw's browser driving is not disrupted.
+  #
+  # The HTTP transport has no built-in auth. It binds 0.0.0.0 inside the
+  # netns-holder namespace (only reachable by other services in that namespace
+  # + the host-web-proxy bridge). For additional origin restrictions, set
+  # OBSCURA_MCP_ALLOWED_ORIGINS.
+  #
+  # See: https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md
+  obscura-mcp:
+    image: h4ckf0r0day/obscura:latest
+    restart: unless-stopped
+    network_mode: "service:netns-holder"
+    command:
+      - "mcp"
+      - "--http"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "${OBSCURA_MCP_PORT:-9223}"
+      - "--stealth"
+    environment:
+      # Optional comma-separated Origin allowlist for the HTTP transport.
+      # When set, browser requests from unlisted origins are refused with 403.
+      # Native (non-browser) MCP clients send no Origin and are always allowed.
+      OBSCURA_MCP_ALLOWED_ORIGINS: "${OBSCURA_MCP_ALLOWED_ORIGINS:-}"
+    healthcheck:
+      # The obscura image is distroless. Probe the MCP HTTP endpoint via the
+      # obscura binary's own `fetch` subcommand. The MCP server responds to
+      # GET / with a JSON-RPC error (method not found) or an SSE stream —
+      # either way a non-empty response means the server is up.
+      test: ["CMD", "/obscura", "fetch", "http://127.0.0.1:${OBSCURA_MCP_PORT:-9223}/", "--dump", "original", "--allow-private-network", "--quiet"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      netns-holder:
+        condition: service_started
+      myst-client:
+        condition: service_healthy
+        restart: true
+
   # Firecrawl-compatible API server. Configured entirely via CRW_* env vars
   # (no config file mount needed — env layer wins over the baked-in
   # config.default.toml). CRW_SERVER__PORT moves it off 3000 (taken by

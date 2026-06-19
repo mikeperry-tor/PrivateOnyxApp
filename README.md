@@ -111,6 +111,10 @@ Most likely variables you want to change:
   - Set `TAILSCALE_VPN_ROUTED=true` to route Tailscale Funnel traffic through the VPN namespace. **Warning:** this links your Tailscale identity to the VPN exit IP.
   - Set `CODE_INTERPRETER_VPN_ROUTED=true` to give Onyx's Python tool and coding-agent bash sessions outbound internet access through the VPN. **Security:** this removes the code-interpreter's network isolation — the LLM can make arbitrary outbound requests from generated code.
   - See [VPN Routing Configuration](#vpn-routing-configuration) for details.
+- **Obscura MCP server** (runs by default):
+  - A second obscura instance runs as an MCP HTTP server, exposing stealth browser automation tools (navigate, snapshot, click, fill, extract, etc.) directly to Onyx chat agents.
+  - Configure the MCP server URL in Onyx Admin → MCP Servers as `http://127.0.0.1:9223/` with Streamable HTTP transport (requires SSRF Protection set to Disabled — see below).
+  - See [Obscura MCP Server](#optional-obscura-mcp-server-for-chat-agent-browser-automation) for details.
 - **Optional LAN access** (for local inference APIs):
   - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
 - Optional Onyx SSRF defaults (for MCP servers and local doc-drop crawling):
@@ -208,6 +212,62 @@ To make use of the provided crw and obscura anti-fingerprinting web search tools
 5. Set **API Base URL** to `http://localhost:3010/v1/scrape`.
 6. Set **API Key** to the value of `CRW_ONYX_API_KEY` (default: `local-crw`).
 7. Click **Connect**, then **Set as Default** on the Firecrawl card.
+
+### Obscura MCP Server for Chat Agent Browser Automation
+
+In addition to the CDP browser that crw drives for scraping, a second obscura instance runs as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) HTTP server by default. This exposes obscura's stealth browser automation tools directly to Onyx chat agents — they can navigate pages, take snapshots, click elements, fill forms, extract content, and more, all through the MCP tool interface.
+
+The MCP server runs in the netns-holder VPN namespace, so all browser traffic egresses through the Mysterium VPN tunnel with stealth anti-fingerprinting enabled. It listens on `127.0.0.1:${OBSCURA_MCP_PORT:-9223}` inside the namespace (default port 9223). Configure the port via `OBSCURA_MCP_PORT` in `.env.wrapper`.
+
+**Step 1: Configure SSRF Protection to allow loopback**
+
+The obscura MCP server listens on `127.0.0.1` inside the netns-holder namespace. The api_server (which runs in the same namespace) reaches it via localhost, but Onyx's SSRF protection blocks loopback addresses by default — even at the `Allow Private Network` level (the wrapper's default via `MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, `MCP_SERVER_ALLOW_LOOPBACK=false`).
+
+To allow the MCP client to reach `127.0.0.1`, set SSRF Protection to **Disabled**:
+
+1. Go to **Admin Panel -> Security Hardening** ([http://localhost:3000/admin/security](http://localhost:3000/admin/security)).
+2. Set **SSRF Protection** to **Disabled**.
+3. Click **Save**.
+
+This allows loopback and private-network targets for MCP servers, open_url, and OAuth endpoints. Cloud-metadata and link-local addresses (169.254.0.0/16) remain blocked as an always-on floor. This is safe in the wrapper deployment because all services run inside the VPN namespace — there are no external clients that could exploit the relaxed SSRF policy.
+
+> **Note:** If you prefer not to disable SSRF protection globally, you can alternatively run the obscura-mcp service on a non-loopback address by giving the netns-holder namespace a dedicated bridge IP. However, the simplest path is the Disabled setting above, since the wrapper's threat model already assumes all services are co-located in the VPN namespace.
+
+**Step 2: Configure the MCP server in Onyx**
+
+1. Go to **Admin Panel -> MCP Servers** ([http://localhost:3000/admin/mcp-servers](http://localhost:3000/admin/mcp-servers)).
+2. Click **Add MCP Server**.
+3. Set **Name** to `obscura` (or any name you prefer).
+4. Set **Server URL** to `http://127.0.0.1:9223/mcp` (or your configured `OBSCURA_MCP_PORT`).
+   - The api_server runs in the same netns-holder namespace, so it reaches the MCP server via localhost.
+5. Set **Auth Type** to **None** (the MCP HTTP transport has no built-in auth; it's only reachable within the VPN namespace).
+6. Click **Save**, then click **Discover Tools** to verify the connection.
+
+The following browser automation tools become available to chat agents:
+
+- **Navigation:** `browser_navigate`, `browser_back`, `browser_forward`, `browser_reload`, `browser_close`
+- **Read the page:** `browser_snapshot`, `browser_markdown`, `browser_links`, `browser_extract`, `browser_interactive_elements`, `browser_detect_forms`
+- **Interact:** `browser_click`, `browser_fill`, `browser_fill_form`, `browser_type`, `browser_press_key`, `browser_select_option`, `browser_scroll`
+- **Wait & JS:** `browser_wait_for`, `browser_wait_for_text`, `browser_evaluate`
+- **Diagnostics:** `browser_network_requests`, `browser_console_messages`
+- **Cookies & storage:** `browser_get_cookies`, `browser_set_cookie`, `browser_clear_cookies`, `browser_storage_state`
+- **Tabs:** `browser_tab_new`, `browser_tab_list`, `browser_tab_switch`, `browser_tab_close`
+
+**Step 3: Assign the MCP tools to an Assistant**
+
+0. **RELOAD THE ONYX Admin WebUI**. After MCP config change, the Admin WebUI needs to be updated with the proper set of tool lists.
+1. Go to **Admin Panel -> Assistants** and edit an assistant (or create a new one).
+2. Under **MCP Servers**, select the `obscura` server.
+3. Select which tools to expose (or select all).
+4. Save the assistant.
+
+Chat agents using that assistant can now drive a stealth browser to navigate, read, and interact with web pages — with all traffic egressing through the VPN.
+
+**Security notes:**
+
+- The MCP HTTP transport has no built-in auth. It binds `0.0.0.0` inside the netns-holder namespace, so it's only reachable by other services in that namespace (and the host-web-proxy bridge). For additional origin restrictions, set `OBSCURA_MCP_ALLOWED_ORIGINS` in `.env.wrapper` to a comma-separated list of allowed Origin values.
+- The browser session is shared across all tool calls within a single MCP server instance. Multiple concurrent chat sessions share the same browser state.
+- See the [obscura MCP documentation](https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md) for full details.
 
 ## Optional Configurations
 
