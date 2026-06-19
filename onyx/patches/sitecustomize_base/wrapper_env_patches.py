@@ -94,15 +94,40 @@ def _is_vpn_routed() -> bool:
     )
 
 
+# Hint text for the Python tool: crw Firecrawl API only (no CDP browser, no
+# SearXNG). The Python tool is for data analysis / code execution, not browser
+# automation, so we only mention the scraping API.
+_PYTHON_SERVICE_HINTS = (
+    " Additionally, the sandbox shares a network namespace with a local Firecrawl-compatible "
+    "REST API at http://127.0.0.1:3010 exposing /v1/scrape, /v1/crawl, /v1/map, "
+    "and /v1/search, all backed by a stealth headless browser. All outbound "
+    "browser traffic egresses through the VPN tunnel."
+)
+
+# Hint text for the coding agent (BashTool + system prompt): crw Firecrawl API
+# + CDP browser (no SearXNG). The coding agent benefits from direct browser
+# automation for investigating web-accessible repos and docs.
+_CODING_AGENT_SERVICE_HINTS = (
+    " Additionally, the sandbox shares a network namespace with local scraping services: "
+    "a Firecrawl-compatible REST API at http://127.0.0.1:3010 exposing "
+    "/v1/scrape, /v1/crawl, /v1/map, and /v1/search, all backed by a stealth "
+    "headless browser. Direct control of the stealth browser is available via "
+    "Chrome DevTools Protocol (CDP) browser at ws://127.0.0.1:9222/devtools/browser"
+    "All outbound browser traffic egresses through the VPN tunnel."
+)
+
+
 def apply_code_interpreter_network_description_patches() -> None:
-    """Update tool descriptions and coding-agent prompts when the
-    code-interpreter executor pods are VPN-routed.
+    """Update tool descriptions, system-prompt guidance, and coding-agent
+    prompts when the code-interpreter executor pods are VPN-routed.
 
     By default, Onyx's code-interpreter hardcodes ``--network none`` on every
     executor pod, so the Python tool, BashTool, and coding-agent bash sessions
-    have no network access. The upstream tool descriptions and coding-agent
-    system prompts all advertise this ("network-restricted", "no network
-    access", "network-isolated sandbox").
+    have no network access. The upstream tool descriptions, the
+    ``PYTHON_TOOL_GUIDANCE`` system prompt, and the coding-agent system prompts
+    all advertise this ("network-restricted", "no network access",
+    "network-isolated sandbox", "Internet access for this session is
+    disabled").
 
     When ``CODE_INTERPRETER_VPN_ROUTED=true`` is set on the api_server
     container, a companion sitecustomize patch in the code-interpreter
@@ -116,21 +141,56 @@ def apply_code_interpreter_network_description_patches() -> None:
     if not _is_vpn_routed():
         return
 
-    # ── PythonTool ──────────────────────────────────────────────────────
+    # ── PythonTool description ──────────────────────────────────────────
+    # Upstream: "Execute Python code in an isolated sandbox environment."
+    # We replace "isolated sandbox environment" with VPN access info, the pip
+    # restriction, the package list, and a code-agent recommendation. Using
+    # .replace() preserves any future upstream additions to the description.
     try:
         from onyx.tools.tool_implementations.python.python_tool import PythonTool
 
         PythonTool.DESCRIPTION = PythonTool.DESCRIPTION.replace(
             "Execute Python code in an isolated sandbox environment.",
             "Execute Python code in a sandbox environment with internet access "
-            "via VPN. Network operations (requests, urllib, pip, etc.) are "
-            "permitted and egress through the VPN tunnel."
+            "via VPN. Network operations (requests, urllib, etc.) are permitted "
+            "and egress through the VPN tunnel. pip package installation is NOT "
+            "supported — only the pre-installed scientific stack is available "
+            "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, "
+            "scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, "
+            "python-docx, python-pptx, fpdf2, pydantic). For tasks requiring "
+            "additional packages or complex multi-step workflows, invoke the "
+            "code agent instead." + _PYTHON_SERVICE_HINTS,
         )
         print("sitecustomize: patched PythonTool.DESCRIPTION for VPN routing", flush=True)
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed to patch PythonTool.DESCRIPTION: {e}", flush=True)
 
-    # ── BashTool ────────────────────────────────────────────────────────
+    # ── PYTHON_TOOL_GUIDANCE system prompt ──────────────────────────────
+    # This is the per-tool guidance injected into the system prompt. Upstream
+    # it says "Internet access for this session is disabled. Do not make
+    # external web requests or API calls as they will fail." — we replace that
+    # with VPN access info, the pip restriction, the package list, and a
+    # recommendation to use the code agent for involved tasks. Patched at the
+    # module level before prompt_utils.py imports it by name.
+    try:
+        from onyx.prompts import tool_prompts
+
+        tool_prompts.PYTHON_TOOL_GUIDANCE = tool_prompts.PYTHON_TOOL_GUIDANCE.replace(
+            "Internet access for this session is disabled. Do not make external web requests or API calls as they will fail.",
+            "Internet access is available via VPN — external web requests and API calls are permitted and egress through the VPN tunnel. "
+            "pip package installation is NOT supported; only the pre-installed scientific stack is available "
+            "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, python-docx, python-pptx, fpdf2, pydantic). "
+            "For tasks requiring additional packages or complex multi-step workflows, invoke the code agent instead."
+            + _PYTHON_SERVICE_HINTS,
+        )
+        print("sitecustomize: patched PYTHON_TOOL_GUIDANCE for VPN routing", flush=True)
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed to patch PYTHON_TOOL_GUIDANCE: {e}", flush=True)
+
+    # ── BashTool description ────────────────────────────────────────────
+    # Upstream: "Execute a bash command inside an isolated, network-restricted
+    # session." We replace "isolated, network-restricted session" with VPN
+    # access info. Using .replace() preserves any future upstream additions.
     try:
         from onyx.tools.tool_implementations.bash.bash_tool import BashTool
 
@@ -139,6 +199,7 @@ def apply_code_interpreter_network_description_patches() -> None:
             "Execute a bash command inside a session with internet access via "
             "VPN. Network commands (curl, wget, pip install, npm install, git "
             "clone, etc.) are permitted and egress through the VPN tunnel."
+            + _CODING_AGENT_SERVICE_HINTS,
         )
         print("sitecustomize: patched BashTool.DESCRIPTION for VPN routing", flush=True)
     except Exception as e:  # pragma: no cover
@@ -154,14 +215,12 @@ def apply_code_interpreter_network_description_patches() -> None:
     try:
         from onyx.coding_agent import mock_tools
 
-        mock_tools.BASH_TOOL_DESCRIPTION["function"]["description"] = (
-            "Run a bash command in the sandboxed session containing the "
-            "checked-out repository. The session has internet access via VPN. "
-            "Network commands (curl, pip install, npm install, git clone, "
-            "etc.) are permitted and egress through the VPN tunnel. Use "
-            "commands like `ls`, `cat`, `grep -r`, `find`, `wc -l`, etc. to "
-            "inspect the code. Filesystem state persists across calls within "
-            "the same session."
+        _desc = mock_tools.BASH_TOOL_DESCRIPTION["function"]["description"]
+        mock_tools.BASH_TOOL_DESCRIPTION["function"]["description"] = _desc.replace(
+            "The session has no network access.",
+            "The session has internet access via VPN. Network commands (curl, "
+            "pip install, npm install, git clone, etc.) are permitted and "
+            "egress through the VPN tunnel." + _CODING_AGENT_SERVICE_HINTS,
         )
         print(
             "sitecustomize: patched coding-agent BASH_TOOL_DESCRIPTION for VPN routing",
@@ -186,7 +245,8 @@ def apply_code_interpreter_network_description_patches() -> None:
             "sandbox with VPN-routed internet access",
         ).replace(
             "Network commands (`curl`, `pip install`, `npm install`, `git pull`) — the sandbox has no network.",
-            "Network commands (`curl`, `pip install`, `npm install`, `git pull`) are permitted — the sandbox has VPN-routed internet access.",
+            "Network commands (`curl`, `pip install`, `npm install`, `git pull`) are permitted — the sandbox has VPN-routed internet access."
+            + _CODING_AGENT_SERVICE_HINTS,
         )
 
         ca_prompts.CODING_AGENT_PROMPT_REASONING = (
@@ -195,7 +255,7 @@ def apply_code_interpreter_network_description_patches() -> None:
                 "sandbox with VPN-routed internet access",
             ).replace(
                 "No network.",
-                "VPN-routed internet access is available.",
+                "VPN-routed internet access is available." + _CODING_AGENT_SERVICE_HINTS,
             )
         )
 

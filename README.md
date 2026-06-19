@@ -280,12 +280,21 @@ The code-interpreter already runs inside the shared `netns-holder` VPN namespace
 
 The patch monkeypatches `DockerExecutor._build_run_command` to rewrite the hardcoded `--network none` flag to `--network container:<self>`, where `<self>` is the code-interpreter's own container ID (auto-discovered from `HOSTNAME`). This makes every executor pod inherit the code-interpreter's network namespace — and since that namespace is the VPN netns, executor pods egress through the Mysterium tunnel.
 
-The override also passes `CODE_INTERPRETER_VPN_ROUTED=true` to the **api_server** container. This activates a companion patch in the api_server's [`wrapper_env_patches.py`](onyx/patches/sitecustomize_base/wrapper_env_patches.py) that updates the LLM-facing tool descriptions and coding-agent system prompts to advertise network access. Without this, the LLM would continue to avoid network commands based on the stale "no network" / "network-restricted" / "network-isolated" descriptions hardcoded upstream:
+The override also passes `CODE_INTERPRETER_VPN_ROUTED=true` to the **api_server** container. This activates a companion patch in the api_server's [`wrapper_env_patches.py`](onyx/patches/sitecustomize_base/wrapper_env_patches.py) that updates the LLM-facing tool descriptions, the `PYTHON_TOOL_GUIDANCE` system prompt, and the coding-agent system prompts to advertise network access. Without this, the LLM would continue to avoid network commands based on the stale "no network" / "network-restricted" / "network-isolated" / "Internet access is disabled" text hardcoded upstream:
 
-- **PythonTool** description → "Execute Python code in a sandbox environment with internet access via VPN..."
+- **PythonTool** description → "Execute Python code in a sandbox environment with internet access via VPN. pip package installation is NOT supported — only the pre-installed scientific stack is available (numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, python-docx, python-pptx, fpdf2, pydantic). For tasks requiring additional packages or complex multi-step workflows, invoke the code agent instead."
+- **`PYTHON_TOOL_GUIDANCE`** system prompt → replaces "Internet access for this session is disabled. Do not make external web requests or API calls as they will fail." with VPN access info, the pip restriction, the pre-installed package list, and a recommendation to invoke the code agent for involved tasks
 - **BashTool** description → "Execute a bash command inside a session with internet access via VPN..."
 - **Coding agent bash tool** description → "The session has internet access via VPN..."
 - **Coding agent system prompts** → "sandbox with VPN-routed internet access" (replaces "network-isolated sandbox"), and "Network commands are permitted" (replaces "the sandbox has no network")
+
+The descriptions/prompts also include service hints for the in-namespace scraping/browser services that executor pods can reach via localhost (since they inherit the netns-holder namespace). The hints are tailored per tool:
+
+- **PythonTool** (description + `PYTHON_TOOL_GUIDANCE`): crw Firecrawl-compatible REST API only
+  - `http://127.0.0.1:3010` — exposes `/v1/scrape`, `/v1/crawl`, `/v1/map`, and `/v1/search` (backed by a stealth headless browser)
+- **BashTool + coding agent** (descriptions + system prompts): crw Firecrawl API + CDP browser
+  - `http://127.0.0.1:3010` — Firecrawl-compatible REST API (`/v1/scrape`, `/v1/crawl`, `/v1/map`, `/v1/search`)
+  - `ws://127.0.0.1:9222/devtools/browser` — stealth Chrome DevTools Protocol browser for direct browser automation
 
 > **Why not just use `PYTHON_EXECUTOR_DOCKER_RUN_ARGS`?** The code-interpreter exposes this env var for extra `docker run` args, and it is appended *after* `--network none`. However, Docker **errors out** when `--network none` is combined with any other `--network` flag (it does not use "last flag wins" for `none`). So the env var alone cannot override the network isolation — the `sitecustomize` patch is required to mutate the command list before it is executed.
 
