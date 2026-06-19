@@ -83,18 +83,68 @@ def _resolve_own_container_id() -> str | None:
     return None
 
 
-def _apply_vpn_network_patch() -> None:
-    """Monkeypatch DockerExecutor to route executor pods through our netns."""
-    if os.environ.get("CODE_INTERPRETER_VPN_ROUTED", "").lower() not in (
+def _proxy_env_vars() -> list[str]:
+    """Build the ``-e KEY=VALUE`` argument pairs for proxy env vars.
+
+    Returns an empty list when ``PROXY_URL`` is unset/empty. When set, injects
+    ``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``ALL_PROXY`` (all = PROXY_URL so httpx
+    and urllib pick the matching-scheme var while ALL_PROXY covers SOCKS) plus
+    ``NO_PROXY`` (internal loopback + Docker-DNS hosts) so intra-namespace
+    traffic stays off the proxy.
+
+    Lowercase variants (``http_proxy`` etc.) are also injected because some
+    tools (notably ``curl`` and ``git``) only honor the lowercase form.
+    """
+    proxy_url = os.environ.get("PROXY_URL", "").strip()
+    if not proxy_url:
+        return []
+
+    no_proxy = os.environ.get(
+        "NO_PROXY",
+        "127.0.0.1,localhost,::1,myst-client,api_server,web_server,background,"
+        "nginx,code-interpreter,obscura,crw,searxng-core,searxng-valkey,"
+        "netns-holder,host-web-proxy,host-searxng-proxy",
+    )
+
+    pairs = [
+        ("PROXY_URL", proxy_url),
+        ("HTTP_PROXY", proxy_url),
+        ("HTTPS_PROXY", proxy_url),
+        ("ALL_PROXY", proxy_url),
+        ("NO_PROXY", no_proxy),
+        ("http_proxy", proxy_url),
+        ("https_proxy", proxy_url),
+        ("all_proxy", proxy_url),
+        ("no_proxy", no_proxy),
+    ]
+    args: list[str] = []
+    for key, value in pairs:
+        args.extend(["-e", f"{key}={value}"])
+    return args
+
+
+def _apply_executor_patches() -> None:
+    """Monkeypatch DockerExecutor to (a) route executor pods through our netns
+    when VPN-routed, and (b) inject proxy env vars into every executor pod when
+    PROXY_URL is set.
+
+    The two concerns are independent: a user may set PROXY_URL without VPN
+    routing (proxy without VPN) or VPN routing without PROXY_URL (VPN without
+    proxy), or both (proxied egress through the VPN tunnel).
+    """
+    vpn_routed = os.environ.get("CODE_INTERPRETER_VPN_ROUTED", "").lower() in (
         "1",
         "true",
         "yes",
         "on",
-    ):
+    )
+    proxy_args = _proxy_env_vars()
+
+    if not vpn_routed and not proxy_args:
         return
 
-    container_id = _resolve_own_container_id()
-    if not container_id:
+    container_id = _resolve_own_container_id() if vpn_routed else None
+    if vpn_routed and not container_id:
         print(
             "sitecustomize: CODE_INTERPRETER_VPN_ROUTED=true but could not "
             "determine this container's own ID; executor pods will keep "
@@ -102,7 +152,9 @@ def _apply_vpn_network_patch() -> None:
             "explicitly to fix this.",
             flush=True,
         )
-        return
+        # Still apply proxy injection if PROXY_URL is set.
+        if not proxy_args:
+            return
 
     try:
         from app.services.executor_docker import DockerExecutor
@@ -113,47 +165,77 @@ def _apply_vpn_network_patch() -> None:
         )
         return
 
-    network_arg = f"container:{container_id}"
+    network_arg = f"container:{container_id}" if container_id else None
     _original_build_run_command = DockerExecutor._build_run_command
 
     def _patched_build_run_command(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
         cmd = _original_build_run_command(self, *args, **kwargs)
-        # Replace the hardcoded "--network" "none" pair. Docker errors if both
-        # "--network none" and another "--network" are present, so we must
-        # mutate the list rather than append.
+
+        # (a) Replace --network none with --network container:<self> when
+        # VPN-routed. Docker errors if both --network none and another
+        # --network are present, so we mutate the list rather than append.
         patched: list[str] = []
         i = 0
-        replaced = False
+        replaced_network = False
         while i < len(cmd):
             if (
-                not replaced
+                network_arg is not None
+                and not replaced_network
                 and cmd[i] == "--network"
                 and i + 1 < len(cmd)
                 and cmd[i + 1] == "none"
             ):
                 patched.extend(["--network", network_arg])
-                replaced = True
+                replaced_network = True
                 i += 2
                 continue
             patched.append(cmd[i])
             i += 1
 
-        if not replaced:
+        if network_arg is not None:
+            if not replaced_network:
+                print(
+                    "sitecustomize: CODE_INTERPRETER_VPN_ROUTED=true but "
+                    "--network none was not found in the executor run command; "
+                    "executor pods may not be VPN-routed.",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"sitecustomize: routing code-interpreter executor pods through "
+                    f"this container's netns (--network {network_arg})",
+                    flush=True,
+                )
+
+        # (b) Inject proxy env vars. Insert them right after the docker binary
+        # and "run" tokens so they apply to the container being created. We
+        # find the first "run" token and insert after it (and after any global
+        # docker flags that precede the first "run"). A simple, robust approach:
+        # insert immediately before the first "--network" token if present,
+        # otherwise before the first image name. To keep it simple and safe,
+        # insert right after the "run" subcommand token.
+        if proxy_args:
+            out: list[str] = []
+            injected = False
+            for j, tok in enumerate(patched):
+                out.append(tok)
+                if not injected and tok == "run":
+                    out.extend(proxy_args)
+                    injected = True
+            if not injected:
+                # No "run" token found (unexpected); append at the end as a
+                # best-effort so the env vars are at least present in the argv.
+                out.extend(proxy_args)
+            patched = out
             print(
-                "sitecustomize: CODE_INTERPRETER_VPN_ROUTED=true but "
-                "--network none was not found in the executor run command; "
-                "executor pods may not be VPN-routed.",
+                f"sitecustomize: injected proxy env vars into executor pod "
+                f"command (PROXY_URL set, {len(proxy_args) // 2} vars)",
                 flush=True,
             )
-        else:
-            print(
-                f"sitecustomize: routing code-interpreter executor pods through "
-                f"this container's netns (--network {network_arg})",
-                flush=True,
-            )
+
         return patched
 
     DockerExecutor._build_run_command = _patched_build_run_command  # type: ignore[assignment]
 
 
-_apply_vpn_network_patch()
+_apply_executor_patches()

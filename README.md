@@ -278,6 +278,25 @@ The code tool descriptions and code agent prompts are updated to mention interne
 
 Restart the stack after changing this setting (`make down-lite && make up-lite`, or the full-mode equivalents).
 
+### Optional: Outbound Proxy (`PROXY_URL`)
+
+Set `PROXY_URL` in `.env.wrapper` to route internet egress from **crw**, **obscura** (both the CDP `serve` instance and the MCP server), **SearXNG**, the **code-interpreter**, and the **code agent** through a single upstream proxy. This is orthogonal to the Mysterium VPN: if both are set, traffic is proxied **through** the VPN tunnel (the proxy connection itself egresses over the VPN).
+
+Accepts any scheme:
+
+```bash
+# HTTP / HTTPS proxy
+PROXY_URL="http://user:pass@proxy.example.com:8080"
+
+# SOCKS5 proxy
+PROXY_URL="socks5://proxy.example.com:1080"
+
+# SOCKS5 with remote DNS resolution
+PROXY_URL="socks5h://proxy.example.com:1080"
+```
+
+> **NOTE** The proxy setup has not been audited for leaks. You still likely want the Myst VPN, or at least a host VPN, in case of proxy bypass. In particular, Obscura/Chrome does not support SOCKS5 usernames and passwords, and will bypass the proxy entirely if these are set!
+
 ### Optional: Local Document RAG via Web Connector
 
 The full version of Onyx supports search and retrieval (RAG) over PDF, DOC, EPUB, and other document types.
@@ -416,3 +435,5 @@ It may seem strange that a [Tor Project](https://www.torproject.org) employee cr
 The reality is that many websites subject Tor and datacenter VPNs to increased captchas and bans compared to [residential IP addresses](https://acid.vegas/blog/the-shady-world-of-ip-leasing/). The most egregious example is Google's move to update [ReCaptcha to require an official Google device, while exempting "official" AI scrapers](https://www.financialexpress.com/life/technology-google-qr-captcha-controversy-explained-why-internet-is-scared-of-this-4237640/).
 
 Until this landscape changes, residential IP address leasing is the only reliable option for a self-hosted private research agent, and Mysterium was the best choice among those, since the server side is open source, and payment is made in cryptocurrency.
+
+If you want to see the difference, you can use set `PROXY_URL=socks5h://host.docker.internal:9150` in `.env.wrapper` to use the host Tor Browser proxy. SearXNG provides search engine success statistics on the "Engines" of the [Preferences Pane](http://localhost:8080/preferences), which is available on your host. Again, be aware that the `PROXY_URL` config is not audited for proxy bypass leaks.

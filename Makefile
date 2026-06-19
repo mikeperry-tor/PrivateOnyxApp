@@ -22,6 +22,7 @@ TEEP_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TEEP_VPN_ROUTED=//p' "$(ENV_FILE)"
 TAILSCALE_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TAILSCALE_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 CODE_INTERPRETER_VPN_ROUTED ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 MYST_VPN_ENABLED ?= $(strip $(shell sed -n 's/^MYST_VPN_ENABLED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+PROXY_URL ?= $(strip $(shell sed -n 's/^PROXY_URL=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -59,6 +60,14 @@ ifneq ($(filter true,$(CODE_INTERPRETER_VPN_ROUTED)),)
 CODE_INTERPRETER_VPN_SUFFIX :=:docker-compose.code-interpreter-vpn.yml
 endif
 
+# When PROXY_URL is non-empty, apply the proxy override layer that threads a
+# single upstream proxy through crw, obscura (CDP + MCP), SearXNG, the
+# code-interpreter, and the code agent. See docker-compose.proxy.yml.
+PROXY_SUFFIX :=
+ifneq ($(strip $(PROXY_URL)),)
+PROXY_SUFFIX :=:docker-compose.proxy.yml
+endif
+
 # Source of truth: ONYX_IMAGE_TAG in $(ENV_FILE). Allow CLI override.
 ONYX_IMAGE_TAG ?= $(strip $(shell sed -n 's/^ONYX_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1))
 ifeq ($(strip $(ONYX_IMAGE_TAG)),)
@@ -84,8 +93,8 @@ EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
 
 .PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup vpn-orderstatus vpn-balance ensure-myst-funded
 
@@ -123,6 +132,8 @@ help:
 	@echo "VPN routing: set TEEP_VPN_ROUTED=true, TAILSCALE_VPN_ROUTED=true, or"
 	@echo "             CODE_INTERPRETER_VPN_ROUTED=true in $(ENV_FILE) to route those services through Myst VPN"
 	@echo "Disable VPN: set MYST_VPN_ENABLED=false in $(ENV_FILE) to idle myst-client without kill-switch/connect"
+	@echo "Proxy: set PROXY_URL in $(ENV_FILE) (http/https/socks5) to route crw, obscura, SearXNG,"
+	@echo "       code-interpreter, and code agent egress through an upstream proxy"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
