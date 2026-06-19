@@ -325,6 +325,16 @@ case "${BALANCE:-0}" in
   ;;
 esac
 
+# When MYST_SKIP_ORDER_CREATION=true, skip the entire order check/creation
+# block. Used by the blockchain signup flow (make vpn-signup-blockchain) where
+# the user will transfer $MYST directly on-chain instead of using a payment
+# order. The CLI helper (myst-vpn-cli.sh blockchain) handles printing the
+# channel address after the entrypoint finishes registration.
+if [ "${MYST_SKIP_ORDER_CREATION:-false}" = "true" ]; then
+  echo "MYST_SKIP_ORDER_CREATION=true: skipping payment order check/creation."
+  NEEDS_ORDER_CHECK=false
+fi
+
 # Extract a payment URL from order output (the "Data: {json}" line).
 # Tries python3 for structured JSON parsing, falls back to grep for any https URL.
 extract_payment_url() {

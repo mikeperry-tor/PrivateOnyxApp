@@ -497,7 +497,7 @@ vpn-signup-blockchain: myst-image-ready
 	else \
 		echo "Starting standalone Myst signup container..."; \
 		mkdir -p $(MYST_DATA_DIR); \
-		COMPOSE_FILE=$(MYST_COMPOSE_FILE):$(MYST_SIGNUP_OVERRIDE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
+		MYST_SKIP_ORDER_CREATION=true COMPOSE_FILE=$(MYST_COMPOSE_FILE):$(MYST_SIGNUP_OVERRIDE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
 		echo "Waiting for container to initialize..."; \
 		sleep 3; \
 	fi
@@ -536,7 +536,7 @@ ensure-myst-funded:
 		echo "       You need to sign up and fund your VPN wallet first."; \
 		echo ""; \
 		echo "       Run: make vpn-signup-orderform  (pay via CoinGate order page)"; \
-		echo "    OR: make vpn-signup-blockchain    (transfer $MYST directly on Polygon)"; \
+		echo "    OR: make vpn-signup-blockchain    (transfer MYST directly on Polygon)"; \
 		echo "       Then check with: make vpn-orderstatus"; \
 		echo "       Once funded, run: make up-lite (or make up-full)"; \
 		echo ""; \

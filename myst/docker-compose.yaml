@@ -244,6 +244,10 @@ services:
       MYST_ORDER_GATEWAY_DATA: "${MYST_ORDER_GATEWAY_DATA:-custom_id=mysterium-onyx}"
       # Set to "true" to block startup until balance > 0 before attempting to connect.
       MYST_WAIT_FOR_FUNDS: "${MYST_WAIT_FOR_FUNDS:-false}"
+      # When "true", skip the payment order check/creation block in the entrypoint.
+      # Used by `make vpn-signup-blockchain` so the user can transfer $MYST directly
+      # on-chain instead of getting a CoinGate order auto-created.
+      MYST_SKIP_ORDER_CREATION: "${MYST_SKIP_ORDER_CREATION:-false}"
     healthcheck:
       # When MYST_VPN_ENABLED=false the daemon idles without a tunnel, so we
       # only require TequilAPI to respond (myst connection info exits 0 once
