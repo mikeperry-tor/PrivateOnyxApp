@@ -105,10 +105,11 @@ Most likely variables you want to change:
   - Set `TAILSCALE_FUNNEL_ENABLED=true`
   - Set `TAILSCALE_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
   - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
-- **VPN routing for teep and tailscale** (optional):
+- **VPN routing for teep, tailscale, and code-interpreter** (optional):
   - By default, teep and tailscale run on the default Docker network (no Myst VPN). Their traffic egresses directly via the docker host's networking stack (or host VPN).
   - Set `TEEP_VPN_ROUTED=true` to route teep LLM API traffic through the Mysterium VPN namespace.
   - Set `TAILSCALE_VPN_ROUTED=true` to route Tailscale Funnel traffic through the VPN namespace. **Warning:** this links your Tailscale identity to the VPN exit IP.
+  - Set `CODE_INTERPRETER_VPN_ROUTED=true` to give Onyx's Python tool and coding-agent bash sessions outbound internet access through the VPN. **Security:** this removes the code-interpreter's network isolation — the LLM can make arbitrary outbound requests from generated code.
   - See [VPN Routing Configuration](#vpn-routing-configuration) for details.
 - **Optional LAN access** (for local inference APIs):
   - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
@@ -238,7 +239,7 @@ Bring the stack up as usual (`make up-lite` or `make up-full`).
 
 Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The service will remain idle and will not publish Funnel routes.
 
-### Optional: VPN Routing for Teep and Tailscale
+### Optional: VPN Routing for Teep, Tailscale, and Code-Interpreter
 
 By default, **teep** and **tailscale** run on the default Docker network without VPN routing. This means:
 
@@ -257,6 +258,38 @@ TAILSCALE_VPN_ROUTED=true
 ```
 
 The Makefile conditionally applies `docker-compose.teep-vpn.yml` and/or `docker-compose.tailscale-vpn.yml` override files when these are set to `true`. These override files properly adjust host and port mappings of teep and tailscale for the VPN interface. Restart the stack after changing these settings.
+
+#### Optional: VPN Routing for the Code-Interpreter
+
+By default, Onyx's code-interpreter (the `onyxdotapp/code-interpreter` image from [onyx-dot-app/python-sandbox](https://github.com/onyx-dot-app/python-sandbox)) hardcodes `--network none` on every executor pod it spawns. This means the Python tool and coding-agent bash sessions have **zero network access** — the LLM-generated code cannot make any outbound requests. This is a security isolation measure baked into the upstream image.
+
+You can optionally give executor pods outbound internet access through the Mysterium VPN by setting:
+
+```bash
+# Give code-interpreter executor pods VPN-routed internet access
+# SECURITY: This removes the code-interpreter's network isolation.
+CODE_INTERPRETER_VPN_ROUTED=true
+```
+
+**How it works (no image rebuild required):**
+
+The code-interpreter already runs inside the shared `netns-holder` VPN namespace (`network_mode: service:netns-holder` in `docker-compose.yaml`). When `CODE_INTERPRETER_VPN_ROUTED=true`, the Makefile applies `docker-compose.code-interpreter-vpn.yml`, which:
+
+1. Mounts a [`sitecustomize.py`](onyx/patches/sitecustomize_code_interpreter/sitecustomize.py) patch into the code-interpreter container at `/app/wrapper-patches/` and prepends it to `PYTHONPATH`.
+2. Sets `CODE_INTERPRETER_VPN_ROUTED=true` so the patch activates.
+
+The patch monkeypatches `DockerExecutor._build_run_command` to rewrite the hardcoded `--network none` flag to `--network container:<self>`, where `<self>` is the code-interpreter's own container ID (auto-discovered from `HOSTNAME`). This makes every executor pod inherit the code-interpreter's network namespace — and since that namespace is the VPN netns, executor pods egress through the Mysterium tunnel.
+
+> **Why not just use `PYTHON_EXECUTOR_DOCKER_RUN_ARGS`?** The code-interpreter exposes this env var for extra `docker run` args, and it is appended *after* `--network none`. However, Docker **errors out** when `--network none` is combined with any other `--network` flag (it does not use "last flag wins" for `none`). So the env var alone cannot override the network isolation — the `sitecustomize` patch is required to mutate the command list before it is executed.
+
+**Security considerations:**
+
+- Enabling this **removes the code-interpreter's network isolation**. The LLM will be able to make arbitrary outbound HTTP/HTTPS requests from generated Python code and bash commands.
+- The VPN exit IP provides attribution and egress control (all traffic appears to come from the Mysterium exit node), but does **not** prevent the LLM from reaching arbitrary internet hosts.
+- Only enable this on trusted, single-tenant deployments where you understand the risk.
+- If auto-discovery of the container ID fails (e.g. a custom `hostname:` is set on the service), set `CODE_INTERPRETER_CONTAINER_ID` explicitly in `.env.wrapper`.
+
+Restart the stack after changing this setting (`make down-lite && make up-lite`, or the full-mode equivalents).
 
 ### Optional: Local Document RAG via Web Connector
 

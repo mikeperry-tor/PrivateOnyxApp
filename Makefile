@@ -20,6 +20,7 @@ CONTAINER_BIN ?= $(strip $(shell sed -n 's/^CONTAINER_BIN=//p' "$(ENV_FILE)" 2>/
 DOCKER_SOCK_PATH ?= $(strip $(shell sed -n 's/^DOCKER_SOCK_PATH=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 TEEP_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TEEP_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 TAILSCALE_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TAILSCALE_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+CODE_INTERPRETER_VPN_ROUTED ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -50,6 +51,13 @@ ifneq ($(filter true,$(TAILSCALE_VPN_ROUTED)),)
 TAILSCALE_VPN_SUFFIX :=:docker-compose.tailscale-vpn.yml
 endif
 
+# When CODE_INTERPRETER_VPN_ROUTED=true, code-interpreter executor pods inherit
+# the code-interpreter's netns (VPN-routed) via a sitecustomize patch.
+CODE_INTERPRETER_VPN_SUFFIX :=
+ifneq ($(filter true,$(CODE_INTERPRETER_VPN_ROUTED)),)
+CODE_INTERPRETER_VPN_SUFFIX :=:docker-compose.code-interpreter-vpn.yml
+endif
+
 # Source of truth: ONYX_IMAGE_TAG in $(ENV_FILE). Allow CLI override.
 ONYX_IMAGE_TAG ?= $(strip $(shell sed -n 's/^ONYX_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1))
 ifeq ($(strip $(ONYX_IMAGE_TAG)),)
@@ -75,8 +83,8 @@ EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)
 
 .PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup vpn-orderstatus vpn-balance ensure-myst-funded
 
@@ -111,7 +119,8 @@ help:
 	@echo "Override container engine: make up-lite CONTAINER_BIN=/opt/homebrew/bin/podman"
 	@echo "Override socket path: make up-lite DOCKER_SOCK_PATH=/path/to/docker-or-podman.sock"
 	@echo "Note: podman mode applies $(PODMAN_OVERRIDE_FILE) (disables code-interpreter + autoheal by default)"
-	@echo "VPN routing: set TEEP_VPN_ROUTED=true or TAILSCALE_VPN_ROUTED=true in $(ENV_FILE) to route those services through Myst VPN"
+	@echo "VPN routing: set TEEP_VPN_ROUTED=true, TAILSCALE_VPN_ROUTED=true, or"
+	@echo "             CODE_INTERPRETER_VPN_ROUTED=true in $(ENV_FILE) to route those services through Myst VPN"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"

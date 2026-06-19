@@ -1,0 +1,30 @@
+## Code-interpreter VPN routing override.
+## Applied when CODE_INTERPRETER_VPN_ROUTED=true in .env.wrapper (via Makefile
+## COMPOSE_FILE layering). Mounts a sitecustomize.py patch into the
+## code-interpreter container that rewrites the executor pods' hardcoded
+## `--network none` flag to `--network container:<self>`, so Python tool and
+## coding-agent bash sessions inherit the code-interpreter's network namespace.
+##
+## Because the code-interpreter already runs inside the shared netns-holder VPN
+## namespace (network_mode: service:netns-holder in docker-compose.yaml),
+## inheriting its namespace gives executor pods VPN-routed egress through the
+## Mysterium tunnel — with no image rebuild required.
+##
+## SECURITY: Enabling this removes the code-interpreter's network isolation.
+## The LLM will be able to make arbitrary outbound network requests from
+## generated code (Python tool) and bash sessions (coding agent). Only enable
+## on trusted, single-tenant deployments.
+
+services:
+  code-interpreter:
+    environment:
+      # Activates the sitecustomize patch below.
+      CODE_INTERPRETER_VPN_ROUTED: "true"
+      # Put the patch directory first on PYTHONPATH so sitecustomize.py is
+      # auto-imported by the Python interpreter at startup.
+      PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"
+    volumes: !override
+      # Preserve the Docker socket mount required for spawning executor pods.
+      - ${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      # The sitecustomize patch that rewrites --network none.
+      - ./onyx/patches/sitecustomize_code_interpreter:/app/wrapper-patches:ro
