@@ -21,6 +21,7 @@ DOCKER_SOCK_PATH ?= $(strip $(shell sed -n 's/^DOCKER_SOCK_PATH=//p' "$(ENV_FILE
 TEEP_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TEEP_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 TAILSCALE_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TAILSCALE_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 CODE_INTERPRETER_VPN_ROUTED ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+MYST_VPN_ENABLED ?= $(strip $(shell sed -n 's/^MYST_VPN_ENABLED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -121,6 +122,7 @@ help:
 	@echo "Note: podman mode applies $(PODMAN_OVERRIDE_FILE) (disables code-interpreter + autoheal by default)"
 	@echo "VPN routing: set TEEP_VPN_ROUTED=true, TAILSCALE_VPN_ROUTED=true, or"
 	@echo "             CODE_INTERPRETER_VPN_ROUTED=true in $(ENV_FILE) to route those services through Myst VPN"
+	@echo "Disable VPN: set MYST_VPN_ENABLED=false in $(ENV_FILE) to idle myst-client without kill-switch/connect"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
@@ -485,6 +487,10 @@ vpn-balance:
 # instruct the user to run 'make vpn-signup' first.
 ensure-myst-funded:
 	@set -eu; \
+	if [ "$(MYST_VPN_ENABLED)" = "false" ]; then \
+		echo "MYST_VPN_ENABLED=false — skipping Myst keystore/funding check."; \
+		exit 0; \
+	fi; \
 	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
 		echo "Stopping standalone Myst signup container (wallet data is preserved)..."; \
 		COMPOSE_FILE=$(MYST_COMPOSE_FILE):$(MYST_SIGNUP_OVERRIDE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) down --remove-orphans 2>/dev/null || \

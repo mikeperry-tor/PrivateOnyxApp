@@ -105,6 +105,8 @@ Most likely variables you want to change:
   - Set `TAILSCALE_FUNNEL_ENABLED=true`
   - Set `TAILSCALE_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
   - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
+- **Master VPN switch**:
+  - Set `MYST_VPN_ENABLED=false` to run the entire stack without the Mysterium VPN. The `myst-client` container still starts and joins the shared `netns-holder` namespace (so all service wiring stays identical), but it idles the daemon without arming the kill-switch or attempting to connect. Traffic egresses directly via the Docker bridge. This skips the Myst wallet/funding requirement entirely. See [Optional: Disabling the Mysterium VPN](#optional-disabling-the-mysterium-vpn) below.
 - **VPN routing for teep, tailscale, and code-interpreter**:
   - By default, teep and tailscale run on the default Docker network (no Myst VPN). Their traffic egresses directly via the docker host's networking stack (or host VPN). This is done so that your tailscale account and inference provider account are not linkable to the agent's web activity by IP address. The code interpreter has no network access as a sandboxing measure. To change this:
     - Set `TEEP_VPN_ROUTED=true` to route teep LLM API traffic through the Mysterium VPN namespace.
@@ -118,6 +120,8 @@ Most likely variables you want to change:
     - After you save a value in Onyx Admin -> Security Hardening, the saved UI setting becomes the effective runtime policy and overrides these defaults.
 
 ### Initial VPN Connection (Myst Payment)
+
+> **Skip this section entirely if `MYST_VPN_ENABLED=false`** in your `.env.wrapper`. When the VPN is disabled, no wallet, identity, or payment is required — `make up-lite` / `make up-full` will proceed directly to starting the stack.
 
 The Mysterium VPN requires a funded wallet (paid in cryptocurrency) before it can connect. The signup process is handled by a standalone container that creates a cryptographic identity, registers it on-chain, and generates a payment order.
 

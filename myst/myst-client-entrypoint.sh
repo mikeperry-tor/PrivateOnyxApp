@@ -24,6 +24,28 @@ if [ "${ALLOW_LAN_ACCESS:-false}" = "true" ]; then
   echo "ALLOW_LAN_ACCESS=true: added LAN CIDRs to route exemptions"
 fi
 
+# ── Optional VPN bypass ────────────────────────────────────────────────────
+# When MYST_VPN_ENABLED=false, start the daemon in idle mode: no kill-switch
+# is armed, no connect attempt is made, and no identity/registration/funding
+# flow runs. The container still joins netns-holder so namespace references
+# stay valid; traffic egresses directly via the Docker bridge.
+if [ "${MYST_VPN_ENABLED:-true}" = "false" ]; then
+  echo "MYST_VPN_ENABLED=false: starting myst daemon in idle mode (no kill-switch, no connect)."
+  # Defense-in-depth: ensure the daemon does not install firewall/kill-switch
+  # rules even if a tunnel is somehow established.
+  export MYST_FIREWALL_ENABLED=false
+  set -- --local-service-discovery=false --consumer
+  if [ -n "${MYST_WIREGUARD_MTU:-}" ]; then
+    set -- "$@" --wireguard.mtu="${MYST_WIREGUARD_MTU}"
+  fi
+  set -- "$@" daemon
+  /usr/local/bin/docker-entrypoint.sh "$@" &
+  svc_pid="$!"
+  trap 'kill "$svc_pid" 2>/dev/null || true; wait "$svc_pid" 2>/dev/null || true' INT TERM
+  wait "$svc_pid"
+  exit 0
+fi
+
 # Myst wireguard DNS manager invokes <script-dir>/update-resolv-conf on Unix.
 # In containerized namespace-sharing mode, keep DNS managed by Docker.
 if [ "${MYST_SKIP_UPDATE_RESOLV_CONF:-false}" = "true" ]; then

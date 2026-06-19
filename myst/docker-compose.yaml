@@ -179,6 +179,12 @@ services:
       - ./myst-data:/root/.mysterium
       - ./myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
     environment:
+      # Master switch for the Mysterium VPN. When "false", the entrypoint
+      # starts the daemon in idle mode: no kill-switch is armed, no connect
+      # attempt is made, and the healthcheck reports healthy based on
+      # TequilAPI reachability. The container still joins netns-holder so
+      # namespace references stay valid. See myst/myst-client-entrypoint.sh.
+      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
       MYST_AUTO_CONNECT: "true"
       # Optional WireGuard interface MTU override passed to the daemon.
       MYST_WIREGUARD_MTU: "${MYST_WIREGUARD_MTU:-}"
@@ -210,8 +216,10 @@ services:
       MYST_SKIP_UPDATE_RESOLV_CONF: "true"
       # Legacy firewall-related toggle kept separate from NAT traversal bypasses.
       MYST_FIREWALL_DETECTION_ENABLED: "${MYST_FIREWALL_DETECTION_ENABLED:-true}"
-      # Fail-closed: block traffic if connection drops
-      MYST_FIREWALL_ENABLED: "true"
+      # Fail-closed: block traffic if connection drops.
+      # The idle path (MYST_VPN_ENABLED=false) overrides this to "false" at
+      # runtime in myst-client-entrypoint.sh for defense-in-depth.
+      MYST_FIREWALL_ENABLED: "${MYST_FIREWALL_ENABLED:-true}"
       # Optional referral/affiliate token used during identity registration.
       MYST_REFERRAL_TOKEN: ""
       # Optional max wait (seconds) for registration confirmation.
@@ -237,7 +245,18 @@ services:
       # Set to "true" to block startup until balance > 0 before attempting to connect.
       MYST_WAIT_FOR_FUNDS: "${MYST_WAIT_FOR_FUNDS:-false}"
     healthcheck:
-      test: ["CMD-SHELL", "myst connection info 2>/dev/null | grep -Eiq '\"status\"[[:space:]]*:[[:space:]]*\"Connected\"|Status:[[:space:]]*Connected' || exit 1"]
+      # When MYST_VPN_ENABLED=false the daemon idles without a tunnel, so we
+      # only require TequilAPI to respond (myst connection info exits 0 once
+      # the daemon is up, regardless of Connected status). Otherwise require
+      # Status: Connected (fail-closed semantics).
+      test:
+        - "CMD-SHELL"
+        - >
+          if [ "${MYST_VPN_ENABLED:-true}" = "false" ]; then
+            myst connection info >/dev/null 2>&1 || exit 1;
+          else
+            myst connection info 2>/dev/null | grep -Eiq '"status"[[:space:]]*:[[:space:]]*"Connected"|Status:[[:space:]]*Connected' || exit 1;
+          fi
       interval: 15s
       timeout: 15s
       retries: 4
