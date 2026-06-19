@@ -105,16 +105,11 @@ Most likely variables you want to change:
   - Set `TAILSCALE_FUNNEL_ENABLED=true`
   - Set `TAILSCALE_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
   - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
-- **VPN routing for teep, tailscale, and code-interpreter** (optional):
-  - By default, teep and tailscale run on the default Docker network (no Myst VPN). Their traffic egresses directly via the docker host's networking stack (or host VPN).
-  - Set `TEEP_VPN_ROUTED=true` to route teep LLM API traffic through the Mysterium VPN namespace.
-  - Set `TAILSCALE_VPN_ROUTED=true` to route Tailscale Funnel traffic through the VPN namespace. **Warning:** this links your Tailscale identity to the VPN exit IP.
-  - Set `CODE_INTERPRETER_VPN_ROUTED=true` to give Onyx's Python tool and coding-agent bash sessions outbound internet access through the VPN. **Security:** this removes the code-interpreter's network isolation — the LLM can make arbitrary outbound requests from generated code.
-  - See [VPN Routing Configuration](#vpn-routing-configuration) for details.
-- **Obscura MCP server** (runs by default):
-  - A second obscura instance runs as an MCP HTTP server, exposing stealth browser automation tools (navigate, snapshot, click, fill, extract, etc.) directly to Onyx chat agents.
-  - Configure the MCP server URL in Onyx Admin → MCP Servers as `http://127.0.0.1:9223/` with Streamable HTTP transport (requires SSRF Protection set to Disabled — see below).
-  - See [Obscura MCP Server](#optional-obscura-mcp-server-for-chat-agent-browser-automation) for details.
+- **VPN routing for teep, tailscale, and code-interpreter**:
+  - By default, teep and tailscale run on the default Docker network (no Myst VPN). Their traffic egresses directly via the docker host's networking stack (or host VPN). This is done so that your tailscale account and inference provider account are not linkable to the agent's web activity by IP address. The code interpreter has no network access as a sandboxing measure. To change this:
+    - Set `TEEP_VPN_ROUTED=true` to route teep LLM API traffic through the Mysterium VPN namespace.
+    - Set `TAILSCALE_VPN_ROUTED=true` to route Tailscale Funnel traffic through the VPN namespace.
+    - Set `CODE_INTERPRETER_VPN_ROUTED=true` to give Onyx's Python tool and coding-agent bash sessions outbound internet access through the VPN. **Security:** this removes the code-interpreter's network isolation — the LLM can make arbitrary outbound requests from generated code.
 - **Optional LAN access** (for local inference APIs):
   - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
 - Optional Onyx SSRF defaults (for MCP servers and local doc-drop crawling):
@@ -213,62 +208,6 @@ To make use of the provided crw and obscura anti-fingerprinting web search tools
 6. Set **API Key** to the value of `CRW_ONYX_API_KEY` (default: `local-crw`).
 7. Click **Connect**, then **Set as Default** on the Firecrawl card.
 
-### Obscura MCP Server for Chat Agent Browser Automation
-
-In addition to the CDP browser that crw drives for scraping, a second obscura instance runs as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) HTTP server by default. This exposes obscura's stealth browser automation tools directly to Onyx chat agents — they can navigate pages, take snapshots, click elements, fill forms, extract content, and more, all through the MCP tool interface.
-
-The MCP server runs in the netns-holder VPN namespace, so all browser traffic egresses through the Mysterium VPN tunnel with stealth anti-fingerprinting enabled. It listens on `127.0.0.1:${OBSCURA_MCP_PORT:-9223}` inside the namespace (default port 9223). Configure the port via `OBSCURA_MCP_PORT` in `.env.wrapper`.
-
-**Step 1: Configure SSRF Protection to allow loopback**
-
-The obscura MCP server listens on `127.0.0.1` inside the netns-holder namespace. The api_server (which runs in the same namespace) reaches it via localhost, but Onyx's SSRF protection blocks loopback addresses by default — even at the `Allow Private Network` level (the wrapper's default via `MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, `MCP_SERVER_ALLOW_LOOPBACK=false`).
-
-To allow the MCP client to reach `127.0.0.1`, set SSRF Protection to **Disabled**:
-
-1. Go to **Admin Panel -> Security Hardening** ([http://localhost:3000/admin/security](http://localhost:3000/admin/security)).
-2. Set **SSRF Protection** to **Disabled**.
-3. Click **Save**.
-
-This allows loopback and private-network targets for MCP servers, open_url, and OAuth endpoints. Cloud-metadata and link-local addresses (169.254.0.0/16) remain blocked as an always-on floor. This is safe in the wrapper deployment because all services run inside the VPN namespace — there are no external clients that could exploit the relaxed SSRF policy.
-
-> **Note:** If you prefer not to disable SSRF protection globally, you can alternatively run the obscura-mcp service on a non-loopback address by giving the netns-holder namespace a dedicated bridge IP. However, the simplest path is the Disabled setting above, since the wrapper's threat model already assumes all services are co-located in the VPN namespace.
-
-**Step 2: Configure the MCP server in Onyx**
-
-1. Go to **Admin Panel -> MCP Servers** ([http://localhost:3000/admin/mcp-servers](http://localhost:3000/admin/mcp-servers)).
-2. Click **Add MCP Server**.
-3. Set **Name** to `obscura` (or any name you prefer).
-4. Set **Server URL** to `http://127.0.0.1:9223/mcp` (or your configured `OBSCURA_MCP_PORT`).
-   - The api_server runs in the same netns-holder namespace, so it reaches the MCP server via localhost.
-5. Set **Auth Type** to **None** (the MCP HTTP transport has no built-in auth; it's only reachable within the VPN namespace).
-6. Click **Save**, then click **Discover Tools** to verify the connection.
-
-The following browser automation tools become available to chat agents:
-
-- **Navigation:** `browser_navigate`, `browser_back`, `browser_forward`, `browser_reload`, `browser_close`
-- **Read the page:** `browser_snapshot`, `browser_markdown`, `browser_links`, `browser_extract`, `browser_interactive_elements`, `browser_detect_forms`
-- **Interact:** `browser_click`, `browser_fill`, `browser_fill_form`, `browser_type`, `browser_press_key`, `browser_select_option`, `browser_scroll`
-- **Wait & JS:** `browser_wait_for`, `browser_wait_for_text`, `browser_evaluate`
-- **Diagnostics:** `browser_network_requests`, `browser_console_messages`
-- **Cookies & storage:** `browser_get_cookies`, `browser_set_cookie`, `browser_clear_cookies`, `browser_storage_state`
-- **Tabs:** `browser_tab_new`, `browser_tab_list`, `browser_tab_switch`, `browser_tab_close`
-
-**Step 3: Assign the MCP tools to an Assistant**
-
-0. **RELOAD THE ONYX Admin WebUI**. After MCP config change, the Admin WebUI needs to be updated with the proper set of tool lists.
-1. Go to **Admin Panel -> Assistants** and edit an assistant (or create a new one).
-2. Under **MCP Servers**, select the `obscura` server.
-3. Select which tools to expose (or select all).
-4. Save the assistant.
-
-Chat agents using that assistant can now drive a stealth browser to navigate, read, and interact with web pages — with all traffic egressing through the VPN.
-
-**Security notes:**
-
-- The MCP HTTP transport has no built-in auth. It binds `0.0.0.0` inside the netns-holder namespace, so it's only reachable by other services in that namespace (and the host-web-proxy bridge). For additional origin restrictions, set `OBSCURA_MCP_ALLOWED_ORIGINS` in `.env.wrapper` to a comma-separated list of allowed Origin values.
-- The browser session is shared across all tool calls within a single MCP server instance. Multiple concurrent chat sessions share the same browser state.
-- See the [obscura MCP documentation](https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md) for full details.
-
 ## Optional Configurations
 
 The following sections detail additional optional feature configuration, including remote access via TailScale Funnel, and RAG document search.
@@ -331,39 +270,7 @@ You can optionally give executor pods outbound internet access through the Myste
 CODE_INTERPRETER_VPN_ROUTED=true
 ```
 
-**How it works (no image rebuild required):**
-
-The code-interpreter already runs inside the shared `netns-holder` VPN namespace (`network_mode: service:netns-holder` in `docker-compose.yaml`). When `CODE_INTERPRETER_VPN_ROUTED=true`, the Makefile applies `docker-compose.code-interpreter-vpn.yml`, which:
-
-1. Mounts a [`sitecustomize.py`](onyx/patches/sitecustomize_code_interpreter/sitecustomize.py) patch into the code-interpreter container at `/app/wrapper-patches/` and prepends it to `PYTHONPATH`.
-2. Sets `CODE_INTERPRETER_VPN_ROUTED=true` so the patch activates.
-
-The patch monkeypatches `DockerExecutor._build_run_command` to rewrite the hardcoded `--network none` flag to `--network container:<self>`, where `<self>` is the code-interpreter's own container ID (auto-discovered from `HOSTNAME`). This makes every executor pod inherit the code-interpreter's network namespace — and since that namespace is the VPN netns, executor pods egress through the Mysterium tunnel.
-
-The override also passes `CODE_INTERPRETER_VPN_ROUTED=true` to the **api_server** container. This activates a companion patch in the api_server's [`wrapper_env_patches.py`](onyx/patches/sitecustomize_base/wrapper_env_patches.py) that updates the LLM-facing tool descriptions, the `PYTHON_TOOL_GUIDANCE` system prompt, and the coding-agent system prompts to advertise network access. Without this, the LLM would continue to avoid network commands based on the stale "no network" / "network-restricted" / "network-isolated" / "Internet access is disabled" text hardcoded upstream:
-
-- **PythonTool** description → "Execute Python code in a sandbox environment with internet access via VPN. pip package installation is NOT supported — only the pre-installed scientific stack is available (numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, python-docx, python-pptx, fpdf2, pydantic). For tasks requiring additional packages or complex multi-step workflows, invoke the code agent instead."
-- **`PYTHON_TOOL_GUIDANCE`** system prompt → replaces "Internet access for this session is disabled. Do not make external web requests or API calls as they will fail." with VPN access info, the pip restriction, the pre-installed package list, and a recommendation to invoke the code agent for involved tasks
-- **BashTool** description → "Execute a bash command inside a session with internet access via VPN..."
-- **Coding agent bash tool** description → "The session has internet access via VPN..."
-- **Coding agent system prompts** → "sandbox with VPN-routed internet access" (replaces "network-isolated sandbox"), and "Network commands are permitted" (replaces "the sandbox has no network")
-
-The descriptions/prompts also include service hints for the in-namespace scraping/browser services that executor pods can reach via localhost (since they inherit the netns-holder namespace). The hints are tailored per tool:
-
-- **PythonTool** (description + `PYTHON_TOOL_GUIDANCE`): crw Firecrawl-compatible REST API only
-  - `http://127.0.0.1:3010` — exposes `/v1/scrape`, `/v1/crawl`, `/v1/map`, and `/v1/search` (backed by a stealth headless browser)
-- **BashTool + coding agent** (descriptions + system prompts): crw Firecrawl API + CDP browser
-  - `http://127.0.0.1:3010` — Firecrawl-compatible REST API (`/v1/scrape`, `/v1/crawl`, `/v1/map`, `/v1/search`)
-  - `ws://127.0.0.1:9222/devtools/browser` — stealth Chrome DevTools Protocol browser for direct browser automation
-
-> **Why not just use `PYTHON_EXECUTOR_DOCKER_RUN_ARGS`?** The code-interpreter exposes this env var for extra `docker run` args, and it is appended *after* `--network none`. However, Docker **errors out** when `--network none` is combined with any other `--network` flag (it does not use "last flag wins" for `none`). So the env var alone cannot override the network isolation — the `sitecustomize` patch is required to mutate the command list before it is executed.
-
-**Security considerations:**
-
-- Enabling this **removes the code-interpreter's network isolation**. The LLM will be able to make arbitrary outbound HTTP/HTTPS requests from generated Python code and bash commands.
-- The VPN exit IP provides attribution and egress control (all traffic appears to come from the Mysterium exit node), but does **not** prevent the LLM from reaching arbitrary internet hosts.
-- Only enable this on trusted, single-tenant deployments where you understand the risk.
-- If auto-discovery of the container ID fails (e.g. a custom `hostname:` is set on the service), set `CODE_INTERPRETER_CONTAINER_ID` explicitly in `.env.wrapper`.
+The code tool descriptions and code agent prompts are updated to mention internet access, and include service hints for the in-namespace scraping/browser services that executor pods can reach via localhost (since they inherit the netns-holder namespace).
 
 Restart the stack after changing this setting (`make down-lite && make up-lite`, or the full-mode equivalents).
 
@@ -428,6 +335,52 @@ To use this shim:
 2. Select your embedding model as **Self-Hosted / Custom Model** (local)
 3. Enter `nomic-ai/nomic-embed-text-v23` as the model type (Onyx has special hardcoded features for nomic-ai...)
 4. For both `Harrier-OSS-V1-0.6B` and `Qwen3-Embedding-0.6B`, the embedding dimension is 1024.
+
+### Optional: Obscura MCP Server for Chat Agent Browser Automation
+
+In addition to the stealth Obscura browser that the crw Firecrawl API uses, a second obscura instance runs as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) HTTP server by default. This exposes obscura's stealth browser automation tools directly to Onyx chat agents — they can navigate pages, take snapshots, click elements, fill forms, extract content, and more, all through the MCP tool interface.
+
+The MCP server runs in the netns-holder VPN namespace, so all browser traffic egresses through the Mysterium VPN tunnel with stealth anti-fingerprinting enabled. It listens on `127.0.0.1:${OBSCURA_MCP_PORT:-9223}` inside the namespace (default port 9223). Configure the port via `OBSCURA_MCP_PORT` in `.env.wrapper`.
+
+**Step 1: Configure SSRF Protection to allow loopback**
+
+The obscura MCP server listens on `127.0.0.1` inside the netns-holder namespace. The api_server (which runs in the same namespace) reaches it via localhost, but Onyx's SSRF protection blocks loopback addresses by default — even at the `Allow Private Network` level (the wrapper's default via `MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, `MCP_SERVER_ALLOW_LOOPBACK=false`).
+
+To allow the MCP client to reach `127.0.0.1`, set SSRF Protection to **Disabled**:
+
+1. Go to **Admin Panel -> Security Hardening** ([http://localhost:3000/admin/security](http://localhost:3000/admin/security)).
+2. Set **SSRF Protection** to **Disabled**.
+3. Click **Save**.
+
+This allows loopback and private-network targets for MCP servers, open_url, and OAuth endpoints. Cloud-metadata and link-local addresses (169.254.0.0/16) remain blocked as an always-on floor. This is safe in the wrapper deployment because all services run inside the VPN namespace — there are no external clients that could exploit the relaxed SSRF policy.
+
+> **Note:** If you prefer not to disable SSRF protection globally, you can alternatively run the obscura-mcp service on a non-loopback address by giving the netns-holder namespace a dedicated bridge IP. However, the simplest path is the Disabled setting above, since the wrapper's threat model already assumes all services are co-located in the VPN namespace.
+
+**Step 2: Configure the MCP server in Onyx**
+
+1. Go to **Admin Panel -> MCP Servers** ([http://localhost:3000/admin/mcp-servers](http://localhost:3000/admin/mcp-servers)).
+2. Click **Add MCP Server**.
+3. Set **Name** to `obscura` (or any name you prefer).
+4. Set **Server URL** to `http://127.0.0.1:9223/mcp` (or your configured `OBSCURA_MCP_PORT`).
+   - The api_server runs in the same netns-holder namespace, so it reaches the MCP server via localhost.
+5. Set **Auth Type** to **None** (the MCP HTTP transport has no built-in auth; it's only reachable within the VPN namespace).
+6. Click **Save**, then click **Discover Tools** to verify the connection.
+
+**Step 3: Assign the MCP tools to an Assistant**
+
+0. **RELOAD THE ONYX Admin WebUI**. After MCP config change, the Admin WebUI needs to be updated with the proper set of tool lists.
+1. Go to **Admin Panel -> Assistants** and edit an assistant (or create a new one).
+2. Under **MCP Servers**, select the `obscura` server.
+3. Select which tools to expose (or select all).
+4. Save the assistant.
+
+Chat agents using that assistant can now drive a stealth browser to navigate, read, and interact with web pages — with all traffic egressing through the VPN.
+
+**Security notes:**
+
+- The MCP HTTP transport has no built-in auth. It binds `0.0.0.0` inside the netns-holder namespace, so it's only reachable by other services in that namespace (and the host-web-proxy bridge). For additional origin restrictions, set `OBSCURA_MCP_ALLOWED_ORIGINS` in `.env.wrapper` to a comma-separated list of allowed Origin values.
+- The browser session is shared across all tool calls within a single MCP server instance. Multiple concurrent chat sessions share the same browser state.
+- See the [obscura MCP documentation](https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md) for full details.
 
 ## Docker Host Endpoints
 
