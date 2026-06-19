@@ -6,3 +6,15 @@ services:
 
   code-interpreter:
     profiles: ["requires-docker-socket"]
+
+  # OpenSearch runs as uid/gid 1000 inside its container. Under rootless
+  # podman the default userns maps container uid 1000 to a high host uid
+  # (e.g. 100999), which cannot write to the bind-mounted ./docker-data/opensearch
+  # directory owned by the host user. This causes:
+  #   AccessDeniedException[/usr/share/opensearch/data/nodes]
+  #   OpenSearchException[failed to bind service]
+  # keep-id:uid=1000,gid=1000 maps the container's opensearch user (1000:1000)
+  # directly to the host user running podman, so the bind mount is writable.
+  # This is a no-op under Docker (userns_mode is ignored by the Docker engine).
+  opensearch:
+    userns_mode: "keep-id:uid=1000,gid=1000"
