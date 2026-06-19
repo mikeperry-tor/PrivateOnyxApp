@@ -1,0 +1,19 @@
+## Podman full-mode override.
+## Applied by `make up-full` (and `make down-full`) via COMPOSE_FILE layering
+## when CONTAINER_BIN resolves to a podman binary.
+##
+## OpenSearch runs as uid/gid 1000 inside its container. Under rootless podman
+## the default userns maps container uid 1000 to a high host uid (e.g. 100999),
+## which cannot write to the bind-mounted ./docker-data/opensearch directory
+## owned by the host user. This causes:
+##   AccessDeniedException[/usr/share/opensearch/data/nodes]
+##   OpenSearchException[failed to bind service]
+##
+## keep-id:uid=1000,gid=1000 maps the container's opensearch user (1000:1000)
+## directly to the host user running podman, so the bind mount is writable.
+## This override is full-mode only because the lite stack has no opensearch
+## service (it uses DISABLE_VECTOR_DB=true with a postgres backend).
+
+services:
+  opensearch:
+    userns_mode: "keep-id:uid=1000,gid=1000"

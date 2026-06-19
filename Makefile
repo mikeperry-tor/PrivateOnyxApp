@@ -3,6 +3,7 @@ WRAPPER_FILE := docker-compose.yaml
 FULL_OVERRIDE_FILE := docker-compose.full.yml
 LITE_OVERRIDE_FILE := docker-compose.lite.yml
 PODMAN_OVERRIDE_FILE := docker-compose.podman.yml
+PODMAN_FULL_OVERRIDE_FILE := docker-compose.podman-full.yml
 
 MYST_NODE_REPO ?= https://github.com/mikeperry-tor/node.git
 MYST_NODE_BRANCH ?= docker_host_fixes_with_logs
@@ -36,8 +37,10 @@ export CONTAINER_BIN
 export DOCKER_SOCK_PATH
 
 PODMAN_COMPOSE_SUFFIX :=
+PODMAN_FULL_COMPOSE_SUFFIX :=
 ifneq ($(findstring podman,$(CONTAINER_BIN)),)
 PODMAN_COMPOSE_SUFFIX :=:$(PODMAN_OVERRIDE_FILE)
+PODMAN_FULL_COMPOSE_SUFFIX :=:$(PODMAN_FULL_OVERRIDE_FILE)
 endif
 
 # Conditional VPN routing overrides for teep and tailscale.
@@ -94,7 +97,7 @@ EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
 
 .PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup vpn-orderstatus vpn-balance ensure-myst-funded
 
