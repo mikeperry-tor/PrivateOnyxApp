@@ -123,15 +123,22 @@ Most likely variables you want to change:
 
 > **Skip this section entirely if `MYST_VPN_ENABLED=false`** in your `.env.wrapper`. When the VPN is disabled, no wallet, identity, or payment is required — `make up-lite` / `make up-full` will proceed directly to starting the stack.
 
-The Mysterium VPN requires a funded wallet (paid in cryptocurrency) before it can connect. The signup process is handled by a standalone container that creates a cryptographic identity, registers it on-chain, and generates a payment order.
+The Mysterium VPN requires a funded wallet (paid in cryptocurrency) before it can connect. The signup process is handled by a standalone container that creates a cryptographic identity and registers it on-chain (Mysterium sponsors the gas fees). There are two ways to fund the wallet:
+
+- **Option A — Order page (CoinGate):** Pay via a crypto payment gateway. Easiest for first-time users, but require email, name, and address.
+- **Option B — Direct blockchain transfer:** Transfer $MYST directly on Polygon. Cheaper (no gateway fees), but requires acquiring $MYST yourself.
+
+Both options use the same standalone container and produce the same identity/keystore. You only need to run one.
+
+#### Option A: CoinGate $MYST Order (Requires email, Name, and Address)
 
 **Step 1: Run the signup process**
 
 ```bash
-make vpn-signup
+make vpn-signup-orderform
 ```
 
-This launches a standalone Myst container, creates a new identity, registers it (Mysterium sponsors the gas fees), and creates a payment order. The payment URL is displayed in a banner:
+This launches a standalone Myst container, creates a new identity, registers it, and creates a CoinGate payment order. The payment URL is displayed in a banner:
 
 ```
 ═══════════════════════════════════════════════════════════
@@ -163,15 +170,77 @@ make vpn-balance
 make up-lite   # or make up-full
 ```
 
-This automatically stops the standalone signup container (your wallet data is preserved) and starts the full stack. If no Myst identity is found, it will tell you to run `make vpn-signup` first.
+This automatically stops the standalone signup container (your wallet data is preserved) and starts the full stack. If no Myst identity is found, it will tell you to run `make vpn-signup-orderform` or `make vpn-signup-blockchain` first.
 
 **Notes:**
 
-- If the payment order expires before you pay, just run `make vpn-signup` again. It reuses your existing identity and creates a new order.
+- If the payment order expires before you pay, just run `make vpn-signup-orderform` again. It reuses your existing identity and creates a new order.
 - The container build process may take some time to build all components on first run. Makefile dependency checks are used by `make up-lite` (or `make up-full`) to build images on first run, but not after the images exist.
 - Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
-- It may be possible to transfer $MYST directly to the VPN identity yourself, but this has not been verified.
 - The payment URL is also printed in the container logs as a fallback: `docker logs myst-client-vpn 2>&1 | grep PAYMENT_URL`
+
+#### Option B: Direct $MYST Transfer (Skip the Order Page)
+
+You can fund your wallet by transferring $MYST tokens directly on-chain, bypassing the CoinGate order page entirely. This is cheaper (no gateway fees) and works with any wallet or exchange that supports Polygon ERC-20 transfers.
+
+**Important: Do NOT send $MYST to your identity address.** The Mysterium node tracks balance on a deterministic **consumer channel** contract, not the raw ERC-20 balance of your identity. Sending tokens to the identity address will not credit your balance and the funds will be stuck.
+
+**Chain:** Polygon Mainnet (Chain ID 137). The default mainnet chain is Polygon, as defined in the Mysterium node metadata (`DefaultChainID: 137`). Ethereum Mainnet (Chain ID 1) is also supported by the node, but the default consumer flow uses Polygon.
+
+**MYST token contract (Polygon):** `0x1379e8886a944d2d9d440b3d88df536aea08d9f3`
+
+**Step 1: Run the blockchain signup**
+
+```bash
+make vpn-signup-blockchain
+```
+
+This launches the same standalone Myst container as `make vpn-signup-orderform`, creates a new identity (or reuses an existing one), registers it on-chain (Mysterium sponsors the gas fees), and prints your **channel address** — the address you must send $MYST to. No payment order is created.
+
+The output will look like:
+
+```
+═══════════════════════════════════════════════════════════
+DIRECT TRANSFER INSTRUCTIONS
+═══════════════════════════════════════════════════════════
+
+  Chain:           Polygon Mainnet (Chain ID 137)
+  MYST token:      0x1379e8886a944d2d9d440b3d88df536aea08d9f3
+  Send $MYST to:   0x<your-channel-address>
+
+  ⚠  Do NOT send to your identity address (0x<your-identity>).
+     The node tracks balance on the channel contract, not the identity.
+     Sending to the identity address will lose your funds.
+═══════════════════════════════════════════════════════════
+```
+
+The channel address is a CREATE2-derived proxy contract address, computed from your identity, the active Hermes address, the registry, and the channel implementation contract. You can also retrieve it later with:
+
+```bash
+make vpn-balance
+```
+
+Look for the `Channel Address` field.
+
+**Step 2: Transfer $MYST on Polygon**
+
+From any wallet or exchange that supports Polygon, send $MYST (ERC-20, contract `0x1379e8886a944d2d9d440b3d88df536aea08d9f3`) to your **channel address** (not your identity address). You will also need a small amount of MATIC for gas if sending from your own wallet (exchange withdrawals handle gas on their end).
+
+$MYST can be acquired on:
+- QuickSwap (Polygon)
+- Uniswap V3 (Ethereum, then bridge to Polygon)
+- PancakeSwap (Binance Smart Chain, then bridge to Polygon)
+- MEXC, HitBTC (centralized exchanges)
+
+If you hold $MYST on Ethereum, use the [Mysterium bridge](https://help.mystnodes.com/en/articles/8004220-bridge-your-myst-tokens-from-ethereum-to-polygon) to move it to Polygon first.
+
+**Step 3: Verify the balance**
+
+```bash
+make vpn-balance
+```
+
+The node polls the on-chain channel balance and will reflect the transfer once the Polygon block confirms. If the balance does not update, run `make vpn-orderstatus` to trigger a resync, or restart the container with `make vpn-signup-blockchain` (which reuses your existing identity).
 
 ## Onyx UI Configuration
 

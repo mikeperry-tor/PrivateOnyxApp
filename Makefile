@@ -99,7 +99,7 @@ EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -121,9 +121,10 @@ help:
 	@echo "  make embedserv-serve   # Launch mlx-openai-server on LOCAL_EMBEDDINGS_URL"
 	@echo ""
 	@echo "VPN signup & payment:"
-	@echo "  make vpn-signup      # Start standalone Myst container, create identity + order, show payment URL"
-	@echo "  make vpn-orderstatus # Show balance, order status, and payment URL"
-	@echo "  make vpn-balance     # Quick balance check"
+	@echo "  make vpn-signup-orderform  # Start standalone Myst container, create identity + CoinGate order, show payment URL"
+	@echo "  make vpn-signup-blockchain # Start standalone Myst container, create identity, show channel address for direct MYST transfer"
+	@echo "  make vpn-orderstatus       # Show balance, order status, and payment URL"
+	@echo "  make vpn-balance           # Quick balance check"
 	@echo ""
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
@@ -471,7 +472,7 @@ embedserv-serve: embedserv-verify-model
 # Start standalone Myst container for initial signup/payment, then run the
 # signup helper which creates an identity, registers it, and creates a
 # payment order. The payment URL is printed to stdout.
-vpn-signup: myst-image-ready
+vpn-signup-orderform: myst-image-ready
 	@set -eu; \
 	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
 		echo "Myst container '$(MYST_CONTAINER_NAME)' is already running."; \
@@ -484,6 +485,24 @@ vpn-signup: myst-image-ready
 	fi
 	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
 		$(MYST_VPN_CLI) signup
+
+# Start standalone Myst container for initial signup, then run the blockchain
+# helper which creates an identity, registers it, and prints the consumer
+# channel address for direct on-chain $MYST transfer (Polygon). No payment
+# order is created.
+vpn-signup-blockchain: myst-image-ready
+	@set -eu; \
+	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
+		echo "Myst container '$(MYST_CONTAINER_NAME)' is already running."; \
+	else \
+		echo "Starting standalone Myst signup container..."; \
+		mkdir -p $(MYST_DATA_DIR); \
+		COMPOSE_FILE=$(MYST_COMPOSE_FILE):$(MYST_SIGNUP_OVERRIDE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
+		echo "Waiting for container to initialize..."; \
+		sleep 3; \
+	fi
+	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
+		$(MYST_VPN_CLI) blockchain
 
 # Show identity, balance, registration status, all orders, and payment URLs
 # for any unpaid orders. Works against whichever myst container is running.
@@ -498,7 +517,7 @@ vpn-balance:
 
 # Prerequisite for up-lite/up-full: stop signup container if running and
 # verify that a Myst identity (keystore) exists. If no keystore is found,
-# instruct the user to run 'make vpn-signup' first.
+# instruct the user to run 'make vpn-signup-orderform' or 'make vpn-signup-blockchain' first.
 ensure-myst-funded:
 	@set -eu; \
 	if [ "$(MYST_VPN_ENABLED)" = "false" ]; then \
@@ -516,8 +535,9 @@ ensure-myst-funded:
 		echo "ERROR: No Myst identity found in $(MYST_DATA_DIR)/keystore/"; \
 		echo "       You need to sign up and fund your VPN wallet first."; \
 		echo ""; \
-		echo "       Run: make vpn-signup"; \
-		echo "       Then pay at the displayed URL and run: make vpn-orderstatus"; \
+		echo "       Run: make vpn-signup-orderform  (pay via CoinGate order page)"; \
+		echo "    OR: make vpn-signup-blockchain    (transfer $MYST directly on Polygon)"; \
+		echo "       Then check with: make vpn-orderstatus"; \
 		echo "       Once funded, run: make up-lite (or make up-full)"; \
 		echo ""; \
 		exit 1; \

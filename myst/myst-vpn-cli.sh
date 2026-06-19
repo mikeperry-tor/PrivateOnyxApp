@@ -7,11 +7,14 @@
 #   signup        — Wait for daemon, show/create order, print payment URL
 #   orderstatus   — Show identity, balance, registration, all orders + payment URLs
 #   balance       — Quick identity + balance check
+#   blockchain    — Wait for daemon, register identity, print channel address for
+#                   direct on-chain $MYST transfer (Polygon, no order page needed)
 #
 # Usage (from Makefile):
 #   ./myst/myst-vpn-cli.sh signup
 #   ./myst/myst-vpn-cli.sh orderstatus
 #   ./myst/myst-vpn-cli.sh balance
+#   ./myst/myst-vpn-cli.sh blockchain
 #
 # Environment:
 #   CONTAINER_BIN   — docker or podman (default: docker)
@@ -476,6 +479,159 @@ cmd_signup() {
   banner
 }
 
+# ── Subcommand: blockchain ────────────────────────────────────────────────────
+#
+# Performs identity creation + on-chain registration (same as signup), but
+# instead of creating a CoinGate payment order, it prints the consumer channel
+# address so the user can transfer $MYST directly on Polygon.
+
+# Polygon mainnet chain ID (Mysterium default consumer chain).
+MYST_POLYGON_CHAIN_ID="${MYST_POLYGON_CHAIN_ID:-137}"
+# MYST ERC-20 token contract on Polygon mainnet.
+MYST_POLYGON_TOKEN_ADDR="${MYST_POLYGON_TOKEN_ADDR:-0x1379e8886a944d2d9d440b3d88df536aea08d9f3}"
+
+cmd_blockchain() {
+  if ! container_running; then
+    echo "ERROR: Container '$CONTAINER_NAME' is not running."
+    echo "       The Makefile should start it before calling this script."
+    exit 1
+  fi
+
+  # Wait for daemon to be ready
+  wait_for_tequilapi || exit 1
+
+  # Get identity
+  ID="$(get_identity)"
+  if [ -z "$ID" ]; then
+    echo "No Myst identity found. Creating one..."
+    myst_cli identities new >/dev/null 2>&1 || true
+    sleep 2
+    ID="$(get_identity)"
+  fi
+
+  if [ -z "$ID" ]; then
+    echo "ERROR: Could not create or find a Myst identity."
+    echo "       Check container logs: $CONTAINER_BIN logs $CONTAINER_NAME"
+    exit 1
+  fi
+
+  # Unlock identity
+  myst_cli identities unlock "$ID" >/dev/null 2>&1 || true
+
+  # Check registration
+  REG_STATUS="$(get_registration_status "$ID")"
+  BALANCE="$(get_balance "$ID")"
+
+  banner
+  echo "Myst VPN — Direct Blockchain Transfer"
+  banner
+  echo "  Identity:     $ID"
+  echo "  Registration: ${REG_STATUS:-unknown}"
+  echo "  Balance:      ${BALANCE:-0} MYST"
+  banner
+
+  # If already funded, tell user to proceed
+  if ! balance_is_zero "$BALANCE"; then
+    echo ""
+    echo "Your wallet is already funded with ${BALANCE} MYST."
+    echo "You can start the full stack now:"
+    echo ""
+    echo "  make up-lite    (or make up-full)"
+    echo ""
+    exit 0
+  fi
+
+  # If not registered, submit registration and wait (same as signup).
+  if [ "$REG_STATUS" != "registered" ]; then
+    echo ""
+    echo "Identity $ID is not registered (status: ${REG_STATUS:-unknown})."
+    echo "Submitting registration (Mysterium sponsors gas fees)..."
+    if [ -n "${MYST_REFERRAL_TOKEN:-}" ]; then
+      myst_exec account register --token="${MYST_REFERRAL_TOKEN}" 2>&1 | sed 's/^/  /' || true
+    else
+      myst_exec account register 2>&1 | sed 's/^/  /' || true
+    fi
+
+    # Wait for registration to confirm (or reach inprogress+needs-funding).
+    _retry_interval="${MYST_REGISTRATION_RETRY_INTERVAL:-60}"
+    case "$_retry_interval" in ''|0) _retry_interval=60 ;; esac
+    _elapsed=0
+    while true; do
+      REG_STATUS="$(get_registration_status "$ID")"
+      echo "  Registration status after ${_elapsed}s: ${REG_STATUS:-unknown}"
+      [ "$REG_STATUS" = "registered" ] && break
+      if [ "$REG_STATUS" = "inprogress" ]; then
+        _rb="$(get_balance "$ID")"
+        if balance_is_zero "$_rb"; then
+          echo "  Registration is inprogress with zero balance; proceeding to channel address output."
+          break
+        fi
+      fi
+      if [ "$_elapsed" -gt 0 ] && [ "$(( _elapsed % _retry_interval ))" -eq 0 ]; then
+        case "${REG_STATUS:-unknown}" in
+          unregistered|registrationerror|unknown)
+            echo "  Re-submitting registration request..."
+            myst_exec account register 2>&1 | sed 's/^/  /' || true
+          ;;
+        esac
+      fi
+      sleep 5
+      _elapsed="$(( _elapsed + 5 ))"
+    done
+
+    if [ "$REG_STATUS" = "registered" ]; then
+      echo "  Identity $ID registered successfully."
+    fi
+  else
+    echo "  Identity $ID is already registered."
+  fi
+
+  # Extract the channel address from `identities get` output.
+  # The myst CLI prints a "Channel Address:" line.
+  CHANNEL_ADDR="$(myst_cli identities get "$ID" 2>/dev/null \
+    | strip_ansi \
+    | grep -i 'Channel Address' \
+    | grep -oE '0x[0-9a-fA-F]{40}' \
+    | head -n1 || true)"
+
+  if [ -z "$CHANNEL_ADDR" ]; then
+    echo ""
+    echo "ERROR: Could not extract channel address from 'identities get' output."
+    echo "       Full identity details:"
+    myst_cli identities get "$ID" 2>&1 | sed 's/^/         /'
+    echo ""
+    echo "       The channel address is the CREATE2-derived consumer channel contract"
+    echo "       where $MYST must be sent. If the CLI does not print it, you can"
+    echo "       compute it or check the TequilAPI JSON response."
+    exit 1
+  fi
+
+  echo ""
+  banner
+  echo "DIRECT TRANSFER INSTRUCTIONS"
+  banner
+  echo ""
+  echo "  Chain:           Polygon Mainnet (Chain ID $MYST_POLYGON_CHAIN_ID)"
+  echo "  MYST token:      $MYST_POLYGON_TOKEN_ADDR"
+  echo "  Send $MYST to:   $CHANNEL_ADDR"
+  echo ""
+  echo "  ⚠  Do NOT send to your identity address ($ID)."
+  echo "     The node tracks balance on the channel contract, not the identity."
+  echo "     Sending to the identity address will lose your funds."
+  echo ""
+  echo "  Acquire $MYST on QuickSwap (Polygon), or bridge from Ethereum/BSC."
+  echo "  You need a small amount of MATIC for gas if sending from your own wallet."
+  echo ""
+  banner
+  echo "After transferring, verify with:"
+  echo "  make vpn-balance"
+  echo "  make vpn-orderstatus"
+  echo ""
+  echo "Once funded, start the stack:"
+  echo "  make up-lite    (or make up-full)"
+  banner
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
@@ -488,12 +644,16 @@ case "${1:-}" in
   balance)
     cmd_balance
     ;;
+  blockchain)
+    cmd_blockchain
+    ;;
   *)
-    echo "Usage: $0 {signup|orderstatus|balance}"
+    echo "Usage: $0 {signup|orderstatus|balance|blockchain}"
     echo ""
     echo "  signup       — Wait for daemon, show/create order, print payment URL"
     echo "  orderstatus  — Show identity, balance, all orders + payment URLs"
     echo "  balance      — Quick identity + balance check"
+    echo "  blockchain   — Register identity, print channel address for direct $MYST transfer"
     exit 1
     ;;
 esac
