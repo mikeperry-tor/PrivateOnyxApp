@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Startpage (web) engine (stealth-browser backed via crw + obscura).
+
+Startpage proxies Google results but wraps them behind its own anti-bot layer
+(``startpage.com``).  The stock ``startpage`` engine scrapes a pre-hydration
+React JSON blob (``React.createElement(UIStartpage.AppSerpWeb, ...)``) from the
+raw HTML; on datacenter / VPN exit IPs Startpage frequently serves a JS
+challenge or empty shell instead, yielding zero results.  This stub routes the
+search through crw, which renders the page with obscura (a stealth headless
+browser) so the React app hydrates and the organic result cards are present in
+the post-render DOM, which we then parse with XPath.
+
+Only the ``web`` category is implemented here (the high-value target).  The
+stock ``startpage`` / ``startpage news`` / ``startpage images`` entries are
+disabled in settings.yml so SearXNG does not double-query Startpage.
+
+See ``searxng/engines/_crw.py`` for the scrape helper and architecture.
+"""
+
+import typing as t
+from urllib.parse import urlencode, unquote, urlparse, parse_qs
+
+from lxml import html
+
+from searx.utils import eval_xpath, eval_xpath_list, extract_text
+
+from searx.engines import _crw  # type: ignore  # noqa: E402
+
+if t.TYPE_CHECKING:
+    from searx.extended_types import SXNG_Response
+    from searx.search.processors import OnlineParams
+
+about = {
+    "website": "https://www.startpage.com",
+    "wikidata_id": "Q498428",
+    "official_api_documentation": None,
+    "use_official_api": False,
+    "require_api_key": False,
+    "results": "HTML",
+}
+
+categories = ["general", "web"]
+paging = True
+max_page = 5
+time_range_support = False
+safesearch = False
+language_support = False
+
+# Startpage post-hydration DOM (obscura renders the React app):
+#
+#   <div class="result css-XXXXX">              ← organic result container
+#     ...
+#     <a class="result-title result-link ..."
+#        data-testid="gl-title-link"
+#        href="https://example.com/...">
+#       <style>...</style>                       ← inline CSS (must NOT leak into title)
+#       <h2 class="wgl-title ...">Title text</h2>
+#     </a>
+#     ...
+#     <div class="description css-XXXXX">Snippet text</div>
+#   </div>
+#
+# Sponsored results use class "a-bg-result" and are excluded by the trailing
+# space in "result " (matches "result css-..." but not "a-bg-result ...").
+results_xpath = '//div[contains(@class, "result ")]'
+# The clickable title link carries the real result href.
+link_xpath = './/a[@data-testid="gl-title-link"]'
+# Fallback for layout variants where data-testid is empty.
+link_fallback_xpath = './/a[contains(@class, "result-title")]'
+# Title text lives in an <h2> inside the link.  We must NOT use extract_text()
+# on the <a> itself because it contains inline <style> tags whose CSS text
+# would leak into the title (lxml's method="text" does not skip <style>).
+title_xpath = './/h2'
+# Snippet / description text.
+content_xpath = './/*[contains(@class, "description")]'
+
+
+def request(query: str, params: "OnlineParams") -> None:
+    """Build the Startpage search URL and hand it to crw for stealth rendering."""
+    query_args: t.Dict[str, str] = {"query": query}
+    # Startpage paginates via the `page` parameter (1-based).
+    if params["pageno"] > 1:
+        query_args["page"] = str(params["pageno"])
+    # cat=web is the default; set it explicitly for determinism.
+    query_args["cat"] = "web"
+
+    target_url = "https://www.startpage.com/sp/search?" + urlencode(query_args)
+    _crw.crw_scrape_request(params, target_url)
+
+
+def _strip_startpage_redirect(href: str) -> str:
+    """Startpage wraps result links in a ``/sp/redirect?...`` tracker.
+
+    The real URL is carried in the ``url`` query parameter (percent-encoded).
+    Unwrap it so SearXNG (and the tracker_url_remover plugin) sees the true
+    destination.  If the href is already a direct http(s) link, return it as-is.
+    """
+    if href.startswith("http"):
+        return href
+    if "/sp/redirect" in href or "url=" in href:
+        parsed = urlparse(href)
+        qs = parse_qs(parsed.query)
+        real = qs.get("url", [None])[0]
+        if real:
+            return unquote(real)
+    return href
+
+
+def response(resp: "SXNG_Response"):
+    """Parse the rendered Startpage SERP HTML returned by crw."""
+    text = _crw.extract_crw_html(resp)
+    if not text:
+        return []
+
+    results = []
+    dom = html.fromstring(text)
+
+    for result in eval_xpath_list(dom, results_xpath):
+        link_nodes = eval_xpath(result, link_xpath)
+        if not link_nodes:
+            link_nodes = eval_xpath(result, link_fallback_xpath)
+        if not link_nodes:
+            continue
+        raw_url = link_nodes[0].get("href")
+        if not raw_url:
+            continue
+        url = _strip_startpage_redirect(raw_url)
+        if not url.startswith("http"):
+            continue
+
+        # Title: prefer the <h2> inside the link to avoid <style> CSS leakage.
+        title_nodes = eval_xpath(link_nodes[0], title_xpath)
+        if not title_nodes:
+            title_nodes = eval_xpath(result, './/h2')
+        title = extract_text(title_nodes[0]) if title_nodes else ""
+        if not title:
+            continue
+
+        content_nodes = eval_xpath(result, content_xpath)
+        content = extract_text(content_nodes[0]) if content_nodes else ""
+
+        results.append({"url": url, "title": title, "content": content})
+
+    return results

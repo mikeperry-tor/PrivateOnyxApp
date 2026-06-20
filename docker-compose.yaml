@@ -73,6 +73,7 @@ services:
       - ./searxng/engines/google2.py:/usr/local/searxng/searx/engines/google2.py:ro
       - ./searxng/engines/brave2.py:/usr/local/searxng/searx/engines/brave2.py:ro
       - ./searxng/engines/duckduckgo2.py:/usr/local/searxng/searx/engines/duckduckgo2.py:ro
+      - ./searxng/engines/startpage2.py:/usr/local/searxng/searx/engines/startpage2.py:ro
     depends_on:
       netns-holder:
         condition: service_started

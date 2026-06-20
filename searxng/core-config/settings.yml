@@ -848,6 +848,13 @@ engines:
     disabled: false
     enable_http: true
 
+  - name: startpage2
+    engine: startpage2
+    shortcut: sp2
+    timeout: 60.0
+    disabled: false
+    enable_http: true
+
   - name: duckduckgo images
     engine: duckduckgo_extra
     categories: [images]
@@ -2033,23 +2040,31 @@ engines:
     api_key: ""
     inactive: true
 
+  # Disabled in favor of the crw + obscura stealth-backed `startpage2` stub
+  # (see ./searxng/engines/startpage2.py).  The stock startpage engine fetches
+  # the SERP directly and is served a JS challenge / empty shell on VPN exit
+  # IPs.  All three category variants are disabled to avoid double-querying
+  # Startpage.
   - name: startpage
     engine: startpage
     shortcut: sp
     startpage_categ: web
     categories: [general, web]
+    disabled: true
 
   - name: startpage news
     engine: startpage
     startpage_categ: news
     categories: [news, web]
     shortcut: spn
+    disabled: true
 
   - name: startpage images
     engine: startpage
     startpage_categ: images
     categories: [images, web]
     shortcut: spi
+    disabled: true
 
   - name: steam
     engine: steam

@@ -77,7 +77,7 @@ import re
 
 path = sys.argv[1]
 proxy_url = sys.argv[2]
-CRW_ENGINES = {"google2", "brave2", "duckduckgo2"}
+CRW_ENGINES = {"google2", "brave2", "duckduckgo2", "startpage2"}
 
 with open(path, "r", encoding="utf-8") as fh:
     lines = fh.readlines()

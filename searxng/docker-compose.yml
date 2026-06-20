@@ -18,6 +18,7 @@ services:
       - ./engines/google2.py:/usr/local/searxng/searx/engines/google2.py:ro
       - ./engines/brave2.py:/usr/local/searxng/searx/engines/brave2.py:ro
       - ./engines/duckduckgo2.py:/usr/local/searxng/searx/engines/duckduckgo2.py:ro
+      - ./engines/startpage2.py:/usr/local/searxng/searx/engines/startpage2.py:ro
 
   valkey:
     container_name: searxng-valkey
