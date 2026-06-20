@@ -620,7 +620,7 @@ cmd_blockchain() {
   echo "     Sending to the identity address will lose your funds."
   echo ""
   echo "  Acquire \$MYST on QuickSwap (Polygon), or bridge from Ethereum/BSC."
-  echo "  You need a small amount of MATIC for gas if sending from your own wallet."
+  echo "  You need a small amount of \$POL for gas if sending from your own wallet."
   echo ""
   banner
   echo "After transferring, verify with:"

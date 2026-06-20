@@ -129,7 +129,7 @@ Note that because our usage of Mysterium is crypto-native, a normal Mysterium VP
 
 There are two ways to fund the wallet:
 
-- **Option A — Order page (CoinGate):** Pay via a crypto payment gateway. Easiest for first-time users, but require email, name, and address.
+- **Option A — Order page (CoinGate):** Pay via a crypto payment gateway. Easiest for first-time users, but requires email, name, and address.
 - **Option B — Direct blockchain transfer:** Transfer $MYST directly on Polygon. Cheaper (no gateway fees), but requires acquiring $MYST yourself.
 
 Both options use the same standalone container and produce the same identity/keystore. You only need to run one.
@@ -191,8 +191,6 @@ You can fund your wallet by transferring $MYST tokens directly on-chain, bypassi
 
 **Chain:** Polygon Mainnet (Chain ID 137). The default mainnet chain is Polygon, as defined in the Mysterium node metadata (`DefaultChainID: 137`). Ethereum Mainnet (Chain ID 1) is also supported by the node, but the default consumer flow uses Polygon.
 
-**MYST token contract (Polygon):** `0x1379e8886a944d2d9d440b3d88df536aea08d9f3`
-
 **Step 1: Run the blockchain signup**
 
 ```bash
@@ -228,7 +226,7 @@ Look for the `Channel Address` field.
 
 **Step 2: Transfer $MYST on Polygon**
 
-From any wallet or exchange that supports Polygon, send $MYST (ERC-20, contract `0x1379e8886a944d2d9d440b3d88df536aea08d9f3`) to your **channel address** (not your identity address). You will also need a small amount of MATIC for gas if sending from your own wallet (exchange withdrawals handle gas on their end).
+From any wallet or exchange that supports Polygon, send $MYST (ERC-20, contract `0x1379e8886a944d2d9d440b3d88df536aea08d9f3`) to your **channel address** (not your identity address). You will also need a small amount of $POL (formerly $MATIC) for gas if sending from your own wallet (exchange withdrawals handle gas on their end).
 
 $MYST can be acquired on:
 - QuickSwap (Polygon)
