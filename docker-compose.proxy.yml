@@ -20,6 +20,14 @@
 services:
   # Stealth CDP browser. The obscura image is distroless (no shell), so the
   # --proxy flag must be added to the command list directly via this override.
+  #
+  # IMPORTANT: obscura's SOCKS proxy connector cannot resolve Docker-internal
+  # DNS names like host.docker.internal — it tries to resolve the proxy
+  # hostname through the SOCKS proxy itself (Tor), which fails. The Makefile
+  # derives PROXY_URL_RESOLVED from PROXY_URL by replacing host.docker.internal
+  # with its resolved IP address, and passes it here. If PROXY_URL already
+  # uses an IP or a publicly-resolvable hostname, PROXY_URL_RESOLVED equals
+  # PROXY_URL.
   obscura:
     command:
       - "serve"
@@ -29,7 +37,7 @@ services:
       - "9222"
       - "--stealth"
       - "--proxy"
-      - "${PROXY_URL}"
+      - "${PROXY_URL_RESOLVED:-${PROXY_URL}}"
 
   # Obscura MCP server. Same distroless constraint as obscura above.
   obscura-mcp:
@@ -42,15 +50,25 @@ services:
       - "${OBSCURA_MCP_PORT:-9223}"
       - "--stealth"
       - "--proxy"
-      - "${PROXY_URL}"
+      - "${PROXY_URL_RESOLVED:-${PROXY_URL}}"
 
-  # Firecrawl-compatible scraper. crw reads CRW_CRAWLER__PROXY via its Figment
-  # env layer (highest precedence). An empty value means "no proxy"; a non-empty
-  # value is validated at startup (crw never silently falls back to a direct
-  # connection, which would leak the real IP).
-  crw:
-    environment:
-      CRW_CRAWLER__PROXY: "${PROXY_URL}"
+  # Firecrawl-compatible scraper. We do NOT set CRW_CRAWLER__PROXY on crw
+  # because crw's CDP path sends Target.createBrowserContext { proxyServer }
+  # with a hardcoded 2-second timeout (crw source: cdp.rs fetch_with_ws).
+  # When the proxy is Tor (slow circuit build), this command takes >2s and
+  # crw times out with "Timeout after 2000ms" → 504 Gateway Timeout.
+  #
+  # Instead, obscura's serve --proxy flag (set above) applies the proxy
+  # globally to ALL browser contexts, so crw does not need to send
+  # proxyServer per-request. crw's CDP path inherits obscura's proxy.
+  # crw's HTTP fetch path egresses directly through the VPN namespace
+  # (netns-holder), which already provides IP attribution.
+  #
+  # If you need crw's HTTP fetch path proxied (not just VPN-routed), set
+  # CRW_CRAWLER__PROXY here — but note the CDP path will hit the 2s timeout
+  # on slow proxies (Tor). Use an HTTP proxy (fast CONNECT) if you need both
+  # paths proxied.
+  crw: {}
 
   # SearXNG. Its httpx network client builds explicit transport mounts from
   # outgoing.proxies in settings.yml and does NOT honor HTTP_PROXY env vars

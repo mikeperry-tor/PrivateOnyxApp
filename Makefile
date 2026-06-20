@@ -24,6 +24,29 @@ TAILSCALE_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TAILSCALE_VPN_ROUTED=//p' "$(
 CODE_INTERPRETER_VPN_ROUTED ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 MYST_VPN_ENABLED ?= $(strip $(shell sed -n 's/^MYST_VPN_ENABLED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 PROXY_URL ?= $(strip $(shell sed -n 's/^PROXY_URL=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+# obscura and crw's SOCKS proxy connectors cannot resolve Docker-internal DNS
+# names (host.docker.internal) — they try to resolve the proxy hostname through
+# the SOCKS proxy itself, which fails. Derive PROXY_URL_RESOLVED by replacing
+# host.docker.internal with its resolved IP address. If PROXY_URL is empty or
+# already uses an IP/public hostname, PROXY_URL_RESOLVED equals PROXY_URL.
+PROXY_URL_RESOLVED :=
+ifneq ($(strip $(PROXY_URL)),)
+PROXY_HOST_INTERNAL := $(strip $(shell echo "$(PROXY_URL)" | grep -oE 'host\.docker\.internal' | head -1))
+ifneq ($(strip $(PROXY_HOST_INTERNAL)),)
+# Resolve host.docker.internal via Docker (run a one-shot container). Falls
+# back to getent on the host if Docker resolution fails.
+PROXY_HOST_IP := $(strip $(shell "$(CONTAINER_BIN)" run --rm alpine:3.20 sh -c 'getent hosts host.docker.internal 2>/dev/null | awk "{print \$$1}" | head -1' 2>/dev/null || getent hosts host.docker.internal 2>/dev/null | awk '{print $$1}' | head -1 || true))
+ifneq ($(strip $(PROXY_HOST_IP)),)
+PROXY_URL_RESOLVED := $(strip $(shell echo "$(PROXY_URL)" | sed 's/host\.docker\.internal/$(PROXY_HOST_IP)/g'))
+else
+# Could not resolve; fall back to the original URL.
+PROXY_URL_RESOLVED := $(PROXY_URL)
+endif
+else
+PROXY_URL_RESOLVED := $(PROXY_URL)
+endif
+endif
+export PROXY_URL_RESOLVED
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
