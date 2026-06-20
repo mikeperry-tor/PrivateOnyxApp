@@ -98,9 +98,23 @@ def crw_scrape_request(
 def extract_crw_html(resp: "SXNG_Response") -> str:
     """Pull the rendered HTML out of a crw ``/v1/scrape`` JSON response.
 
-    Returns an empty string on any decode / shape error so the caller's
-    XPath simply yields no results (SearXNG treats an empty result list as
-    a soft failure, not an engine crash).
+    Returns the rendered HTML string on success. When crw reports that the
+    target site blocked the request (``success: false`` with an anti-bot
+    error), raises the appropriate SearXNG engine exception so the engine
+    stats and suspension machinery work correctly:
+
+      - HTTP 429 → :class:`SearxEngineTooManyRequestsException`
+      - HTTP 403 → :class:`SearxEngineAccessDeniedException`
+      - CAPTCHA  → :class:`SearxEngineCaptchaException`
+      - Other    → :class:`SearxEngineResponseException`
+
+    Without this, crw's HTTP 200 + ``success: false`` envelope would be
+    treated by SearXNG as a successful search with zero results, hiding
+    bot-blockage from the Engines tab stats and never suspending the engine.
+
+    Returns an empty string on non-block decode/shape errors so the caller's
+    XPath simply yields no results (SearXNG treats an empty result list as a
+    soft failure, not an engine crash).
     """
     try:
         envelope = json.loads(resp.text)
@@ -108,9 +122,12 @@ def extract_crw_html(resp: "SXNG_Response") -> str:
         return ""
     if not isinstance(envelope, dict):
         return ""
-    # crw returns success:false + an error field when the target blocks; in
-    # that case data may still carry a short HTML stub, but it's useless for
-    # parsing, so surface nothing and let SearXNG log the empty result.
+
+    # crw returns success:false + error/error_code when the target blocks.
+    # Raise the matching SearXNG exception so engine stats + suspension work.
+    if envelope.get("success") is False:
+        _raise_crw_block_exception(envelope)
+
     data = envelope.get("data")
     if not isinstance(data, dict):
         return ""
@@ -122,3 +139,52 @@ def extract_crw_html(resp: "SXNG_Response") -> str:
         or data.get("markdown")
         or ""
     )
+
+
+def _raise_crw_block_exception(envelope: dict) -> None:
+    """Raise the SearXNG exception matching crw's block error.
+
+    crw's error field looks like:
+      "Blocked by anti-bot (rate_limited): HTTP 429 Too Many Requests"
+      "Blocked by anti-bot (generic_block): HTTP 403 with HTML content"
+    The metadata.statusCode field carries the HTTP status from the target.
+    """
+    from searx.exceptions import (
+        SearxEngineAccessDeniedException,
+        SearxEngineCaptchaException,
+        SearxEngineResponseException,
+        SearxEngineTooManyRequestsException,
+    )
+
+    error_msg = envelope.get("error") or "crw scrape failed"
+    error_code = envelope.get("error_code") or ""
+
+    # Extract the target's HTTP status code from metadata or the error string.
+    status_code = 0
+    data = envelope.get("data")
+    if isinstance(data, dict):
+        metadata = data.get("metadata")
+        if isinstance(metadata, dict):
+            status_code = metadata.get("statusCode") or 0
+
+    if not status_code:
+        # Fall back to parsing the error string for an HTTP status code.
+        import re
+        m = re.search(r"HTTP (\d{3})", error_msg)
+        if m:
+            status_code = int(m.group(1))
+
+    error_lower = error_msg.lower()
+
+    # CAPTCHA detection (check before generic 403).
+    if "captcha" in error_lower or error_code == "captcha":
+        raise SearxEngineCaptchaException(message=f"crw: {error_msg}")
+
+    if status_code == 429 or "429" in error_msg or "rate_limited" in error_lower:
+        raise SearxEngineTooManyRequestsException(message=f"crw: {error_msg}")
+
+    if status_code == 403 or "403" in error_msg or "access" in error_lower or "forbidden" in error_lower:
+        raise SearxEngineAccessDeniedException(message=f"crw: {error_msg}")
+
+    # Generic response error for any other failure.
+    raise SearxEngineResponseException(f"crw: {error_msg}")
