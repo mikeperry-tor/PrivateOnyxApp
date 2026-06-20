@@ -816,7 +816,7 @@ engines:
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
-    disabled: true
+    inactive: true
 
   # ── crw + obscura stealth-browser backed stubs ─────────────────────────
   # These engines fetch the SERP via the local crw Firecrawl-compatible
@@ -1086,19 +1086,25 @@ engines:
   - name: google
     engine: google
     shortcut: go
-    disabled: true
+    inactive: true
 
+  # Inactive: stock google images/news/videos get access-denied / rate-limited
+  # on VPN exit IPs (same anti-bot wall that google2 bypasses via crw +
+  # obscura).  Only the crw-backed google2 web engine is enabled.
   - name: google images
     engine: google_images
     shortcut: goi
+    inactive: true
 
   - name: google news
     engine: google_news
     shortcut: gon
+    inactive: true
 
   - name: google videos
     engine: google_videos
     shortcut: gov
+    inactive: true
 
   - name: google scholar
     engine: google_scholar
@@ -2050,21 +2056,21 @@ engines:
     shortcut: sp
     startpage_categ: web
     categories: [general, web]
-    disabled: true
+    inactive: true
 
   - name: startpage news
     engine: startpage
     startpage_categ: news
     categories: [news, web]
     shortcut: spn
-    disabled: true
+    inactive: true
 
   - name: startpage images
     engine: startpage
     startpage_categ: images
     categories: [images, web]
     shortcut: spi
-    disabled: true
+    inactive: true
 
   - name: steam
     engine: steam
@@ -2656,15 +2662,19 @@ engines:
     paging: true
     categories: [general, web]
     brave_category: search
-    disabled: true
+    inactive: true
     # brave_spellcheck: true
 
+  # Inactive: the stock brave engine crashes / gets rate-limited on VPN exit
+  # IPs (same anti-bot wall that brave2 bypasses via crw + obscura).  Only the
+  # crw-backed brave2 web engine is enabled.
   - name: brave.images
     engine: brave
     network: brave
     shortcut: brimg
     categories: [images, web]
     brave_category: images
+    inactive: true
 
   - name: brave.videos
     engine: brave
@@ -2672,6 +2682,7 @@ engines:
     shortcut: brvid
     categories: [videos, web]
     brave_category: videos
+    inactive: true
 
   - name: brave.news
     engine: brave
@@ -2679,6 +2690,7 @@ engines:
     shortcut: brnews
     categories: news
     brave_category: news
+    inactive: true
 
   # - name: brave.goggles
   #   engine: brave
