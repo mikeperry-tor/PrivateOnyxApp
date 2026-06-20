@@ -366,7 +366,7 @@ PROXY_URL="socks5://proxy.example.com:1080"
 PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
-> **NOTE** The proxy setup has not been audited for leaks. You still likely want the Myst VPN, or at least a host VPN, in case of proxy bypass. In particular, Obscura/Chrome does not support SOCKS5 usernames and passwords, and will bypass the proxy entirely if these are set!
+> **NOTE** The proxy setup has not been audited for leaks. You still likely want the Myst VPN, or at least a host VPN, in case of proxy bypass. In particular, Obscura/Chrome does not support SOCKS5 usernames and passwords, and will bypass the proxy entirely if these are set. Additionally, the python code interpreter tool will bypass socks proxies when used with urllib, since urllib does not honor ALL_PROXY or support SOCKS.
 
 **SearXNG crw-engine loopback exclusion:** The crw-backed SearXNG engines (`google2`, `brave2`, `duckduckgo2`) POST their search queries to the local crw scraper at `http://127.0.0.1:3010/v1/scrape` (loopback inside the `netns-holder` namespace). The `searxng-proxy-entrypoint.sh` wrapper defines a `direct` network (`proxies: {}`) and assigns these three engines to it, so their loopback requests to crw bypass the upstream proxy. Without this, the `all://` proxy pattern would catch the loopback request and the proxy would reject it as a private address. All other SearXNG engines (which fetch external URLs directly) use the default network and egress through the proxy.
 
