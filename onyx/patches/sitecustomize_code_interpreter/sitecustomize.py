@@ -23,6 +23,7 @@ requests from its generated code.
 from __future__ import annotations
 
 import os
+import sys
 
 
 def _resolve_own_container_id() -> str | None:
@@ -83,14 +84,118 @@ def _resolve_own_container_id() -> str | None:
     return None
 
 
+# Directory where PySocks/socksio are installed for SOCKS proxy support.
+# The code-interpreter installs them here at startup (via _install_socks_libs),
+# and executor pods mount this via --volumes-from + PYTHONPATH.
+SOCKS_LIBS_DIR = "/tmp/proxy-libs"
+
+
+def _is_socks_proxy() -> bool:
+    """True if PROXY_URL is a SOCKS proxy (socks4/socks5/socks5h scheme)."""
+    proxy_url = os.environ.get("PROXY_URL", "").strip().lower()
+    return proxy_url.startswith(
+        ("socks4://", "socks4a://", "socks5://", "socks5h://")
+    )
+
+
+def _install_socks_libs() -> None:
+    """Install PySocks and socksio into SOCKS_LIBS_DIR for SOCKS proxy support.
+
+    Called at code-interpreter startup (sitecustomize) when PROXY_URL is a SOCKS
+    proxy. The installed packages are made available to executor pods via
+    ``--volumes-from <self>`` + ``PYTHONPATH=SOCKS_LIBS_DIR`` injected by
+    ``_proxy_env_vars``.
+
+    PySocks enables SOCKS support in ``requests`` (via ``requests[socks]``).
+    socksio enables SOCKS support in ``httpx`` (via ``httpx[socks]``).
+    Without these, Python's ``urllib``/``requests``/``httpx`` cannot use SOCKS
+    proxies — ``urllib`` treats ``HTTP_PROXY`` as an HTTP CONNECT proxy (which
+    Tor rejects), and ``requests``/``httpx`` need the SOCKS transport libraries
+    to honor ``ALL_PROXY`` for SOCKS URLs.
+    """
+    if not _is_socks_proxy():
+        return
+
+    import subprocess
+
+    os.makedirs(SOCKS_LIBS_DIR, exist_ok=True)
+
+    # Check if already installed (idempotent — skip if the import succeeds).
+    try:
+        import socks  # noqa: F401
+        import socksio  # noqa: F401
+        print(
+            "sitecustomize: PySocks and socksio already available system-wide; "
+            "no need to install into proxy-libs",
+            flush=True,
+        )
+        return
+    except ImportError:
+        pass
+
+    # Install into the shared directory so executor pods can use them.
+    # CRITICAL: unset proxy env vars for the pip subprocess to avoid a
+    # chicken-and-egg problem — pip would try to download PySocks through the
+    # SOCKS proxy, but PySocks isn't installed yet so pip can't use SOCKS.
+    # The code-interpreter is in the netns-holder namespace, so pip can
+    # download directly through the VPN (or Docker bridge if VPN is off).
+    clean_env = {
+        k: v for k, v in os.environ.items()
+        if not k.lower().startswith(("http_proxy", "https_proxy", "all_proxy"))
+    }
+    try:
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "pip", "install",
+                "--target", SOCKS_LIBS_DIR,
+                "--quiet",
+                "--no-warn-script-location",
+                "PySocks",
+                "socksio",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=clean_env,
+        )
+        if result.returncode == 0:
+            print(
+                f"sitecustomize: installed PySocks + socksio into {SOCKS_LIBS_DIR} "
+                "for SOCKS proxy support in executor pods",
+                flush=True,
+            )
+        else:
+            print(
+                f"sitecustomize: pip install PySocks/socksio failed (exit {result.returncode}): "
+                f"{result.stderr.strip()[:200]}",
+                flush=True,
+            )
+    except Exception as e:
+        print(
+            f"sitecustomize: failed to install PySocks/socksio: {e}",
+            flush=True,
+        )
+
+
 def _proxy_env_vars() -> list[str]:
     """Build the ``-e KEY=VALUE`` argument pairs for proxy env vars.
 
-    Returns an empty list when ``PROXY_URL`` is unset/empty. When set, injects
-    ``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``ALL_PROXY`` (all = PROXY_URL so httpx
-    and urllib pick the matching-scheme var while ALL_PROXY covers SOCKS) plus
-    ``NO_PROXY`` (internal loopback + Docker-DNS hosts) so intra-namespace
-    traffic stays off the proxy.
+    Returns an empty list when ``PROXY_URL`` is unset/empty.
+
+    For **HTTP/HTTPS proxies**: injects ``HTTP_PROXY`` / ``HTTPS_PROXY`` /
+    ``ALL_PROXY`` (all = PROXY_URL) plus ``NO_PROXY`` so intra-namespace traffic
+    stays off the proxy. Python's ``urllib``, ``requests``, and ``httpx`` all
+    honor these for HTTP CONNECT proxies.
+
+    For **SOCKS proxies** (socks4://, socks5://, socks5h://): injects only
+    ``ALL_PROXY`` / ``all_proxy`` (which ``requests`` and ``httpx`` honor for
+    SOCKS when PySocks/socksio is installed). Does NOT inject ``HTTP_PROXY`` /
+    ``HTTPS_PROXY`` because Python's ``urllib`` treats those as HTTP CONNECT
+    proxies and sends a ``CONNECT`` request to the SOCKS port, which Tor
+    rejects with "501 Tor is not an HTTP Proxy" / "Socks version 67 not
+    recognized". If PySocks is not installed (the default code-interpreter
+    image), SOCKS proxies won't work for the Python tool — executor pods will
+    fall back to VPN direct egress (they're in the netns-holder namespace).
 
     Lowercase variants (``http_proxy`` etc.) are also injected because some
     tools (notably ``curl`` and ``git``) only honor the lowercase form.
@@ -106,17 +211,43 @@ def _proxy_env_vars() -> list[str]:
         "netns-holder,host-web-proxy,host-searxng-proxy",
     )
 
-    pairs = [
-        ("PROXY_URL", proxy_url),
-        ("HTTP_PROXY", proxy_url),
-        ("HTTPS_PROXY", proxy_url),
-        ("ALL_PROXY", proxy_url),
-        ("NO_PROXY", no_proxy),
-        ("http_proxy", proxy_url),
-        ("https_proxy", proxy_url),
-        ("all_proxy", proxy_url),
-        ("no_proxy", no_proxy),
-    ]
+    is_socks = proxy_url.lower().startswith(
+        ("socks4://", "socks4a://", "socks5://", "socks5h://")
+    )
+
+    if is_socks:
+        # SOCKS proxies: only set ALL_PROXY (honored by requests/httpx with
+        # PySocks/socksio). Do NOT set HTTP_PROXY/HTTPS_PROXY — urllib
+        # misinterprets them as HTTP CONNECT proxies and fails on SOCKS.
+        # Also set PYTHONPATH to include SOCKS_LIBS_DIR so executor pods can
+        # import PySocks/socksio installed by _install_socks_libs().
+        existing_pythonpath = os.environ.get("PYTHONPATH", "")
+        if existing_pythonpath:
+            socks_pythonpath = f"{SOCKS_LIBS_DIR}:{existing_pythonpath}"
+        else:
+            socks_pythonpath = SOCKS_LIBS_DIR
+        pairs = [
+            ("PROXY_URL", proxy_url),
+            ("ALL_PROXY", proxy_url),
+            ("NO_PROXY", no_proxy),
+            ("all_proxy", proxy_url),
+            ("no_proxy", no_proxy),
+            ("PYTHONPATH", socks_pythonpath),
+        ]
+    else:
+        # HTTP/HTTPS proxies: all standard env vars work with urllib/requests/httpx.
+        pairs = [
+            ("PROXY_URL", proxy_url),
+            ("HTTP_PROXY", proxy_url),
+            ("HTTPS_PROXY", proxy_url),
+            ("ALL_PROXY", proxy_url),
+            ("NO_PROXY", no_proxy),
+            ("http_proxy", proxy_url),
+            ("https_proxy", proxy_url),
+            ("all_proxy", proxy_url),
+            ("no_proxy", no_proxy),
+        ]
+
     args: list[str] = []
     for key, value in pairs:
         args.extend(["-e", f"{key}={value}"])
@@ -139,11 +270,16 @@ def _apply_executor_patches() -> None:
         "on",
     )
     proxy_args = _proxy_env_vars()
+    socks_active = _is_socks_proxy()
 
     if not vpn_routed and not proxy_args:
         return
 
-    container_id = _resolve_own_container_id() if vpn_routed else None
+    # Resolve container ID for --network container:<self> (VPN routing) and/or
+    # --volumes-from <self> (SOCKS proxy: mount PySocks/socksio libs).
+    container_id = None
+    if vpn_routed or socks_active:
+        container_id = _resolve_own_container_id()
     if vpn_routed and not container_id:
         print(
             "sitecustomize: CODE_INTERPRETER_VPN_ROUTED=true but could not "
@@ -155,6 +291,13 @@ def _apply_executor_patches() -> None:
         # Still apply proxy injection if PROXY_URL is set.
         if not proxy_args:
             return
+    if socks_active and not container_id:
+        print(
+            "sitecustomize: SOCKS proxy active but could not determine this "
+            "container's own ID; executor pods won't get --volumes-from for "
+            "PySocks/socksio. Set CODE_INTERPRETER_CONTAINER_ID explicitly.",
+            flush=True,
+        )
 
     try:
         from app.services.executor_docker import DockerExecutor
@@ -233,9 +376,34 @@ def _apply_executor_patches() -> None:
                 flush=True,
             )
 
+        # (c) For SOCKS proxies, inject --volumes-from <self> so executor pods
+        # can access PySocks/socksio installed in SOCKS_LIBS_DIR. The PYTHONPATH
+        # env var (set by _proxy_env_vars) makes Python find them.
+        if socks_active and container_id:
+            out2: list[str] = []
+            injected_vf = False
+            for j, tok in enumerate(patched):
+                out2.append(tok)
+                if not injected_vf and tok == "run":
+                    out2.extend(["--volumes-from", container_id])
+                    injected_vf = True
+            if not injected_vf:
+                out2.extend(["--volumes-from", container_id])
+            patched = out2
+            print(
+                f"sitecustomize: injected --volumes-from {container_id} into "
+                f"executor pod command (SOCKS proxy: mount PySocks/socksio)",
+                flush=True,
+            )
+
         return patched
 
     DockerExecutor._build_run_command = _patched_build_run_command  # type: ignore[assignment]
 
+
+# Install PySocks/socksio for SOCKS proxy support before patching executor
+# pods. This runs at code-interpreter startup; the installed libs are mounted
+# into executor pods via --volumes-from + PYTHONPATH.
+_install_socks_libs()
 
 _apply_executor_patches()
