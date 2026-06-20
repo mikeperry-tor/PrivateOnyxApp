@@ -431,6 +431,7 @@ engines:
     search_type: search
     categories: [general]
     shortcut: aol
+    disabled: true
 
   - name: aol images
     engine: aol
@@ -829,21 +830,21 @@ engines:
   - name: google2
     engine: google2
     shortcut: go2
-    timeout: 30.0
+    timeout: 60.0
     disabled: false
     enable_http: true
 
   - name: brave2
     engine: brave2
     shortcut: br2
-    timeout: 30.0
+    timeout: 60.0
     disabled: false
     enable_http: true
 
   - name: duckduckgo2
     engine: duckduckgo2
     shortcut: ddg2
-    timeout: 30.0
+    timeout: 60.0
     disabled: false
     enable_http: true
 
