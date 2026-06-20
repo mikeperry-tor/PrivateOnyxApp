@@ -311,7 +311,9 @@ searxng-image-ready:
 		exit 1; \
 	fi; \
 	echo "Pulling SearxNG image: $$image"; \
-	"$(CONTAINER_BIN)" pull "$$image"
+	"$(CONTAINER_BIN)" pull "$$image"; \
+	echo "Extracting limiter.toml from $$image"; \
+	"$(CONTAINER_BIN)" run --rm --entrypoint cat "$$image" /usr/local/searxng/searx/limiter.toml > searxng/core-config/limiter.toml
 
 down-lite:
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) down --remove-orphans
