@@ -855,23 +855,29 @@ engines:
     disabled: false
     enable_http: true
 
+  # Inactive: stock DDG extra engines hit the same anti-bot wall as the
+  # crw-backed duckduckgo2 web engine.  Disabled to avoid wasted captcha'd
+  # requests on VPN exit IPs.
   - name: duckduckgo images
     engine: duckduckgo_extra
     categories: [images]
     ddg_category: images
     shortcut: ddi
+    inactive: true
 
   - name: duckduckgo videos
     engine: duckduckgo_extra
     categories: [videos]
     ddg_category: videos
     shortcut: ddv
+    inactive: true
 
   - name: duckduckgo news
     engine: duckduckgo_extra
     categories: [news]
     ddg_category: news
     shortcut: ddn
+    inactive: true
 
   - name: duckduckgo weather
     engine: duckduckgo_weather
