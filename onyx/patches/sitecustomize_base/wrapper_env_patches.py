@@ -265,3 +265,91 @@ def apply_code_interpreter_network_description_patches() -> None:
         )
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed to patch coding-agent prompts: {e}", flush=True)
+
+
+def apply_firecrawl_wait_for_patch() -> None:
+    """Patch FirecrawlClient to omit `waitFor` from /v2/scrape payloads.
+
+    Onyx's FirecrawlClient sends ``{url, formats: ["markdown"]}`` with no
+    ``waitFor`` field. This patch monkey-patches
+    ``FirecrawlClient._get_webpage_content`` to ensure no ``waitFor`` field
+    is ever sent, even if a future upstream change adds one.
+
+    A ``waitFor`` field would make CRW do a blind fixed sleep after
+    ``Page.loadEventFired`` before extracting content. This is actively
+    harmful: it wastes time on fast pages (always sleeps the full duration
+    even when the page is ready) and is insufficient on slow pages (Tor/
+    VPN loads can take 20-40s, far exceeding any reasonable fixed sleep).
+    Instead, page load waiting is handled by the CDP shim's ``waitUntil``
+    injection (``OBSCURA_WAIT_UNTIL=networkidle2``), which makes obscura
+    adaptively wait for network silence before returning the nav response.
+    CRW then uses its smart heuristics (SPA selector poll, content
+    stability, challenge retry) for any remaining post-navigate work.
+
+    See ``docs/request_handling.md`` §1.6 for the full wait strategy.
+    """
+    try:
+        from onyx.tools.tool_implementations.open_url.firecrawl import FirecrawlClient
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed importing FirecrawlClient: {e}", flush=True)
+        return
+
+    _original_get_webpage_content = FirecrawlClient._get_webpage_content
+
+    def _patched_get_webpage_content(self, url: str):
+        # No waitFor field — page load waiting is handled by the CDP shim's
+        # waitUntil injection (OBSCURA_WAIT_UNTIL=networkidle2). CRW uses
+        # its smart SPA selector poll + content stability heuristics for
+        # any remaining post-navigate work instead of a blind fixed sleep.
+        payload: dict = {
+            "url": url,
+            "formats": ["markdown"],
+        }
+        import requests as _requests
+        response = _requests.post(
+            self._base_url,
+            headers=self._headers,
+            json=payload,
+            timeout=self._timeout_seconds,
+        )
+
+        if response.status_code != 200:
+            try:
+                error_payload = response.json()
+            except Exception:
+                error_payload = response.text
+            self._last_error = (
+                error_payload if isinstance(error_payload, str) else str(error_payload)
+            )
+            if 400 <= response.status_code < 500:
+                from onyx.tools.tool_implementations.open_url.models import WebContent
+                return WebContent(
+                    title="",
+                    link=url,
+                    full_content="",
+                    published_date=None,
+                    scrape_successful=False,
+                )
+            raise ValueError(
+                f"Firecrawl fetch failed with status {response.status_code}."
+            )
+        else:
+            self._last_error = None
+
+        response_json = response.json()
+        extracted = self._extract_content_fields(response_json, url)
+        from onyx.tools.tool_implementations.open_url.models import WebContent
+        return WebContent(
+            title=extracted.title,
+            link=url,
+            full_content=extracted.text,
+            published_date=extracted.published_date,
+            scrape_successful=bool(extracted.text),
+        )
+
+    FirecrawlClient._get_webpage_content = _patched_get_webpage_content
+    print(
+        f"sitecustomize: patched FirecrawlClient._get_webpage_content "
+        f"(waitFor omitted, using CDP shim waitUntil + CRW heuristics)",
+        flush=True,
+    )

@@ -21,6 +21,13 @@ services:
   # Stealth CDP browser. The obscura image is distroless (no shell), so the
   # --proxy flag must be added to the command list directly via this override.
   #
+  # CRW_CRAWLER__PROXY is set in the base docker-compose.yaml to point at the
+  # prefetch-blocking proxy (port 3128), not at PROXY_URL directly. The CDP
+  # shim strips proxyServer from Target.createBrowserContext so obscura uses
+  # its own --proxy flag (set here), not CRW's proxy. This avoids the
+  # 2-second createBrowserContext timeout that occurs when proxyServer points
+  # at a slow Tor SOCKS proxy.
+  #
   # IMPORTANT: obscura's SOCKS proxy connector cannot resolve Docker-internal
   # DNS names like host.docker.internal — it tries to resolve the proxy
   # hostname through the SOCKS proxy itself (Tor), which fails. The Makefile
@@ -52,26 +59,7 @@ services:
       - "--proxy"
       - "${PROXY_URL_RESOLVED:-${PROXY_URL}}"
 
-  # Firecrawl-compatible scraper. We do NOT set CRW_CRAWLER__PROXY on crw
-  # because crw's CDP path sends Target.createBrowserContext { proxyServer }
-  # with a hardcoded 2-second timeout (crw source: cdp.rs fetch_with_ws).
-  # When the proxy is Tor (slow circuit build), this command takes >2s and
-  # crw times out with "Timeout after 2000ms" → 504 Gateway Timeout.
-  #
-  # Instead, obscura's serve --proxy flag (set above) applies the proxy
-  # globally to ALL browser contexts, so crw does not need to send
-  # proxyServer per-request. crw's CDP path inherits obscura's proxy.
-  #
-  # CRW_RENDERER__RENDER_JS_DEFAULT=true forces ALL scrape requests (including
-  # open_url calls from Onyx's FirecrawlClient, which omits the renderer field)
-  # to use the JS renderer (obscura) instead of trying HTTP first. This ensures
-  # all crw traffic goes through obscura, which is proxied via --proxy. Without
-  # this, crw's default auto mode tries HTTP first (direct/VPN egress, no proxy)
-  # and only escalates to obscura if the HTTP response is thin/blocked.
-  crw:
-    environment:
-      CRW_RENDERER__RENDER_JS_DEFAULT: "true"
-
+  
   # SearXNG. Its httpx network client builds explicit transport mounts from
   # outgoing.proxies in settings.yml and does NOT honor HTTP_PROXY env vars
   # when an explicit transport is provided. So the proxy must be merged into

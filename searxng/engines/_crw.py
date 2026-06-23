@@ -49,17 +49,25 @@ import os
 # default self-host key when unset.
 CRW_API_KEY = os.environ.get("CRW_ONYX_API_KEY") or "local-crw"
 
-# obscura is comparatively slow (real headless browser).  Give crw enough wall
-# clock to navigate + wait for the SERP to render before SearXNG's own engine
-# timeout fires (engines set timeout: 30.0 in settings.yml).
-CRW_WAIT_MS = 4000
+# Page load waiting is handled by the CDP shim (crw/cdp_shim.py), which
+# injects `waitUntil: "networkidle2"` into every Page.navigate call so
+# obscura adaptively waits for network silence before returning the nav
+# response. This is event-driven: fast pages return in ~500ms, slow Tor/
+# proxy pages get up to OBSCURA_NAV_TIMEOUT_MS (default 45s).
+#
+# No `waitFor` field is sent in the scrape payload. A fixed `waitFor` sleep
+# is actively harmful: it wastes time on fast pages (always sleeps the full
+# duration even when the page is ready) and is insufficient on slow pages
+# (Tor/VPN loads can take 20-40s, far exceeding any reasonable fixed sleep).
+# Instead, CRW uses its smart heuristics (SPA selector poll, content
+# stability, challenge retry) for post-navigate work.
+# See docs/request_handling.md §1.6.
 
 
 def crw_scrape_request(
     params: "OnlineParams",
     target_url: str,
     *,
-    wait_ms: int = CRW_WAIT_MS,
     extra_headers: t.Dict[str, str] | None = None,
 ) -> None:
     """Rewrite ``params`` in place so SearXNG's HTTP client POSTs the target
@@ -81,10 +89,17 @@ def crw_scrape_request(
         # narrowed; we want the full SERP DOM for XPath parsing.
         "formats": ["rawHtml"],
         "onlyMainContent": False,
-        # Force obscura.  auto mode picks plain HTTP for these SERPs and either
-        # 429s (Google) or returns an empty SPA shell (Brave).
-        "renderer": "chrome",
-        "waitFor": wait_ms,
+        # No `renderer` pin — use auto mode. The prefetch-blocking proxy
+        # returns 403 for search engine URLs, forcing CRW to escalate to
+        # the CDP renderer (obscura). Pinning renderer:"chrome" would put
+        # CRW in Some(true) mode, where HTTP prefetch failure is propagated
+        # via ? (no CDP escalation). Auto mode (None) escalates to CDP on
+        # 403/error. See docs/request_handling.md §1.7.
+        #
+        # No `waitFor` field — page load waiting is handled by the CDP shim's
+        # waitUntil injection (OBSCURA_WAIT_UNTIL=networkidle2). CRW uses its
+        # smart SPA selector poll + content stability heuristics for any
+        # remaining post-navigate work instead of a blind fixed sleep.
     }
     if extra_headers:
         payload["headers"] = extra_headers

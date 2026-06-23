@@ -61,6 +61,11 @@ services:
       # Mirrors CRW_ONYX_API_KEY from .env.wrapper so a future auth-required
       # crw flip keeps the engines working without a code change.
       CRW_ONYX_API_KEY: ${CRW_ONYX_API_KEY:-local-crw}
+      # Page load waiting is handled by the CDP shim's waitUntil injection
+      # (OBSCURA_WAIT_UNTIL_SEARCH=networkidle2 for SERPs,
+      # OBSCURA_WAIT_UNTIL_DEFAULT=load for web pages), not by a CRW
+      # waitFor sleep. See docs/request_handling.md §1.6 for the full
+      # wait strategy.
     network_mode: "service:netns-holder"
     volumes: !override
       - ./searxng/core-config/:/etc/searxng/:Z
@@ -121,6 +126,37 @@ services:
       - "--port"
       - "9222"
       - "--stealth"
+      # Persist cookies to /data/obscura so they survive container restarts
+      # and are reloaded on BrowserContext creation (obscura's context.rs
+      # loads {storage_dir}/cookies.json on init, saves on shutdown). This
+      # gives obscura's own BrowserContext cookie continuity across restarts.
+      # NOTE: CRW drives obscura via CDP Target.createBrowserContext, which
+      # bypasses obscura's Rust BrowserContext API — so this storage_dir
+      # does NOT give CRW's per-request CDP contexts cookie persistence.
+      # It only helps obscura's MCP/CLI paths. CRW cookie carry-over would
+      # require a code change to CRW's cdp.rs (Network.getCookies/setCookies
+      # around the per-request context create/dispose cycle).
+      - "--storage-dir"
+      - "/data/obscura"
+    environment:
+      # Hard ceiling on a single Page.navigate. Obscura's default is 30s,
+      # but when PROXY_URL routes through Tor or a slow VPN, page loads can
+      # take up to 60s. Set to 45000 to give obscura enough headroom for
+      # the waitUntil=networkidle2 condition (injected by the CDP shim) to
+      # resolve on slow proxy paths. Must be ≤ CRW's chrome_timeout_ms
+      # (CRW_RENDERER__CHROME_TIMEOUT_MS below) so CRW's outer deadline
+      # doesn't fire before obscura's nav timeout.
+      OBSCURA_NAV_TIMEOUT_MS: "${OBSCURA_NAV_TIMEOUT_MS:-45000}"
+      # Per-CDP-command deadline. A hung page (runaway Runtime.evaluate,
+      # synchronous DOM op) is terminated after this budget so one bad
+      # session cannot hold the shared V8 lock and stall others. Default
+      # 60s; set to 90000 to accommodate slow Tor page renders.
+      OBSCURA_CDP_COMMAND_TIMEOUT_MS: "${OBSCURA_CDP_COMMAND_TIMEOUT_MS:-90000}"
+      # Request timeout for scripted fetch()/XHR/ES-module loads. Default
+      # 30s; bump to 45000 for slow proxy paths.
+      OBSCURA_FETCH_TIMEOUT_MS: "${OBSCURA_FETCH_TIMEOUT_MS:-45000}"
+    volumes:
+      - obscura-data:/data/obscura
     healthcheck:
       # The obscura image is distroless (no shell, no wget/curl), so the
       # healthcheck uses the obscura binary's own `fetch` subcommand against
@@ -187,12 +223,154 @@ services:
         condition: service_healthy
         restart: true
 
+  # CDP WebSocket proxy shim between CRW and obscura.
+  #
+  # Sits on port 9224 between CRW and obscura (port 9222) to provide:
+  #
+  # 1. Browser context pooling by eTLD+1 — CRW creates/disposes a fresh
+  #    Target.createBrowserContext per request, so cookies and cache never
+  #    persist across queries to the same search engine. The shim intercepts
+  #    disposeBrowserContext calls and keeps contexts alive for reuse, giving
+  #    us cookie persistence and cache coherence for free.
+  #
+  # 2. STEALTH_JS stripping — CRW unconditionally injects its own stealth
+  #    script via Page.addScriptToEvaluateOnNewDocument with Mac-specific
+  #    WebGL strings that conflict with obscura's Linux platform. The shim
+  #    replaces the script source with a no-op, letting obscura's own
+  #    --stealth mode handle fingerprinting without conflict.
+  #
+  # CRW connects to ws://127.0.0.1:9224/devtools/browser (the shim) instead
+  # of ws://127.0.0.1:9222/devtools/browser (obscura directly). The shim
+  # proxies all CDP traffic transparently except for the intercepted methods.
+  #
+  # See crw/cdp_shim.py for the implementation. No build step — the script is
+  # bind-mounted into a stock python:3.12-slim image and deps are pip-installed
+  # at container start (same pattern as onyx/local_embedding_shim.py in
+  # docker-compose.full.yml).
+  cdp-shim:
+    image: python:3.12-slim-bookworm
+    restart: unless-stopped
+    network_mode: "service:netns-holder"
+    environment:
+      CDP_SHIM_HOST: "0.0.0.0"
+      CDP_SHIM_PORT: "9224"
+      OBSCURA_CDP_URL: "ws://127.0.0.1:9222/devtools/browser"
+      # Strip CRW's STEALTH_JS (1 = yes, 0 = no).
+      CDP_SHIM_STRIP_STEALTH_JS: "1"
+      CDP_SHIM_LOG_LEVEL: "info"
+      # Per-URL waitUntil injection into Page.navigate calls.
+      # Search engine URLs (SERPs) use networkidle2 (≤2 active connections
+      # for 500ms) — SERPs are JS-heavy SPAs that load results via XHR.
+      # All other URLs (open_url web pages) use "load" (all subresources
+      # finished) — content is ready at load, and many modern sites keep
+      # long-polling connections that prevent network idle.
+      #
+      # Obscura lifecycle event firing order (each implies the previous):
+      #   1. domcontentloaded  — DOM parsed + scripts executed
+      #   2. load              — all subresources finished, onload fired
+      #   3. networkidle2      — ≤2 active network requests for 500ms
+      #   4. networkidle0     — 0 active network requests for 500ms
+      OBSCURA_WAIT_UNTIL_SEARCH: "${OBSCURA_WAIT_UNTIL_SEARCH:-networkidle2}"
+      OBSCURA_WAIT_UNTIL_DEFAULT: "${OBSCURA_WAIT_UNTIL_DEFAULT:-load}"
+      OBSCURA_WAIT_UNTIL_SEARCH_HOSTS: "${OBSCURA_WAIT_UNTIL_SEARCH_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com}"
+      # Interval for periodic cookie clearing on obscura (seconds).
+      # Obscura's CDP server uses a single CdpContext that persists across
+      # WebSocket connections, so cookies accumulate indefinitely. This
+      # periodically clears them via Network.clearBrowserCookies to limit
+      # tracking surface from open_url visits to arbitrary sites.
+      # Default: 3600 (60 min). Set to 0 to disable.
+      OBSCURA_CLEAR_COOKIES_INTERVAL: "${OBSCURA_CLEAR_COOKIES_INTERVAL:-3600}"
+    volumes:
+      - ./crw/cdp_shim.py:/app/cdp_shim.py:ro
+    # Install websockets at startup, then run the shim.
+    # pip install takes ~2-3s on first start; the healthcheck start_period
+    # accommodates this. Only the websockets library is needed — the shim
+    # uses stdlib for everything else (urllib.parse for hostname extraction).
+    command:
+      - /bin/sh
+      - -c
+      - |
+        pip install --no-cache-dir --quiet 'websockets>=12.0,<14' && \
+        exec python -u /app/cdp_shim.py
+    healthcheck:
+      # The shim is a Python websockets server. Use a raw TCP connect to
+      # check the port is listening. The websockets library will log a 400
+      # for this (it's not a valid WebSocket handshake), but that's harmless
+      # — the shim suppresses the log for connections that don't send a
+      # valid HTTP upgrade. We can't use websockets.connect() here because
+      # pip install happens in the command, not in the healthcheck's env.
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 9224)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      netns-holder:
+        condition: service_started
+      obscura:
+        condition: service_healthy
+
+  # Prefetch-blocking HTTP proxy for CRW.
+  #
+  # CRW unconditionally sends a bare reqwest GET (non-browser TLS fingerprint,
+  # no JS) to every target URL before escalating to obscura's stealth CDP
+  # browser. For anti-bot-protected search engines, this double-hit from the
+  # same IP — first with a non-browser TLS fingerprint — is a strong bot
+  # detection signal and a primary cause of 429s.
+  #
+  # This proxy intercepts CRW's HTTP prefetch requests:
+  #  - Search engine URLs → 403 immediately (no network request)
+  #  - Other URLs → HEAD check → PDF? tunnel GET : 403
+  #
+  # CRW is configured with CRW_CRAWLER__PROXY pointing at this proxy. The CDP
+  # shim strips proxyServer from Target.createBrowserContext so obscura uses
+  # its own --proxy flag, not this proxy.
+  #
+  # When PROXY_URL is set (e.g., Tor SOCKS proxy), this proxy routes its own
+  # upstream requests (HEAD and tunnel) through PROXY_URL, ensuring the HEAD
+  # request and PDF tunnel egress through the same proxy as obscura.
+  #
+  # See crw/prefetch_blocking_proxy.py for the implementation and
+  # docs/request_handling.md §1.7 for the design.
+  prefetch-blocking-proxy:
+    image: python:3.12-slim-bookworm
+    restart: unless-stopped
+    network_mode: "service:netns-holder"
+    environment:
+      PREFETCH_PROXY_HOST: "0.0.0.0"
+      PREFETCH_PROXY_PORT: "3128"
+      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
+      # Upstream proxy (PROXY_URL from .env.wrapper). When set, the proxy
+      # routes its own HEAD and tunnel requests through this upstream.
+      # Supports http://, https://, socks5://, socks5h://
+      PROXY_URL: "${PROXY_URL:-}"
+      # Comma-separated list of search engine hostnames to block immediately
+      # (return 403 without any network request).
+      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com}"
+    volumes:
+      - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
+    command:
+      - /bin/sh
+      - -c
+      - |
+        exec python -u /app/prefetch_blocking_proxy.py
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 3128)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      netns-holder:
+        condition: service_started
+
   # Firecrawl-compatible API server. Configured entirely via CRW_* env vars
   # (no config file mount needed — env layer wins over the baked-in
   # config.default.toml). CRW_SERVER__PORT moves it off 3000 (taken by
   # web_server in the shared netns). CRW_RENDERER__CHROME__WS_URL points at
-  # the obscura CDP endpoint; CRW_SEARCH__SEARXNG_URL points /v1/search at
-  # the wrapper's bundled SearXNG sidecar (127.0.0.1:8888 in the netns).
+  # the CDP shim (port 9224), which proxies to obscura (port 9222);
+  # CRW_SEARCH__SEARXNG_URL points /v1/search at the wrapper's bundled
+  # SearXNG sidecar (127.0.0.1:8888 in the netns).
   crw:
     image: ghcr.io/us/crw:latest
     restart: unless-stopped
@@ -209,11 +387,125 @@ services:
       # through obscura's stealth CDP browser. Per-request renderer pins in
       # the searxng stub engines are now redundant but harmless.
       CRW_RENDERER__MODE: "chrome"
-      # Point the chrome renderer at obscura's CDP endpoint. The /devtools/
-      # path makes crw skip /json/version discovery and connect directly.
-      CRW_RENDERER__CHROME__WS_URL: "ws://127.0.0.1:9222/devtools/browser"
+      # Auto mode (render_js_default unset): CRW runs an HTTP prefetch first,
+      # then escalates to the CDP renderer (obscura) when the prefetch returns
+      # an error or a 403/blocked status. The prefetch-blocking proxy
+      # (prefetch-blocking-proxy service on port 3128) intercepts the HTTP
+      # prefetch and returns 403 for all non-PDF URLs, forcing CRW to escalate
+      # to obscura for every page. PDFs are detected by the proxy and returned
+      # to CRW for pdf_inspector processing.
+      #
+      # The SearXNG stub engines pin renderer:"chrome" per-request, which
+      # forces CDP regardless of this setting. The FirecrawlClient (/v2/scrape)
+      # does not pin a renderer, so it relies on auto mode + the proxy's 403
+      # to escalate to obscura.
+      #
+      # We do NOT set render_js_default=true because that mode runs the HTTP
+      # prefetch unconditionally and does NOT escalate to CDP on prefetch
+      # failure (the ? operator propagates the error). Auto mode does escalate
+      # on failure/403, which is what we need.
+      # CRW_RENDERER__RENDER_JS_DEFAULT is intentionally unset.
+      # Point the chrome renderer at the CDP shim (port 9224), not obscura
+      # directly (port 9222). The shim intercepts createBrowserContext/
+      # disposeBrowserContext to pool contexts per eTLD+1 (cookie + cache
+      # persistence) and strips CRW's conflicting STEALTH_JS injection.
+      # The /devtools/ path makes crw skip /json/version discovery and
+      # connect directly.
+      CRW_RENDERER__CHROME__WS_URL: "ws://127.0.0.1:9224/devtools/browser"
+      # Route CRW's HTTP prefetch through the prefetch-blocking proxy via
+      # reqwest's env-var proxy support (HTTPS_PROXY/HTTP_PROXY). We do NOT
+      # use CRW_CRAWLER__PROXY because that sets REQUEST_PROXY, which causes
+      # CRW to include proxyServer in Target.createBrowserContext with a
+      # hardcoded 2-second timeout. On Tor/slow paths, createBrowserContext
+      # takes >2s → "Timeout after 2000ms" → 504. Using env-var proxies
+      # routes the HTTP prefetch through the blocking proxy without setting
+      # REQUEST_PROXY, so the CDP path uses the no-proxy fetcher (no
+      # proxyServer in createBrowserContext, no 2s timeout).
+      #
+      # The proxy returns 403 for search engine URLs and non-PDF URLs,
+      # forcing CRW to escalate to the CDP renderer (obscura). PDFs are
+      # detected by the proxy and returned for CRW's pdf_inspector.
+      HTTPS_PROXY: "http://127.0.0.1:3128"
+      HTTP_PROXY: "http://127.0.0.1:3128"
+      # Exclude loopback from the proxy so CRW's CDP WebSocket connection
+      # to the shim (ws://127.0.0.1:9224) and health check (127.0.0.1:3010)
+      # go direct. The CDP connection uses the websockets crate (not
+      # reqwest), so HTTPS_PROXY doesn't affect it, but NO_PROXY is set
+      # for completeness.
+      NO_PROXY: "127.0.0.1,localhost,::1"
+      # Per-page navigation timeout for the chrome (obscura) renderer tier.
+      # CRW's default page_timeout_ms is 30s, but when PROXY_URL routes
+      # through Tor or a slow VPN, obscura's waitUntil=networkidle2 can
+      # take up to 45s (OBSCURA_NAV_TIMEOUT_MS). This must be ≥
+      # OBSCURA_NAV_TIMEOUT_MS so CRW's page_timeout doesn't fire before
+      # obscura's nav timeout. Set to 50000 to give 5s of headroom.
+      CRW_RENDERER__CHROME_TIMEOUT_MS: "${CRW_RENDERER__CHROME_TIMEOUT_MS:-50000}"
+      # HTTP prefetch timeout. CRW always runs an HTTP prefetch before the
+      # CDP renderer (even with RENDER_JS_DEFAULT=true) to check Content-Type
+      # — PDFs (application/pdf) bypass obscura entirely and are handled by
+      # CRW's pdf_inspector. On the happy path the prefetch completes in 1-3s;
+      # this is a ceiling, not a delay. Increasing it from the default 30s to
+      # 60s raises CRW's effective per-request deadline (ladder_min) from
+      # ~108s to ~138s, giving queued requests in the per-host rate limiter
+      # more budget before their deadline expires. No happy-path impact.
+      CRW_RENDERER__HTTP_TIMEOUT_MS: "${CRW_RENDERER__HTTP_TIMEOUT_MS:-60000}"
+      # Baseline per-request deadline (ms). With auto_extend_deadline_for_ladder
+      # (default true), the effective deadline is max(this, ladder_min). Since
+      # ladder_min=~138s, setting this to 300000 (5 min) makes it the effective
+      # deadline instead, accommodating multi-request scenarios where the agent
+      # issues many parallel open_url or search queries. This gives queued
+      # requests in the per-host rate limiter (PER_HOST_MAX_CONCURRENT=1) enough
+      # deadline budget to complete after waiting behind earlier requests, while
+      # still serializing per-host to avoid 429s. No happy-path impact — fast
+      # pages complete in ~1-5s regardless. The Tower outer timeout auto-widens
+      # to cover this. See docs/request_handling.md §1.6.1.
+      CRW_REQUEST__DEADLINE_MS_DEFAULT: "${CRW_REQUEST__DEADLINE_MS_DEFAULT:-300000}"
+      # Post-navigate budget for the chrome (obscura) renderer tier.
+      # This is the inner race that wraps wait_for_page_ready +
+      # post_navigate_phase (SPA selector poll, content stability, challenge
+      # retry). CRW's default is 12000ms (calibrated as p90 of successful
+      # renders on fast networks), but on Tor/slow VPN, obscura's navigation
+      # alone can take 20-40s. When this budget fires before the page loads,
+      # CRW returns "Timeout after 12000ms" → 504 Gateway Timeout.
+      # Set to 48000 (just under OBSCURA_NAV_TIMEOUT_MS=45000 + overhead)
+      # so the nav budget doesn't fire before obscura's adaptive waitUntil
+      # has a chance to complete.
+      CRW_RENDERER__CHROME_NAV_BUDGET_MS: "${CRW_RENDERER__CHROME_NAV_BUDGET_MS:-48000}"
       # /v1/search backed by the wrapper's bundled SearXNG sidecar.
       CRW_SEARCH__SEARXNG_URL: "http://127.0.0.1:8888"
+      # ── Per-host rate limiting (anti-429) ──────────────────────────────
+      # CRW's host_limiter (crates/crw-renderer/src/host_limiter.rs) enforces
+      # a minimum interval between requests to the same eTLD+1. The
+      # FallbackRenderer (which handles /v1/scrape from SearXNG engines)
+      # uses crawler.requests_per_second to compute the per-host interval
+      # (interval = 1/rps). The default 10 RPS = 100ms interval, which lets
+      # SearXNG's parallel engine fan-out hit Google/Brave/DDG/Startpage
+      # nearly simultaneously from the same VPN IP and trigger 429s.
+      # 0.33 RPS = ~3s interval between requests to the same eTLD+1,
+      # serializing the burst that Onyx's parallel web_search queries create.
+      # Keyed by eTLD+1 so www.google.com and google.com share one limiter.
+      CRW_CRAWLER__REQUESTS_PER_SECOND: "0.33"
+      # Cap concurrent in-flight requests per host at 1 (this is already the
+      # default, but set explicitly). Combined with the RPS limit above,
+      # this fully serializes per-provider requests: the host_limiter
+      # semaphore is acquired before the fetch and held until the CDP render
+      # completes, so a second query to the same engine waits for the first.
+      #
+      # Deadline compounding: the semaphore blocks queued requests while
+      # their per-request deadline clock keeps ticking. On Tor/slow VPN
+      # where a single nav takes ~45s, the 3rd request to the same engine
+      # in a parallel fan-out (e.g. 3 search queries → 3 Google requests)
+      # will have most of its ~108s deadline consumed by the time it
+      # acquires the semaphore, leaving insufficient nav budget. This is
+      # acceptable — SearXNG aggregates partial results from engines that
+      # succeed. See docs/request_handling.md §1.6.1.
+      CRW_CRAWLER__PER_HOST_MAX_CONCURRENT: "1"
+      # Add ±20% jitter to the rate-limit interval so request timing doesn't
+      # look mechanically regular (a bot signal in itself). This is the
+      # stealth jitter_factor applied to the per-host limiter sleep in the
+      # crawl loop. (The scrape path does not yet apply jitter — see CRW
+      # lib.rs fetch(); the jitter is consumed by crw-crawl and crw-monitor.)
+      CRW_CRAWLER__STEALTH__JITTER_FACTOR: "0.2"
     healthcheck:
       # The crw image (debian:bookworm-slim) has no wget/curl, but has
       # /bin/sh + grep + the crw CLI. We scrape the server's own /health
@@ -233,6 +525,8 @@ services:
         condition: service_healthy
         restart: true
       obscura:
+        condition: service_healthy
+      cdp-shim:
         condition: service_healthy
 
   # Host-facing TCP bridges. These run on the normal compose network and
@@ -362,6 +656,11 @@ services:
       # Leave empty to use Onyx defaults.
       OPEN_URL_MAX_CHARS_PER_URL: "${OPEN_URL_MAX_CHARS_PER_URL:-}"
       OPEN_URL_MAX_CHARS_ACROSS_URLS: "${OPEN_URL_MAX_CHARS_ACROSS_URLS:-}"
+      # Page load waiting is handled by the CDP shim's waitUntil injection
+      # (OBSCURA_WAIT_UNTIL_DEFAULT=load for web pages), not by a CRW
+      # waitFor sleep. The sitecustomize patch ensures FirecrawlClient
+      # omits waitFor from
+      # /v2/scrape payloads. See docs/request_handling.md §1.6.
       # Base wrapper sitecustomize patches (applies to full and lite compose).
       PYTHONPATH: "/app/wrapper-patches-base:${PYTHONPATH:-}"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
@@ -514,5 +813,6 @@ volumes:
   background_logs:
   inference_model_server_logs:
   indexing_model_server_logs:
+  obscura-data:
 
 

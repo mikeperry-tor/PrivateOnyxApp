@@ -52,7 +52,7 @@ def request(query: str, params: "OnlineParams") -> None:
     # we pass the query and let pageno>1 be a best-effort no-op (DDG HTML
     # returns ~30 results on the first page, enough for SearXNG aggregation).
     target_url = "https://html.duckduckgo.com/html/?" + urlencode(query_args)
-    _crw.crw_scrape_request(params, target_url, wait_ms=2500)
+    _crw.crw_scrape_request(params, target_url)
 
 
 def _strip_ddg_redirect(href: str) -> str:
