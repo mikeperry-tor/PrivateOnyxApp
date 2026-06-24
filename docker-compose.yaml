@@ -792,6 +792,7 @@ services:
       TEEP_MAX_CONNS: "${TEEP_MAX_CONNS:-6}"
       TEEP_SERVE_FLAGS: "${TEEP_SERVE_FLAGS:-}"
       VENICE_API_KEY: "${VENICE_API_KEY:-}"
+      TINFOIL_API_KEY: "${TINFOIL_API_KEY:-}"
       NEARAI_API_KEY: "${NEARAI_API_KEY:-}"
       CHUTES_API_KEY: "${CHUTES_API_KEY:-}"
     healthcheck:
