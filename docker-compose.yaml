@@ -656,6 +656,8 @@ services:
       # Leave empty to use Onyx defaults.
       OPEN_URL_MAX_CHARS_PER_URL: "${OPEN_URL_MAX_CHARS_PER_URL:-}"
       OPEN_URL_MAX_CHARS_ACROSS_URLS: "${OPEN_URL_MAX_CHARS_ACROSS_URLS:-}"
+      # Fail startup if wrapper monkey patches no longer match upstream Onyx.
+      WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
       # Page load waiting is handled by the CDP shim's waitUntil injection
       # (OBSCURA_WAIT_UNTIL_DEFAULT=load for web pages), not by a CRW
       # waitFor sleep. The sitecustomize patch ensures FirecrawlClient
@@ -815,5 +817,4 @@ volumes:
   inference_model_server_logs:
   indexing_model_server_logs:
   obscura-data:
-
 

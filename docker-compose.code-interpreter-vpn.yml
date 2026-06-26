@@ -20,6 +20,7 @@ services:
     environment:
       # Activates the sitecustomize patch below.
       CODE_INTERPRETER_VPN_ROUTED: "true"
+      WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
       # Put the patch directory first on PYTHONPATH so sitecustomize.py is
       # auto-imported by the Python interpreter at startup.
       PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"
@@ -38,3 +39,4 @@ services:
   api_server:
     environment:
       CODE_INTERPRETER_VPN_ROUTED: "true"
+      WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"

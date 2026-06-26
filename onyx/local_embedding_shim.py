@@ -11,6 +11,29 @@ from http.server import ThreadingHTTPServer
 from urllib.parse import urlparse
 
 
+def log_line(message: str) -> None:
+    print(message, flush=True)
+    sys.stdout.flush()
+
+
+def parse_positive_int_env(var_name: str, default: int) -> int:
+    raw = os.environ.get(var_name)
+    if raw is None or raw == "":
+        return default
+
+    try:
+        value = int(raw)
+    except ValueError as e:
+        log_line(f"fatal_config {var_name}={raw!r} must be an integer")
+        raise ValueError(f"{var_name} must be an integer") from e
+
+    if value < 1:
+        log_line(f"fatal_config {var_name}={raw!r} must be >= 1")
+        raise ValueError(f"{var_name} must be >= 1")
+
+    return value
+
+
 HOST = "0.0.0.0"
 PORT = 9101
 EMBEDDINGS_URL = os.environ.get(
@@ -23,8 +46,8 @@ DEFAULT_QUERY_PREFIX = os.environ.get("SHIM_QUERY_PREFIX", "")
 DEFAULT_PASSAGE_PREFIX = os.environ.get("SHIM_PASSAGE_PREFIX", "")
 
 HTTP_TIMEOUT_SECONDS = 30.0
-UPSTREAM_POOL_SIZE = max(1, int(os.environ.get("SHIM_UPSTREAM_POOL_SIZE", "8")))
-METRICS_LOG_EVERY = max(1, int(os.environ.get("SHIM_METRICS_LOG_EVERY", "50")))
+UPSTREAM_POOL_SIZE = parse_positive_int_env("SHIM_UPSTREAM_POOL_SIZE", 8)
+METRICS_LOG_EVERY = parse_positive_int_env("SHIM_METRICS_LOG_EVERY", 50)
 GPU_AVAILABLE = True
 
 
@@ -175,17 +198,18 @@ class UpstreamConnectionPool:
             self._pool.put(connection)
 
 
-UPSTREAM_POOL = UpstreamConnectionPool(
-    url=EMBEDDINGS_URL,
-    pool_size=UPSTREAM_POOL_SIZE,
-    timeout_seconds=HTTP_TIMEOUT_SECONDS,
-)
+try:
+    UPSTREAM_POOL = UpstreamConnectionPool(
+        url=EMBEDDINGS_URL,
+        pool_size=UPSTREAM_POOL_SIZE,
+        timeout_seconds=HTTP_TIMEOUT_SECONDS,
+    )
+except Exception as e:
+    log_line(
+        f"fatal_config failed to initialize upstream embedding pool url={EMBEDDINGS_URL!r} error={e}"
+    )
+    raise
 SHIM_METRICS = ShimMetrics()
-
-
-def log_line(message: str) -> None:
-    print(message, flush=True)
-    sys.stdout.flush()
 
 
 def normalize_prefix(prefix: str | None) -> str:

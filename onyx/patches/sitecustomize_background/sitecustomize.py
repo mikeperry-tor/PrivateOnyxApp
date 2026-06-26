@@ -30,6 +30,15 @@ def _env_enabled(name: str, default: bool = True) -> bool:
     return raw.lower() in ("1", "true", "yes", "on")
 
 
+def _strict_mode() -> bool:
+    return _env_enabled("WRAPPER_PATCH_STRICT", True)
+
+
+def _raise_if_strict() -> None:
+    if _strict_mode():
+        raise
+
+
 def _allowed_hosts() -> set[str]:
     raw = os.environ.get(
         "ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS",
@@ -243,6 +252,7 @@ def _apply_indexing_freshness_skip_patch() -> None:
             "skip patch; pre-download skipping disabled error=%s",
             e,
         )
+        _raise_if_strict()
         return
 
     original_get_docs_to_update = indexing_pipeline.get_docs_to_update
@@ -324,6 +334,7 @@ def _apply_web_connector_http_freshness_patch() -> None:
             f"sitecustomize_background: failed importing Web connector patch deps: {e}",
             flush=True,
         )
+        _raise_if_strict()
         return
 
     global _PATCH_LOGGER

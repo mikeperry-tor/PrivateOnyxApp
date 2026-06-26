@@ -66,7 +66,8 @@ Patch behavior:
 - `WRAPPER_PATCH_STRICT=true` is the default. Missing exact upstream strings,
   changed helper signatures, or failed imports should fail startup instead of
   silently leaving stale runtime behavior. Set `WRAPPER_PATCH_STRICT=false` only
-  for temporary diagnosis during an upgrade.
+  for temporary diagnosis during an upgrade. The compose wrapper passes this
+  env var to every service that mounts wrapper `sitecustomize` patches.
 - Reads `OPEN_URL_MAX_CHARS_PER_URL` and `OPEN_URL_MAX_CHARS_ACROSS_URLS`.
 - Replaces `web_search.utils.MAX_CHARS_PER_URL`.
 - Rewrites default arguments for
@@ -315,7 +316,8 @@ Wrapper compose assumptions:
   `CODE_INTERPRETER_BASE_URL` at `http://localhost:7000`.
 - `docker-compose.code-interpreter-vpn.yml` mounts the patch directory and adds
   `CODE_INTERPRETER_VPN_ROUTED=true`.
-- `docker-compose.proxy.yml` adds `PROXY_URL` / `ALL_PROXY` / `NO_PROXY` to the
+- `docker-compose.proxy.yml` mounts the code-interpreter patch when proxy mode
+  is active and adds `PROXY_URL` / `ALL_PROXY` / `NO_PROXY` to the
   code-interpreter container. The patch decides which variables to forward to
   executor pods.
 

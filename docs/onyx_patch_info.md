@@ -194,7 +194,9 @@ local scraping and browser services available in the shared namespace.
 The patch checks exact upstream string matches before claiming success.
 `WRAPPER_PATCH_STRICT=true` is the default, so missing expected strings or
 changed helper signatures fail startup instead of silently leaving stale tool
-text in place. Set `WRAPPER_PATCH_STRICT=false` only for temporary diagnosis.
+text in place. The compose wrapper passes this setting to every service that
+mounts wrapper `sitecustomize` patches. Set `WRAPPER_PATCH_STRICT=false` only
+for temporary diagnosis.
 
 ### Upstream merge request shape
 

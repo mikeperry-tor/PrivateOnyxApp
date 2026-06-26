@@ -5,6 +5,17 @@ Loaded automatically by Python when this directory is on PYTHONPATH.
 
 from __future__ import annotations
 
+import os
+
+
+def _strict_mode() -> bool:
+    return os.environ.get("WRAPPER_PATCH_STRICT", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
 
 def _apply_base_env_patches() -> None:
     try:
@@ -17,6 +28,8 @@ def _apply_base_env_patches() -> None:
         # In lite mode this should usually succeed because base patch path is
         # included after this directory. If not, proceed with lite-only patches.
         print(f"sitecustomize: base env patches unavailable: {e}", flush=True)
+        if _strict_mode():
+            raise
 
 
 def _force_open_url_available() -> None:
@@ -29,8 +42,9 @@ def _force_open_url_available() -> None:
         OpenURLTool.is_available = classmethod(_always_available)
         print("sitecustomize: patched OpenURLTool.is_available -> True", flush=True)
     except Exception as e:  # pragma: no cover
-        # Never block startup if patching fails.
         print(f"sitecustomize: failed to patch OpenURLTool: {e}", flush=True)
+        if _strict_mode():
+            raise
 
 
 _apply_base_env_patches()

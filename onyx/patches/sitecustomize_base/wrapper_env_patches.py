@@ -6,12 +6,67 @@ adjust hardcoded limits without rebuilding images.
 
 from __future__ import annotations
 
+import inspect
 import os
 
 
 # We cannot remove truncation logic entirely without editing upstream code, so
 # for "unlimited" we use a very large budget that won't be hit in practice.
 EFFECTIVE_UNLIMITED_CHARS = 2_000_000_000
+
+
+def _strict_mode() -> bool:
+    return os.environ.get("WRAPPER_PATCH_STRICT", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _warn_or_raise(message: str) -> None:
+    print(f"sitecustomize: WARNING: {message}", flush=True)
+    if _strict_mode():
+        raise RuntimeError(message)
+
+
+def _raise_if_strict() -> None:
+    if _strict_mode():
+        raise
+
+
+def _replace_or_warn(
+    *,
+    owner_name: str,
+    current: str,
+    old: str,
+    new: str,
+) -> str:
+    replaced = current.replace(old, new)
+    if replaced == current:
+        _warn_or_raise(
+            f"{owner_name} patch did not match expected upstream text"
+        )
+    else:
+        print(f"sitecustomize: patched {owner_name}", flush=True)
+    return replaced
+
+
+def _set_single_default(function, value: int, function_name: str) -> None:
+    signature = inspect.signature(function)
+    if not signature.parameters:
+        _warn_or_raise(f"{function_name} has no parameters; cannot patch default")
+        return
+
+    defaults = function.__defaults__
+    if defaults is None or len(defaults) != 1:
+        _warn_or_raise(
+            f"{function_name} expected one positional default, found {defaults!r}; "
+            f"signature={signature}"
+        )
+        return
+
+    function.__defaults__ = (value,)
 
 
 def _parse_positive_int(var_name: str) -> int | None:
@@ -57,12 +112,21 @@ def apply_open_url_char_limit_patches() -> None:
         from onyx.tools.tool_implementations.web_search import utils as ws_utils
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed importing web_search.utils: {e}", flush=True)
+        _raise_if_strict()
         return
 
     if per_url is not None:
         ws_utils.MAX_CHARS_PER_URL = per_url
-        ws_utils.truncate_search_result_content.__defaults__ = (per_url,)
-        ws_utils._truncate_content_around_snippet.__defaults__ = (per_url,)
+        _set_single_default(
+            ws_utils.truncate_search_result_content,
+            per_url,
+            "web_search.utils.truncate_search_result_content",
+        )
+        _set_single_default(
+            ws_utils._truncate_content_around_snippet,
+            per_url,
+            "web_search.utils._truncate_content_around_snippet",
+        )
 
     if across_urls is None:
         across_urls = 10 * ws_utils.MAX_CHARS_PER_URL
@@ -71,11 +135,14 @@ def apply_open_url_char_limit_patches() -> None:
         from onyx.tools.tool_implementations.open_url import open_url_tool
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed importing open_url_tool: {e}", flush=True)
+        _raise_if_strict()
         return
 
     open_url_tool.MAX_CHARS_ACROSS_URLS = across_urls
-    open_url_tool._convert_sections_to_llm_string_with_citations.__defaults__ = (
+    _set_single_default(
+        open_url_tool._convert_sections_to_llm_string_with_citations,
         across_urls,
+        "open_url_tool._convert_sections_to_llm_string_with_citations",
     )
 
     print(
@@ -112,7 +179,7 @@ _CODING_AGENT_SERVICE_HINTS = (
     "a Firecrawl-compatible REST API at http://127.0.0.1:3010 exposing "
     "/v1/scrape, /v1/crawl, /v1/map, and /v1/search, all backed by a stealth "
     "headless browser. Direct control of the stealth browser is available via "
-    "Chrome DevTools Protocol (CDP) browser at ws://127.0.0.1:9222/devtools/browser"
+    "Chrome DevTools Protocol (CDP) browser at ws://127.0.0.1:9222/devtools/browser. "
     "All outbound browser traffic egresses through the VPN tunnel."
 )
 
@@ -149,21 +216,25 @@ def apply_code_interpreter_network_description_patches() -> None:
     try:
         from onyx.tools.tool_implementations.python.python_tool import PythonTool
 
-        PythonTool.DESCRIPTION = PythonTool.DESCRIPTION.replace(
-            "Execute Python code in an isolated sandbox environment.",
-            "Execute Python code in a sandbox environment with internet access "
-            "via VPN. Network operations (requests, urllib, etc.) are permitted "
-            "and egress through the VPN tunnel. pip package installation is NOT "
-            "supported — only the pre-installed scientific stack is available "
-            "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, "
-            "scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, "
-            "python-docx, python-pptx, fpdf2, pydantic). For tasks requiring "
-            "additional packages or complex multi-step workflows, invoke the "
-            "code agent instead." + _PYTHON_SERVICE_HINTS,
+        PythonTool.DESCRIPTION = _replace_or_warn(
+            owner_name="PythonTool.DESCRIPTION",
+            current=PythonTool.DESCRIPTION,
+            old="Execute Python code in an isolated sandbox environment.",
+            new=(
+                "Execute Python code in a sandbox environment with internet access "
+                "via VPN. Network operations (requests, urllib, etc.) are permitted "
+                "and egress through the VPN tunnel. pip package installation is NOT "
+                "supported — only the pre-installed scientific stack is available "
+                "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, "
+                "scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, "
+                "python-docx, python-pptx, fpdf2, pydantic). For tasks requiring "
+                "additional packages or complex multi-step workflows, invoke the "
+                "code agent instead." + _PYTHON_SERVICE_HINTS
+            ),
         )
-        print("sitecustomize: patched PythonTool.DESCRIPTION for VPN routing", flush=True)
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed to patch PythonTool.DESCRIPTION: {e}", flush=True)
+        _raise_if_strict()
 
     # ── PYTHON_TOOL_GUIDANCE system prompt ──────────────────────────────
     # This is the per-tool guidance injected into the system prompt. Upstream
@@ -175,17 +246,21 @@ def apply_code_interpreter_network_description_patches() -> None:
     try:
         from onyx.prompts import tool_prompts
 
-        tool_prompts.PYTHON_TOOL_GUIDANCE = tool_prompts.PYTHON_TOOL_GUIDANCE.replace(
-            "Internet access for this session is disabled. Do not make external web requests or API calls as they will fail.",
-            "Internet access is available via VPN — external web requests and API calls are permitted and egress through the VPN tunnel. "
-            "pip package installation is NOT supported; only the pre-installed scientific stack is available "
-            "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, python-docx, python-pptx, fpdf2, pydantic). "
-            "For tasks requiring additional packages or complex multi-step workflows, invoke the code agent instead."
-            + _PYTHON_SERVICE_HINTS,
+        tool_prompts.PYTHON_TOOL_GUIDANCE = _replace_or_warn(
+            owner_name="PYTHON_TOOL_GUIDANCE",
+            current=tool_prompts.PYTHON_TOOL_GUIDANCE,
+            old="Internet access for this session is disabled. Do not make external web requests or API calls as they will fail.",
+            new=(
+                "Internet access is available via VPN — external web requests and API calls are permitted and egress through the VPN tunnel. "
+                "pip package installation is NOT supported; only the pre-installed scientific stack is available "
+                "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, python-docx, python-pptx, fpdf2, pydantic). "
+                "For tasks requiring additional packages or complex multi-step workflows, invoke the code agent instead."
+                + _PYTHON_SERVICE_HINTS
+            ),
         )
-        print("sitecustomize: patched PYTHON_TOOL_GUIDANCE for VPN routing", flush=True)
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed to patch PYTHON_TOOL_GUIDANCE: {e}", flush=True)
+        _raise_if_strict()
 
     # ── BashTool description ────────────────────────────────────────────
     # Upstream: "Execute a bash command inside an isolated, network-restricted
@@ -194,16 +269,20 @@ def apply_code_interpreter_network_description_patches() -> None:
     try:
         from onyx.tools.tool_implementations.bash.bash_tool import BashTool
 
-        BashTool.DESCRIPTION = BashTool.DESCRIPTION.replace(
-            "Execute a bash command inside an isolated, network-restricted session.",
-            "Execute a bash command inside a session with internet access via "
-            "VPN. Network commands (curl, wget, pip install, npm install, git "
-            "clone, etc.) are permitted and egress through the VPN tunnel."
-            + _CODING_AGENT_SERVICE_HINTS,
+        BashTool.DESCRIPTION = _replace_or_warn(
+            owner_name="BashTool.DESCRIPTION",
+            current=BashTool.DESCRIPTION,
+            old="Execute a bash command inside an isolated, network-restricted session.",
+            new=(
+                "Execute a bash command inside a session with internet access via "
+                "VPN. Network commands (curl, wget, pip install, npm install, git "
+                "clone, etc.) are permitted and egress through the VPN tunnel."
+                + _CODING_AGENT_SERVICE_HINTS
+            ),
         )
-        print("sitecustomize: patched BashTool.DESCRIPTION for VPN routing", flush=True)
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed to patch BashTool.DESCRIPTION: {e}", flush=True)
+        _raise_if_strict()
 
     # ── Coding agent bash tool description ──────────────────────────────
     # Upstream: "Run a bash command in the sandboxed session containing the
@@ -216,21 +295,22 @@ def apply_code_interpreter_network_description_patches() -> None:
         from onyx.coding_agent import mock_tools
 
         _desc = mock_tools.BASH_TOOL_DESCRIPTION["function"]["description"]
-        mock_tools.BASH_TOOL_DESCRIPTION["function"]["description"] = _desc.replace(
-            "The session has no network access.",
-            "The session has internet access via VPN. Network commands (curl, "
-            "pip install, npm install, git clone, etc.) are permitted and "
-            "egress through the VPN tunnel." + _CODING_AGENT_SERVICE_HINTS,
-        )
-        print(
-            "sitecustomize: patched coding-agent BASH_TOOL_DESCRIPTION for VPN routing",
-            flush=True,
+        mock_tools.BASH_TOOL_DESCRIPTION["function"]["description"] = _replace_or_warn(
+            owner_name="coding-agent BASH_TOOL_DESCRIPTION",
+            current=_desc,
+            old="The session has no network access.",
+            new=(
+                "The session has internet access via VPN. Network commands (curl, "
+                "pip install, npm install, git clone, etc.) are permitted and "
+                "egress through the VPN tunnel." + _CODING_AGENT_SERVICE_HINTS
+            ),
         )
     except Exception as e:  # pragma: no cover
         print(
             f"sitecustomize: failed to patch coding-agent BASH_TOOL_DESCRIPTION: {e}",
             flush=True,
         )
+        _raise_if_strict()
 
     # ── Coding agent system prompts ─────────────────────────────────────
     # The prompts are module-level string constants. They are imported by name
@@ -240,31 +320,39 @@ def apply_code_interpreter_network_description_patches() -> None:
     try:
         from onyx.prompts.coding_agent import coding_agent as ca_prompts
 
-        ca_prompts.CODING_AGENT_PROMPT = ca_prompts.CODING_AGENT_PROMPT.replace(
-            "network-isolated sandbox",
-            "sandbox with VPN-routed internet access",
-        ).replace(
-            "Network commands (`curl`, `pip install`, `npm install`, `git pull`) — the sandbox has no network.",
-            "Network commands (`curl`, `pip install`, `npm install`, `git pull`) are permitted — the sandbox has VPN-routed internet access."
+        ca_prompts.CODING_AGENT_PROMPT = _replace_or_warn(
+            owner_name="CODING_AGENT_PROMPT network sandbox",
+            current=ca_prompts.CODING_AGENT_PROMPT,
+            old="network-isolated sandbox",
+            new="sandbox with VPN-routed internet access",
+        )
+        ca_prompts.CODING_AGENT_PROMPT = _replace_or_warn(
+            owner_name="CODING_AGENT_PROMPT network commands",
+            current=ca_prompts.CODING_AGENT_PROMPT,
+            old="Network commands (`curl`, `pip install`, `npm install`, `git pull`) — the sandbox has no network.",
+            new=(
+                "Network commands (`curl`, `pip install`, `npm install`, `git pull`) are permitted — the sandbox has VPN-routed internet access."
+                + _CODING_AGENT_SERVICE_HINTS
+            ),
+        )
+
+        ca_prompts.CODING_AGENT_PROMPT_REASONING = _replace_or_warn(
+            owner_name="CODING_AGENT_PROMPT_REASONING network sandbox",
+            current=ca_prompts.CODING_AGENT_PROMPT_REASONING,
+            old="network-isolated sandbox",
+            new="sandbox with VPN-routed internet access",
+        )
+        ca_prompts.CODING_AGENT_PROMPT_REASONING = _replace_or_warn(
+            owner_name="CODING_AGENT_PROMPT_REASONING network access",
+            current=ca_prompts.CODING_AGENT_PROMPT_REASONING,
+            old="No network.",
+            new="VPN-routed internet access is available."
             + _CODING_AGENT_SERVICE_HINTS,
         )
 
-        ca_prompts.CODING_AGENT_PROMPT_REASONING = (
-            ca_prompts.CODING_AGENT_PROMPT_REASONING.replace(
-                "network-isolated sandbox",
-                "sandbox with VPN-routed internet access",
-            ).replace(
-                "No network.",
-                "VPN-routed internet access is available." + _CODING_AGENT_SERVICE_HINTS,
-            )
-        )
-
-        print(
-            "sitecustomize: patched coding-agent prompts for VPN routing",
-            flush=True,
-        )
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed to patch coding-agent prompts: {e}", flush=True)
+        _raise_if_strict()
 
 
 def apply_firecrawl_wait_for_patch() -> None:
@@ -292,9 +380,8 @@ def apply_firecrawl_wait_for_patch() -> None:
         from onyx.tools.tool_implementations.open_url.firecrawl import FirecrawlClient
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed importing FirecrawlClient: {e}", flush=True)
+        _raise_if_strict()
         return
-
-    _original_get_webpage_content = FirecrawlClient._get_webpage_content
 
     def _patched_get_webpage_content(self, url: str):
         # No waitFor field — page load waiting is handled by the CDP shim's
