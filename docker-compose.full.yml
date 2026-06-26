@@ -42,6 +42,9 @@ services:
       MODEL_SERVER_PORT: "9101"
       INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
       INDEXING_MODEL_SERVER_PORT: "9101"
+      PYTHONPATH: "/app/wrapper-patches-background:${PYTHONPATH:-}"
+      ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED: "${ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED:-true}"
+      ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS: "${ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS:-localhost,127.0.0.1,::1}"
       # code-interpreter runs on 7000 in the shared netns (8000 is taken by background prometheus).
       CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
@@ -60,6 +63,7 @@ services:
       - ./docker-data/file-system:/app/file-system
       - ./docker-data/model-cache:/app/.cache/huggingface
       - ./docker-data/model-cache:/root/.cache/huggingface
+      - ./onyx/patches/sitecustomize_background:/app/wrapper-patches-background:ro
       - background_logs:/var/log/onyx
 
   # Onyx internal/data services (full mode only)
