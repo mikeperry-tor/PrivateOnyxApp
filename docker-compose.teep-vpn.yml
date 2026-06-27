@@ -25,7 +25,7 @@ services:
   # inside the shared netns-holder namespace (reachable via the myst-client
   # alias on the default network).
   host-teep-proxy:
-    image: alpine/socat:1.8.0.3
+    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
     command: tcp-listen:${TEEP_PORT:-8337},fork,reuseaddr tcp-connect:myst-client:${TEEP_CONTAINER_PORT:-8337}
     ports:

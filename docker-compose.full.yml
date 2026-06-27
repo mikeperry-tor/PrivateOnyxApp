@@ -117,7 +117,7 @@ services:
 
   # Required by upstream Onyx service dependencies inherited via extends.
   minio:
-    image: minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1
+    image: ${MINIO_IMAGE:?MINIO_IMAGE must be set}
     restart: unless-stopped
     env_file:
       - path: ./onyx/onyx_data/deployment/.env
@@ -136,7 +136,7 @@ services:
       retries: 3
 
   host-doc-drop-web-proxy:
-    image: alpine/socat:1.8.0.3
+    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
     command: tcp-listen:${DOC_DROP_WEB_PORT:-8091},fork,reuseaddr tcp-connect:myst-client:${DOC_DROP_WEB_CONTAINER_PORT:-8091}
     ports:
@@ -152,7 +152,7 @@ services:
   # Use with Onyx Web connector at http://localhost:${DOC_DROP_WEB_PORT:-8091}/
   # so source links stay host-clickable while crawler access remains local.
   doc-drop-web:
-    image: python:3.12-alpine
+    image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
     restart: unless-stopped
     network_mode: "service:netns-holder"
     volumes:
@@ -212,7 +212,7 @@ services:
   # Model-server-compatible embedding shim for local OpenAI-compatible
   # /v1/embeddings endpoints.
   local-embedding-shim:
-    image: python:3.12-alpine
+    image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
     restart: unless-stopped
     network_mode: "service:netns-holder"
     environment:

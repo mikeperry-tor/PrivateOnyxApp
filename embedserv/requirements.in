@@ -1,0 +1,6 @@
+mlx-openai-server
+mlx-embeddings
+huggingface_hub
+# Compatibility pin: newer Typer releases trigger a sys.exit() handler
+# traceback in the local embedserv CLI path. Re-test before unpinning.
+typer==0.20.0

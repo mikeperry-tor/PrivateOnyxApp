@@ -1,36 +1,53 @@
 ENV_FILE ?= .env.wrapper
+VERSION_FILE ?= stack.versions.env
 WRAPPER_FILE := docker-compose.yaml
 FULL_OVERRIDE_FILE := docker-compose.full.yml
 LITE_OVERRIDE_FILE := docker-compose.lite.yml
 PODMAN_OVERRIDE_FILE := docker-compose.podman.yml
 PODMAN_FULL_OVERRIDE_FILE := docker-compose.podman-full.yml
 
+env_value = $(strip $(shell for f in "$(ENV_FILE)" "$(VERSION_FILE)"; do [ -f "$$f" ] || continue; sed -n 's/^$(1)=//p' "$$f" | head -1 | sed 's/^"//; s/"$$//'; done | head -1))
+COMPOSE_ENV_FILES = --env-file "$(VERSION_FILE)" --env-file "$(ENV_FILE)"
+ONYX_COMPOSE_ENV_FILES = $(COMPOSE_ENV_FILES) --env-file "$(ONYX_ENV_FILE)"
+
 MYST_NODE_REPO ?= https://github.com/mikeperry-tor/node.git
 MYST_NODE_BRANCH ?= docker_host_fixes_with_logs
 MYST_DOCKERFILE ?= myst/build/Dockerfile
-MYST_IMAGE ?= mysteriumnetwork/myst:docker_host_fixes_with_logs
+MYST_IMAGE ?= $(call env_value,MYST_IMAGE)
+ifeq ($(strip $(MYST_IMAGE)),)
+MYST_IMAGE := mysteriumnetwork/myst:docker_host_fixes_with_logs
+endif
 
 TEEP_REPO ?= https://github.com/13rac1/teep.git
 TEEP_DEFAULT_REF := cacfa5ab2a4e8cc52ec8a2020a763f7306ad3438
-TEEP_REF ?= $(strip $(shell sed -n 's/^TEEP_REF=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+TEEP_REF ?= $(call env_value,TEEP_REF)
 ifeq ($(strip $(TEEP_REF)),)
 TEEP_REF := $(TEEP_DEFAULT_REF)
 endif
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
-TEEP_IMAGE ?= $(strip $(shell sed -n 's/^TEEP_IMAGE=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+TEEP_IMAGE ?= $(call env_value,TEEP_IMAGE)
 ifeq ($(strip $(TEEP_IMAGE)),)
 TEEP_IMAGE := 13rac1/teep:$(TEEP_REF)
 endif
-TAILSCALE_IMAGE ?= tailscale/tailscale:stable
-OBSCURA_IMAGE ?= h4ckf0r0day/obscura:0.1.9
-CRW_IMAGE ?= ghcr.io/us/crw:0.18.3
-CONTAINER_BIN ?= $(strip $(shell sed -n 's/^CONTAINER_BIN=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
-DOCKER_SOCK_PATH ?= $(strip $(shell sed -n 's/^DOCKER_SOCK_PATH=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
-TEEP_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TEEP_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
-TAILSCALE_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TAILSCALE_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
-CODE_INTERPRETER_VPN_ROUTED ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
-MYST_VPN_ENABLED ?= $(strip $(shell sed -n 's/^MYST_VPN_ENABLED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
-PROXY_URL ?= $(strip $(shell sed -n 's/^PROXY_URL=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+TAILSCALE_IMAGE ?= $(call env_value,TAILSCALE_IMAGE)
+ifeq ($(strip $(TAILSCALE_IMAGE)),)
+TAILSCALE_IMAGE := tailscale/tailscale:stable
+endif
+OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
+ifeq ($(strip $(OBSCURA_IMAGE)),)
+OBSCURA_IMAGE := h4ckf0r0day/obscura:0.1.9
+endif
+CRW_IMAGE ?= $(call env_value,CRW_IMAGE)
+ifeq ($(strip $(CRW_IMAGE)),)
+CRW_IMAGE := ghcr.io/us/crw:0.18.3
+endif
+CONTAINER_BIN ?= $(call env_value,CONTAINER_BIN)
+DOCKER_SOCK_PATH ?= $(call env_value,DOCKER_SOCK_PATH)
+TEEP_VPN_ROUTED ?= $(call env_value,TEEP_VPN_ROUTED)
+TAILSCALE_VPN_ROUTED ?= $(call env_value,TAILSCALE_VPN_ROUTED)
+CODE_INTERPRETER_VPN_ROUTED ?= $(call env_value,CODE_INTERPRETER_VPN_ROUTED)
+MYST_VPN_ENABLED ?= $(call env_value,MYST_VPN_ENABLED)
+PROXY_URL ?= $(call env_value,PROXY_URL)
 # obscura and crw's SOCKS proxy connectors cannot resolve Docker-internal DNS
 # names (host.docker.internal) — they try to resolve the proxy hostname through
 # the SOCKS proxy itself, which fails. Derive PROXY_URL_RESOLVED by replacing
@@ -102,17 +119,17 @@ ifneq ($(strip $(PROXY_URL)),)
 PROXY_SUFFIX :=:docker-compose.proxy.yml
 endif
 
-# Source of truth: ONYX_IMAGE_TAG in $(ENV_FILE). Allow CLI override.
-ONYX_IMAGE_TAG ?= $(strip $(shell sed -n 's/^ONYX_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1))
+# Source of truth: ONYX_IMAGE_TAG in $(VERSION_FILE). Allow ENV_FILE or CLI override.
+ONYX_IMAGE_TAG ?= $(call env_value,ONYX_IMAGE_TAG)
 ifeq ($(strip $(ONYX_IMAGE_TAG)),)
-$(error ONYX_IMAGE_TAG is not set. Add ONYX_IMAGE_TAG=... to $(ENV_FILE), or pass ONYX_IMAGE_TAG=... on the make command line)
+$(error ONYX_IMAGE_TAG is not set. Add ONYX_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass ONYX_IMAGE_TAG=... on the make command line)
 endif
 ONYX_BACKEND_IMAGE ?= onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
 ONYX_WEB_SERVER_IMAGE ?= onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
 ONYX_MODEL_SERVER_IMAGE ?= onyxdotapp/onyx-model-server:$(ONYX_IMAGE_TAG)
-SEARXNG_IMAGE_TAG ?= $(strip $(shell sed -n 's/^SEARXNG_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+SEARXNG_IMAGE_TAG ?= $(call env_value,SEARXNG_IMAGE_TAG)
 ifeq ($(strip $(SEARXNG_IMAGE_TAG)),)
-$(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(ENV_FILE), or pass SEARXNG_IMAGE_TAG=... on the make command line)
+$(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass SEARXNG_IMAGE_TAG=... on the make command line)
 endif
 SEARXNG_IMAGE ?= docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)
 export SEARXNG_IMAGE_TAG
@@ -133,9 +150,9 @@ export MINIO_ROOT_USER
 export MINIO_ROOT_PASSWORD
 export S3_AWS_ACCESS_KEY_ID
 export S3_AWS_SECRET_ACCESS_KEY
-CODE_INTERPRETER_IMAGE_TAG ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+CODE_INTERPRETER_IMAGE_TAG ?= $(call env_value,CODE_INTERPRETER_IMAGE_TAG)
 ifeq ($(strip $(CODE_INTERPRETER_IMAGE_TAG)),)
-$(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=... to $(ENV_FILE), or pass CODE_INTERPRETER_IMAGE_TAG=... on the make command line)
+$(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass CODE_INTERPRETER_IMAGE_TAG=... on the make command line)
 endif
 CODE_INTERPRETER_IMAGE ?= onyxdotapp/code-interpreter:$(CODE_INTERPRETER_IMAGE_TAG)
 export CODE_INTERPRETER_IMAGE_TAG
@@ -150,14 +167,20 @@ MYST_VPN_CLI := myst/myst-vpn-cli.sh
 MYST_CONTAINER_NAME := myst-client-vpn
 MYST_DATA_DIR := docker-data/myst-data
 EMBEDSERV_DIR := embedserv
+EMBEDSERV_REQUIREMENTS_IN := $(EMBEDSERV_DIR)/requirements.in
 EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
+CDP_SHIM_REQUIREMENTS_IN := crw/cdp-shim-requirements.in
+CDP_SHIM_REQUIREMENTS := crw/cdp-shim-requirements.txt
+PROXY_LIBS_REQUIREMENTS_IN := onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.in
+PROXY_LIBS_REQUIREMENTS := onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt
+UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -169,8 +192,9 @@ help:
 	@echo "  make ps-full      # Show full mode containers"
 	@echo "  make logs-lite    # Tail lite mode logs"
 	@echo "  make logs-full    # Tail full mode logs"
-	@echo "  make upgrade      # Rebuild Myst + teep images, refresh Onyx deployment files, pull SearxNG, Tailscale, obscura, and crw"
+	@echo "  make upgrade      # Upgrade Python locks, rebuild Myst + teep, refresh Onyx deployment files, and pull companion images"
 	@echo "  make upgrade-onyx # Download fresh Onyx deployment files for ONYX_IMAGE_TAG"
+	@echo "  make upgrade-python-deps # Upgrade hashed Python lock files from requirements.in inputs"
 	@echo "  make onyx-build   # Pull/build Onyx images via onyx/install.sh"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
 	@echo "  make teep-build   # Build teep image from teep/build/Dockerfile"
@@ -184,6 +208,7 @@ help:
 	@echo "  make vpn-orderstatus       # Show balance, order status, and payment URL"
 	@echo "  make vpn-balance           # Quick balance check"
 	@echo ""
+	@echo "Version manifest: $(VERSION_FILE) (override with VERSION_FILE=...)"
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
 	@echo "Override SearXNG tag: make searxng-image-ready SEARXNG_IMAGE_TAG=2026.6.26-f8ffbf36f"
@@ -203,7 +228,17 @@ help:
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:<tag>"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
 
-upgrade: myst-build teep-build searxng-image-ready tailscale-image-ready crw-image-ready upgrade-onyx
+upgrade: upgrade-python-deps myst-build teep-build searxng-image-ready tailscale-image-ready crw-image-ready upgrade-onyx
+
+upgrade-python-deps:
+	@set -eu; \
+	if ! command -v uv >/dev/null 2>&1; then \
+		echo "ERROR: uv is required for upgrade-python-deps"; \
+		exit 1; \
+	fi; \
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(EMBEDSERV_REQUIREMENTS_IN)" -o "$(EMBEDSERV_REQUIREMENTS)"; \
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(CDP_SHIM_REQUIREMENTS_IN)" -o "$(CDP_SHIM_REQUIREMENTS)"; \
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(PROXY_LIBS_REQUIREMENTS_IN)" -o "$(PROXY_LIBS_REQUIREMENTS)"
 
 tailscale-image-ready:
 	@echo "Pulling Tailscale image: $(TAILSCALE_IMAGE)"; \
@@ -218,12 +253,12 @@ crw-image-ready:
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
 up-lite: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) up -d --wait
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(ONYX_MODEL_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
 up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) up -d --wait
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 ensure-onyx-config:
 	@set -eu; \
@@ -307,7 +342,7 @@ upgrade-onyx:
 
 searxng-image-ready:
 	@set -eu; \
-	image=$$("$(CONTAINER_BIN)" compose --env-file "$(ENV_FILE)" -f "$(SEARXNG_COMPOSE_FILE)" config | sed -n 's/^    image: //p' | head -1); \
+	image=$$("$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) -f "$(SEARXNG_COMPOSE_FILE)" config | sed -n 's/^    image: //p' | head -1); \
 	if [ -z "$$image" ]; then \
 		echo "ERROR: could not resolve SearxNG image from $(SEARXNG_COMPOSE_FILE)"; \
 		exit 1; \
@@ -317,22 +352,22 @@ searxng-image-ready:
 	echo "SearxNG image ready: $$image"
 
 down-lite:
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) down --remove-orphans
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
 
 down-full:
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) down --remove-orphans
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
 
 ps-lite:
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) ps
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) ps
 
 ps-full:
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) ps
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) ps
 
 logs-lite:
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) logs -f --tail=200
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) logs -f --tail=200
 
 logs-full:
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) --env-file $(ONYX_ENV_FILE) logs -f --tail=200
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) logs -f --tail=200
 
 onyx-image-ready:
 	@set -eu; \
@@ -423,7 +458,7 @@ embedserv-install:
 	if [ ! -x "$$venv_python" ]; then \
 		uv venv --python 3.12 "$(EMBEDSERV_VENV)"; \
 	fi; \
-	uv pip install --python "$$venv_python" -r "$(EMBEDSERV_REQUIREMENTS)"; \
+	uv pip install --python "$$venv_python" --require-hashes -r "$(EMBEDSERV_REQUIREMENTS)"; \
 	echo "Downloading MLX embedding model: $$model_repo"; \
 	MODEL_REPO="$$model_repo" MODEL_DIR="$$model_dir" "$$venv_python" -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["MODEL_REPO"], local_dir=os.environ["MODEL_DIR"])'; \
 	echo "Model ready at $$model_dir"
@@ -506,7 +541,7 @@ vpn-signup-orderform: myst-image-ready
 		echo "Starting standalone Myst signup container..."; \
 		mkdir -p $(MYST_DATA_DIR); \
 		MYST_AUTO_CONNECT=false MYST_WAIT_FOR_FUNDS=false \
-			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
+			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) up -d; \
 		echo "Waiting for container to initialize..."; \
 		sleep 3; \
 	fi
@@ -528,7 +563,7 @@ vpn-signup-blockchain: myst-image-ready
 		echo "Starting standalone Myst signup container..."; \
 		mkdir -p $(MYST_DATA_DIR); \
 		MYST_AUTO_CONNECT=false MYST_WAIT_FOR_FUNDS=false MYST_SKIP_ORDER_CREATION=true \
-			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) up -d; \
+			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) up -d; \
 		echo "Waiting for container to initialize..."; \
 		sleep 3; \
 	fi
@@ -557,7 +592,7 @@ ensure-myst-funded:
 	fi; \
 	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
 		echo "Stopping standalone Myst signup container (wallet data is preserved)..."; \
-		COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose --env-file $(ENV_FILE) down --remove-orphans 2>/dev/null || \
+		COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) down --remove-orphans 2>/dev/null || \
 			"$(CONTAINER_BIN)" stop $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
 		"$(CONTAINER_BIN)" rm -f $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
 	fi; \

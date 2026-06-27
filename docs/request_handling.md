@@ -974,37 +974,43 @@ automatically, but they tail **all** services. To view just the cdp-shim:
 ```bash
 # Full mode (make up-full):
 COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs -f cdp-shim
 
 # Lite mode (make up-lite):
 COMPOSE_FILE=docker-compose.yaml:docker-compose.lite.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs -f cdp-shim
 
 # Last 100 lines only (full mode):
 COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs --tail 100 cdp-shim
 
 # Logs from the last hour with timestamps (full mode):
 COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs --since 1h -t cdp-shim
 
 # View CRW logs (to see CDP connection + scrape activity):
 COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs -f crw
 
 # View obscura logs (to see browser rendering + stealth activity):
 COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs -f obscura
 ```
@@ -1012,10 +1018,11 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 > **Note:** The `COMPOSE_FILE` and `--env-file` flags are required because
 > the wrapper layers multiple compose files (`docker-compose.yaml` as the
 > base, `docker-compose.full.yml` or `docker-compose.lite.yml` as the
-> override) and loads env vars from both `.env.wrapper` (wrapper-level
-> config like VPN, ports, image tags) and `onyx/onyx_data/deployment/.env`
-> (Onyx-level config like `ONYX_IMAGE_TAG`, database credentials). Omitting
-> either will result in "required variable is missing" errors.
+> override) and loads env vars from `stack.versions.env` (image/source pins),
+> `.env.wrapper` (local runtime config like VPN, ports, proxy, and keys), and
+> `onyx/onyx_data/deployment/.env` (Onyx deployment config and database
+> credentials). Omitting any layer will result in "required variable is
+> missing" errors.
 
 ### Log levels
 
@@ -1108,25 +1115,29 @@ replace `docker-compose.full.yml` with `docker-compose.lite.yml`.
 ```bash
 # Stealth stripping
 COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs cdp-shim | grep "Stripped CRW STEALTH_JS"
 
 # waitUntil injection (DEBUG level required)
 COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs cdp-shim | grep "Injected waitUntil"
 
 # Errors
 COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs cdp-shim | grep -E "ERROR|WARNING"
 
 # Proxy safety-net stripping
 COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
-  docker compose --env-file .env.wrapper \
+  docker compose --env-file stack.versions.env \
+  --env-file .env.wrapper \
   --env-file onyx/onyx_data/deployment/.env \
   logs cdp-shim | grep "Stripped proxyServer"
 ```

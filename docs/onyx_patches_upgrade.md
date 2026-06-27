@@ -41,6 +41,8 @@ SearXNG/CRW/Obscura request path and live parser assumptions, see
    re-check the wrapper SearXNG engine files, minimal settings overlay, and
    custom engine DOM selectors described in
    [SearXNG companion stack](#searxng-companion-stack).
+8. Update `stack.versions.env` for image/source pins and run
+   `make upgrade-python-deps` to refresh runtime Python package locks.
 
 ## Service map
 
@@ -344,9 +346,9 @@ Patch behavior:
   `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`.
 - When `PROXY_URL` is set, injects proxy env vars into every executor pod.
 - For SOCKS proxies, creates a Docker volume named `onyx-proxy-libs`,
-  synchronously installs `PySocks` and `socksio` into it using
-  `python:3.11-slim`, and only mounts/prepends `/tmp/proxy-libs` when setup
-  succeeds.
+  synchronously installs the hashed `PySocks` and `socksio` lock into it using
+  `PROXY_LIBS_INSTALL_IMAGE`, and only mounts/prepends `/tmp/proxy-libs` when
+  setup succeeds.
 
 Onyx service: `code-interpreter`, plus its transient executor pods.
 
@@ -412,8 +414,8 @@ Upgrade notes:
 - If upstream changes command construction, proxy injection can fail open or
   fail closed. Verify logs contain the startup patch status and proxy injection
   messages when `PROXY_URL` is set.
-- If the code-interpreter image changes Python version, revisit the
-  `python:3.11-slim` SOCKS-lib install container.
+- If the code-interpreter image changes Python version, revisit
+  `PROXY_LIBS_INSTALL_IMAGE` in `stack.versions.env`.
 
 ## Local embedding shim
 
@@ -816,6 +818,7 @@ Upgrade notes:
 Local files:
 
 - `Makefile`
+- `stack.versions.env`
 - `onyx/install-with-container-bin.sh`
 - `onyx/install.sh`
 
@@ -830,7 +833,8 @@ Onyx source references:
 Behavior:
 
 - Requires `ONYX_IMAGE_TAG`, `SEARXNG_IMAGE_TAG`, and
-  `CODE_INTERPRETER_IMAGE_TAG` from `.env.wrapper` or make CLI overrides.
+  `CODE_INTERPRETER_IMAGE_TAG` from `stack.versions.env`, `.env.wrapper`
+  overrides, or make CLI overrides.
   `ONYX_IMAGE_TAG` remains the source of truth for Onyx backend/web/model
   image tags.
 - Generates local stack auth material (`SEARXNG_SECRET`, `USER_AUTH_SECRET`,
@@ -850,6 +854,10 @@ Behavior:
   pinned in Onyx's deployment env.
 - `embedserv-*` targets install, verify, and serve the local MLX embedding
   server that `onyx/local_embedding_shim.py` calls.
+- `upgrade-python-deps` upgrades the hashed Python lock files for
+  `embedserv/requirements.txt`, `crw/cdp-shim-requirements.txt`, and
+  `onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt`
+  from their corresponding `requirements.in` files.
 
 Upgrade notes:
 
@@ -857,6 +865,14 @@ Upgrade notes:
   `upgrade-onyx`.
 - If upstream env vars change names, update `sync-onyx-env` and the wrapper
   compose env overrides together.
+- `make upgrade` includes `upgrade-python-deps`, so normal stack upgrades also
+  refresh the Python locks. Most runtime Python inputs are unconstrained to
+  allow upgrades; `embedserv/requirements.in` intentionally pins
+  `typer==0.20.0` because newer Typer releases trigger a `sys.exit()` handler
+  traceback in the local embedserv CLI path.
+- If a runtime Python dependency input changes, run `make upgrade-python-deps`
+  and keep the generated hash locks in the same upgrade commit as the version
+  manifest change.
 
 ### Container binary install wrapper
 

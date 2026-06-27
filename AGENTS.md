@@ -16,7 +16,7 @@ Before changing a subsystem, read the matching document below, then inspect the 
 - `docs/request_handling.md` - `web_search`, `open_url`, CRW, Obscura, CDP shim, prefetch blocking, readiness, cookies, and anti-bot behavior.
 - `docs/vpn_routing_and_proxies.md` - shared VPN namespace layout, Mysterium, explicit no-VPN mode, optional routing switches, `PROXY_URL`, and `NO_PROXY`.
 - `docs/onyx_patch_info.md` - why local runtime patches exist.
-- `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/CRW/Obscura/ Teep upgrade checklist and patch validation, for use when image version tags are updated.
+- `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/CRW/Obscura/ Teep upgrade checklist and patch validation, for use when image/source pins or runtime Python locks are updated.
 - `docs/local_docs_rag_search.md` - full-mode local document RAG, local doc serving, PDF freshness, embedding shim, and diagnostics.
 
 When a request touches more than one path, read each relevant doc first. Prefer small, doc-aligned changes over broad rewrites.
@@ -38,7 +38,8 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 ## Key Locations
 
 - `Makefile` - source of truth for stack targets, compose layering, generated local secrets, image builds, upgrades, Myst flows, and embedserv flows.
-- `.env.wrapper.example` - user-facing configuration surface.
+- `stack.versions.env` - committed source of truth for stack image tags and source refs.
+- `.env.wrapper.example` - user-facing configuration surface for local runtime options, not routine image pins.
 - `docker-compose.yaml` - base wrapper stack.
 - `docker-compose.full.yml` - full Onyx/RAG mode.
 - `docker-compose.lite.yml` - lite mode.
@@ -65,6 +66,7 @@ debugging the Makefile itself.
 - `make ps-lite` / `make ps-full` - inspect containers.
 - `make logs-lite` / `make logs-full` - follow logs.
 - `make upgrade` and `make upgrade-onyx ONYX_CONFIG_REF=<tag>` - upgrade flows.
+- `make upgrade-python-deps` - upgrade hashed Python lock files from the committed `requirements.in` inputs.
 - `make onyx-build`, `make myst-build`, and `make teep-build` - image builds.
 - `make vpn-signup-orderform`, `make vpn-signup-blockchain`,
   `make vpn-orderstatus`, and `make vpn-balance` - Myst account/payment flows.
@@ -102,7 +104,7 @@ This stack protects private research, document contents, browsing behavior, infe
 - VPN/proxy routing: preserve explicit VPN/no-VPN behavior, host-proxy access, shared namespace membership where documented, optional routing switches, and `PROXY_URL`/`NO_PROXY` handling. Do not introduce automatic direct-egress fallback when VPN or proxy connectivity fails.
 - Request handling: keep supported search engines routed through the custom CRW/SearXNG path; preserve CRW/Obscura rendering, prefetch blocking, per-host rate control, anti-bot visibility, and the documented CDP shim behavior. Do not replace this path with plain HTTP fetching or fixed sleeps.
 - Documentation: update docs in the same change when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
-- Patch upgrades: before changing Onyx, code-interpreter, SearXNG, CRW, Obscura, or Teep pins, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
+- Patch upgrades: before changing Onyx, code-interpreter, SearXNG, CRW, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
 - Untracked stack files: Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data. Do not read, stage, or rewrite them unless the user explicitly asks.
 
 ### Testing and Validation

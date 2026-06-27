@@ -312,7 +312,8 @@ Implementation:
 - `make embedserv-install`
 - `make embedserv-verify-model`
 - `make embedserv-serve`
-- `embedserv/requirements.txt`
+- `embedserv/requirements.in`
+- `embedserv/requirements.txt` (hashed lock file)
 
 On macOS, the Makefile can install and launch an MLX embedding server:
 
@@ -321,6 +322,14 @@ make embedserv-install
 make embedserv-verify-model
 make embedserv-serve
 ```
+
+`make embedserv-install` installs from the hashed lock file with
+`--require-hashes`. To upgrade package versions during a stack upgrade, edit
+`embedserv/requirements.in` if needed and run `make upgrade-python-deps`.
+Most embedserv requirements are intentionally unconstrained so that target can
+float them forward. `typer==0.20.0` is a compatibility pin: newer Typer
+releases currently trigger a `sys.exit()` handler traceback in the local
+embedserv CLI path, so re-test that behavior before unpinning.
 
 The default model is:
 

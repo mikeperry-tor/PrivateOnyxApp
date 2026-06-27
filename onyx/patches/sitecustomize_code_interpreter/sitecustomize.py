@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 
 def _env_enabled(name: str, default: bool = True) -> bool:
@@ -54,6 +55,7 @@ def _raise_if_strict() -> None:
 # the container's filesystem or bind mounts.
 SOCKS_LIBS_VOLUME = "onyx-proxy-libs"
 SOCKS_LIBS_DIR = "/tmp/proxy-libs"
+SOCKS_LIBS_REQUIREMENTS = Path(__file__).with_name("proxy-libs-requirements.txt")
 
 
 def _is_socks_proxy() -> bool:
@@ -104,17 +106,27 @@ def _install_socks_libs() -> bool:
                 f"{volume_result.stderr.strip()[:300]}"
             )
 
+        try:
+            requirements_text = SOCKS_LIBS_REQUIREMENTS.read_text(encoding="utf-8")
+        except Exception as e:
+            return _fail_or_false(
+                "sitecustomize: failed to read SOCKS proxy libs requirements "
+                f"{SOCKS_LIBS_REQUIREMENTS}: {e}"
+            )
+
         # Use the same Python image as the executor pods for ABI compatibility.
+        install_image = os.environ.get("PROXY_LIBS_INSTALL_IMAGE", "python:3.11-slim")
         result = subprocess.run(
             [
-                docker_bin, "run", "--rm",
+                docker_bin, "run", "--rm", "-i",
                 "-v", f"{SOCKS_LIBS_VOLUME}:/proxy-libs",
-                "python:3.11-slim",
+                install_image,
                 "pip", "install", "--target", "/proxy-libs",
-                "--quiet", "--no-warn-script-location",
-                "PySocks", "socksio",
+                "--quiet", "--no-warn-script-location", "--require-hashes",
+                "-r", "/dev/stdin",
             ],
             capture_output=True,
+            input=requirements_text,
             text=True,
             timeout=120,
         )

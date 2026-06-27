@@ -92,6 +92,7 @@ services:
       # and setting them to a SOCKS URL would break any HTTP client that
       # accidentally runs in the container (urllib treats SOCKS as HTTP CONNECT).
       PROXY_URL: "${PROXY_URL}"
+      PROXY_LIBS_INSTALL_IMAGE: "${PROXY_LIBS_INSTALL_IMAGE:?PROXY_LIBS_INSTALL_IMAGE must be set}"
       WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
       PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"
       ALL_PROXY: "${PROXY_URL}"

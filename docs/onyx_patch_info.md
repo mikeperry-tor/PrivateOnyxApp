@@ -509,8 +509,10 @@ upstream proxy.
 For SOCKS proxies, the patch also:
 
 - Creates a Docker volume named `onyx-proxy-libs`.
-- Synchronously installs `PySocks` and `socksio` into that volume using
-  `python:3.11-slim` during code-interpreter startup.
+- Synchronously installs the hashed `PySocks` and `socksio` lock from
+  `onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt`
+  into that volume using `PROXY_LIBS_INSTALL_IMAGE` during code-interpreter
+  startup.
 - Mounts the volume read-only into executor pods at `/tmp/proxy-libs` only if
   setup succeeds.
 - Prepends that directory to `PYTHONPATH` only if setup succeeds.
@@ -742,6 +744,7 @@ Onyx. The upstreamable pieces are extension points:
 Local files:
 
 - `Makefile`
+- `stack.versions.env`
 - `onyx/install.sh`
 - `onyx/install-with-container-bin.sh`
 
@@ -756,8 +759,8 @@ The upstream install script is optimized for directly installing Onyx's Docker
 Compose deployment. The wrapper needs a more deterministic and automatable
 workflow:
 
-- Require wrapper image tags from `.env.wrapper` or make CLI overrides:
-  `ONYX_IMAGE_TAG`, `SEARXNG_IMAGE_TAG`, and `CODE_INTERPRETER_IMAGE_TAG`.
+- Require wrapper image tags and source refs from `stack.versions.env`, with
+  `.env.wrapper` and make CLI values available as explicit local overrides.
 - Generate local stack auth material (`SEARXNG_SECRET`, `USER_AUTH_SECRET`,
   `CRW_ONYX_API_KEY`, and MinIO/S3 credentials) ephemerally for each Makefile
   invocation.
@@ -776,6 +779,12 @@ The Makefile orchestrates upgrade and runtime flow:
 - `init-onyx-env` runs the Onyx installer through the local wrapper.
 - `sync-onyx-env` pins `IMAGE_TAG` and `CODE_INTERPRETER_IMAGE_TAG`.
 - `onyx-build` uses the installer path to prepare or pull required Onyx images.
+- `upgrade-python-deps` upgrades the hashed runtime Python locks for
+  `embedserv`, `cdp-shim`, and code-interpreter SOCKS proxy support from their
+  `requirements.in` files. Most package inputs are unconstrained so this target
+  can move them forward; `embedserv/requirements.in` keeps `typer==0.20.0`
+  pinned because newer Typer releases trigger a `sys.exit()` handler traceback
+  in the local embedserv CLI path.
 
 `install-with-container-bin.sh` wraps the upstream install script so it can run
 through the selected container engine instead of assuming `docker`. The local

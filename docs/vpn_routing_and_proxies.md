@@ -297,7 +297,9 @@ The patch injects proxy environment variables into every executor pod's
   `HTTP_PROXY`/`HTTPS_PROXY` because Python's `urllib` treats those as HTTP
   CONNECT proxies
 - for SOCKS proxies, it creates the Docker volume `onyx-proxy-libs`, installs
-  `PySocks` and `socksio` into it, mounts it into executor pods at
+  the hashed `PySocks` and `socksio` lock from
+  `onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt`
+  into it using `PROXY_LIBS_INSTALL_IMAGE`, mounts it into executor pods at
   `/tmp/proxy-libs`, and injects `PYTHONPATH` so `requests` and `httpx` can use
   SOCKS transports
 
