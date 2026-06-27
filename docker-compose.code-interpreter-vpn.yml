@@ -1,9 +1,9 @@
 ## Code-interpreter VPN routing override.
 ## Applied when CODE_INTERPRETER_VPN_ROUTED=true in .env.wrapper (via Makefile
-## COMPOSE_FILE layering). Mounts a sitecustomize.py patch into the
-## code-interpreter container that rewrites the executor pods' hardcoded
-## `--network none` flag to `--network container:<self>`, so Python tool and
-## coding-agent bash sessions inherit the code-interpreter's network namespace.
+## COMPOSE_FILE layering). Configures code-interpreter 0.4.4 executor
+## containers to join the shared netns-holder network namespace through
+## PYTHON_EXECUTOR_DOCKER_NETWORK. The mounted sitecustomize.py patch forwards
+## proxy settings into executor containers.
 ##
 ## Because the code-interpreter already runs inside the shared netns-holder VPN
 ## namespace (network_mode: service:netns-holder in docker-compose.yaml),
@@ -20,6 +20,7 @@ services:
     environment:
       # Activates the sitecustomize patch below.
       CODE_INTERPRETER_VPN_ROUTED: "true"
+      PYTHON_EXECUTOR_DOCKER_NETWORK: "container:onyx-netns-holder-1"
       WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
       # Put the patch directory first on PYTHONPATH so sitecustomize.py is
       # auto-imported by the Python interpreter at startup.
@@ -27,7 +28,8 @@ services:
     volumes: !override
       # Preserve the Docker socket mount required for spawning executor pods.
       - ${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock
-      # The sitecustomize patch that rewrites --network none.
+      # The sitecustomize patch that forwards proxy settings into executor
+      # containers.
       - ./onyx/patches/sitecustomize_code_interpreter:/app/wrapper-patches:ro
 
   # The api_server also needs CODE_INTERPRETER_VPN_ROUTED=true so its

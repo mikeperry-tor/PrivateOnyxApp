@@ -163,25 +163,21 @@ default is intentionally not VPN-routed.
 ### Code Interpreter
 
 The `code-interpreter` service itself runs in the shared namespace by default,
-but upstream executor pods are launched with `--network none`. That means the
+but upstream executor pods default to Docker network `none`. That means the
 Python tool and coding-agent bash sessions have no network access unless
 explicitly enabled.
 
 When `CODE_INTERPRETER_VPN_ROUTED=true`, the Makefile adds
 `docker-compose.code-interpreter-vpn.yml`. That mounts
 `onyx/patches/sitecustomize_code_interpreter` into the code-interpreter image
-and sets `CODE_INTERPRETER_VPN_ROUTED=true`. The patch monkey-patches
-`DockerExecutor._build_run_command` so executor pod commands change from:
+and sets `CODE_INTERPRETER_VPN_ROUTED=true`. The override also sets:
 
 ```text
---network none
+PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1
 ```
 
-to:
-
-```text
---network container:<code-interpreter-container-id>
-```
+The patch monkey-patches `DockerExecutor._build_run_command` only to propagate
+proxy settings into executor containers.
 
 Because the code-interpreter container already shares `netns-holder`, executor
 pods inherit the VPN namespace. This intentionally removes the upstream network
@@ -305,12 +301,11 @@ The patch injects proxy environment variables into every executor pod's
   `/tmp/proxy-libs`, and injects `PYTHONPATH` so `requests` and `httpx` can use
   SOCKS transports
 
-Proxy injection and VPN routing are separate code paths in the patch, but the
-upstream executor command still uses `--network none` unless
-`CODE_INTERPRETER_VPN_ROUTED=true` is enabled. With `PROXY_URL` alone, executor
-pods receive proxy environment variables but remain network-isolated. With both
-`PROXY_URL` and `CODE_INTERPRETER_VPN_ROUTED=true`, executor pods inherit the
-VPN namespace and then use the configured upstream proxy for supported tools.
+Proxy injection and VPN routing are separate code paths. With `PROXY_URL`
+alone, executor pods receive proxy environment variables but remain
+network-isolated. With both `PROXY_URL` and
+`CODE_INTERPRETER_VPN_ROUTED=true`, executor pods inherit the VPN namespace and
+then use the configured upstream proxy for supported tools.
 
 ## VPN Signup and Funding Flows
 

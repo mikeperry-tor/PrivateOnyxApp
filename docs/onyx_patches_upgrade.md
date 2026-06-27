@@ -6,8 +6,8 @@ Reference checkouts:
 
 - `reference_repos/onyx` at `v4.1.7`
   (`34fc4c3d1febb8866b980a67d62258288e852343`).
-- `reference_repos/python-sandbox` at `code-interpreter-0.4.3`
-  (`e690122dfa009a9a57fc33c4f8ce8d73bed5e652`), remote
+- `reference_repos/python-sandbox` at `code-interpreter-0.4.4`
+  (`8950eadc06567798ec61354f24260e5dc996684b`), remote
   `https://github.com/onyx-dot-app/python-sandbox`.
 - Companion web stack checked against `reference_repos/crw` at `v0.18.3`,
   `reference_repos/obscura` at `v0.1.9`, and `reference_repos/searxng` at
@@ -331,10 +331,10 @@ Local files:
 
 Patch behavior:
 
-- When `CODE_INTERPRETER_VPN_ROUTED=true`, patches the code-interpreter
-  container so spawned executor pods inherit the code-interpreter container's
-  network namespace via `--network container:<self>`.
-- Rewrites the upstream executor command by replacing `--network none`.
+- Pins the code-interpreter image with `CODE_INTERPRETER_IMAGE_TAG=0.4.4`.
+- When `CODE_INTERPRETER_VPN_ROUTED=true`, spawned executor containers inherit
+  the shared `netns-holder` namespace via
+  `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`.
 - When `PROXY_URL` is set, injects proxy env vars into every executor pod.
 - For SOCKS proxies, creates a Docker volume named `onyx-proxy-libs`,
   synchronously installs `PySocks` and `socksio` into it using
@@ -361,20 +361,25 @@ Python-sandbox / code-interpreter assumptions to re-check:
   `:71` sets `CMD ["code-interpreter-api"]`.
 - `code-interpreter/pyproject.toml:22` to `:23` maps the
   `code-interpreter-api` console script to `app.main:run`.
-- `code-interpreter/app/services/executor_docker.py:60` defines
+- `code-interpreter/app/app_configs.py:15` defines
+  `PYTHON_EXECUTOR_DOCKER_RUN_ARGS`.
+- `code-interpreter/app/app_configs.py:19` defines
+  `PYTHON_EXECUTOR_DOCKER_NETWORK`, defaulting to `none`.
+- `code-interpreter/app/services/executor_docker.py:61` defines
   `DockerExecutor`.
-- `code-interpreter/app/services/executor_docker.py:249` defines
+- `code-interpreter/app/services/executor_docker.py:250` defines
   `_build_run_command`.
-- `code-interpreter/app/services/executor_docker.py:264` starts building the
-  `docker run` argv, and `:271`/`:272` hardcode `--network none`.
-- `code-interpreter/app/services/executor_docker.py:313` to `:314` appends
-  `PYTHON_EXECUTOR_DOCKER_RUN_ARGS` after the built-in isolation flags. The
-  wrapper patch mutates the argv instead of relying on this hook because Docker
-  errors if both `--network none` and another `--network` are present.
-- `code-interpreter/app/services/executor_docker.py:421` creates persistent
+- `code-interpreter/app/services/executor_docker.py:265` starts building the
+  `docker run` argv, and `:272`/`:273` pass
+  `PYTHON_EXECUTOR_DOCKER_NETWORK` to `--network`.
+- `code-interpreter/app/services/executor_docker.py:314` to `:315` appends
+  `PYTHON_EXECUTOR_DOCKER_RUN_ARGS` after the built-in isolation flags. Use the
+  upstream network setting rather than passing another `--network` here,
+  because Docker errors if conflicting network flags are present.
+- `code-interpreter/app/services/executor_docker.py:422` creates persistent
   session containers with `_build_run_command`; bash executions inherit that
   container network namespace, as documented in `execute_bash_in_session` at
-  `:513` to `:525`.
+  `:514` to `:526`.
 
 Wrapper compose assumptions:
 
@@ -382,7 +387,8 @@ Wrapper compose assumptions:
   `network_mode: service:netns-holder`, sets `PORT=7000`, and points
   `CODE_INTERPRETER_BASE_URL` at `http://localhost:7000`.
 - `docker-compose.code-interpreter-vpn.yml` mounts the patch directory and adds
-  `CODE_INTERPRETER_VPN_ROUTED=true`.
+  `CODE_INTERPRETER_VPN_ROUTED=true` plus
+  `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`.
 - `docker-compose.proxy.yml` mounts the code-interpreter patch when proxy mode
   is active and adds `PROXY_URL` / `ALL_PROXY` / `NO_PROXY` to the
   code-interpreter container. The patch decides which variables to forward to
@@ -396,12 +402,11 @@ Security notes:
 
 Upgrade notes:
 
-- If upstream changes command construction, this patch can fail open or fail
-  closed. Verify logs contain the startup patch status plus either the
-  successful routing message or an explicit warning.
+- If upstream changes command construction, proxy injection can fail open or
+  fail closed. Verify logs contain the startup patch status and proxy injection
+  messages when `PROXY_URL` is set.
 - If the code-interpreter image changes Python version, revisit the
-  `python:3.11-slim` SOCKS-lib install container for ABI compatibility.
-- If upstream adds a supported executor network/proxy configuration, prefer that.
+  `python:3.11-slim` SOCKS-lib install container.
 
 ## Local embedding shim
 
@@ -799,8 +804,8 @@ Manual behavior checks:
 - Full mode embedding calls hit `local-embedding-shim` and return vectors of the
   expected dimension.
 - Query and passage prefixes appear in shim logs with the expected source.
-- Code-interpreter executor pods either remain network-isolated or show the
-  patch log confirming `--network container:<self>`, matching the selected
-  `CODE_INTERPRETER_VPN_ROUTED` setting.
+- Code-interpreter executor pods either remain network-isolated or are created
+  with `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`, matching
+  the selected `CODE_INTERPRETER_VPN_ROUTED` setting.
 - Proxy mode shows executor pod commands receiving proxy env vars; SOCKS mode
   mounts `onyx-proxy-libs`.

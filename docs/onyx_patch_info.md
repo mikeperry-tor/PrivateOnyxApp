@@ -270,9 +270,9 @@ Onyx source areas:
 
 ### Why this is needed
 
-Upstream Onyx describes the Python tool, Bash tool, and coding agent as running
-without network access. That is correct for the default code-interpreter image,
-which starts executor pods with `--network none`.
+Onyx describes the Python tool, Bash tool, and coding agent as running without
+network access when `CODE_INTERPRETER_VPN_ROUTED=false`. That matches
+code-interpreter 0.4.4's default executor network, `none`.
 
 The wrapper can explicitly enable VPN-routed executor networking. When that is
 enabled, the upstream descriptions become actively harmful: the LLM is told not
@@ -471,8 +471,8 @@ Python-sandbox source area:
 
 ### Why this is needed
 
-Onyx's code-interpreter source, from `python-sandbox`, hardcodes executor pods
-with `--network none`. That is a strong and sensible hosted default.
+Onyx's code-interpreter source, from `python-sandbox`, defaults executor pods to
+Docker network `none`. That is a strong and sensible hosted default.
 
 This wrapper also supports a different deployment mode: trusted, single-tenant
 local execution where generated Python and bash should be able to reach the
@@ -480,20 +480,20 @@ internet through the shared VPN namespace, optionally using the configured
 upstream proxy. This is useful for research, package inspection, fetching
 public data, and coding-agent workflows where network commands are expected.
 
-Because upstream appends custom Docker run args after its isolation flags,
-setting an extra `--network` flag is not enough; Docker rejects conflicting
-network options. The wrapper has to replace the built-in `--network none`.
+The wrapper uses code-interpreter 0.4.4's
+`PYTHON_EXECUTOR_DOCKER_NETWORK` setting to choose the executor container
+network before command construction.
 
 ### How it modifies Onyx
 
-When `CODE_INTERPRETER_VPN_ROUTED=true`, the code-interpreter container loads a
-`sitecustomize` patch that:
+When `CODE_INTERPRETER_VPN_ROUTED=true`, `docker-compose.code-interpreter-vpn.yml`
+sets `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`, so
+code-interpreter starts executor containers directly in the shared network
+namespace. The code-interpreter container also loads a `sitecustomize` patch
+that:
 
-- Resolves the code-interpreter container's own Docker container ID.
 - Patches `DockerExecutor._build_run_command`.
-- Replaces `--network none` with `--network container:<self>`.
-- Causes executor pods to inherit the code-interpreter container's network
-  namespace.
+- Injects proxy env vars and optional SOCKS support into executor pod commands.
 
 The wrapper compose already runs code-interpreter in the shared
 `netns-holder` namespace. Inheriting that namespace gives executor pods the
@@ -501,10 +501,10 @@ same VPN-routed egress.
 
 When `PROXY_URL` is set, the same patch injects proxy environment variables
 into executor pod commands. This proxy injection is independent from the
-network-mode replacement above: with `PROXY_URL` alone, executor pods still use
-upstream `--network none` and therefore remain network-isolated. With both
-`PROXY_URL` and `CODE_INTERPRETER_VPN_ROUTED=true`, executor pods inherit the
-VPN namespace and supported tools use the configured upstream proxy.
+executor network setting: with `PROXY_URL` alone, executor pods remain
+network-isolated. With both `PROXY_URL` and `CODE_INTERPRETER_VPN_ROUTED=true`,
+executor pods inherit the VPN namespace and supported tools use the configured
+upstream proxy.
 
 For SOCKS proxies, the patch also:
 
@@ -520,26 +520,6 @@ isolation when `CODE_INTERPRETER_VPN_ROUTED=true` and lets generated code make
 outbound network requests. See
 [VPN routing and proxies](vpn_routing_and_proxies.md#code-interpreter-executor-pods)
 for the service-level routing behavior.
-
-### Upstream merge request shape
-
-The right upstream home is probably `python-sandbox`, with Onyx consuming the
-resulting capabilities.
-
-Potential configuration:
-
-- `EXECUTOR_NETWORK_MODE=none|bridge|container:<id>|service:<name>`
-- `EXECUTOR_EXTRA_DOCKER_RUN_ARGS`
-- `EXECUTOR_PROXY_ENV_ALLOWLIST`
-- `EXECUTOR_PROXY_URL`
-- `EXECUTOR_MOUNT_PROXY_LIBS=true`
-
-The implementation should avoid conflicting Docker flags by making the built-in
-network setting configurable before command construction. It should also expose
-the effective executor capabilities to Onyx so tool descriptions stay accurate.
-
-Security documentation is part of the feature. Defaults should remain network
-disabled.
 
 ## Local embedding shim
 

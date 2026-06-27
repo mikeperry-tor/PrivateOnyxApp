@@ -2,16 +2,13 @@
 
 Loaded automatically by Python when this directory is on PYTHONPATH.
 
-This patch is only active when CODE_INTERPRETER_VPN_ROUTED=true is set on the
-code-interpreter container. It rewrites the executor pod's ``--network none``
-flag (hardcoded upstream in ``DockerExecutor._build_run_command``) to
-``--network container:<self>`` so that every Python/bash executor pod inherits
-the code-interpreter's own network namespace.
+In VPN mode, code-interpreter 0.4.4 receives
+``PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`` from compose,
+so Python/bash executor containers inherit the shared ``netns-holder`` network
+namespace.
 
-Because the code-interpreter already runs inside the shared ``netns-holder``
-VPN namespace (via ``network_mode: service:netns-holder`` in the wrapper
-compose), inheriting its namespace gives executor pods VPN-routed egress
-through the Mysterium tunnel — with no image rebuild required.
+This patch only forwards proxy settings, and optional SOCKS proxy support,
+into executor containers created by code-interpreter.
 
 Security note: enabling this removes the code-interpreter's network isolation.
 Executor pods (Python tool + coding agent bash sessions) gain outbound internet
@@ -47,64 +44,6 @@ def _fail_or_false(message: str) -> bool:
 def _raise_if_strict() -> None:
     if _strict_mode():
         raise
-
-
-def _resolve_own_container_id() -> str | None:
-    """Best-effort discovery of this container's own Docker container ID.
-
-    The code-interpreter runs as root with the Docker socket mounted, so it can
-    spawn sibling containers. To make those siblings inherit our network
-    namespace we need our own container ID (or name) for
-    ``docker run --network container:<id>``.
-
-    Discovery order:
-      1. CODE_INTERPRETER_CONTAINER_ID env var (explicit override).
-      2. HOSTNAME — Docker sets this to the short container ID (12 hex chars)
-         unless overridden by ``hostname:`` in the compose service. The wrapper
-         compose does not set ``hostname:`` on code-interpreter, so this is the
-         reliable default.
-      3. /proc/self/cgroup v2 ``0::/...`` path tail (fallback for environments
-         where hostname is overridden).
-    """
-    explicit = os.environ.get("CODE_INTERPRETER_CONTAINER_ID", "").strip()
-    if explicit:
-        return explicit
-
-    hostname = os.environ.get("HOSTNAME", "").strip()
-    if hostname and len(hostname) >= 12 and all(
-        c in "0123456789abcdef" for c in hostname.lower()
-    ):
-        # Looks like a Docker short container ID.
-        return hostname
-
-    # cgroup v2 fallback: the final path component is the container ID scope.
-    try:
-        with open("/proc/self/cgroup", "r") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                # cgroup v2: "0::/docker/<id>" or "0::/system.slice/..."
-                # cgroup v1: "<subsys>:<path>"
-                path = line.split(":", 2)[-1]
-                tail = path.rstrip("/").rsplit("/", 1)[-1]
-                if tail and tail not in ("", "docker", "system.slice"):
-                    # Heuristic: Docker scopes look like 64-hex-char IDs or
-                    # "docker-<id>.scope". Strip a "docker-" prefix / ".scope"
-                    # suffix if present.
-                    candidate = tail
-                    if candidate.startswith("docker-"):
-                        candidate = candidate[len("docker-"):]
-                    if candidate.endswith(".scope"):
-                        candidate = candidate[: -len(".scope")]
-                    if candidate and all(
-                        c in "0123456789abcdef" for c in candidate.lower()
-                    ):
-                        return candidate
-    except OSError:
-        pass
-
-    return None
 
 
 # Docker named volume for PySocks/socksio shared between code-interpreter and
@@ -216,9 +155,8 @@ def _proxy_env_vars(*, socks_libs_available: bool) -> list[str]:
     ``HTTPS_PROXY`` because Python's ``urllib`` treats those as HTTP CONNECT
     proxies and sends a ``CONNECT`` request to the SOCKS port, which Tor
     rejects with "501 Tor is not an HTTP Proxy" / "Socks version 67 not
-    recognized". If PySocks is not installed (the default code-interpreter
-    image), SOCKS proxies won't work for the Python tool — executor pods will
-    fall back to VPN direct egress (they're in the netns-holder namespace).
+    recognized". If PySocks is not installed, executor Python clients that
+    require SOCKS transport support may fail.
 
     Lowercase variants (``http_proxy`` etc.) are also injected because some
     tools (notably ``curl`` and ``git``) only honor the lowercase form.
@@ -286,38 +224,13 @@ def _proxy_env_vars(*, socks_libs_available: bool) -> list[str]:
 
 
 def _apply_executor_patches(*, socks_libs_available: bool) -> None:
-    """Monkeypatch DockerExecutor to (a) route executor pods through our netns
-    when VPN-routed, and (b) inject proxy env vars into every executor pod when
-    PROXY_URL is set.
-
-    The two concerns are independent: a user may set PROXY_URL without VPN
-    routing (proxy without VPN) or VPN routing without PROXY_URL (VPN without
-    proxy), or both (proxied egress through the VPN tunnel).
-    """
-    vpn_routed = _env_enabled("CODE_INTERPRETER_VPN_ROUTED", False)
+    """Monkeypatch DockerExecutor to inject proxy settings into executor pods."""
     proxy_args = _proxy_env_vars(socks_libs_available=socks_libs_available)
     socks_active = _is_socks_proxy()
 
-    if not vpn_routed and not proxy_args:
+    if not proxy_args:
         return
 
-    # Resolve container ID for --network container:<self> (VPN routing).
-    container_id = None
-    if vpn_routed:
-        container_id = _resolve_own_container_id()
-    if vpn_routed and not container_id:
-        message = (
-            "sitecustomize: CODE_INTERPRETER_VPN_ROUTED=true but could not "
-            "determine this container's own ID; executor pods will keep "
-            "--network none (no VPN routing). Set CODE_INTERPRETER_CONTAINER_ID "
-            "explicitly to fix this."
-        )
-        print(message, flush=True)
-        if _strict_mode():
-            raise RuntimeError(message)
-        # Still apply proxy injection if PROXY_URL is set.
-        if not proxy_args:
-            return
     try:
         from app.services.executor_docker import DockerExecutor
     except Exception as e:  # pragma: no cover
@@ -328,12 +241,10 @@ def _apply_executor_patches(*, socks_libs_available: bool) -> None:
         _raise_if_strict()
         return
 
-    network_arg = f"container:{container_id}" if container_id else None
     _original_build_run_command = DockerExecutor._build_run_command
     print(
         "sitecustomize: installed DockerExecutor run-command patch "
-        f"(vpn_routed={vpn_routed}, network_arg={network_arg or 'none'}, "
-        f"proxy_enabled={bool(proxy_args)}, socks_proxy={socks_active}, "
+        f"(proxy_enabled={bool(proxy_args)}, socks_proxy={socks_active}, "
         f"socks_libs_available={socks_libs_available})",
         flush=True,
     )
@@ -341,43 +252,9 @@ def _apply_executor_patches(*, socks_libs_available: bool) -> None:
     def _patched_build_run_command(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
         cmd = _original_build_run_command(self, *args, **kwargs)
 
-        # (a) Replace --network none with --network container:<self> when
-        # VPN-routed. Docker errors if both --network none and another
-        # --network are present, so we mutate the list rather than append.
-        patched: list[str] = []
-        i = 0
-        replaced_network = False
-        while i < len(cmd):
-            if (
-                network_arg is not None
-                and not replaced_network
-                and cmd[i] == "--network"
-                and i + 1 < len(cmd)
-                and cmd[i + 1] == "none"
-            ):
-                patched.extend(["--network", network_arg])
-                replaced_network = True
-                i += 2
-                continue
-            patched.append(cmd[i])
-            i += 1
+        patched = list(cmd)
 
-        if network_arg is not None:
-            if not replaced_network:
-                print(
-                    "sitecustomize: CODE_INTERPRETER_VPN_ROUTED=true but "
-                    "--network none was not found in the executor run command; "
-                    "executor pods may not be VPN-routed.",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"sitecustomize: routing code-interpreter executor pods through "
-                    f"this container's netns (--network {network_arg})",
-                    flush=True,
-                )
-
-        # (b) Inject proxy env vars. Insert them right after the docker binary
+        # Inject proxy env vars. Insert them right after the docker binary
         # and "run" tokens so they apply to the container being created. We
         # find the first "run" token and insert after it (and after any global
         # docker flags that precede the first "run"). A simple, robust approach:
@@ -387,7 +264,7 @@ def _apply_executor_patches(*, socks_libs_available: bool) -> None:
         if proxy_args:
             out: list[str] = []
             injected = False
-            for j, tok in enumerate(patched):
+            for tok in patched:
                 out.append(tok)
                 if not injected and tok == "run":
                     out.extend(proxy_args)
@@ -403,7 +280,7 @@ def _apply_executor_patches(*, socks_libs_available: bool) -> None:
                 flush=True,
             )
 
-        # (c) For SOCKS proxies, inject -v <volume>:/tmp/proxy-libs so executor
+        # For SOCKS proxies, inject -v <volume>:/tmp/proxy-libs so executor
         # pods can access PySocks/socksio installed in the Docker named volume.
         # The PYTHONPATH env var (set by _proxy_env_vars) makes Python find them.
         # We use a Docker named volume (not --volumes-from) because the
@@ -411,7 +288,7 @@ def _apply_executor_patches(*, socks_libs_available: bool) -> None:
         if socks_active and socks_libs_available:
             out2: list[str] = []
             injected_vf = False
-            for j, tok in enumerate(patched):
+            for tok in patched:
                 out2.append(tok)
                 if not injected_vf and tok == "run":
                     out2.extend(["-v", f"{SOCKS_LIBS_VOLUME}:{SOCKS_LIBS_DIR}:ro"])
