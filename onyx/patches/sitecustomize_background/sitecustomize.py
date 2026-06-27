@@ -17,7 +17,10 @@ FRESHNESS_LAST_MODIFIED_KEY = "_wrapper_http_last_modified"
 FRESHNESS_CONTENT_LENGTH_KEY = "_wrapper_http_content_length"
 FRESHNESS_SOURCE_KEY = "_wrapper_http_freshness_source"
 FRESHNESS_UNCHANGED_KEY = "_wrapper_http_freshness_unchanged"
+FRESHNESS_UNREADABLE_KEY = "_wrapper_http_freshness_unreadable"
+FRESHNESS_HTTP_STATUS_KEY = "_wrapper_http_status"
 FRESHNESS_VERSION = "1"
+TERMINAL_HTTP_STATUS_SKIP_CODES = frozenset({401, 403, 404})
 _PATCH_LOGGER = None
 _INDEXING_SKIP_PATCHED = False
 _LOG_ONCE_KEYS: set[str] = set()
@@ -162,6 +165,24 @@ def _unchanged_freshness_metadata(
     return metadata
 
 
+def _unreadable_freshness_metadata(
+    *,
+    status_code: int,
+    last_modified_raw: str | None,
+    content_length: str | None,
+) -> dict:
+    metadata = {}
+    metadata[FRESHNESS_META_VERSION_KEY] = FRESHNESS_VERSION
+    metadata[FRESHNESS_SOURCE_KEY] = "http-head"
+    metadata[FRESHNESS_UNREADABLE_KEY] = FRESHNESS_VERSION
+    metadata[FRESHNESS_HTTP_STATUS_KEY] = str(status_code)
+    if last_modified_raw:
+        metadata[FRESHNESS_LAST_MODIFIED_KEY] = last_modified_raw
+    if content_length:
+        metadata[FRESHNESS_CONTENT_LENGTH_KEY] = content_length
+    return metadata
+
+
 def _metadata_matches_freshness(
     metadata: dict,
     *,
@@ -232,14 +253,14 @@ def _seed_db_freshness(
 
 
 def _apply_indexing_freshness_skip_patch() -> None:
-    """Keep wrapper unchanged-PDF sentinels out of forced reindex paths.
+    """Keep wrapper PDF skip sentinels out of forced reindex paths.
 
     Normal indexing already skips unchanged docs through Onyx's doc_updated_at
     gate. Targeted reindex disables that gate, so an unchanged PDF sentinel
     with empty sections would otherwise be indexed as empty content. This
     wrapper-specific marker is only produced after trusted HTTP validators
-    match the DB document, so it is safe to skip even when ignore_time_skip is
-    true.
+    match the DB document or after a trusted doc-drop host returns a terminal
+    unreadable status, so it is safe to skip even when ignore_time_skip is true.
     """
     global _INDEXING_SKIP_PATCHED
 
@@ -268,6 +289,10 @@ def _apply_indexing_freshness_skip_patch() -> None:
 
         for doc in documents:
             metadata = dict(doc.doc_metadata or {})
+            if metadata.get(FRESHNESS_UNREADABLE_KEY) == FRESHNESS_VERSION:
+                skipped += 1
+                continue
+
             if metadata.get(FRESHNESS_UNCHANGED_KEY) != FRESHNESS_VERSION:
                 passthrough_documents.append(doc)
                 continue
@@ -300,7 +325,7 @@ def _apply_indexing_freshness_skip_patch() -> None:
 
         if skipped:
             _log_debug(
-                "skipped %s unchanged PDF freshness sentinels before indexing",
+                "skipped %s PDF freshness sentinels before indexing",
                 skipped,
             )
 
@@ -365,6 +390,58 @@ def _apply_web_connector_http_freshness_patch() -> None:
                 allow_redirects=True,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
+            content_type = head_response.headers.get("content-type")
+            is_pdf = is_pdf_resource(initial_url, content_type)
+            last_modified_raw = head_response.headers.get("last-modified")
+            last_modified_dt = _parse_last_modified(last_modified_raw)
+            content_length = _normal_content_length(
+                head_response.headers.get("content-length")
+            )
+            if (
+                _INDEXING_SKIP_PATCHED
+                and is_pdf
+                and head_response.status_code in TERMINAL_HTTP_STATUS_SKIP_CODES
+            ):
+                result = web_connector.ScrapeResult()
+                result.doc = Document(
+                    id=initial_url,
+                    sections=[],
+                    source=DocumentSource.WEB,
+                    semantic_identifier=_semantic_identifier(initial_url),
+                    metadata={},
+                    doc_metadata=_unreadable_freshness_metadata(
+                        status_code=head_response.status_code,
+                        last_modified_raw=last_modified_raw,
+                        content_length=content_length,
+                    ),
+                    doc_updated_at=last_modified_dt,
+                )
+                session_ctx.last_error = (
+                    f"Skipped indexing {initial_url} due to HTTP "
+                    f"{head_response.status_code} response"
+                )
+                _log_debug(
+                    "skipped unreadable PDF before download url=%s status=%s "
+                    "last_modified=%s content_length=%s",
+                    initial_url,
+                    head_response.status_code,
+                    last_modified_raw,
+                    content_length,
+                )
+                return result
+
+            if (
+                is_pdf
+                and head_response.status_code in TERMINAL_HTTP_STATUS_SKIP_CODES
+            ):
+                _log_once(
+                    "indexing_unreadable_skip_patch_missing",
+                    "warning",
+                    "PDF freshness saw terminal HTTP %s, but indexing sentinel "
+                    "skip patch is unavailable; falling back to normal scrape.",
+                    head_response.status_code,
+                )
+
             if head_response.status_code >= 400:
                 _log_once(
                     f"head_status_{head_response.status_code}",
@@ -378,13 +455,6 @@ def _apply_web_connector_http_freshness_patch() -> None:
                 return original_do_scrape(
                     self, index, initial_url, session_ctx, slim=slim
                 )
-            content_type = head_response.headers.get("content-type")
-            is_pdf = is_pdf_resource(initial_url, content_type)
-            last_modified_raw = head_response.headers.get("last-modified")
-            last_modified_dt = _parse_last_modified(last_modified_raw)
-            content_length = _normal_content_length(
-                head_response.headers.get("content-length")
-            )
         except Exception:
             # Preserve upstream retry/error behavior. The original implementation
             # will repeat the HEAD request and surface any failure normally.

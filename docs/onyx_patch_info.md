@@ -303,12 +303,17 @@ For allowlisted hosts only, it:
 
 - Performs a HEAD request before scraping a PDF.
 - Reads `Last-Modified` and `Content-Length`.
+- Treats HTTP 401, 403, and 404 from the trusted preflight as terminal
+  unreadable/missing PDF states and returns a wrapper skip sentinel instead of
+  letting Onyx parse the error body as a PDF. Upstream Web connector code uses
+  4xx/5xx page responses as the "skip this URL" signal; the wrapper applies
+  that same intent to the direct PDF download path.
 - Compares those validators to metadata stored on the DB document.
 - If the validators and `doc_updated_at` match, returns an empty-section
   `ScrapeResult` that tells Onyx the document is unchanged.
-- Marks unchanged sentinels with wrapper `doc_metadata` and patches Onyx's
-  document update gate so forced/targeted reindex paths do not accidentally
-  index those empty sentinels as empty documents.
+- Marks unchanged and unreadable sentinels with wrapper `doc_metadata` and
+  patches Onyx's document update gate so forced/targeted reindex paths do not
+  accidentally index those empty sentinels as empty documents.
 - If the PDF is scraped normally and its content hash matches the existing DB
   document, seeds freshness metadata so future runs can skip the download.
 - If the parsed content hash differs, allows Onyx's normal re-index path.
@@ -324,6 +329,9 @@ The patch stores wrapper metadata keys:
 - `_wrapper_http_content_length`
 - `_wrapper_http_freshness_source`
 - `_wrapper_http_freshness_unchanged` on pre-download skip sentinels only
+- `_wrapper_http_freshness_unreadable` on terminal HTTP-status skip sentinels
+  only
+- `_wrapper_http_status` on terminal HTTP-status skip sentinels only
 
 By default, the patch logs startup status and one-time warnings for unexpected
 conditions such as missing validators, HEAD failures, sentinel mismatches, or
@@ -568,6 +576,12 @@ The base compose wrapper changes the runtime shape of core Onyx services:
 Full mode adds model-server routing through the local embedding shim, background
 worker patches, OpenSearch/cache/MinIO storage, and local document-drop
 services.
+
+The local `doc-drop-web` service runs `onyx/doc_drop_webserver.py` instead of the
+stdlib `python -m http.server` entrypoint directly. It keeps normal static-file
+behavior for readable documents, hides macOS metadata entries such as `._*` from
+directory listings, and converts unreadable file requests into HTTP 403
+responses so crawlers receive a proper status instead of a closed connection.
 
 Lite mode removes full-mode dependencies, uses Postgres-backed storage options,
 sets `DISABLE_VECTOR_DB=true`, and loads the lite Open URL patch.

@@ -150,10 +150,10 @@ services:
     network_mode: "service:netns-holder"
     volumes:
       - ${DOC_DROP_DIR:-./doc-drop}:/import/docs:ro
+      - ./onyx/doc_drop_webserver.py:/app/doc_drop_webserver.py:ro
     command:
       - python
-      - -m
-      - http.server
+      - /app/doc_drop_webserver.py
       - ${DOC_DROP_WEB_CONTAINER_PORT:-8091}
       - --bind
       - 0.0.0.0
