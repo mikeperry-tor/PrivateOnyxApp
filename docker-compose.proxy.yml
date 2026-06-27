@@ -3,7 +3,7 @@
 ## COMPOSE_FILE layering). Threads a single upstream proxy through:
 ##   - obscura (CDP `serve`)        : --proxy ${PROXY_URL}
 ##   - obscura-mcp                  : --proxy ${PROXY_URL}
-##   - crw                          : CRW_CRAWLER__PROXY=${PROXY_URL}
+##   - prefetch-blocking-proxy      : PROXY_URL for HEAD/PDF tunnel egress
 ##   - searxng-core                 : outgoing.proxies merged into settings.yml
 ##                                     at startup by searxng-proxy-entrypoint.sh
 ##   - code-interpreter             : HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY
@@ -21,12 +21,13 @@ services:
   # Stealth CDP browser. The obscura image is distroless (no shell), so the
   # --proxy flag must be added to the command list directly via this override.
   #
-  # CRW_CRAWLER__PROXY is set in the base docker-compose.yaml to point at the
-  # prefetch-blocking proxy (port 3128), not at PROXY_URL directly. The CDP
-  # shim strips proxyServer from Target.createBrowserContext so obscura uses
-  # its own --proxy flag (set here), not CRW's proxy. This avoids the
-  # 2-second createBrowserContext timeout that occurs when proxyServer points
-  # at a slow Tor SOCKS proxy.
+  # CRW's HTTP prefetch path is routed to the local prefetch-blocking proxy by
+  # HTTP_PROXY/HTTPS_PROXY in the base compose. This override only gives
+  # obscura the real upstream proxy for browser traffic. The stack
+  # intentionally avoids CRW_CRAWLER__PROXY because that would make CRW pass a
+  # proxyServer option in Target.createBrowserContext; the CDP shim can strip
+  # it as a safety net, but the normal path never enters that per-request
+  # context/proxy code.
   #
   # IMPORTANT: obscura's SOCKS proxy connector cannot resolve Docker-internal
   # DNS names like host.docker.internal — it tries to resolve the proxy

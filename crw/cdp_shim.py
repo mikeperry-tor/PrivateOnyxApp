@@ -27,11 +27,11 @@ headless browser) to provide:
    omit ``waitFor`` entirely — CRW uses its smart heuristics (SPA selector
    poll, content stability, challenge retry) for post-navigate work instead.
 
-3. **Periodic browser state clearing** — Obscura's CDP server uses a single
-   ``CdpContext`` that persists across WebSocket connections. Cookies
-   accumulate in the shared ``default_context.cookie_jar`` indefinitely.
-   The shim periodically clears cookies and browser state via CDP
-   ``Network.clearBrowserCookies`` and ``Storage.clearDataForOrigin`` to
+3. **Periodic browser state clearing** — In the normal wrapper path CRW uses
+   ``Target.createTarget`` on obscura's default CDP context. Cookies can
+   accumulate in the shared ``default_context.cookie_jar`` between WebSocket
+   connections. The shim periodically clears cookies via CDP
+   ``Network.clearBrowserCookies`` and best-effort ``Storage.clearCookies`` to
    prevent stale cookies from interfering with searches and to limit
    cross-query tracking surface.
 
@@ -123,9 +123,12 @@ if _LEGACY_WAIT_UNTIL:
     WAIT_UNTIL_SEARCH = _LEGACY_WAIT_UNTIL
     WAIT_UNTIL_DEFAULT = _LEGACY_WAIT_UNTIL
 # Interval for periodic cookie clearing (seconds). 0 = disabled.
-# Cookies persist across CRW's per-request WebSocket connections via
-# obscura's shared CdpContext. This loop periodically clears them to
-# prevent indefinite accumulation from open_url visits to arbitrary sites.
+# In the normal wrapper path, CRW creates targets on obscura's default CDP
+# context. Cookies can persist across CRW WebSocket connections in that
+# in-process jar. This loop periodically clears them to prevent indefinite
+# accumulation from open_url visits to arbitrary sites. If a future CRW config
+# uses Target.createBrowserContext, obscura v0.1.9 clears cookies on
+# create/dispose and this loop becomes mostly defensive.
 # Default: 3600 (60 minutes) — long enough for multi-query research
 # sessions, short enough to limit tracking surface.
 CLEAR_STATE_INTERVAL_SECONDS = int(
@@ -140,8 +143,8 @@ MAX_RECONNECT_ATTEMPTS = int(os.environ.get("CDP_SHIM_MAX_RECONNECT", "10"))
 # proxy), CRW includes proxyServer in createBrowserContext. Obscura would
 # then route its browser traffic through the blocking proxy, breaking
 # stealth navigation. Stripping proxyServer lets obscura use its own
-# --proxy flag instead. Set to "1" to enable (default: "1" when
-# CRW_CRAWLER__PROXY is set, "0" to disable).
+# --proxy flag instead. Set to "0" only when intentionally testing CRW's
+# per-request browserContext proxy path.
 STRIP_PROXY_SERVER = os.environ.get("CDP_SHIM_STRIP_PROXY_SERVER", "1") == "1"
 
 logging.basicConfig(
@@ -403,8 +406,7 @@ class CdpProxy:
             else:
                 logger.info(
                     "Target.createBrowserContext (id=%s, proxyServer=%s) "
-                    "— per-request browser context created (fingerprint "
-                    "re-randomized)",
+                    "— per-request browser context path reached",
                     msg_id,
                     "present" if had_proxy else "absent",
                 )
@@ -491,10 +493,9 @@ class CdpProxy:
 async def clear_state_loop() -> None:
     """Periodically clear cookies and browser state on obscura.
 
-    Obscura's CDP server uses a single ``CdpContext`` that persists across
-    WebSocket connections. Cookies accumulate in the shared
-    ``default_context.cookie_jar`` indefinitely. This loop periodically
-    clears them to:
+    In the normal wrapper path, CRW creates targets on obscura's default CDP
+    context. Cookies can accumulate in the shared ``default_context.cookie_jar``
+    across WebSocket connections. This loop periodically clears them to:
     - Prevent stale cookies from interfering with searches
     - Limit cross-query tracking surface
     - Avoid cookie accumulation from many different sites (open_url visits)

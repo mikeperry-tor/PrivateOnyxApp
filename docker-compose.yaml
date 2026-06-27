@@ -116,7 +116,7 @@ services:
   # enables the full anti-fingerprint + tracker-blocking domain.
   # crw connects to ws://obscura:9222/devtools/browser.
   obscura:
-    image: h4ckf0r0day/obscura:latest
+    image: ${OBSCURA_IMAGE:-h4ckf0r0day/obscura:v0.1.9}
     restart: unless-stopped
     network_mode: "service:netns-holder"
     command:
@@ -190,7 +190,7 @@ services:
   #
   # See: https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md
   obscura-mcp:
-    image: h4ckf0r0day/obscura:latest
+    image: ${OBSCURA_IMAGE:-h4ckf0r0day/obscura:v0.1.9}
     restart: unless-stopped
     network_mode: "service:netns-holder"
     command:
@@ -227,17 +227,20 @@ services:
   #
   # Sits on port 9224 between CRW and obscura (port 9222) to provide:
   #
-  # 1. Browser context pooling by eTLD+1 — CRW creates/disposes a fresh
-  #    Target.createBrowserContext per request, so cookies and cache never
-  #    persist across queries to the same search engine. The shim intercepts
-  #    disposeBrowserContext calls and keeps contexts alive for reuse, giving
-  #    us cookie persistence and cache coherence for free.
+  # 1. waitUntil injection — CRW sends Page.navigate without waitUntil.
+  #    Obscura's CDP default is domcontentloaded, which can return too early for
+  #    JS-heavy SERPs. The shim injects networkidle2 for configured search
+  #    hosts and load for ordinary web pages.
   #
   # 2. STEALTH_JS stripping — CRW unconditionally injects its own stealth
   #    script via Page.addScriptToEvaluateOnNewDocument with Mac-specific
   #    WebGL strings that conflict with obscura's Linux platform. The shim
   #    replaces the script source with a no-op, letting obscura's own
   #    --stealth mode handle fingerprinting without conflict.
+  #
+  # 3. proxyServer stripping safety net — if CRW is ever configured with a
+  #    crawler proxy that creates a per-request CDP browser context, the shim
+  #    strips proxyServer so browser traffic uses obscura's own --proxy path.
   #
   # CRW connects to ws://127.0.0.1:9224/devtools/browser (the shim) instead
   # of ws://127.0.0.1:9222/devtools/browser (obscura directly). The shim
@@ -273,12 +276,12 @@ services:
       OBSCURA_WAIT_UNTIL_SEARCH: "${OBSCURA_WAIT_UNTIL_SEARCH:-networkidle2}"
       OBSCURA_WAIT_UNTIL_DEFAULT: "${OBSCURA_WAIT_UNTIL_DEFAULT:-load}"
       OBSCURA_WAIT_UNTIL_SEARCH_HOSTS: "${OBSCURA_WAIT_UNTIL_SEARCH_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com}"
-      # Interval for periodic cookie clearing on obscura (seconds).
-      # Obscura's CDP server uses a single CdpContext that persists across
-      # WebSocket connections, so cookies accumulate indefinitely. This
-      # periodically clears them via Network.clearBrowserCookies to limit
-      # tracking surface from open_url visits to arbitrary sites.
-      # Default: 3600 (60 min). Set to 0 to disable.
+      # Interval for periodic cookie clearing on obscura (seconds). In the
+      # normal wrapper path CRW uses Target.createTarget on obscura's default
+      # context, so cookies can persist between CDP WebSocket connections.
+      # If a per-request Target.createBrowserContext path is introduced,
+      # obscura v0.1.9 clears the default jar on create/dispose. Default: 3600
+      # (60 min). Set to 0 to disable.
       OBSCURA_CLEAR_COOKIES_INTERVAL: "${OBSCURA_CLEAR_COOKIES_INTERVAL:-3600}"
     volumes:
       - ./crw/cdp_shim.py:/app/cdp_shim.py:ro
@@ -322,9 +325,10 @@ services:
   #  - Search engine URLs → 403 immediately (no network request)
   #  - Other URLs → HEAD check → PDF? tunnel GET : 403
   #
-  # CRW is configured with CRW_CRAWLER__PROXY pointing at this proxy. The CDP
-  # shim strips proxyServer from Target.createBrowserContext so obscura uses
-  # its own --proxy flag, not this proxy.
+  # CRW is configured with HTTP_PROXY/HTTPS_PROXY pointing at this proxy. We
+  # intentionally do not set CRW_CRAWLER__PROXY; if that path is used later,
+  # the CDP shim strips proxyServer from Target.createBrowserContext so
+  # obscura uses its own --proxy flag, not this proxy.
   #
   # When PROXY_URL is set (e.g., Tor SOCKS proxy), this proxy routes its own
   # upstream requests (HEAD and tunnel) through PROXY_URL, ensuring the HEAD
@@ -372,7 +376,7 @@ services:
   # CRW_SEARCH__SEARXNG_URL points /v1/search at the wrapper's bundled
   # SearXNG sidecar (127.0.0.1:8888 in the netns).
   crw:
-    image: ghcr.io/us/crw:latest
+    image: ${CRW_IMAGE:-ghcr.io/us/crw:v0.18.3}
     restart: unless-stopped
     network_mode: "service:netns-holder"
     environment:
@@ -380,12 +384,11 @@ services:
       # Override the baked-in config.default.toml via env vars (highest precedence).
       # Move crw off port 3000 (taken by web_server in the shared netns).
       CRW_SERVER__PORT: "3010"
-      # Force the chrome renderer (obscura) for ALL crw requests, including
-      # Onyx's /v1/scrape calls. The default "auto" mode tries a plain HTTP
-      # fetch first, which 429s on Google and returns empty SPA shells for
-      # JS-rendered SERPs (Brave). Pinning "chrome" sends every request
-      # through obscura's stealth CDP browser. Per-request renderer pins in
-      # the searxng stub engines are now redundant but harmless.
+      # Constrain CRW's JS renderer ladder to the chrome tier, which points at
+      # obscura through the CDP shim. This does not force every request directly
+      # to CDP: with render_js_default unset, CRW still performs its HTTP
+      # prefetch first, then escalates to chrome/obscura when the prefetch is
+      # blocked, thin, or JS-required.
       CRW_RENDERER__MODE: "chrome"
       # Auto mode (render_js_default unset): CRW runs an HTTP prefetch first,
       # then escalates to the CDP renderer (obscura) when the prefetch returns
@@ -395,20 +398,16 @@ services:
       # to obscura for every page. PDFs are detected by the proxy and returned
       # to CRW for pdf_inspector processing.
       #
-      # The SearXNG stub engines pin renderer:"chrome" per-request, which
-      # forces CDP regardless of this setting. The FirecrawlClient (/v2/scrape)
-      # does not pin a renderer, so it relies on auto mode + the proxy's 403
-      # to escalate to obscura.
-      #
       # We do NOT set render_js_default=true because that mode runs the HTTP
       # prefetch unconditionally and does NOT escalate to CDP on prefetch
       # failure (the ? operator propagates the error). Auto mode does escalate
       # on failure/403, which is what we need.
       # CRW_RENDERER__RENDER_JS_DEFAULT is intentionally unset.
       # Point the chrome renderer at the CDP shim (port 9224), not obscura
-      # directly (port 9222). The shim intercepts createBrowserContext/
-      # disposeBrowserContext to pool contexts per eTLD+1 (cookie + cache
-      # persistence) and strips CRW's conflicting STEALTH_JS injection.
+      # directly (port 9222). The shim strips CRW's conflicting STEALTH_JS
+      # injection, injects per-URL waitUntil into Page.navigate, and strips
+      # proxyServer if a future CRW_CRAWLER__PROXY path creates a per-request
+      # browser context.
       # The /devtools/ path makes crw skip /json/version discovery and
       # connect directly.
       CRW_RENDERER__CHROME__WS_URL: "ws://127.0.0.1:9224/devtools/browser"
@@ -817,4 +816,3 @@ volumes:
   inference_model_server_logs:
   indexing_model_server_logs:
   obscura-data:
-

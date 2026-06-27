@@ -19,13 +19,13 @@ Architecture
 All three containers share one network namespace (``netns-holder``), so crw is
 reachable at ``http://127.0.0.1:3010`` from inside searxng-core.
 
-Why pin ``renderer: chrome``
-    crw's default ``auto`` mode tries a plain HTTP fetch first.  For
-    anti-bot-protected SERPs (Google 429, Brave SvelteKit SPA) that either
-    fails outright or returns a JS shell with no results.  Pinning the
-    ``chrome`` renderer forces crw to drive obscura directly -- obscura is a
-    Rust-native headless browser with built-in stealth (anti-fingerprint +
-    tracker blocking), which is what actually gets results past the bot walls.
+Why omit ``renderer`` and ``waitFor``
+    The wrapper leaves CRW in render auto mode and lets the local
+    prefetch-blocking proxy return 403 for search-engine prefetches. CRW then
+    escalates to the configured chrome tier, which is obscura behind the CDP
+    shim. Omitting ``waitFor`` avoids a blind fixed sleep; page readiness is
+    handled by the shim's per-URL ``waitUntil`` injection plus CRW's own
+    post-navigation heuristics.
 """
 
 import json
@@ -89,12 +89,13 @@ def crw_scrape_request(
         # narrowed; we want the full SERP DOM for XPath parsing.
         "formats": ["rawHtml"],
         "onlyMainContent": False,
-        # No `renderer` pin — use auto mode. The prefetch-blocking proxy
-        # returns 403 for search engine URLs, forcing CRW to escalate to
-        # the CDP renderer (obscura). Pinning renderer:"chrome" would put
-        # CRW in Some(true) mode, where HTTP prefetch failure is propagated
-        # via ? (no CDP escalation). Auto mode (None) escalates to CDP on
-        # 403/error. See docs/request_handling.md §1.7.
+        # No `renderer` pin — use auto mode. The compose default already
+        # constrains CRW's JS ladder to chrome/obscura via
+        # CRW_RENDERER__MODE=chrome. Leaving this request unpinned preserves
+        # CRW's HTTP prefetch/PDF detection and lets the prefetch-blocking
+        # proxy return 403 for search engine URLs, which auto mode treats as
+        # the signal to escalate to the CDP renderer. See
+        # docs/request_handling.md §1.7.
         #
         # No `waitFor` field — page load waiting is handled by the CDP shim's
         # waitUntil injection (OBSCURA_WAIT_UNTIL=networkidle2). CRW uses its

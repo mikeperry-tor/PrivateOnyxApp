@@ -39,10 +39,12 @@ Architecture::
                                    └── upstream ──> PROXY_URL (Tor/VPN)
                                                     (if set)
 
-CRW is configured with ``CRW_CRAWLER__PROXY=http://127.0.0.1:3128`` so its
-reqwest HTTP fetcher routes through this proxy. The CDP shim strips
-``proxyServer`` from ``Target.createBrowserContext`` so obscura uses its own
-``--proxy`` flag, not this proxy.
+CRW is configured with ``HTTP_PROXY=http://127.0.0.1:3128`` and
+``HTTPS_PROXY=http://127.0.0.1:3128`` so its reqwest HTTP fetcher routes
+through this proxy while CDP/WebSocket traffic stays direct via ``NO_PROXY``.
+The stack intentionally avoids ``CRW_CRAWLER__PROXY``; the CDP shim still
+strips ``proxyServer`` from ``Target.createBrowserContext`` as a safety net if
+that path is enabled later.
 
 See ``docs/request_handling.md`` §1.6 for the full wait strategy and §1.7
 for the prefetch-blocking proxy design.
