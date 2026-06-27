@@ -702,6 +702,26 @@ Proxy and VPN override files thread optional egress configuration through Onyx
 services and wrapper sidecars. The routing matrix is documented in
 [VPN routing and proxies](vpn_routing_and_proxies.md).
 
+### SearXNG overlay
+
+The SearXNG sidecar uses `searxng/core-config/settings.yml` as a minimal
+`use_default_settings` overlay on top of the image defaults. The wrapper owns
+only the settings needed for the Onyx web-search path:
+
+- enable `json` output while keeping `html` diagnostics;
+- set a deployment-local `server.secret_key`, which SearXNG overwrites from
+  `SEARXNG_SECRET` when that env var is present;
+- set the non-custom default `outgoing.request_timeout`;
+- remove stock direct Google, Brave, DuckDuckGo, and Startpage engines;
+- add the CRW-backed `google2`, `brave2`, `duckduckgo2`, and `startpage2`
+  engines.
+
+Other SearXNG env-overridden defaults, such as `SEARXNG_PORT`,
+`SEARXNG_BIND_ADDRESS`, `SEARXNG_BASE_URL`, `SEARXNG_LIMITER`,
+`SEARXNG_PUBLIC_INSTANCE`, `SEARXNG_IMAGE_PROXY`, `SEARXNG_METHOD`, and
+`SEARXNG_VALKEY_URL`, stay inherited from the image defaults rather than being
+duplicated in the overlay.
+
 ### Upstream merge request shape
 
 Some wrapper sidecars are deployment-specific and do not belong in upstream

@@ -1,5 +1,7 @@
 use_default_settings:
   engines:
+    # Drop direct stock engines that are replaced by CRW-backed rendered
+    # variants below.
     remove:
       - google
       - google images
@@ -19,17 +21,23 @@ use_default_settings:
       - startpage images
 
 search:
+  # Result formats available from the web endpoint; remove a format to deny
+  # access. Onyx requires json (`format=json`); html is kept for diagnostics.
   formats:
     - html
     - json
 
 server:
+  # Is overwritten by ${SEARXNG_SECRET}.
   secret_key: "DCIc01DEbGttdLWtTPdISq8fHrb99l"
 
 outgoing:
+  # Default timeout in seconds; engine entries can override it with `timeout`.
   request_timeout: 6.0
 
 engines:
+  # CRW-backed rendered SERP engines. `enable_http: true` allows the SearXNG
+  # HTTP client to POST to the local CRW endpoint on loopback.
   - name: google2
     engine: google2
     shortcut: go2

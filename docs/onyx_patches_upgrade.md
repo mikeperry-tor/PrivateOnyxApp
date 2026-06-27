@@ -599,13 +599,24 @@ Overlay-owned settings:
 
 - `search.formats: [html, json]`, because Onyx calls SearXNG with
   `format=json` and HTML is useful for local diagnostics.
-- `server.secret_key`, which must remain deployment-local.
+- `server.secret_key`, which must remain deployment-local and is overwritten by
+  `SEARXNG_SECRET` when that env var is set.
 - `outgoing.request_timeout: 6.0`, used by non-custom engines.
 - `use_default_settings.engines.remove`, which prevents double-querying the
   direct stock engines replaced by the custom CRW-backed engines.
 - `engines` entries for `google2`, `brave2`, `duckduckgo2`, and `startpage2`,
   each with `timeout: 60.0` and `enable_http: true` for the loopback POST to
   CRW.
+
+Inherited SearXNG env overrides:
+
+- Keep env-overridden stock defaults in the image defaults unless the wrapper
+  intentionally owns the setting.
+- `SEARXNG_SECRET` overrides the overlay's `server.secret_key`.
+- `SEARXNG_PORT`, `SEARXNG_BIND_ADDRESS`, `SEARXNG_BASE_URL`,
+  `SEARXNG_LIMITER`, `SEARXNG_PUBLIC_INSTANCE`, `SEARXNG_IMAGE_PROXY`,
+  `SEARXNG_METHOD`, and `SEARXNG_VALKEY_URL` override inherited image-default
+  settings.
 
 Upgrade procedure:
 
@@ -615,6 +626,9 @@ Upgrade procedure:
   `use_default_settings` merge behavior. The wrapper relies on mapping
   deep-merge, engine removal by name, and appending unknown custom engine
   names.
+- Check `reference_repos/searxng/searx/settings_defaults.py` for env alias
+  changes, especially `server.secret_key` / `SEARXNG_SECRET` and inherited
+  `SEARXNG_*` defaults listed above.
 - Check `reference_repos/searxng/searx/settings.yml` for renamed stock engines.
   If upstream renames Google, Brave, DuckDuckGo, or Startpage entries, update
   `use_default_settings.engines.remove`.
@@ -913,6 +927,7 @@ SearXNG upgrade checks:
 
 ```sh
 rg -n "def update_settings|use_default_settings|keep_only|remove" reference_repos/searxng/searx/settings_loader.py
+rg -n "SEARXNG_SECRET|SEARXNG_PORT|SEARXNG_BIND_ADDRESS|SEARXNG_VALKEY_URL" reference_repos/searxng/searx/settings_defaults.py
 rg -n "name: (google|brave|duckduckgo|startpage)" reference_repos/searxng/searx/settings.yml
 rg -n "google2|brave2|duckduckgo2|startpage2|use_default_settings" searxng docs
 ```
