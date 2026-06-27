@@ -164,38 +164,54 @@ class UpstreamConnectionPool:
     def request(
         self, method: str, body: bytes, headers: dict[str, str]
     ) -> tuple[int, str, float, float]:
-        wait_start = time.monotonic()
-        connection = self._pool.get()
-        pool_wait_ms = (time.monotonic() - wait_start) * 1000.0
-        replace_connection = False
-        try:
-            upstream_start = time.monotonic()
-            connection.request(method, self.target, body=body, headers=headers)
-            response = connection.getresponse()
-            raw = response.read().decode("utf-8")
-            upstream_ms = (time.monotonic() - upstream_start) * 1000.0
-            status = response.status
-            if status >= 400:
-                raise UpstreamHTTPError(
-                    status=status,
-                    detail=raw,
-                    pool_wait_ms=pool_wait_ms,
-                    upstream_ms=upstream_ms,
+        max_attempts = 2
+        total_pool_wait_ms = 0.0
+        total_upstream_ms = 0.0
+
+        for attempt in range(1, max_attempts + 1):
+            wait_start = time.monotonic()
+            connection = self._pool.get()
+            pool_wait_ms = (time.monotonic() - wait_start) * 1000.0
+            total_pool_wait_ms += pool_wait_ms
+            replace_connection = False
+            try:
+                upstream_start = time.monotonic()
+                connection.request(method, self.target, body=body, headers=headers)
+                response = connection.getresponse()
+                raw = response.read().decode("utf-8")
+                upstream_ms = (time.monotonic() - upstream_start) * 1000.0
+                total_upstream_ms += upstream_ms
+                status = response.status
+                if status >= 400:
+                    raise UpstreamHTTPError(
+                        status=status,
+                        detail=raw,
+                        pool_wait_ms=total_pool_wait_ms,
+                        upstream_ms=total_upstream_ms,
+                    )
+                return status, raw, total_pool_wait_ms, total_upstream_ms
+            except UpstreamHTTPError:
+                raise
+            except (OSError, TimeoutError, http.client.HTTPException) as e:
+                replace_connection = True
+                if attempt >= max_attempts:
+                    raise
+                log_line(
+                    "upstream_connection_retry"
+                    f" attempt={attempt}"
+                    f" max_attempts={max_attempts}"
+                    f" reason={e}"
                 )
-            return status, raw, pool_wait_ms, upstream_ms
-        except UpstreamHTTPError:
-            raise
-        except Exception:
-            replace_connection = True
-            raise
-        finally:
-            if replace_connection:
-                try:
-                    connection.close()
-                except Exception:
-                    pass
-                connection = self._new_connection()
-            self._pool.put(connection)
+            finally:
+                if replace_connection:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+                    connection = self._new_connection()
+                self._pool.put(connection)
+
+        raise RuntimeError("unreachable upstream retry state")
 
 
 try:
