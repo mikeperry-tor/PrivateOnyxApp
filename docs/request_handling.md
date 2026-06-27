@@ -8,6 +8,15 @@ content provider pointed at the local CRW endpoint. If the Firecrawl content
 provider is not configured in Onyx Admin, upstream Onyx falls back to its
 built-in `OnyxWebCrawler`; that fallback is documented separately below.
 
+Version scope for this document, based on clean local checkouts under
+`reference_repos/`:
+
+- Onyx: `v4.1.7` (`34fc4c3d1f`, 2026-06-23)
+- CRW: `v0.16.0-29-g4638715` (`4638715bed7d`, 2026-06-20)
+- Obscura: `v0.1.8-33-gedde67d` (`edde67ddd4a6`, 2026-06-22)
+- SearXNG: master commit `952896d29e1f` (runtime version string
+  `2026.6.22+952896d29`, 2026-06-22)
+
 This document focuses on request chains and browser/scraper behavior. For the
 Compose-level VPN namespace, optional `PROXY_URL`, teep, Tailscale, and
 code-interpreter routing switches, see
