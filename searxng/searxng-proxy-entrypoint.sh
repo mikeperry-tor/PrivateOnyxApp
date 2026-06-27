@@ -38,22 +38,9 @@ if [ ! -f "$SRC_SETTINGS" ]; then
 fi
 
 # Work on a private copy so the host-side bind mount is never modified.
-# Copy ALL config files from /etc/searxng/ (settings.yml, etc.) because SearXNG
-# looks for companion config files in the same directory as
-# SEARXNG_SETTINGS_PATH. Also copy limiter.toml from the image's built-in
-# location (it's not in the bind-mounted /etc/searxng/ — only settings.yml is).
 MERGE_DIR="/tmp/searxng-proxy"
 mkdir -p "$MERGE_DIR"
-cp -r /etc/searxng/* "$MERGE_DIR/" 2>/dev/null || true
-# limiter.toml ships in the image at /usr/local/searxng/searx/limiter.toml but
-# is not in the bind-mounted /etc/searxng/ directory. Copy it to the merge dir
-# so SearXNG's bot detection finds it alongside settings.yml.
-if [ ! -f "$MERGE_DIR/limiter.toml" ] && [ -f /usr/local/searxng/searx/limiter.toml ]; then
-  cp /usr/local/searxng/searx/limiter.toml "$MERGE_DIR/limiter.toml"
-fi
 MERGED_SETTINGS="$MERGE_DIR/settings.yml"
-# Ensure settings.yml is the fresh source copy (cp -r may have copied a stale
-# merged version from a previous run if /etc/searxng was the merge dir).
 cp "$SRC_SETTINGS" "$MERGED_SETTINGS"
 
 # Merge proxy config into the settings copy using Python (the SearXNG image
@@ -66,7 +53,8 @@ cp "$SRC_SETTINGS" "$MERGED_SETTINGS"
 #  2. outgoing.networks.direct: define a `direct` network with `proxies: {}`
 #     (empty = no proxy) so engines assigned to it bypass the proxy entirely.
 #
-#  3. crw-backed engines (google2, brave2, duckduckgo2): set `network: direct`
+#  3. crw-backed engines (google2, brave2, duckduckgo2, startpage2): set
+#     `network: direct`
 #     so their loopback POSTs to http://127.0.0.1:3010/v1/scrape (the local crw
 #     Firecrawl-compatible scraper) are NOT sent through the upstream proxy.
 #     Without this, the `all://` proxy pattern catches the loopback crw request

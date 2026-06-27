@@ -1209,13 +1209,12 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `outgoing.request_timeout` | `6.0` | Default SearXNG HTTP client timeout; custom CRW-backed engines override this with longer per-engine timeouts |
 | Engine `timeout` | `60.0` | Per-engine timeout (seconds) — accommodates obscura render time |
 | `google2`, `brave2`, `duckduckgo2`, `startpage2` | enabled | Custom CRW-backed engines mounted from `searxng/engines/` |
-| Stock Google/Brave/DuckDuckGo/Startpage variants | inactive | Avoids double-querying direct stock engines that are challenge-prone on VPN/datacenter exit IPs |
+| Stock Google/Brave/DuckDuckGo/Startpage variants | removed by overlay | Avoids double-querying direct stock engines that are challenge-prone on VPN/datacenter exit IPs |
 
-The current `searxng/core-config/settings.yml` is a full copied settings file,
-but SearXNG can merge a compact user overlay with the image defaults via
-`use_default_settings: true`. The upgrade analysis and recommended overlay
-strategy are tracked in
-[SearXNG config drift and overlay option](onyx_patches_upgrade.md#searxng-config-drift-and-overlay-option).
+`searxng/core-config/settings.yml` is a minimal overlay merged with the
+SearXNG image defaults via `use_default_settings`. The upgrade procedure for
+that overlay is tracked in
+[SearXNG settings overlay](onyx_patches_upgrade.md#searxng-settings-overlay).
 
 ---
 
