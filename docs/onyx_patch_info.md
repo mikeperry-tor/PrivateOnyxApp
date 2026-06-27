@@ -5,10 +5,16 @@ Last updated for Onyx v4.1.7.
 This document explains why this wrapper carries local Onyx patches, how those
 patches modify Onyx at runtime or install time, and how the same behavior could
 be turned into proper upstream merge requests. For line-oriented upgrade checks,
-use the companion inventory in `docs/onyx_patches_upgrade.md`.
+use the companion inventory in
+[`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md). For operator-facing
+setup and troubleshooting of the local document RAG path, use
+[`docs/local_docs_rag_search.md`](local_docs_rag_search.md).
 
 Related implementation docs:
 
+- [Local document RAG search](local_docs_rag_search.md) describes the
+  `doc-drop-web` connector path, local embedding shim, optional MLX embedding
+  server, and RAG-specific diagnostics.
 - [Request handling](request_handling.md) describes how web search and
   `open_url` requests flow through SearXNG, CRW, the CDP shim, and obscura.
 - [VPN routing and proxies](vpn_routing_and_proxies.md) describes the
@@ -283,6 +289,11 @@ Onyx source areas:
 - `backend/onyx/connectors/models.py`
 - `backend/onyx/db/models.py`
 
+For local document-drop setup and troubleshooting, see
+[Local Document RAG Search](local_docs_rag_search.md#local-document-rag-search).
+For the line-oriented upgrade inventory, see
+[Background Web connector PDF freshness patch](onyx_patches_upgrade.md#background-web-connector-pdf-freshness-patch).
+
 ### Why this is needed
 
 The wrapper exposes a local, read-only document drop over HTTP so Onyx's Web
@@ -461,6 +472,11 @@ Onyx source areas:
 - `backend/onyx/indexing/embedder.py`
 - `backend/onyx/utils/gpu_utils.py`
 
+For local/custom embedding setup, query prefix behavior, and diagnostics, see
+[Local Document RAG Search](local_docs_rag_search.md#embedding-shim). For
+upgrade checks against Onyx's model-server contract, see
+[Local embedding shim](onyx_patches_upgrade.md#local-embedding-shim).
+
 ### Why this is needed
 
 Onyx expects embedding calls to go through its model-server API, especially
@@ -562,6 +578,11 @@ Onyx source area:
 
 - `reference_repos/onyx/deployment/docker_compose/docker-compose.yml`
 - `reference_repos/onyx/deployment/docker_compose/docker-compose.onyx-lite.yml`
+
+The RAG-specific sidecars described here are covered operationally in
+[Local Document RAG Search](local_docs_rag_search.md#web-connector-server), and
+line-oriented full-mode compose checks live in
+[Full mode](onyx_patches_upgrade.md#full-mode-compose).
 
 ### Why this is needed
 

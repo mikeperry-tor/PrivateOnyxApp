@@ -15,7 +15,10 @@ Reference checkouts:
 
 Use this document when moving to a new major Onyx release: inspect the
 referenced upstream code first, then decide whether each wrapper patch is still
-applicable.
+applicable. For why each patch exists and what an upstreamable version might
+look like, see [`docs/onyx_patch_info.md`](onyx_patch_info.md). For
+operator-facing setup and troubleshooting of the local document RAG path, see
+[`docs/local_docs_rag_search.md`](local_docs_rag_search.md).
 
 ## Fast upgrade checklist
 
@@ -211,6 +214,13 @@ Local files:
 - `onyx/patches/sitecustomize_background/sitecustomize.py`
 - `docker-compose.full.yml`
 
+Companion docs:
+
+- Rationale and upstream shape:
+  [Background Web connector PDF freshness](onyx_patch_info.md#background-web-connector-pdf-freshness)
+- Operator flow and diagnostics:
+  [Local Document RAG Search](local_docs_rag_search.md#pdf-freshness-patch)
+
 Patch behavior:
 
 - Active by default with `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED=true`.
@@ -350,6 +360,13 @@ Local files:
 - `onyx/local_embedding_shim.py`
 - `docker-compose.full.yml`
 - `Makefile` embedserv targets
+
+Companion docs:
+
+- Rationale and upstream shape:
+  [Local embedding shim](onyx_patch_info.md#local-embedding-shim)
+- Operator setup, prefix behavior, and diagnostics:
+  [Local Document RAG Search](local_docs_rag_search.md#embedding-shim)
 
 Patch behavior:
 
@@ -500,7 +517,15 @@ Upgrade notes:
 - Confirm upstream env names for telemetry/cloud/license flags still exist or
   are harmless if ignored.
 
-### Full mode (`docker-compose.full.yml`)
+### Full mode compose
+
+File: `docker-compose.full.yml`.
+
+For the RAG-specific user flow around `doc-drop-web`,
+`host-doc-drop-web-proxy`, and `local-embedding-shim`, see
+[Local Document RAG Search](local_docs_rag_search.md). For why the wrapper
+uses full-mode sidecars and compose overrides at all, see
+[Docker Compose wrapper modifications](onyx_patch_info.md#docker-compose-wrapper-modifications).
 
 Patched Onyx services:
 

@@ -3,7 +3,19 @@
 This document explains the local-document RAG path provided by the full Onyx
 wrapper. It is the design and troubleshooting companion for the shorter setup
 steps in `README.md` and the line-oriented upgrade checklist in
-`docs/onyx_patches_upgrade.md`.
+[`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md).
+
+Use this document for operator-facing setup, request flow, and diagnostics. For
+the patch rationale and possible upstream shape, see
+[`docs/onyx_patch_info.md`](onyx_patch_info.md), especially
+[Background Web connector PDF freshness](onyx_patch_info.md#background-web-connector-pdf-freshness),
+[Local embedding shim](onyx_patch_info.md#local-embedding-shim), and
+[Docker Compose wrapper modifications](onyx_patch_info.md#docker-compose-wrapper-modifications).
+For line-numbered Onyx upgrade checks, use
+[`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md), especially
+[Background Web connector PDF freshness patch](onyx_patches_upgrade.md#background-web-connector-pdf-freshness-patch),
+[Local embedding shim](onyx_patches_upgrade.md#local-embedding-shim), and
+[Full mode](onyx_patches_upgrade.md#full-mode-compose).
 
 The local path is intentionally built out of wrapper services instead of an
 Onyx fork:
@@ -62,6 +74,11 @@ Implementation:
 - User-facing env: `DOC_DROP_DIR`, `DOC_DROP_WEB_PORT`,
   `DOC_DROP_WEB_CONTAINER_PORT`, and optional `DOC_DROP_WEB_HOST`
 
+Upgrade-sensitive compose details for these services live in
+[Full mode](onyx_patches_upgrade.md#full-mode-compose). The
+broader reason the wrapper carries these sidecars is described in
+[Docker Compose wrapper modifications](onyx_patch_info.md#docker-compose-wrapper-modifications).
+
 `doc-drop-web` is a thin Python `http.server` wrapper. It deliberately does not
 try to parse documents. Onyx's Web connector is responsible for downloading,
 extracting, chunking, and indexing PDFs, Office documents, EPUBs, and other
@@ -118,6 +135,13 @@ Implementation:
   `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS`, and
   `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_DEBUG`
 
+This section keeps the operational behavior in one place. The detailed patch
+rationale is in
+[Background Web connector PDF freshness](onyx_patch_info.md#background-web-connector-pdf-freshness);
+the upstream symbols and line references to re-check during an Onyx upgrade are
+in
+[Background Web connector PDF freshness patch](onyx_patches_upgrade.md#background-web-connector-pdf-freshness-patch).
+
 Onyx v4.1.7 intentionally avoids trusting `Last-Modified` for Web PDFs because
 public websites often emit unreliable validators. That is sensible for the
 general internet, but wasteful for a local document-drop server where the file
@@ -143,6 +167,12 @@ Implementation:
 - Compose service: `local-embedding-shim` in `docker-compose.full.yml`
 - Shim script: `onyx/local_embedding_shim.py`
 - Onyx services routed to it: `api_server` and `background`
+
+This section focuses on how to run and diagnose the shim. The rationale and
+upstreamable design are in
+[Local embedding shim](onyx_patch_info.md#local-embedding-shim); the model-server
+contract and upstream references to verify during upgrades are in
+[Local embedding shim](onyx_patches_upgrade.md#local-embedding-shim).
 
 The shim listens on `0.0.0.0:9101` inside the shared namespace. Full mode sets
 these env vars for `api_server` and `background`:
@@ -335,22 +365,21 @@ Common failure modes:
 
 ## Major Upgrade Checklist
 
-Before upgrading Onyx across a major version, re-check these assumptions:
+This is the short RAG-specific checklist. The authoritative line-oriented
+inventory is
+[`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md), especially the
+[background freshness](onyx_patches_upgrade.md#background-web-connector-pdf-freshness-patch),
+[embedding shim](onyx_patches_upgrade.md#local-embedding-shim), and
+[full-mode compose](onyx_patches_upgrade.md#full-mode-compose)
+sections. Before upgrading Onyx across a major version, re-check these
+assumptions:
 
-- `background` and `api_server` still accept `MODEL_SERVER_HOST`,
-  `MODEL_SERVER_PORT`, `INDEXING_MODEL_SERVER_HOST`, and
-  `INDEXING_MODEL_SERVER_PORT`.
-- Indexing still sends embedding requests through
-  `/encoder/bi-encoder-embed`.
-- Query-time internal search still embeds queries through the same model-server
-  path.
-- The `EmbedRequest` and `EmbedResponse` shapes still match the shim, especially
-  `texts`, `model_name`, `text_type`, `manual_query_prefix`, and
-  `manual_passage_prefix`.
-- Onyx has not started requiring `/api/health` on the model-server path. The
-  shim currently exposes `/health` for Compose and `/api/gpu-status` for Onyx.
-- Reranking and query-analysis are still optional for the workflows using the
-  shim, or the shim has been extended to support them.
+- `background` and `api_server` still route both indexing and query-time
+  embeddings through the model-server env vars pointed at the shim.
+- Onyx's embedding request and response shape still matches the shim, including
+  the fields used for query/passage prefixing.
+- Reranking and query-analysis are still optional for this local path, or the
+  shim has been extended to support them.
 - The Web connector scrape path and document model fields used by the PDF
   freshness patch still exist.
 - The Security Hardening env-to-UI mapping has not changed.
