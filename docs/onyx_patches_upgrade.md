@@ -599,8 +599,8 @@ Overlay-owned settings:
 
 - `search.formats: [html, json]`, because Onyx calls SearXNG with
   `format=json` and HTML is useful for local diagnostics.
-- `server.secret_key`, which must remain deployment-local and is overwritten by
-  `SEARXNG_SECRET` when that env var is set.
+- `server.secret_key`, which must come from the required deployment-local
+  `SEARXNG_SECRET` value in `.env.wrapper`.
 - `outgoing.request_timeout: 6.0`, used by non-custom engines.
 - `use_default_settings.engines.remove`, which prevents double-querying the
   direct stock engines replaced by the custom CRW-backed engines.
@@ -612,7 +612,8 @@ Inherited SearXNG env overrides:
 
 - Keep env-overridden stock defaults in the image defaults unless the wrapper
   intentionally owns the setting.
-- `SEARXNG_SECRET` overrides the overlay's `server.secret_key`.
+- `SEARXNG_SECRET` overrides the overlay's `server.secret_key` and is required
+  by both Makefile validation and Compose interpolation.
 - `SEARXNG_PORT`, `SEARXNG_BIND_ADDRESS`, `SEARXNG_BASE_URL`,
   `SEARXNG_LIMITER`, `SEARXNG_PUBLIC_INSTANCE`, `SEARXNG_IMAGE_PROXY`,
   `SEARXNG_METHOD`, and `SEARXNG_VALKEY_URL` override inherited image-default
@@ -629,6 +630,8 @@ Upgrade procedure:
 - Check `reference_repos/searxng/searx/settings_defaults.py` for env alias
   changes, especially `server.secret_key` / `SEARXNG_SECRET` and inherited
   `SEARXNG_*` defaults listed above.
+- Keep `.env.wrapper.example`, Makefile validation, and Compose
+  `${SEARXNG_SECRET:?SEARXNG_SECRET must be set}` checks aligned.
 - Check `reference_repos/searxng/searx/settings.yml` for renamed stock engines.
   If upstream renames Google, Brave, DuckDuckGo, or Startpage entries, update
   `use_default_settings.engines.remove`.
@@ -826,7 +829,7 @@ Onyx source references:
 
 Behavior:
 
-- Requires `ONYX_IMAGE_TAG`, `SEARXNG_IMAGE_TAG`, and
+- Requires `ONYX_IMAGE_TAG`, `SEARXNG_IMAGE_TAG`, `SEARXNG_SECRET`, and
   `CODE_INTERPRETER_IMAGE_TAG` from `.env.wrapper` or make CLI overrides.
   `ONYX_IMAGE_TAG` remains the source of truth for Onyx backend/web/model
   image tags.

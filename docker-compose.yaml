@@ -57,6 +57,9 @@ services:
       service: core
     environment:
       SEARXNG_PORT: ${SEARXNG_CONTAINER_PORT:-8888}
+      # Required SearXNG server secret. The settings overlay includes a local
+      # placeholder, but SearXNG overwrites server.secret_key from this env var.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET must be set}
       # crw API key shared with the stub engines (searxng/engines/_crw.py).
       # Mirrors CRW_ONYX_API_KEY from .env.wrapper so a future auth-required
       # crw flip keeps the engines working without a code change.

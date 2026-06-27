@@ -1206,7 +1206,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `SearxEngineTooManyRequests` | `180` | Suspension time for 429 errors (seconds) |
 | `SearxEngineAccessDenied` | `180` | Suspension time for 403 errors (seconds) |
 | `SearxEngineCaptcha` | `3600` | Suspension time for CAPTCHA (seconds) |
-| `server.secret_key` | deployment-local secret | Overwritten by `SEARXNG_SECRET` when that env var is set |
+| `server.secret_key` | `SEARXNG_SECRET` from `.env.wrapper` | Required by Makefile and Compose; overwrites the overlay value |
 | `outgoing.request_timeout` | `6.0` | Default SearXNG HTTP client timeout; custom CRW-backed engines override this with longer per-engine timeouts |
 | Engine `timeout` | `60.0` | Per-engine timeout (seconds) — accommodates obscura render time |
 | `google2`, `brave2`, `duckduckgo2`, `startpage2` | enabled | Custom CRW-backed engines mounted from `searxng/engines/` |
@@ -1217,10 +1217,12 @@ SearXNG image defaults via `use_default_settings`. The upgrade procedure for
 that overlay is tracked in
 [SearXNG settings overlay](onyx_patches_upgrade.md#searxng-settings-overlay).
 
-Other SearXNG env-overridden defaults stay inherited from the image rather than
-being repeated in the overlay: `SEARXNG_PORT`, `SEARXNG_BIND_ADDRESS`,
-`SEARXNG_BASE_URL`, `SEARXNG_LIMITER`, `SEARXNG_PUBLIC_INSTANCE`,
-`SEARXNG_IMAGE_PROXY`, `SEARXNG_METHOD`, and `SEARXNG_VALKEY_URL`.
+`SEARXNG_SECRET` is declared in `.env.wrapper.example`; copied deployments must
+set a non-empty deployment-local value. Other SearXNG env-overridden defaults
+stay inherited from the image rather than being repeated in the overlay:
+`SEARXNG_PORT`, `SEARXNG_BIND_ADDRESS`, `SEARXNG_BASE_URL`,
+`SEARXNG_LIMITER`, `SEARXNG_PUBLIC_INSTANCE`, `SEARXNG_IMAGE_PROXY`,
+`SEARXNG_METHOD`, and `SEARXNG_VALKEY_URL`.
 
 ---
 

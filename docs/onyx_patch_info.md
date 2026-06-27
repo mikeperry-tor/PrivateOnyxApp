@@ -709,18 +709,19 @@ The SearXNG sidecar uses `searxng/core-config/settings.yml` as a minimal
 only the settings needed for the Onyx web-search path:
 
 - enable `json` output while keeping `html` diagnostics;
-- set a deployment-local `server.secret_key`, which SearXNG overwrites from
-  `SEARXNG_SECRET` when that env var is present;
+- set a deployment-local `server.secret_key` from the required
+  `SEARXNG_SECRET` value in `.env.wrapper`;
 - set the non-custom default `outgoing.request_timeout`;
 - remove stock direct Google, Brave, DuckDuckGo, and Startpage engines;
 - add the CRW-backed `google2`, `brave2`, `duckduckgo2`, and `startpage2`
   engines.
 
-Other SearXNG env-overridden defaults, such as `SEARXNG_PORT`,
-`SEARXNG_BIND_ADDRESS`, `SEARXNG_BASE_URL`, `SEARXNG_LIMITER`,
-`SEARXNG_PUBLIC_INSTANCE`, `SEARXNG_IMAGE_PROXY`, `SEARXNG_METHOD`, and
-`SEARXNG_VALKEY_URL`, stay inherited from the image defaults rather than being
-duplicated in the overlay.
+The Makefile and Compose configuration require `SEARXNG_SECRET` so direct
+startup cannot rely on the overlay placeholder. Other SearXNG env-overridden
+defaults, such as `SEARXNG_PORT`, `SEARXNG_BIND_ADDRESS`, `SEARXNG_BASE_URL`,
+`SEARXNG_LIMITER`, `SEARXNG_PUBLIC_INSTANCE`, `SEARXNG_IMAGE_PROXY`,
+`SEARXNG_METHOD`, and `SEARXNG_VALKEY_URL`, stay inherited from the image
+defaults rather than being duplicated in the overlay.
 
 ### Upstream merge request shape
 
@@ -755,8 +756,9 @@ The upstream install script is optimized for directly installing Onyx's Docker
 Compose deployment. The wrapper needs a more deterministic and automatable
 workflow:
 
-- Require wrapper image tags from `.env.wrapper` or make CLI overrides:
-  `ONYX_IMAGE_TAG`, `SEARXNG_IMAGE_TAG`, and `CODE_INTERPRETER_IMAGE_TAG`.
+- Require wrapper image tags and SearXNG secret material from `.env.wrapper` or
+  make CLI overrides: `ONYX_IMAGE_TAG`, `SEARXNG_IMAGE_TAG`,
+  `SEARXNG_SECRET`, and `CODE_INTERPRETER_IMAGE_TAG`.
 - Support Docker or Podman through `CONTAINER_BIN`.
 - Refresh upstream deployment files for a chosen config ref.
 - Initialize and sync Onyx's `.env` noninteractively.

@@ -28,7 +28,7 @@ search:
     - json
 
 server:
-  # Is overwritten by ${SEARXNG_SECRET}.
+  # Is overwritten by the required ${SEARXNG_SECRET} from .env.wrapper.
   secret_key: "DCIc01DEbGttdLWtTPdISq8fHrb99l"
 
 outgoing:

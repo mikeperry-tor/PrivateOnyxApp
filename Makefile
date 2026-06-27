@@ -116,6 +116,11 @@ $(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(ENV_FILE), 
 endif
 SEARXNG_IMAGE ?= docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)
 export SEARXNG_IMAGE_TAG
+SEARXNG_SECRET ?= $(strip $(shell sed -n 's/^SEARXNG_SECRET=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+ifeq ($(strip $(SEARXNG_SECRET)),)
+$(error SEARXNG_SECRET is not set. Add SEARXNG_SECRET=... to $(ENV_FILE), or pass SEARXNG_SECRET=... on the make command line)
+endif
+export SEARXNG_SECRET
 CODE_INTERPRETER_IMAGE_TAG ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 ifeq ($(strip $(CODE_INTERPRETER_IMAGE_TAG)),)
 $(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=... to $(ENV_FILE), or pass CODE_INTERPRETER_IMAGE_TAG=... on the make command line)

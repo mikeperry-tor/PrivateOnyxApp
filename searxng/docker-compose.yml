@@ -9,6 +9,8 @@ services:
     image: docker.io/searxng/searxng:${SEARXNG_IMAGE_TAG:?SEARXNG_IMAGE_TAG must be set}
     restart: always
     env_file: ./.env
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET must be set}
     volumes:
       - ./core-config/:/etc/searxng/:Z
       - core-data:/var/cache/searxng/
