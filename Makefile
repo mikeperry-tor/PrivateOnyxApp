@@ -118,9 +118,10 @@ SEARXNG_IMAGE ?= docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)
 export SEARXNG_IMAGE_TAG
 CODE_INTERPRETER_IMAGE_TAG ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 ifeq ($(strip $(CODE_INTERPRETER_IMAGE_TAG)),)
-CODE_INTERPRETER_IMAGE_TAG := 0.4.4
+$(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=... to $(ENV_FILE), or pass CODE_INTERPRETER_IMAGE_TAG=... on the make command line)
 endif
 CODE_INTERPRETER_IMAGE ?= onyxdotapp/code-interpreter:$(CODE_INTERPRETER_IMAGE_TAG)
+export CODE_INTERPRETER_IMAGE_TAG
 ONYX_INSTALL_SCRIPT ?= ./install.sh
 ONYX_INSTALL_WRAPPER ?= ./install-with-container-bin.sh
 ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
@@ -169,6 +170,7 @@ help:
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
 	@echo "Override SearXNG tag: make searxng-image-ready SEARXNG_IMAGE_TAG=2026.6.26-f8ffbf36f"
+	@echo "Override code-interpreter tag: make up-lite CODE_INTERPRETER_IMAGE_TAG=0.4.4"
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override install-time low-port remap: make up-full ONYX_INSTALL_HOST_PORT_80=3001"
 	@echo "Override container engine: make up-lite CONTAINER_BIN=/opt/homebrew/bin/podman"

@@ -703,8 +703,10 @@ Onyx source references:
 
 Behavior:
 
-- Reads `ONYX_IMAGE_TAG` from `.env.wrapper` and treats it as the source of
-  truth for Onyx image tags.
+- Requires `ONYX_IMAGE_TAG`, `SEARXNG_IMAGE_TAG`, and
+  `CODE_INTERPRETER_IMAGE_TAG` from `.env.wrapper` or make CLI overrides.
+  `ONYX_IMAGE_TAG` remains the source of truth for Onyx backend/web/model
+  image tags.
 - Builds `COMPOSE_FILE` layer lists for lite/full mode, Podman mode, optional
   teep/tailscale/code-interpreter VPN routing, and optional proxy routing.
 - `ensure-onyx-config` verifies `onyx/onyx_data/deployment/.env` exists and
@@ -715,7 +717,8 @@ Behavior:
 - `init-onyx-env` and `onyx-build` invoke `onyx/install-with-container-bin.sh`
   with `ONYX_DESIRED_IMAGE_TAG`, `CONTAINER_BIN`, and
   `ONYX_INSTALL_HOST_PORT_80`.
-- `sync-onyx-env` ensures `IMAGE_TAG`, `USER_AUTH_SECRET`, and MinIO/S3
+- `sync-onyx-env` ensures `IMAGE_TAG`, `CODE_INTERPRETER_IMAGE_TAG`,
+  `USER_AUTH_SECRET`, and MinIO/S3
   credentials are present and non-default.
 - `embedserv-*` targets install, verify, and serve the local MLX embedding
   server that `onyx/local_embedding_shim.py` calls.

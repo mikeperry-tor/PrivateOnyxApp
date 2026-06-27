@@ -735,7 +735,8 @@ The upstream install script is optimized for directly installing Onyx's Docker
 Compose deployment. The wrapper needs a more deterministic and automatable
 workflow:
 
-- Use `ONYX_IMAGE_TAG` from `.env.wrapper` as the image source of truth.
+- Require wrapper image tags from `.env.wrapper` or make CLI overrides:
+  `ONYX_IMAGE_TAG`, `SEARXNG_IMAGE_TAG`, and `CODE_INTERPRETER_IMAGE_TAG`.
 - Support Docker or Podman through `CONTAINER_BIN`.
 - Refresh upstream deployment files for a chosen config ref.
 - Initialize and sync Onyx's `.env` noninteractively.
