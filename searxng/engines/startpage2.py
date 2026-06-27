@@ -22,6 +22,7 @@ from urllib.parse import urlencode, unquote, urlparse, parse_qs
 
 from lxml import html
 
+from searx.exceptions import SearxEngineCaptchaException
 from searx.utils import eval_xpath, eval_xpath_list, extract_text
 
 from searx.engines import _crw  # type: ignore  # noqa: E402
@@ -60,9 +61,12 @@ language_support = False
 #     <div class="description css-XXXXX">Snippet text</div>
 #   </div>
 #
-# Sponsored results use class "a-bg-result" and are excluded by the trailing
-# space in "result " (matches "result css-..." but not "a-bg-result ...").
-results_xpath = '//div[contains(@class, "result ")]'
+# Sponsored results use class "a-bg-result"; match the organic "result" class
+# as a class token so both "result css-..." and a bare "result" class work.
+results_xpath = (
+    '//div[contains(concat(" ", normalize-space(@class), " "), " result ")'
+    ' and not(contains(concat(" ", normalize-space(@class), " "), " a-bg-result "))]'
+)
 # The clickable title link carries the real result href.
 link_xpath = './/a[@data-testid="gl-title-link"]'
 # Fallback for layout variants where data-testid is empty.
@@ -73,6 +77,13 @@ link_fallback_xpath = './/a[contains(@class, "result-title")]'
 title_xpath = './/h2'
 # Snippet / description text.
 content_xpath = './/*[contains(@class, "description")]'
+captcha_xpath = (
+    '//title[contains(translate(normalize-space(.), '
+    '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "startpage captcha")]'
+    ' | //meta[contains(translate(@content, '
+    '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "startpage\'s captcha page")]'
+    ' | //form[contains(@action, "/sp/captcha")]'
+)
 
 
 def request(query: str, params: "OnlineParams") -> None:
@@ -106,6 +117,14 @@ def _strip_startpage_redirect(href: str) -> str:
     return href
 
 
+def _raise_if_captcha(dom) -> None:
+    """Startpage can return a captcha page with HTTP 200 / crw success=true."""
+    if eval_xpath(dom, captcha_xpath):
+        raise SearxEngineCaptchaException(
+            message="startpage2: Startpage returned a captcha page via crw",
+        )
+
+
 def response(resp: "SXNG_Response"):
     """Parse the rendered Startpage SERP HTML returned by crw."""
     text = _crw.extract_crw_html(resp)
@@ -114,6 +133,7 @@ def response(resp: "SXNG_Response"):
 
     results = []
     dom = html.fromstring(text)
+    _raise_if_captcha(dom)
 
     for result in eval_xpath_list(dom, results_xpath):
         link_nodes = eval_xpath(result, link_xpath)
