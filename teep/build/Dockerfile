@@ -6,7 +6,8 @@ ARG TEEP_REPO=https://github.com/13rac1/teep.git
 ARG TEEP_REF=main
 
 WORKDIR /src
-RUN git clone --branch "$TEEP_REF" --single-branch --depth 1 "$TEEP_REPO" .
+RUN git clone "$TEEP_REPO" . \
+    && git checkout --detach "$TEEP_REF"
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -14,6 +15,12 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w" -o /out/teep ./cmd/teep
 
 FROM alpine:3.22
+
+ARG TEEP_REPO=https://github.com/13rac1/teep.git
+ARG TEEP_REF=main
+
+LABEL org.opencontainers.image.source=$TEEP_REPO \
+      org.opencontainers.image.revision=$TEEP_REF
 
 RUN apk add --no-cache ca-certificates
 

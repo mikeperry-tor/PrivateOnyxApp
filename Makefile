@@ -11,9 +11,16 @@ MYST_DOCKERFILE ?= myst/build/Dockerfile
 MYST_IMAGE ?= mysteriumnetwork/myst:docker_host_fixes_with_logs
 
 TEEP_REPO ?= https://github.com/13rac1/teep.git
-TEEP_REF ?= main
+TEEP_DEFAULT_REF := cacfa5ab2a4e8cc52ec8a2020a763f7306ad3438
+TEEP_REF ?= $(strip $(shell sed -n 's/^TEEP_REF=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+ifeq ($(strip $(TEEP_REF)),)
+TEEP_REF := $(TEEP_DEFAULT_REF)
+endif
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
-TEEP_IMAGE ?= 13rac1/teep:main
+TEEP_IMAGE ?= $(strip $(shell sed -n 's/^TEEP_IMAGE=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+ifeq ($(strip $(TEEP_IMAGE)),)
+TEEP_IMAGE := 13rac1/teep:$(TEEP_REF)
+endif
 TAILSCALE_IMAGE ?= tailscale/tailscale:stable
 OBSCURA_IMAGE ?= h4ckf0r0day/obscura:0.1.9
 CRW_IMAGE ?= ghcr.io/us/crw:0.18.3
@@ -58,6 +65,7 @@ endif
 endif
 export CONTAINER_BIN
 export DOCKER_SOCK_PATH
+export TEEP_IMAGE
 
 PODMAN_COMPOSE_SUFFIX :=
 PODMAN_FULL_COMPOSE_SUFFIX :=
@@ -161,7 +169,8 @@ help:
 	@echo "Proxy: set PROXY_URL in $(ENV_FILE) (http/https/socks5) to route crw, obscura, SearXNG,"
 	@echo "       code-interpreter, and code agent egress through an upstream proxy"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
-	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:main"
+	@echo "Override teep pin: make teep-build TEEP_REF=<commit-sha>"
+	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:<tag>"
 	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
 
 upgrade: myst-build teep-build searxng-image-ready tailscale-image-ready crw-image-ready upgrade-onyx

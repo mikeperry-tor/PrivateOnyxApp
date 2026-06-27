@@ -784,7 +784,7 @@ services:
   # Set TEEP_VPN_ROUTED=true in .env.wrapper to route teep through the Mysterium
   # VPN namespace (applies docker-compose.teep-vpn.yml via Makefile layering).
   teep:
-    image: ${TEEP_IMAGE:-13rac1/teep:main}
+    image: ${TEEP_IMAGE:-13rac1/teep:cacfa5ab2a4e8cc52ec8a2020a763f7306ad3438}
     restart: unless-stopped
     ports:
       - ${TEEP_HOST:+${TEEP_HOST}:}${TEEP_PORT:-8337}:${TEEP_CONTAINER_PORT:-8337}

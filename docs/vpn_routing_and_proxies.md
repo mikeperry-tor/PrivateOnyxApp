@@ -130,9 +130,12 @@ loopback:
 http://127.0.0.1:8337/v1
 ```
 
-The teep image is built by `teep/build/Dockerfile`. Its entrypoint defaults to
-`teep serve` and appends `TEEP_SERVE_FLAGS` for serve mode, allowing wrapper
-flags such as `--offline` without rebuilding the image.
+The teep image is built by `teep/build/Dockerfile`. `make teep-build` pins the
+source checkout with `TEEP_REF`, which defaults to a commit SHA, and derives the
+default image tag from that pin. To upgrade teep, change `TEEP_REF` to the new
+commit; the wrapper will build and run a distinct image tag. Its entrypoint
+defaults to `teep serve` and appends `TEEP_SERVE_FLAGS` for serve mode, allowing
+wrapper flags such as `--offline` without rebuilding the image.
 
 ### Tailscale Funnel
 
