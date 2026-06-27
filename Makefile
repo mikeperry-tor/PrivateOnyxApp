@@ -110,6 +110,12 @@ endif
 ONYX_BACKEND_IMAGE ?= onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
 ONYX_WEB_SERVER_IMAGE ?= onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
 ONYX_MODEL_SERVER_IMAGE ?= onyxdotapp/onyx-model-server:$(ONYX_IMAGE_TAG)
+SEARXNG_IMAGE_TAG ?= $(strip $(shell sed -n 's/^SEARXNG_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
+ifeq ($(strip $(SEARXNG_IMAGE_TAG)),)
+$(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(ENV_FILE), or pass SEARXNG_IMAGE_TAG=... on the make command line)
+endif
+SEARXNG_IMAGE ?= docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)
+export SEARXNG_IMAGE_TAG
 CODE_INTERPRETER_IMAGE_TAG ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 ifeq ($(strip $(CODE_INTERPRETER_IMAGE_TAG)),)
 CODE_INTERPRETER_IMAGE_TAG := 0.4.4
@@ -121,7 +127,6 @@ ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
 ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
 ONYX_INSTALL_HOST_PORT_80 ?= 3001
 SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
-SEARXNG_ENV_FILE := searxng/.env
 MYST_COMPOSE_FILE := myst/docker-compose.yaml
 MYST_VPN_CLI := myst/myst-vpn-cli.sh
 MYST_CONTAINER_NAME := myst-client-vpn
@@ -163,6 +168,7 @@ help:
 	@echo ""
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
+	@echo "Override SearXNG tag: make searxng-image-ready SEARXNG_IMAGE_TAG=2026.6.26-f8ffbf36f"
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override install-time low-port remap: make up-full ONYX_INSTALL_HOST_PORT_80=3001"
 	@echo "Override container engine: make up-lite CONTAINER_BIN=/opt/homebrew/bin/podman"
@@ -324,7 +330,7 @@ upgrade-onyx:
 
 searxng-image-ready:
 	@set -eu; \
-	image=$$("$(CONTAINER_BIN)" compose --env-file "$(SEARXNG_ENV_FILE)" -f "$(SEARXNG_COMPOSE_FILE)" config | sed -n 's/^    image: //p' | head -1); \
+	image=$$("$(CONTAINER_BIN)" compose --env-file "$(ENV_FILE)" -f "$(SEARXNG_COMPOSE_FILE)" config | sed -n 's/^    image: //p' | head -1); \
 	if [ -z "$$image" ]; then \
 		echo "ERROR: could not resolve SearxNG image from $(SEARXNG_COMPOSE_FILE)"; \
 		exit 1; \

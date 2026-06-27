@@ -16,6 +16,19 @@ Version scope for this document, based on clean local checkouts under
 - Obscura: `v0.1.9`
 - SearXNG: master commit `f8ffbf36f903`
 
+SearXNG does not publish Git release tags. It is a rolling release from
+`master`; the Docker image tag is computed from the Git commit date and short
+hash in `searx/version.py` as `YYYY.M.D-<short-sha>`. For the checkout above,
+`git show -s --date='format:%Y.%m.%d' --format='%cd+%h'` returns
+`2026.06.26+f8ffbf36f`, so the corresponding Docker tag is
+`2026.6.26-f8ffbf36f`. SearXNG's container workflow publishes both that tag
+and `latest` to Docker Hub and GHCR after the master-branch integration
+workflow succeeds. To pin a SearXNG release, prefer the computed tag
+(`docker.io/searxng/searxng:2026.6.26-f8ffbf36f`) or, for exact immutability,
+the image digest. To map an image back to source, inspect the OCI label
+`org.opencontainers.image.revision`; SearXNG sets it to the full Git commit SHA
+when building `container/dist.dockerfile`.
+
 This document focuses on request chains and browser/scraper behavior. For the
 Compose-level VPN namespace, optional `PROXY_URL`, teep, Tailscale, and
 code-interpreter routing switches, see

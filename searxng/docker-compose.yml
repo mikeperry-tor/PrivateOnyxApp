@@ -6,7 +6,7 @@ name: searxng
 services:
   core:
     container_name: searxng-core
-    image: docker.io/searxng/searxng:${SEARXNG_VERSION:-latest}
+    image: docker.io/searxng/searxng:${SEARXNG_IMAGE_TAG:?SEARXNG_IMAGE_TAG must be set}
     restart: always
     env_file: ./.env
     volumes:
