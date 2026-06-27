@@ -104,6 +104,56 @@ Upgrade notes:
 - If Onyx exposes first-class env/config for these limits, prefer that over the
   monkey patch.
 
+### Internal search context limits
+
+Patch behavior:
+
+- Reads `ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS`,
+  `ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`,
+  `ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
+  `ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`.
+- Replaces `chat_configs.NUM_RETURNED_HITS`.
+- Replaces `chat_configs.MAX_CHUNKS_FED_TO_CHAT`.
+- Rewrites captured Pydantic defaults on
+  `SearchToolOverrideKwargs.num_hits` and
+  `SearchToolOverrideKwargs.max_llm_chunks`.
+- Wraps `convert_inference_sections_to_llm_string()` and the symbol imported
+  into `search_tool.py` to cap each result's `content` and aggregate returned
+  content after context expansion.
+
+Onyx service: `api_server` in full mode.
+
+Upstream v4.1.7 assumptions to re-check:
+
+- `backend/onyx/configs/chat_configs.py:5` defines `NUM_RETURNED_HITS = 50`.
+- `backend/onyx/configs/chat_configs.py:8` defines
+  `MAX_CHUNKS_FED_TO_CHAT` from env.
+- `backend/onyx/tools/models.py:187` and `:189` define
+  `SearchToolOverrideKwargs.num_hits` and `.max_llm_chunks` defaults from those
+  constants.
+- `backend/onyx/tools/tool_implementations/search/search_tool.py:829` trims
+  merged search sections with `override_kwargs.num_hits`.
+- `backend/onyx/tools/tool_implementations/search/search_tool.py:864` builds
+  the selection token budget from `override_kwargs.max_llm_chunks`.
+- `backend/onyx/tools/tool_implementations/search/search_tool.py:975` calls
+  `convert_inference_sections_to_llm_string()` with
+  `limit=override_kwargs.max_llm_chunks`.
+- `backend/onyx/tools/tool_implementations/utils.py:29` defines
+  `convert_inference_sections_to_llm_string()`, and `:111` serializes
+  `section.combined_content` into each result's `content`.
+- `backend/onyx/server/features/search/api.py:191` maps the LLM-facing search
+  JSON into `/search` results.
+- `backend/onyx/mcp_server/tools/search.py:46` forwards `/search` result
+  content to MCP clients.
+
+Upgrade notes:
+
+- If upstream changes search formatting or stops importing
+  `convert_inference_sections_to_llm_string` by name, update the wrapper patch
+  or remove the extra imported-symbol assignment.
+- If upstream adds first-class settings for internal search result budgets,
+  prefer those and keep the wrapper env names as aliases only if useful.
+
 ### Firecrawl waitFor omission
 
 Patch behavior:
@@ -532,7 +582,10 @@ Patched Onyx services:
 - `background`: extends upstream, joins `netns-holder`, disables telemetry,
   points model-server env to the local shim, applies the background
   `sitecustomize`, and depends on `local-embedding-shim`.
-- `api_server`: adds model-server env pointing to the shim and depends on it.
+- `api_server`: adds model-server env pointing to the shim, forwards
+  user-facing internal-search context limit env vars, maps
+  `ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS` to upstream
+  `MAX_CHUNKS_FED_TO_CHAT`, and depends on the shim.
 - `inference_model_server` and `indexing_model_server`: still extend upstream
   and mount caches/logs, but API/background model-server traffic is routed to
   the shim instead.
@@ -556,6 +609,10 @@ Upgrade notes:
 - Confirm upstream `background` still accepts `MODEL_SERVER_HOST`,
   `MODEL_SERVER_PORT`, `INDEXING_MODEL_SERVER_HOST`, and
   `INDEXING_MODEL_SERVER_PORT`.
+- Confirm upstream `api_server` still reads `MAX_CHUNKS_FED_TO_CHAT` at import
+  time and that the wrapper `sitecustomize` still patches the remaining search
+  defaults described in
+  [Internal search context limits](#internal-search-context-limits).
 - If upstream makes model-server calls from additional services, point them at
   the shim or document why not.
 

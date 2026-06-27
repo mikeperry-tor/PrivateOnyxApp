@@ -34,6 +34,8 @@ small set of local deployment requirements that Onyx v4.1.7 does not expose as
 configuration:
 
 - Let a private deployment tune tool limits without rebuilding Onyx images.
+- Keep internal-search result count and content budgets small enough for local
+  document RAG without relying on obscure upstream env names.
 - Keep generated tool descriptions accurate when executor capabilities differ
   from upstream defaults.
 - Support trusted, VPN-routed code-interpreter execution when explicitly
@@ -55,6 +57,7 @@ trusted HTTP freshness, should remain explicit opt-in configuration.
 | Area | Onyx service or component | Local mechanism | Upstream shape |
 | --- | --- | --- | --- |
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
+| Internal search context limits | `api_server` | `sitecustomize` rewrites search defaults and wraps result formatting; full compose passes wrapper env aliases | Admin/env settings for candidate count, returned context count, and content budgets |
 | Firecrawl scrape payload | `api_server` | `sitecustomize` replaces `FirecrawlClient._get_webpage_content` | Configurable Firecrawl request options |
 | Code-interpreter capability text | `api_server` | `sitecustomize` rewrites tool descriptions and prompt constants | Capability-driven tool descriptions generated from actual executor config |
 | Lite Open URL availability | Lite `api_server` | `sitecustomize` forces `OpenURLTool.is_available` true | Separate Open URL availability from vector DB availability |
@@ -116,6 +119,88 @@ The implementation should read the configured values at call time or pass them
 through tool configuration, rather than relying on module constants captured as
 default parameters. Tests should cover default behavior, custom limits, and the
 "unlimited" value if that is accepted upstream.
+
+## Internal search context limits
+
+Local files:
+
+- `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- `onyx/patches/sitecustomize_base/sitecustomize.py`
+- `docker-compose.full.yml`
+- `.env.wrapper.example`
+
+Onyx source areas:
+
+- `backend/onyx/configs/chat_configs.py`
+- `backend/onyx/tools/models.py`
+- `backend/onyx/tools/tool_implementations/search/search_tool.py`
+- `backend/onyx/tools/tool_implementations/search/search_utils.py`
+- `backend/onyx/tools/tool_implementations/utils.py`
+- `backend/onyx/server/features/search/api.py`
+- `backend/onyx/mcp_server/tools/search.py`
+
+### Why this is needed
+
+Onyx v4.1.7's internal search result payload is section/chunk content, not a
+short excerpt. The agent-facing `internal_search` tool, the `/search` API, and
+the MCP `search_indexed_documents` tool all ultimately forward the LLM-facing
+search JSON. That JSON uses the selected section's `combined_content`, and a
+section may contain merged adjacent chunks or chunks added by Onyx's context
+expansion flow.
+
+The upstream defaults are also easy to misunderstand. `NUM_RETURNED_HITS=50`
+controls how many candidate hits/sections are kept before later selection, and
+`MAX_CHUNKS_FED_TO_CHAT=25` is used as a rough pre-selection token budget and
+as a final section-count limit. With 512-token chunks, those defaults can
+produce tool responses large enough to crowd the answering model's context
+window in a local document RAG workflow.
+
+### How it modifies Onyx
+
+Full mode passes clearer wrapper settings to `api_server`:
+
+- `ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS`
+- `ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`
+- `ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`
+- `ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`
+
+The compose layer also maps
+`ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS` to upstream
+`MAX_CHUNKS_FED_TO_CHAT` so Onyx's own config import sees the lower value.
+
+The base `sitecustomize` patch then:
+
+- Replaces `chat_configs.NUM_RETURNED_HITS`.
+- Replaces `chat_configs.MAX_CHUNKS_FED_TO_CHAT`.
+- Updates the captured Pydantic defaults on
+  `SearchToolOverrideKwargs.num_hits` and
+  `SearchToolOverrideKwargs.max_llm_chunks`.
+- Wraps `convert_inference_sections_to_llm_string()` so each result's
+  `content` field and the aggregate returned content can be capped after Onyx
+  has merged and expanded sections.
+- Replaces the formatter reference imported into `search_tool.py`, since that
+  module imports the helper by name.
+
+The wrapper defaults are intentionally lower than upstream:
+
+```env
+ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS=24
+ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS=8
+ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT=6000
+ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=30000
+```
+
+### Upstream merge request shape
+
+This should become first-class Onyx configuration, ideally with names that
+distinguish candidate retrieval count, final context section count, per-result
+content budget, and aggregate tool-response budget. The final budget should be
+applied after context expansion, because expansion is where a selected section
+can grow past the nominal chunk count.
+
+Tests should cover the chat `internal_search` tool, `/search`, and MCP
+`search_indexed_documents`, because all three paths can expose the same
+oversized content.
 
 ## Firecrawl scrape payload control
 
@@ -615,9 +700,9 @@ The base compose wrapper changes the runtime shape of core Onyx services:
   patched for VPN-routed executor pods.
 - `relational_db` uses wrapper-managed persistent storage.
 
-Full mode adds model-server routing through the local embedding shim, background
-worker patches, OpenSearch/cache/MinIO storage, and local document-drop
-services.
+Full mode adds model-server routing through the local embedding shim, internal
+search context-limit env aliases for `api_server`, background worker patches,
+OpenSearch/cache/MinIO storage, and local document-drop services.
 
 The local `doc-drop-web` service runs `onyx/doc_drop_webserver.py` instead of the
 stdlib `python -m http.server` entrypoint directly. It keeps normal static-file

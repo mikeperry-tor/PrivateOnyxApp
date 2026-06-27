@@ -6,7 +6,9 @@ adjust hardcoded limits without rebuilding images.
 
 from __future__ import annotations
 
+import functools
 import inspect
+import json
 import os
 
 
@@ -99,6 +101,205 @@ def _parse_positive_int(var_name: str) -> int | None:
         return None
 
     return value
+
+
+def _parse_int_at_least(var_name: str, minimum: int) -> int | None:
+    raw = os.environ.get(var_name)
+    if not raw:
+        return None
+
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"sitecustomize: ignoring {var_name}={raw!r} (must be integer)",
+            flush=True,
+        )
+        return None
+
+    if value < minimum:
+        print(
+            f"sitecustomize: ignoring {var_name}={raw!r} "
+            f"(must be >= {minimum})",
+            flush=True,
+        )
+        return None
+
+    return value
+
+
+def _set_pydantic_field_default(model_cls, field_name: str, value: int) -> None:
+    try:
+        model_cls.model_fields[field_name].default = value
+        model_cls.model_rebuild(force=True)
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(
+            f"failed patching {model_cls.__name__}.{field_name} default: {e}"
+        )
+
+
+def _truncate_text_with_notice(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 0:
+        return ""
+
+    notice_template = (
+        "\n... [internal search content truncated, {omitted} characters omitted]"
+    )
+    # Compute the suffix using a first-pass omitted count, then recompute once
+    # because suffix length can change with digit count.
+    suffix = notice_template.format(omitted=len(text))
+    keep = max(0, max_chars - len(suffix))
+    suffix = notice_template.format(omitted=len(text) - keep)
+    keep = max(0, max_chars - len(suffix))
+    return text[:keep] + suffix
+
+
+def apply_internal_search_context_patches() -> None:
+    """Apply wrapper limits to Onyx internal search context payloads.
+
+    Onyx v4.1.7 has two useful but awkwardly named/internal controls:
+    ``NUM_RETURNED_HITS`` is a candidate/result-section count, while
+    ``MAX_CHUNKS_FED_TO_CHAT`` is used as both a rough token budget and a final
+    section count. The wrapper exposes clearer env names and adds character
+    caps after Onyx's context expansion step, where sections can grow beyond
+    the nominal chunk count.
+    """
+
+    candidate_sections = _parse_int_at_least(
+        "ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS", 1
+    )
+    context_sections = _parse_int_at_least(
+        "ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS", 1
+    )
+    max_chars_per_result = _parse_int_at_least(
+        "ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT", 0
+    )
+    max_total_chars = _parse_int_at_least(
+        "ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS", 0
+    )
+
+    if (
+        candidate_sections is None
+        and context_sections is None
+        and max_chars_per_result is None
+        and max_total_chars is None
+    ):
+        return
+
+    if candidate_sections is not None or context_sections is not None:
+        try:
+            from onyx.configs import chat_configs
+            from onyx.tools import models as tool_models
+        except Exception as e:  # pragma: no cover
+            print(
+                f"sitecustomize: failed importing search limit modules: {e}",
+                flush=True,
+            )
+            _raise_if_strict()
+            return
+
+        if candidate_sections is not None:
+            chat_configs.NUM_RETURNED_HITS = candidate_sections
+            tool_models.NUM_RETURNED_HITS = candidate_sections
+            _set_pydantic_field_default(
+                tool_models.SearchToolOverrideKwargs,
+                "num_hits",
+                candidate_sections,
+            )
+
+        if context_sections is not None:
+            chat_configs.MAX_CHUNKS_FED_TO_CHAT = context_sections
+            tool_models.MAX_CHUNKS_FED_TO_CHAT = context_sections
+            _set_pydantic_field_default(
+                tool_models.SearchToolOverrideKwargs,
+                "max_llm_chunks",
+                context_sections,
+            )
+
+    if max_chars_per_result is not None or max_total_chars is not None:
+        try:
+            from onyx.tools.tool_implementations import utils as tool_utils
+        except Exception as e:  # pragma: no cover
+            print(
+                f"sitecustomize: failed importing search formatter module: {e}",
+                flush=True,
+            )
+            _raise_if_strict()
+            return
+
+        original_convert = tool_utils.convert_inference_sections_to_llm_string
+
+        @functools.wraps(original_convert)
+        def _limited_convert_inference_sections_to_llm_string(*args, **kwargs):
+            docs_str, citation_mapping = original_convert(*args, **kwargs)
+            if not docs_str:
+                return docs_str, citation_mapping
+
+            try:
+                payload = json.loads(docs_str)
+                results = payload.get("results", [])
+            except Exception as e:
+                print(
+                    f"sitecustomize: failed parsing internal search payload: {e}",
+                    flush=True,
+                )
+                if _strict_mode():
+                    raise
+                return docs_str, citation_mapping
+
+            remaining_total = max_total_chars
+            for entry in results:
+                content = entry.get("content")
+                if not isinstance(content, str):
+                    continue
+
+                cap = len(content)
+                if max_chars_per_result is not None:
+                    cap = min(cap, max_chars_per_result)
+                if remaining_total is not None:
+                    cap = min(cap, remaining_total)
+
+                limited_content = _truncate_text_with_notice(content, cap)
+                entry["content"] = limited_content
+
+                if remaining_total is not None:
+                    remaining_total = max(0, remaining_total - len(limited_content))
+
+            return (
+                json.dumps(payload, indent=2, ensure_ascii=False),
+                citation_mapping,
+            )
+
+        tool_utils.convert_inference_sections_to_llm_string = (
+            _limited_convert_inference_sections_to_llm_string
+        )
+
+        # search_tool imports the formatter by name. Patch the imported symbol
+        # too if the module is already importable during startup.
+        try:
+            from onyx.tools.tool_implementations.search import search_tool
+
+            search_tool.convert_inference_sections_to_llm_string = (
+                _limited_convert_inference_sections_to_llm_string
+            )
+        except Exception as e:  # pragma: no cover
+            print(
+                f"sitecustomize: search_tool formatter patch deferred/unavailable: {e}",
+                flush=True,
+            )
+            if _strict_mode():
+                raise
+
+    print(
+        "sitecustomize: applied internal search context limits "
+        f"(candidate_sections={candidate_sections}, "
+        f"context_sections={context_sections}, "
+        f"max_chars_per_result={max_chars_per_result}, "
+        f"max_total_chars={max_total_chars})",
+        flush=True,
+    )
 
 
 def apply_open_url_char_limit_patches() -> None:
