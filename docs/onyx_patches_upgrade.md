@@ -366,6 +366,14 @@ Patch behavior:
 - Applies query/passage prefixes from either Onyx request fields or wrapper env:
   `SHIM_QUERY_PREFIX` / `ONYX_EMBEDDING_QUERY_PREFIX` and
   `SHIM_PASSAGE_PREFIX` / `ONYX_EMBEDDING_PASSAGE_PREFIX`.
+- Keeps a small upstream connection pool to the configured
+  OpenAI-compatible embedding server. If pooled connection reuse fails with a
+  transport-level exception (`OSError`, `TimeoutError`, or
+  `http.client.HTTPException`), the shim closes and replaces that connection,
+  logs `upstream_connection_retry`, and retries the embedding request once.
+  This covers local embedding servers that silently close idle keep-alive
+  sockets. HTTP error statuses from the upstream server are returned without
+  retrying.
 - Supports `LOCAL_EMBEDDINGS_URL`, `LOCAL_EMBEDDING_API_KEY`,
   `LOCAL_EMBEDDING_MODEL`, `SHIM_UPSTREAM_POOL_SIZE`, and
   `SHIM_METRICS_LOG_EVERY`.
@@ -405,12 +413,28 @@ Upstream v4.1.7 assumptions to re-check:
   `/encoder/cross-encoder-scores`.
 - `backend/onyx/natural_language_processing/search_nlp_models.py:1321` builds
   `/custom/query-analysis`.
+- `backend/onyx/tools/tool_implementations/search/search_tool.py:448` runs
+  the agent-facing `internal_search` query through `search_pipeline()`.
+- `backend/onyx/context/search/pipeline.py:336` calls `search_chunks()`.
+- `backend/onyx/context/search/retrieval/search_runner.py:58` embeds query
+  text before hybrid search.
+- `backend/onyx/context/search/utils.py:163` calls `get_query_embeddings()`;
+  `:110` delegates to `EmbeddingModel.encode()`.
 - `backend/onyx/indexing/embedder.py:60` constructs `EmbeddingModel` for
   indexing and `:72`/`:73` pass the indexing model-server host/port.
 - `backend/onyx/utils/gpu_utils.py` calls `/api/gpu-status`.
 
 Upgrade notes:
 
+- When upgrading Onyx, verify that `internal_search` still uses the same
+  query-embedding path and still depends on `MODEL_SERVER_HOST` /
+  `MODEL_SERVER_PORT`. If Onyx adds a distinct internal-search embedding
+  provider, wire that provider to the local embedding service or remove the
+  shim dependency for `api_server` search.
+- Reproduce the stale-connection case by making a fake upstream close the first
+  socket before responding, then confirm the shim logs
+  `upstream_connection_retry` and returns a successful embedding response on
+  the second attempt.
 - The shim does not implement reranking or query analysis. It is correct only
   when local rerank/query-analysis are unused or when 501 failures are acceptable
   and visible.
@@ -494,9 +518,11 @@ Wrapper additions:
 
 - `doc-drop-web` and `host-doc-drop-web-proxy` expose a local read-only docs
   directory for the Onyx Web connector. `doc-drop-web` runs
-  `onyx/doc_drop_webserver.py`, a small `http.server` wrapper that hides macOS
-  `._*` metadata files from directory listings and returns HTTP 403 for
-  unreadable file requests instead of closing the connection with a traceback.
+  `onyx/doc_drop_webserver.py`, a small `http.server` wrapper that hides hidden
+  filesystem entries such as `.git`, `._*`, `.DS_Store`, and `__pycache__` from
+  directory listings, returns HTTP 404 for direct hidden-path requests, and
+  returns HTTP 403 for unreadable file requests instead of closing the
+  connection with a traceback.
 - `local-embedding-shim` provides the model-server-compatible local embedding
   bridge.
 

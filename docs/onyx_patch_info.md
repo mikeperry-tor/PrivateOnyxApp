@@ -501,6 +501,27 @@ It translates Onyx embedding payloads into OpenAI-compatible embedding requests:
 - Query and passage prefixes come from Onyx request fields or wrapper env.
 - Responses are translated back into `{"embeddings": ...}`.
 
+Onyx's agent-facing `internal_search` tool uses the normal Onyx search
+pipeline, not a separate Web connector HTTP path. In v4.1.7,
+`SearchTool._run_search_for_query()` calls `search_pipeline()`, which calls
+`search_chunks()`, which embeds each query through
+`get_query_embedding()`/`EmbeddingModel.encode()`. Because full mode points
+`MODEL_SERVER_HOST`/`MODEL_SERVER_PORT` at the shim, a failed query embedding
+surfaces to the agent as an `internal_search` tool failure even when the
+document-drop HTTP server and indexed Web connector documents are healthy.
+
+The shim keeps a small pool of upstream HTTP connections to the local
+OpenAI-compatible embedding server. Some local embedding servers close idle
+keep-alive connections without the client knowing. Reusing one of those stale
+sockets raises a low-level transport error such as `Remote end closed
+connection without response`; Onyx then wraps the resulting 502 as
+`HTTP error occurred - response is None.` To avoid making transient stale
+connection reuse visible to `internal_search`, the shim closes and replaces a
+connection on `OSError`, `TimeoutError`, or `http.client.HTTPException`, logs
+`upstream_connection_retry`, and retries the embedding request once on a fresh
+socket. HTTP status errors from the upstream server are not retried; they remain
+visible.
+
 It intentionally returns 501 for model-server features it does not implement:
 
 - `POST /encoder/cross-encoder-scores`
@@ -579,9 +600,11 @@ services.
 
 The local `doc-drop-web` service runs `onyx/doc_drop_webserver.py` instead of the
 stdlib `python -m http.server` entrypoint directly. It keeps normal static-file
-behavior for readable documents, hides macOS metadata entries such as `._*` from
-directory listings, and converts unreadable file requests into HTTP 403
-responses so crawlers receive a proper status instead of a closed connection.
+behavior for readable documents, hides hidden filesystem entries such as
+`.git`, `._*`, `.DS_Store`, and `__pycache__` from directory listings, returns
+HTTP 404 for direct requests to hidden paths, and converts unreadable file
+requests into HTTP 403 responses so crawlers receive a proper status instead of
+a closed connection.
 
 Lite mode removes full-mode dependencies, uses Postgres-backed storage options,
 sets `DISABLE_VECTOR_DB=true`, and loads the lite Open URL patch.
