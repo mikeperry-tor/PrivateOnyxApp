@@ -38,6 +38,8 @@ The Docker Compose files in this stack relies on the following components:
 
 The stack comes in two flavors: lite and full. This specifies the mode of the Onyx app. Lite mode provides Chat, Web, and Research only. Full mode also provides RAG, external app connectors, and groupware. Lite mode uses significantly less RAM (~1GB vs ~20GB).
 
+This wrapper carries a few local Onyx runtime and install-time patches. For the rationale behind those patches, see [`docs/onyx_patch_info.md`](docs/onyx_patch_info.md). When changing `ONYX_IMAGE_TAG` or rebasing onto a new Onyx release, use [`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md).
+
 It is possible to switch between full and lite modes.
 
 All persistent data is bind-mounted to subdirectories in `./docker-data`
@@ -112,6 +114,7 @@ Most likely variables you want to change:
     - Set `TEEP_VPN_ROUTED=true` to route teep LLM API traffic through the Mysterium VPN namespace.
     - Set `TAILSCALE_VPN_ROUTED=true` to route Tailscale Funnel traffic through the VPN namespace.
     - Set `CODE_INTERPRETER_VPN_ROUTED=true` to give Onyx's Python tool and coding-agent bash sessions outbound internet access through the VPN. **Security:** this removes the code-interpreter's network isolation — the LLM can make arbitrary outbound requests from generated code.
+  - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access** (for local inference APIs):
   - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
 - Optional Onyx SSRF defaults (for MCP servers and local doc-drop crawling):
@@ -272,6 +275,8 @@ Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.2 is t
 ### Web Search Provider Configuration
 
 To make use of the provided crw and obscura anti-fingerprinting web search tools, you will need to select SearXNG and Firecrawl from the [Web Search Admin Panel](http://localhost:3000/admin/configuration/web-search):
+
+For a detailed request-flow map of Web Search, `open_url`, SearXNG, CRW, the CDP shim, and Obscura, see [`docs/request_handling.md`](docs/request_handling.md).
 
 1. Go to **Admin Panel -> Web Search -> Web Crawler**.
 2. Open **SearXNG** and click **Connect**
