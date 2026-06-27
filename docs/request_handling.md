@@ -34,7 +34,9 @@ Compose-level VPN namespace, optional `PROXY_URL`, teep, Tailscale, and
 code-interpreter routing switches, see
 [VPN routing and proxies](vpn_routing_and_proxies.md). For the Onyx runtime
 patches that shape Firecrawl payloads, tool availability, prompt text, and
-executor pod networking, see [Onyx patch information](onyx_patch_info.md).
+executor pod networking, see [Onyx patch information](onyx_patch_info.md). For
+line-oriented upgrade checks, including the SearXNG custom engines and config
+overlay notes, see [Onyx wrapper patches](onyx_patches_upgrade.md).
 
 Unless a section says otherwise, diagrams assume `MYST_VPN_ENABLED=true`.
 When `MYST_VPN_ENABLED=false`, shared-namespace services keep the same internal
@@ -181,6 +183,26 @@ The engine's `response()` function decodes the CRW JSON envelope and parses
 the rendered HTML with XPath to extract search results. If CRW reports a
 block (429/403/CAPTCHA), the appropriate SearXNG exception is raised so
 SearXNG's engine suspension machinery kicks in.
+
+#### Custom engine parser assumptions
+
+These engines intentionally scrape live, rendered search-result pages rather
+than official APIs. Their request path is stable inside the wrapper, but their
+parsers depend on target SERP DOM shapes that can change without a SearXNG
+upgrade. During upgrades or search-quality debugging, test each custom engine
+with a real query and inspect the returned `rawHtml` if result counts fall to
+zero.
+
+| Engine | Target URL shape | DOM assumption to verify |
+|--------|------------------|--------------------------|
+| `google2` | `https://www.google.com/search?q=...` | Organic result links are anchors containing an `h3`, optionally under `div.g` or `div[data-ved]`; snippets may appear under `VwiC3b` / `IsZvec` classes. |
+| `brave2` | `https://search.brave.com/search?q=...` | Organic result cards have `data-type="web"`; title links carry class `l1`; title/snippet text remains under `title` and `snippet-description` classes. |
+| `duckduckgo2` | `https://html.duckduckgo.com/html/?q=...` | HTML endpoint result cards include both `result` and `web-result`; title links use `result__a`; snippets use `result__snippet`; `/l/?uddg=...` redirects still carry the real URL. |
+| `startpage2` | `https://www.startpage.com/sp/search?query=...&cat=web` | Post-hydration organic cards carry a `result` class but not `a-bg-result`; title links prefer `data-testid="gl-title-link"` or `result-title`; captcha pages still expose title/meta/form markers caught by `captcha_xpath`. |
+
+The upgrade inventory in
+[SearXNG companion stack](onyx_patches_upgrade.md#searxng-companion-stack)
+lists the corresponding file-level checks and config-overlay findings.
 
 ### 1.3 CRW → CDP Shim → Obscura
 
@@ -1178,12 +1200,22 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 
 | Setting | Value | Description |
 |---------|-------|-------------|
+| `formats` | `html`, `json` | JSON output is required by Onyx's `SearXNGClient`; HTML remains available for local/manual diagnostics |
 | `ban_time_on_fail` | `5` | Base engine ban time (seconds) |
 | `max_ban_time_on_fail` | `120` | Max engine ban time (seconds) |
 | `SearxEngineTooManyRequests` | `180` | Suspension time for 429 errors (seconds) |
 | `SearxEngineAccessDenied` | `180` | Suspension time for 403 errors (seconds) |
 | `SearxEngineCaptcha` | `3600` | Suspension time for CAPTCHA (seconds) |
+| `outgoing.request_timeout` | `6.0` | Default SearXNG HTTP client timeout; custom CRW-backed engines override this with longer per-engine timeouts |
 | Engine `timeout` | `60.0` | Per-engine timeout (seconds) — accommodates obscura render time |
+| `google2`, `brave2`, `duckduckgo2`, `startpage2` | enabled | Custom CRW-backed engines mounted from `searxng/engines/` |
+| Stock Google/Brave/DuckDuckGo/Startpage variants | inactive | Avoids double-querying direct stock engines that are challenge-prone on VPN/datacenter exit IPs |
+
+The current `searxng/core-config/settings.yml` is a full copied settings file,
+but SearXNG can merge a compact user overlay with the image defaults via
+`use_default_settings: true`. The upgrade analysis and recommended overlay
+strategy are tracked in
+[SearXNG config drift and overlay option](onyx_patches_upgrade.md#searxng-config-drift-and-overlay-option).
 
 ---
 
