@@ -8,6 +8,20 @@ content provider pointed at the local CRW endpoint. If the Firecrawl content
 provider is not configured in Onyx Admin, upstream Onyx falls back to its
 built-in `OnyxWebCrawler`; that fallback is documented separately below.
 
+This document focuses on request chains and browser/scraper behavior. For the
+Compose-level VPN namespace, optional `PROXY_URL`, teep, Tailscale, and
+code-interpreter routing switches, see
+[VPN routing and proxies](vpn_routing_and_proxies.md). For the Onyx runtime
+patches that shape Firecrawl payloads, tool availability, prompt text, and
+executor pod networking, see [Onyx patch information](onyx_patch_info.md).
+
+Unless a section says otherwise, diagrams assume `MYST_VPN_ENABLED=true`.
+When `MYST_VPN_ENABLED=false`, shared-namespace services keep the same internal
+addresses but external traffic leaves through the Docker bridge. When
+`PROXY_URL` is set, obscura, SearXNG, and the prefetch/PDF path use the
+configured upstream proxy as described in
+[VPN routing and proxies](vpn_routing_and_proxies.md#proxy_url).
+
 ## Path 1: Web Search (`web_search` tool)
 
 ### Request chain diagram
@@ -505,6 +519,10 @@ routes its own upstream requests (HEAD and tunnel) through `PROXY_URL`. This
 ensures the HEAD request and PDF tunnel egress through the same proxy as
 obscura, so the target sees a consistent exit IP.
 
+The full service-by-service `PROXY_URL` behavior, including SearXNG settings
+generation and code-interpreter executor pod caveats, is documented in
+[VPN routing and proxies](vpn_routing_and_proxies.md#how-proxy_url-applies-by-service).
+
 | Component | Proxy used | How |
 |-----------|-----------|-----|
 | **Obscura (CDP browser)** | `PROXY_URL` | `--proxy` flag in docker-compose.proxy.yml |
@@ -512,7 +530,7 @@ obscura, so the target sees a consistent exit IP.
 | **CRW HTTP prefetch** | prefetch-blocking proxy | `HTTPS_PROXY` / `HTTP_PROXY` env vars on the CRW container |
 | **CRW CDP (obscura)** | `PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
 | **SearXNG** | `PROXY_URL` | `outgoing.proxies` in settings.yml |
-| **OnyxWebCrawler** | direct/VPN | Does not go through CRW |
+| **OnyxWebCrawler** | shared namespace direct egress | Does not go through CRW or explicit `PROXY_URL`; traffic uses the Mysterium VPN when `MYST_VPN_ENABLED=true`, otherwise the Docker bridge |
 
 **CONNECT handling:**
 
@@ -725,15 +743,24 @@ the README setup tells you to configure Firecrawl and set it as default.
 ### 2.1.1 Wrapper runtime patches
 
 The wrapper mounts `onyx/patches/sitecustomize_base` into the API server and
-puts it on `PYTHONPATH`, so Python imports it at process startup in both full
-and lite mode. These patches do not choose the active content provider; the
-Onyx Admin Firecrawl setting still does that. They do adjust behavior around
-the `open_url` path:
+puts it on `PYTHONPATH`. In full mode, that base `sitecustomize` module is the
+one Python imports at process startup. In lite mode, `docker-compose.lite.yml`
+places `onyx/patches/sitecustomize` first on `PYTHONPATH`; that lite patch
+imports selected helpers from the base patch module and then applies the
+lite-only Open URL availability patch.
+
+These patches do not choose the active content provider; the Onyx Admin
+Firecrawl setting still does that. They do adjust behavior around the
+`open_url` path. See [Onyx patch information](onyx_patch_info.md) for the
+complete patch inventory and upstreaming notes.
 
 - `apply_firecrawl_wait_for_patch()` monkey-patches
   `FirecrawlClient._get_webpage_content` to send only
   `{url, formats: ["markdown"]}` to the configured endpoint. This is a guard
-  against future upstream Onyx changes adding a `waitFor` field.
+  against future upstream Onyx changes adding a `waitFor` field. It is called
+  by the base sitecustomize path; the lite sitecustomize does not currently
+  call this helper, but Onyx v4.1.7 already sends the same no-`waitFor` payload
+  in lite mode.
 - `apply_open_url_char_limit_patches()` lets wrapper env vars
   `OPEN_URL_MAX_CHARS_PER_URL` and `OPEN_URL_MAX_CHARS_ACROSS_URLS` override
   upstream truncation defaults.
@@ -767,11 +794,13 @@ Onyx open_url → FirecrawlClient.contents(urls)
 ```
 
 The `FirecrawlClient` sends each URL to the configured scrape endpoint with
-`formats: ["markdown"]`. The wrapper's sitecustomize patch replaces
-`FirecrawlClient._get_webpage_content` at startup and preserves that payload
-shape with **no** `waitFor` field, even if a future upstream Onyx release adds
-one. This keeps page-load waiting in the CDP shim/obscura `waitUntil` path and
-CRW's post-navigation heuristics, instead of adding a blind fixed sleep.
+`formats: ["markdown"]`. In the base/full API-server patch path, the wrapper's
+sitecustomize patch replaces `FirecrawlClient._get_webpage_content` at startup
+and preserves that payload shape with **no** `waitFor` field, even if a future
+upstream Onyx release adds one. In lite mode, Onyx v4.1.7 already sends the
+same no-`waitFor` payload. This keeps page-load waiting in the CDP
+shim/obscura `waitUntil` path and CRW's post-navigation heuristics, instead of
+adding a blind fixed sleep.
 
 CRW's `FallbackRenderer` performs an HTTP prefetch first to check the content
 type ([`lib.rs:801-862`](../reference_repos/crw/crates/crw-renderer/src/lib.rs:801)).
@@ -870,8 +899,9 @@ CRW exposes Firecrawl-compatible scrape endpoints. This stack uses:
   escalates to the chrome/obscura CDP renderer.
 - `/v1/scrape` for the README-recommended Onyx Firecrawl content provider
   configuration (`http://localhost:3010/v1/scrape`). Onyx's FirecrawlClient
-  sends `{url, formats: ["markdown"]}` to the configured URL. The
-  sitecustomize patch ensures no `waitFor` field is sent.
+  sends `{url, formats: ["markdown"]}` to the configured URL. The base/full
+  sitecustomize path defensively preserves that no-`waitFor` payload; lite mode
+  already has that shape in Onyx v4.1.7.
 - `/v2/scrape` is still supported by CRW and matches Onyx's upstream
   `FIRECRAWL_SCRAPE_URL` constant, but it is not the URL shown in the README
   setup steps for this wrapper.

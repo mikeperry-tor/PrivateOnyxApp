@@ -7,6 +7,14 @@ patches modify Onyx at runtime or install time, and how the same behavior could
 be turned into proper upstream merge requests. For line-oriented upgrade checks,
 use the companion inventory in `docs/onyx_patches_upgrade.md`.
 
+Related implementation docs:
+
+- [Request handling](request_handling.md) describes how web search and
+  `open_url` requests flow through SearXNG, CRW, the CDP shim, and obscura.
+- [VPN routing and proxies](vpn_routing_and_proxies.md) describes the
+  Compose-level VPN namespace, `PROXY_URL`, and optional teep, Tailscale, and
+  code-interpreter routing modes.
+
 Reference checkouts:
 
 - `reference_repos/onyx` contains the Onyx source used for v4.1.7 review.
@@ -135,6 +143,12 @@ The patch replaces `FirecrawlClient._get_webpage_content` and sends only:
 It preserves Onyx's response parsing path and the existing behavior that treats
 some client-side scrape failures as empty content instead of fatal errors.
 
+The base API-server `sitecustomize` path calls this helper. Lite mode loads the
+lite `sitecustomize` first and currently imports selected base helpers for
+character limits and code-interpreter capability text, but not this defensive
+Firecrawl helper. For Onyx v4.1.7 that does not change the live request shape,
+because upstream already sends the same no-`waitFor` payload.
+
 ### Upstream merge request shape
 
 Onyx could expose Firecrawl scrape options as configuration:
@@ -237,7 +251,8 @@ tool.
 
 ### How it modifies Onyx
 
-The lite `sitecustomize` patch imports the base patches and then forces
+The lite `sitecustomize` patch imports selected base helpers for environment
+driven character limits and code-interpreter capability text, then forces
 `OpenURLTool.is_available` to return `True`.
 
 This changes tool exposure only. It does not add vector DB functionality or make
@@ -357,9 +372,9 @@ with `--network none`. That is a strong and sensible hosted default.
 
 This wrapper also supports a different deployment mode: trusted, single-tenant
 local execution where generated Python and bash should be able to reach the
-internet through a VPN or proxy. This is useful for research, package
-inspection, fetching public data, and coding-agent workflows where network
-commands are expected.
+internet through the shared VPN namespace, optionally using the configured
+upstream proxy. This is useful for research, package inspection, fetching
+public data, and coding-agent workflows where network commands are expected.
 
 Because upstream appends custom Docker run args after its isolation flags,
 setting an extra `--network` flag is not enough; Docker rejects conflicting
@@ -381,7 +396,13 @@ The wrapper compose already runs code-interpreter in the shared
 same VPN-routed egress.
 
 When `PROXY_URL` is set, the same patch injects proxy environment variables
-into executor pods. For SOCKS proxies, it also:
+into executor pod commands. This proxy injection is independent from the
+network-mode replacement above: with `PROXY_URL` alone, executor pods still use
+upstream `--network none` and therefore remain network-isolated. With both
+`PROXY_URL` and `CODE_INTERPRETER_VPN_ROUTED=true`, executor pods inherit the
+VPN namespace and supported tools use the configured upstream proxy.
+
+For SOCKS proxies, the patch also:
 
 - Creates a Docker volume named `onyx-proxy-libs`.
 - Synchronously installs `PySocks` and `socksio` into that volume using
@@ -391,7 +412,10 @@ into executor pods. For SOCKS proxies, it also:
 - Prepends that directory to `PYTHONPATH` only if setup succeeds.
 
 This is intentionally high trust. It removes the upstream executor network
-isolation and lets generated code make outbound network requests.
+isolation when `CODE_INTERPRETER_VPN_ROUTED=true` and lets generated code make
+outbound network requests. See
+[VPN routing and proxies](vpn_routing_and_proxies.md#code-interpreter-executor-pods)
+for the service-level routing behavior.
 
 ### Upstream merge request shape
 
@@ -552,7 +576,8 @@ Podman overrides disable or profile services that depend on Docker socket
 semantics that rootless Podman on macOS does not reliably provide.
 
 Proxy and VPN override files thread optional egress configuration through Onyx
-services and wrapper sidecars.
+services and wrapper sidecars. The routing matrix is documented in
+[VPN routing and proxies](vpn_routing_and_proxies.md).
 
 ### Upstream merge request shape
 

@@ -5,6 +5,14 @@ stack. The main controls live in `.env.wrapper`, with defaults documented in
 `.env.wrapper.example`. The Makefile reads those values and builds the effective
 Compose stack by layering optional override files.
 
+Related implementation docs:
+
+- [Request handling](request_handling.md) describes the Onyx web-search and
+  `open_url` request chains through SearXNG, CRW, the CDP shim, and obscura.
+- [Onyx patch information](onyx_patch_info.md) describes the runtime
+  `sitecustomize` patches used by the API server, background worker, and
+  code-interpreter containers.
+
 ## Compose Layering
 
 The wrapper does not rewrite the base Compose file at startup. `make up-lite`
@@ -179,7 +187,8 @@ isolation for LLM-generated code.
 The same override sets `CODE_INTERPRETER_VPN_ROUTED=true` on `api_server`.
 `onyx/patches/sitecustomize_base/wrapper_env_patches.py` then updates the
 Python tool, Bash tool, and coding-agent prompt text so the model is told that
-network access is available through the VPN.
+network access is available through the VPN. The patch mechanics are described
+in [Onyx patch information](onyx_patch_info.md#code-interpreter-executor-networking-and-proxying).
 
 ## PROXY_URL
 
@@ -218,7 +227,8 @@ and Docker DNS names such as `myst-client`, `api_server`, `nginx`,
 ```
 
 This applies the upstream proxy to the stealth browser traffic used by CRW's
-CDP renderer.
+CDP renderer. The request-chain details for the search and `open_url` paths
+are covered in [Request handling](request_handling.md).
 
 ### Obscura MCP
 
