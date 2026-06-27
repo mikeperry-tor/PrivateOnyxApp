@@ -116,11 +116,23 @@ $(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(ENV_FILE), 
 endif
 SEARXNG_IMAGE ?= docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)
 export SEARXNG_IMAGE_TAG
-SEARXNG_SECRET ?= $(strip $(shell sed -n 's/^SEARXNG_SECRET=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
-ifeq ($(strip $(SEARXNG_SECRET)),)
-$(error SEARXNG_SECRET is not set. Add SEARXNG_SECRET=... to $(ENV_FILE), or pass SEARXNG_SECRET=... on the make command line)
+SEARXNG_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
+USER_AUTH_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
+CRW_ONYX_API_KEY := crw-$(strip $(shell openssl rand -hex 16 2>/dev/null))
+MINIO_ROOT_USER := $(strip $(shell openssl rand -hex 16 2>/dev/null))
+MINIO_ROOT_PASSWORD := $(strip $(shell openssl rand -hex 32 2>/dev/null))
+S3_AWS_ACCESS_KEY_ID := $(MINIO_ROOT_USER)
+S3_AWS_SECRET_ACCESS_KEY := $(MINIO_ROOT_PASSWORD)
+ifeq ($(strip $(SEARXNG_SECRET)$(USER_AUTH_SECRET)$(MINIO_ROOT_PASSWORD)),)
+$(error openssl is required to generate ephemeral local stack secrets)
 endif
 export SEARXNG_SECRET
+export USER_AUTH_SECRET
+export CRW_ONYX_API_KEY
+export MINIO_ROOT_USER
+export MINIO_ROOT_PASSWORD
+export S3_AWS_ACCESS_KEY_ID
+export S3_AWS_SECRET_ACCESS_KEY
 CODE_INTERPRETER_IMAGE_TAG ?= $(strip $(shell sed -n 's/^CODE_INTERPRETER_IMAGE_TAG=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 ifeq ($(strip $(CODE_INTERPRETER_IMAGE_TAG)),)
 $(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=... to $(ENV_FILE), or pass CODE_INTERPRETER_IMAGE_TAG=... on the make command line)
@@ -254,48 +266,6 @@ sync-onyx-env:
 		sed -i.bak "s|^CODE_INTERPRETER_IMAGE_TAG=.*|CODE_INTERPRETER_IMAGE_TAG=$(CODE_INTERPRETER_IMAGE_TAG)|" "$(ONYX_ENV_FILE)"; \
 	else \
 		printf '\nCODE_INTERPRETER_IMAGE_TAG=%s\n' "$(CODE_INTERPRETER_IMAGE_TAG)" >> "$(ONYX_ENV_FILE)"; \
-	fi
-	@set -eu; \
-	secret_raw=$$(sed -n 's/^USER_AUTH_SECRET=//p' "$(ONYX_ENV_FILE)" | head -1 || true); \
-	secret_trimmed=$$(printf '%s' "$$secret_raw" | sed 's/^"//; s/"$$//'); \
-	if [ -z "$$secret_trimmed" ]; then \
-		if ! command -v openssl >/dev/null 2>&1; then \
-			echo "ERROR: USER_AUTH_SECRET is unset and openssl was not found"; \
-			exit 1; \
-		fi; \
-		new_secret=$$(openssl rand -hex 32); \
-		if grep -q '^USER_AUTH_SECRET=' "$(ONYX_ENV_FILE)"; then \
-			sed -i.bak "s|^USER_AUTH_SECRET=.*|USER_AUTH_SECRET=\"$$new_secret\"|" "$(ONYX_ENV_FILE)"; \
-		else \
-			printf '\nUSER_AUTH_SECRET="%s"\n' "$$new_secret" >> "$(ONYX_ENV_FILE)"; \
-		fi; \
-		echo "Generated USER_AUTH_SECRET in $(ONYX_ENV_FILE)"; \
-	fi
-	@set -eu; \
-	minio_user_raw=$$(sed -n 's/^MINIO_ROOT_USER=//p' "$(ONYX_ENV_FILE)" | head -1 || true); \
-	minio_user_trimmed=$$(printf '%s' "$$minio_user_raw" | sed 's/^"//; s/"$$//'); \
-	if [ -z "$$minio_user_trimmed" ] || [ "$$minio_user_trimmed" = "minioadmin" ]; then \
-		if ! command -v openssl >/dev/null 2>&1; then \
-			echo "ERROR: MinIO credentials are unset/default and openssl was not found"; \
-			exit 1; \
-		fi; \
-		new_mu=$$(openssl rand -hex 16); \
-		new_mp=$$(openssl rand -hex 32); \
-		for entry in "MINIO_ROOT_USER:$$new_mu" "MINIO_ROOT_PASSWORD:$$new_mp" "S3_AWS_ACCESS_KEY_ID:$$new_mu" "S3_AWS_SECRET_ACCESS_KEY:$$new_mp"; do \
-			k=$${entry%%:*}; v=$${entry#*:}; \
-			if grep -q "^$$k=" "$(ONYX_ENV_FILE)"; then \
-				sed -i.bak "s|^$$k=.*|$$k=\"$$v\"|" "$(ONYX_ENV_FILE)"; \
-			else \
-				printf '\n%s="%s"\n' "$$k" "$$v" >> "$(ONYX_ENV_FILE)"; \
-			fi; \
-		done; \
-		if [ -d "./docker-data/minio" ]; then \
-			echo "Replaced default MinIO credentials in $(ONYX_ENV_FILE)."; \
-			echo "Restart MinIO (make down-full && make up-full) for new credentials to take effect."; \
-			echo "Existing MinIO data is NOT affected — credentials are access control only, not encryption keys."; \
-		else \
-			echo "Generated MinIO/S3 credentials in $(ONYX_ENV_FILE)"; \
-		fi; \
 	fi
 	@echo "Synced $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"
 

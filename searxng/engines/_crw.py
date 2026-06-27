@@ -41,13 +41,10 @@ CRW_SCRAPE_URL = "http://127.0.0.1:3010/v1/scrape"
 
 import os
 
-# crw accepts any non-empty bearer token when auth is not enforced (the wrapper
-# deploy runs crw with the default self-host auth bypass).  Read the key from
-# the CRW_ONYX_API_KEY env var (passed through to searxng-core in
-# docker-compose.yaml, sourced from .env.wrapper) so a future auth-required
-# crw flip keeps the engines working without a code change.  Falls back to the
-# default self-host key when unset.
-CRW_API_KEY = os.environ.get("CRW_ONYX_API_KEY") or "local-crw"
+# The wrapper deploy runs crw with the default self-host auth bypass, so any
+# non-empty bearer token works. The Makefile supplies an ephemeral placeholder
+# to keep this header present without making it operator-managed config.
+CRW_API_KEY = os.environ["CRW_ONYX_API_KEY"]
 
 # Page load waiting is handled by the CDP shim (crw/cdp_shim.py), which
 # injects `waitUntil: "networkidle2"` into every Page.navigate call so
