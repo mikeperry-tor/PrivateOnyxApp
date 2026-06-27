@@ -372,6 +372,8 @@ PROXY_URL="socks5h://proxy.example.com:1080"
 
 The full version of Onyx supports search and retrieval (RAG) over PDF, DOC, EPUB, and other document types.
 
+For implementation details, troubleshooting notes, and Onyx upgrade assumptions, see [`docs/local_docs_rag_search.md`](docs/local_docs_rag_search.md).
+
 Setup steps:
 
 1. Put PDFs into `DOC_DROP_DIR` (default `./doc-drop`).
