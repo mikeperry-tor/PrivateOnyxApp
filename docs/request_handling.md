@@ -12,10 +12,9 @@ Version scope for this document, based on clean local checkouts under
 `reference_repos/`:
 
 - Onyx: `v4.1.7` (`34fc4c3d1f`, 2026-06-23)
-- CRW: `v0.16.0-29-g4638715` (`4638715bed7d`, 2026-06-20)
-- Obscura: `v0.1.8-33-gedde67d` (`edde67ddd4a6`, 2026-06-22)
-- SearXNG: master commit `952896d29e1f` (runtime version string
-  `2026.6.22+952896d29`, 2026-06-22)
+- CRW: `v0.18.3`
+- Obscura: `v0.1.9`
+- SearXNG: master commit `f8ffbf36f903`
 
 This document focuses on request chains and browser/scraper behavior. For the
 Compose-level VPN namespace, optional `PROXY_URL`, teep, Tailscale, and
@@ -82,10 +81,10 @@ configured upstream proxy as described in
           ▼
 ┌──────────────────────────────────────────────────────┐
 │  Obscura :9222 (--stealth --storage-dir)             │
-│  ├─ TLS fingerprint impersonation (wreq/Chrome145)   │
+│  ├─ Browser-consistent TLS/HTTP fingerprinting        │
 │  ├─ Tracker blocking                                 │
 │  ├─ JS fingerprint spoofing (bootstrap.js V8 snapshot)│
-│  ├─ Cookie jar (persisted to /data/obscura)          │
+│  ├─ Cookie jar on the default CDP context             │
 │  └─ Renders SERP → returns HTML                      │
 └─────────┬────────────────────────────────────────────┘
           │ HTTPS (through Myst VPN exit IP)
@@ -102,9 +101,11 @@ configured upstream proxy as described in
 - SearXNG fans out to 4 custom engines in parallel, each hitting CRW separately
 - CRW's per-host rate limiter serializes requests to the same search engine
 - The CDP shim strips CRW's conflicting STEALTH_JS, injects `waitUntil` into
-  `Page.navigate` for adaptive network-idle waiting, and periodically clears
-  cookies
-- Cookies persist across queries via obscura's shared CdpContext (see Known Limitations)
+  `Page.navigate` for adaptive waiting, strips `proxyServer` only as a safety
+  net, and periodically clears cookies when the default CDP context is used
+- Obscura `--storage-dir` persists cookies for obscura's own CLI/MCP contexts;
+  CRW-driven `/v1/scrape` requests normally use the in-process default CDP
+  context and do not rely on storage-dir persistence
 - Results are parsed from rendered HTML via XPath in each engine's `response()`
   function
 - 429s from search engines trigger SearXNG engine suspension (180s)
@@ -205,15 +206,18 @@ signal to escalate to the CDP renderer. The flow is:
    results have loaded. For web pages, `load` (all subresources finished)
    is sufficient and avoids waiting for long-polling connections. No
    `waitFor` fixed sleep is used — see §1.6 for why. Obscura renders the
-   page with its stealth browser (TLS fingerprint impersonation via
-   wreq/Chrome145, tracker blocking, JS fingerprint spoofing via
-   bootstrap.js) and returns the rendered HTML. Cookies from previous
-   requests persist via obscura's shared `CdpContext` (see Known Limitations
-   for fingerprint stability caveats).
+   page with its stealth browser (browser-consistent TLS/HTTP fingerprinting,
+   tracker blocking, and JS fingerprint spoofing via bootstrap.js) and returns
+   the rendered HTML.
 
 6. **Target close + disconnect**: CRW calls `Target.closeTarget` and closes
-   the WebSocket. Obscura removes the page but the cookie jar persists on
-   the shared `default_context` for the next connection.
+   the WebSocket. In the normal wrapper path CRW does not set
+   `REQUEST_PROXY`, so it creates targets on obscura's default context. Cookies
+   can therefore remain in the in-process default cookie jar until the shim's
+   periodic clearing runs or obscura restarts. The compose default
+   intentionally avoids CRW's `REQUEST_PROXY` path because that path uses
+   per-request `Target.createBrowserContext`; Obscura clears the default cookie
+   jar on context create/dispose.
 
 ### 1.4 429 / Rate Limit Handling
 
@@ -235,16 +239,15 @@ There are multiple layers of 429 handling:
    same VPN exit IP.
 2. **IP reputation**: VPN/Tor exit IPs are often flagged by anti-bot systems
    regardless of request pattern.
-3. **Fingerprint and cookie mismatch**: obscura's TLS and browser-level
-   fingerprinting is much better than bare HTTP, but JS fingerprint values are
-   re-randomized on navigation while cookies can persist for a while (see
-   Known Limitations).
+3. **Residual fingerprint drift**: obscura's TLS and browser-level
+   fingerprinting is much better than bare HTTP, but some JS-visible values
+   are still re-seeded during page initialization while cookies can persist
+   for a while (see Known Limitations).
 
-The old unproxied CRW flow could produce a search-engine double-hit: one bare
-reqwest HTTP prefetch and one obscura navigation. The current compose default
-routes CRW's HTTP prefetch through the prefetch-blocking proxy, so search
-engine prefetches receive a local 403 and never reach the upstream search
-engine. That removes this particular double-hit as a search-path 429 cause.
+The compose default routes CRW's HTTP prefetch through the prefetch-blocking
+proxy, so search-engine prefetches receive a local 403 and never reach the
+upstream search engine. The search engine sees only the obscura browser
+navigation rather than a bare reqwest prefetch followed by a browser visit.
 
 When a search engine returns 429:
 1. Obscura renders the 429 page (or the anti-bot challenge page).
@@ -294,7 +297,8 @@ or waste time on fast ones.
    (default 48s).
 5. CRW extracts the rendered DOM and returns it.
 
-**Obscura lifecycle event firing order** (each implies the previous):
+**Obscura lifecycle event firing order** (each later event includes the earlier
+conditions):
 
 ```
 1. domcontentloaded  — DOM parsed + scripts executed
@@ -355,14 +359,13 @@ an HTTP prefetch before the CDP renderer when JS rendering may be needed. That
 prefetch is a normal reqwest fetch, not an obscura browser navigation. CRW uses
 it to detect PDFs and other non-HTML content before spending a browser render.
 
-In an unmodified deployment, that prefetch can be a 429 risk for search
-engines because the target sees both a bare reqwest request and then a browser
-navigation. In this stack, the compose default routes CRW's reqwest traffic
-through `HTTPS_PROXY=http://127.0.0.1:3128` and
+The compose default routes CRW's reqwest traffic through
+`HTTPS_PROXY=http://127.0.0.1:3128` and
 `HTTP_PROXY=http://127.0.0.1:3128`. The local prefetch-blocking proxy rejects
 search-engine prefetches with `403 Forbidden` without opening an upstream
 connection. CRW auto mode sees that blocked HTTP result and escalates to the
-chrome/obscura CDP renderer. The search engine sees only the obscura browser
+chrome/obscura CDP renderer. This preserves CRW's prefetch/PDF handling while
+preventing search engines from seeing a bare reqwest request before the browser
 navigation.
 
 The prefetch still matters for PDF handling and for non-search HTTP paths:
@@ -425,12 +428,10 @@ nav per request on Tor):
 | 6   | T≈237s             | 3s               | T≈240s     | ~60s               | 48s        | ✓ completes at ~285s |
 
 With `deadline_ms_default=300000` (5 min effective deadline), up to 6
-requests per engine can complete sequentially within the deadline. With the
-previous default (108s deadline), only 2 requests would complete — Req 3
-would time out with ~12s of nav budget. The 300s deadline accommodates
-multi-request scenarios (e.g., agent issuing 5+ parallel search queries, or
-crawling many URLs from the same GitHub repository) while still serializing
-per-host to avoid 429s.
+requests per engine can complete sequentially within the deadline. The 300s
+deadline accommodates multi-request scenarios (e.g., agent issuing 5+
+parallel search queries, or crawling many URLs from the same GitHub
+repository) while still serializing per-host to avoid 429s.
 
 **Mitigation:** `CRW_REQUEST__DEADLINE_MS_DEFAULT=300000` (5 min) sets the
 effective per-request deadline to 300s, accommodating multi-request
@@ -589,21 +590,20 @@ This is critical for two reasons:
    the HTTP prefetch through the blocking proxy via reqwest's built-in env-var
    proxy support, without setting `REQUEST_PROXY`.
 
-2. **Avoids per-request browser context creation (fingerprint
-   re-randomization)**: When `REQUEST_PROXY` is set, CRW creates a new
+2. **Avoids per-request browser context creation and cookie clearing**: When
+   `REQUEST_PROXY` is set, CRW creates a new
    browser context per request (`fetch_with_ws` path, `cdp.rs:1204-1439`)
    with `Target.createBrowserContext`, then disposes it after the fetch.
-   Each `createBrowserContext` call creates a fresh obscura page with a
-   re-randomized JS fingerprint (GPU, screen, hardwareConcurrency, etc. —
-   see Known Limitations). This is a regression from the shared default
-   context path, which reuses the same context across requests.
+   In Obscura `v0.1.9`, `Target.createBrowserContext` and
+   `Target.disposeBrowserContext` clear the default cookie jar. That weakens
+   session continuity and can erase any cookies gathered by earlier requests.
 
    With `HTTPS_PROXY` env vars, `REQUEST_PROXY` is not set, so CRW uses
    the no-proxy path (`fetch_with_pool` or `fetch_with_ws` without
-   `createBrowserContext`). Obscura's shared default `CdpContext` is
-   reused across requests, and cookies persist. The CDP shim's
-   `proxyServer` stripping is kept as a safety net but is not needed
-   since `REQUEST_PROXY` is not set.
+   `createBrowserContext`). Obscura's default CDP context is reused across
+   requests, and cookies can persist until the shim clears them. The CDP shim's
+   `proxyServer` stripping is kept as a safety net but is not needed since
+   `REQUEST_PROXY` is not set.
 
    Verified in production: CDP shim logs show no `createBrowserContext`
    or `proxyServer` stripping when using `HTTPS_PROXY` env vars.
@@ -1223,77 +1223,70 @@ by requesting and preferring `rawHtml` for raw-file URLs.
 
 ## Known Limitations: Fingerprint Stability
 
-### The fingerprint re-randomization problem
+### The remaining stability problem
 
-Obscura's JS fingerprint (GPU, screen resolution, hardwareConcurrency,
-deviceMemory, canvas hash, WebGL renderer, audio fingerprint) is
-**re-randomized on every page navigation**. This is because obscura drops
-the entire V8 JS runtime on every `Page.navigate` call
-([`page.rs:1083`](../reference_repos/obscura/crates/obscura-browser/src/page.rs:1083))
-and creates a fresh one, which re-seeds the fingerprint RNG:
+Obscura `v0.1.9` selects a realistic browser profile from a built-in pool for
+each `BrowserContext`, and the default is a single stable profile rather than
+rotation. That keeps the User-Agent, `navigator.platform`,
+`navigator.userAgentData`, and the declared browser family internally
+consistent. `--stealth` also uses the stealth HTTP client so navigation and
+scripted fetch/XHR traffic share a browser-like TLS/HTTP fingerprint.
+
+Some JS-visible values are still initialized from a per-page seed in
+`bootstrap.js` during `__obscura_init()`:
 
 ```javascript
-// bootstrap.js:6841 — runs on every __obscura_init()
 _fpSeed = Date.now() ^ (Math.random() * 0xFFFFFFFF >>> 0);
 ```
 
-All fingerprint values are derived from `_fpSeed` via `_fpRand(salt)`, so
-they all change on every navigation. This cannot be fixed without patching
-obscura's source (the bootstrap is compiled into a V8 snapshot at build time).
+That seed influences values such as screen dimensions, `hardwareConcurrency`,
+`deviceMemory`, performance memory, canvas output, and WebGL debug renderer
+strings, so the stack should not promise perfectly stable cross-navigation
+device identity.
 
-### The cookie-fingerprint contradiction
+### Cookie interaction
 
-Cookies persist across requests (via obscura's shared `CdpContext`), but the
-fingerprint changes on every request. This creates a contradictory signal for
-anti-bot systems:
+In the normal wrapper path CRW creates pages on obscura's default CDP context,
+so cookies can remain in the in-process cookie jar across WebSocket
+connections. The shim periodically clears them. The compose default avoids
+CRW's `REQUEST_PROXY` / `Target.createBrowserContext` path because Obscura
+clears the default cookie jar on context create/dispose, which weakens session
+continuity.
 
-- **Cookies say "returning user"** — same session cookies across requests
-- **Fingerprint says "different device"** — different GPU/screen/hardware on every request
-
-A real returning user has the same fingerprint AND the same cookies. Having
-stable cookies with a changing fingerprint is a stronger bot signal than
-having neither.
-
-### What IS stable across requests
+### What is stable by default
 
 | Signal | Stable? | Source |
 |--------|---------|--------|
-| User-Agent | Yes | `BrowserContext` profile (Chrome 145 Linux) |
-| navigator.platform | Yes | `BrowserContext` profile (Linux x86_64) |
-| TLS fingerprint | Yes | `StealthHttpClient` wreq Chrome145 emulation |
-| Cookies | Yes | Rust `CookieJar` on shared `default_context` |
-| GPU/WebGL renderer | No | Re-randomized per page |
-| Screen resolution | No | Re-randomized per page |
-| hardwareConcurrency | No | Re-randomized per page |
-| deviceMemory | No | Re-randomized per page |
-| Canvas fingerprint | No | Re-randomized per page |
+| User-Agent | Yes | Stable `BrowserContext` profile unless `OBSCURA_ROTATE_PROFILE=1` |
+| navigator.platform | Yes | Stable `BrowserContext` profile |
+| navigator.userAgentData | Yes | Derived from the selected profile |
+| TLS/HTTP fingerprint | Mostly | Stealth client presents a browser-like Chrome fingerprint |
+| Timezone | Yes | Process `TZ`; default `Europe/Berlin`, override with `OBSCURA_TIMEZONE` |
+| Cookies | Usually | Default CDP context jar, cleared periodically by the shim |
+| Screen / canvas / hardware values | Not fully | Re-seeded during page initialization |
 
-### What does NOT persist
-
-Obscura has no persistent storage beyond cookies:
+### What does not reliably persist
 
 | Storage vector | Persists across navigations? | Why |
 |---|---|---|
-| Cookies | Yes | Rust `CookieJar` on `default_context` |
-| localStorage | No | JS runtime dropped on every navigation |
-| sessionStorage | No | JS runtime dropped on every navigation |
+| Cookies | Usually | Default CDP context jar, unless per-request context create/dispose clears it |
+| localStorage | Only for storage-dir-backed contexts | `--storage-dir` supports it, but CRW's default CDP path should not rely on it |
+| sessionStorage | No | Page/runtime scoped |
 | IndexedDB | No | Stub only — nothing is ever stored |
 | Cache API | Not implemented | No `caches` global |
 | Service Workers | Stub only | `register()` returns empty promise |
 | HTTP cache | Not implemented | No ETag/304 handling |
-| Super-cookies | Not possible | No plugin architecture |
 
 ### Mitigation
 
 The `OBSCURA_CLEAR_COOKIES_INTERVAL` setting (default: 3600s = 60 minutes)
-periodically clears cookies to limit the tracking surface. Within a 60-minute
-window, cookies persist for session continuity; after that, they're cleared
-to prevent indefinite accumulation. This is a pragmatic balance — the
-fingerprint inconsistency exists but is secondary to IP reputation as a
-429 trigger.
+periodically clears cookies to limit the tracking surface.
 
 The most impactful anti-bot measures currently in place are:
-1. **STEALTH_JS stripping** — eliminates CRW's Mac WebGL / Linux platform conflict
-2. **TLS fingerprint impersonation** — obscura's wreq Chrome145 emulation
-3. **CRW per-host rate limiting** — 3s interval between requests to the same engine
-4. **SearXNG engine suspension** — 180s cooldown on 429
+1. **STEALTH_JS stripping** — lets Obscura's own fingerprint model own the
+   browser surfaces instead of combining it with CRW's injected script.
+2. **Obscura stealth mode** — browser-like TLS/HTTP fingerprinting, stable
+   browser profile by default, and tracker blocking.
+3. **CRW per-host rate limiting** — 3s interval between requests to the same
+   engine.
+4. **SearXNG engine suspension** — 180s cooldown on 429.

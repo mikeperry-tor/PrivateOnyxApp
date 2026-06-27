@@ -9,6 +9,9 @@ Reference checkouts:
 - `reference_repos/python-sandbox` at `code-interpreter-0.4.3`
   (`e690122dfa009a9a57fc33c4f8ce8d73bed5e652`), remote
   `https://github.com/onyx-dot-app/python-sandbox`.
+- Companion web stack checked against `reference_repos/crw` at `v0.18.3`,
+  `reference_repos/obscura` at `v0.1.9`, and `reference_repos/searxng` at
+  `f8ffbf36f903`.
 
 Use this document when moving to a new major Onyx release: inspect the
 referenced upstream code first, then decide whether each wrapper patch is still
@@ -343,9 +346,6 @@ Local files:
 - `onyx/local_embedding_shim.py`
 - `docker-compose.full.yml`
 - `Makefile` embedserv targets
-
-Note: older notes may call this `local_embedding_sim.py`; the checked-in file is
-`onyx/local_embedding_shim.py`.
 
 Patch behavior:
 

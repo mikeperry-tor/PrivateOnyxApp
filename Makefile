@@ -15,8 +15,8 @@ TEEP_REF ?= main
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
 TEEP_IMAGE ?= 13rac1/teep:main
 TAILSCALE_IMAGE ?= tailscale/tailscale:stable
-OBSCURA_IMAGE ?= h4ckf0r0day/obscura:v0.1.9
-CRW_IMAGE ?= ghcr.io/us/crw:v0.18.3
+OBSCURA_IMAGE ?= h4ckf0r0day/obscura:0.1.9
+CRW_IMAGE ?= ghcr.io/us/crw:0.18.3
 CONTAINER_BIN ?= $(strip $(shell sed -n 's/^CONTAINER_BIN=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 DOCKER_SOCK_PATH ?= $(strip $(shell sed -n 's/^DOCKER_SOCK_PATH=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))
 TEEP_VPN_ROUTED ?= $(strip $(shell sed -n 's/^TEEP_VPN_ROUTED=//p' "$(ENV_FILE)" 2>/dev/null | head -1 | sed 's/^"//; s/"$$//'))

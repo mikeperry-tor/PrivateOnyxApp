@@ -116,7 +116,7 @@ services:
   # enables the full anti-fingerprint + tracker-blocking domain.
   # crw connects to ws://obscura:9222/devtools/browser.
   obscura:
-    image: ${OBSCURA_IMAGE:-h4ckf0r0day/obscura:v0.1.9}
+    image: ${OBSCURA_IMAGE:-h4ckf0r0day/obscura:0.1.9}
     restart: unless-stopped
     network_mode: "service:netns-holder"
     command:
@@ -190,7 +190,7 @@ services:
   #
   # See: https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md
   obscura-mcp:
-    image: ${OBSCURA_IMAGE:-h4ckf0r0day/obscura:v0.1.9}
+    image: ${OBSCURA_IMAGE:-h4ckf0r0day/obscura:0.1.9}
     restart: unless-stopped
     network_mode: "service:netns-holder"
     command:
@@ -376,7 +376,7 @@ services:
   # CRW_SEARCH__SEARXNG_URL points /v1/search at the wrapper's bundled
   # SearXNG sidecar (127.0.0.1:8888 in the netns).
   crw:
-    image: ${CRW_IMAGE:-ghcr.io/us/crw:v0.18.3}
+    image: ${CRW_IMAGE:-ghcr.io/us/crw:0.18.3}
     restart: unless-stopped
     network_mode: "service:netns-holder"
     environment:
