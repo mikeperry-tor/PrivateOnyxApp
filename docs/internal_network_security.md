@@ -42,6 +42,21 @@ The investigation was conducted against the committed pins in
 The live stack was running in full mode. The relevant browser, scraper, Onyx,
 RAG, and code-interpreter services shared the `netns-holder` network namespace.
 
+Related implementation docs:
+
+- [Request handling](request_handling.md) describes the `web_search` and
+  `open_url` chains through SearXNG, CRW, the prefetch proxy, the CDP shim, and
+  Obscura.
+- [VPN routing and proxies](vpn_routing_and_proxies.md) describes the shared
+  namespace, optional Mysterium/proxy routing, and code-interpreter networking
+  switch.
+- [Local document RAG search](local_docs_rag_search.md) describes the
+  doc-drop and embedding-shim paths that motivate the default Onyx SSRF
+  posture.
+- [Onyx patch information](onyx_patch_info.md) and
+  [Onyx wrapper patches](onyx_patches_upgrade.md) document the runtime patches,
+  shims, and upgrade checks relevant to this investigation.
+
 ## Live Namespace Shape
 
 In the inspected full stack, these services shared the network namespace owned

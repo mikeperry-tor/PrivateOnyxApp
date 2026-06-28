@@ -12,6 +12,10 @@ Related implementation docs:
 - [Onyx patch information](onyx_patch_info.md) describes the runtime
   `sitecustomize` patches used by the API server, background worker, and
   code-interpreter containers.
+- [Internal network security](internal_network_security.md) records tested
+  localhost/private-network reachability, prefetch-proxy direct-use risks,
+  Obscura/CRW blocking behavior, and the remaining code-interpreter networking
+  gap.
 
 ## Compose Layering
 

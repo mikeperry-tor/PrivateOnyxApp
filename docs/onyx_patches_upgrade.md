@@ -20,7 +20,10 @@ look like, see [`docs/onyx_patch_info.md`](onyx_patch_info.md). For
 operator-facing setup and troubleshooting of the local document RAG path, see
 [`docs/local_docs_rag_search.md`](local_docs_rag_search.md). For the
 SearXNG/CRW/Obscura request path and live parser assumptions, see
-[`docs/request_handling.md`](request_handling.md).
+[`docs/request_handling.md`](request_handling.md). For the internal-network
+security findings to re-check when changing CRW, Obscura, code-interpreter,
+proxy, or shim behavior, see
+[`docs/internal_network_security.md`](internal_network_security.md).
 
 ## Fast upgrade checklist
 
@@ -43,6 +46,10 @@ SearXNG/CRW/Obscura request path and live parser assumptions, see
    [SearXNG companion stack](#searxng-companion-stack).
 8. Update `stack.versions.env` for image/source pins and run
    `make upgrade-python-deps` to refresh runtime Python package locks.
+9. Re-run the internal reachability checks summarized in
+   [Internal network security](internal_network_security.md) when changes touch
+   CRW, Obscura, the prefetch proxy, CDP shim, code-interpreter executor
+   networking, or shared-namespace service placement.
 
 ## Service map
 

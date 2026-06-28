@@ -17,6 +17,10 @@ For line-numbered Onyx upgrade checks, use
 [Background Web connector PDF freshness patch](onyx_patches_upgrade.md#background-web-connector-pdf-freshness-patch),
 [Local embedding shim](onyx_patches_upgrade.md#local-embedding-shim), and
 [Full mode](onyx_patches_upgrade.md#full-mode-compose).
+For the tested interaction between Onyx SSRF defaults, local doc-drop
+reachability, Obscura/CRW private-network blocking, and code-interpreter
+networking, see
+[`docs/internal_network_security.md`](internal_network_security.md).
 
 The local path is intentionally built out of wrapper services instead of an
 Onyx fork:

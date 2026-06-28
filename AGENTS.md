@@ -15,6 +15,7 @@ Before changing a subsystem, read the matching document below, then inspect the 
 - `README.md` - user setup, first-run flow, optional features, and host endpoints.
 - `docs/request_handling.md` - `web_search`, `open_url`, CRW, Obscura, CDP shim, prefetch blocking, readiness, cookies, and anti-bot behavior.
 - `docs/vpn_routing_and_proxies.md` - shared VPN namespace layout, Mysterium, explicit no-VPN mode, optional routing switches, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and `NO_PROXY`.
+- `docs/internal_network_security.md` - tested internal-network reachability, Obscura/CRW private-target blocking, prefetch-proxy direct-use risks, Onyx SSRF interaction, and code-interpreter networking gaps.
 - `docs/onyx_patch_info.md` - why local runtime patches exist.
 - `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/CRW/Obscura/ Teep upgrade checklist and patch validation, for use when image/source pins or runtime Python locks are updated.
 - `docs/local_docs_rag_search.md` - full-mode local document RAG, local doc serving, PDF freshness, embedding shim, and diagnostics.

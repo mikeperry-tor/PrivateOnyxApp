@@ -36,7 +36,10 @@ code-interpreter routing switches, see
 patches that shape Firecrawl payloads, tool availability, prompt text, and
 executor pod networking, see [Onyx patch information](onyx_patch_info.md). For
 line-oriented upgrade checks, including the SearXNG custom engines and config
-overlay notes, see [Onyx wrapper patches](onyx_patches_upgrade.md).
+overlay notes, see [Onyx wrapper patches](onyx_patches_upgrade.md). For the
+tested internal-network reachability of CRW, Obscura, the prefetch proxy, and
+network-enabled code-interpreter executors, see
+[Internal network security](internal_network_security.md).
 
 Unless a section says otherwise, diagrams assume `MYST_VPN_ENABLED=true`.
 When `MYST_VPN_ENABLED=false`, shared-namespace services keep the same internal

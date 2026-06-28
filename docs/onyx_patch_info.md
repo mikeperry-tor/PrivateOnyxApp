@@ -20,6 +20,10 @@ Related implementation docs:
 - [VPN routing and proxies](vpn_routing_and_proxies.md) describes the
   Compose-level VPN namespace, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and optional teep, Tailscale, and
   code-interpreter routing modes.
+- [Internal network security](internal_network_security.md) records the tested
+  internal reachability of wrapper shims and services, including the
+  prefetch-proxy direct CONNECT risk and code-interpreter executor networking
+  gap.
 
 Reference checkouts:
 
