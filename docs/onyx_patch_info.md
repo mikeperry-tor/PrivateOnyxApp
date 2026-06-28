@@ -18,7 +18,7 @@ Related implementation docs:
 - [Request handling](request_handling.md) describes how web search and
   `open_url` requests flow through SearXNG, CRW, the CDP shim, and obscura.
 - [VPN routing and proxies](vpn_routing_and_proxies.md) describes the
-  Compose-level VPN namespace, `PROXY_URL`, and optional teep, Tailscale, and
+  Compose-level VPN namespace, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and optional teep, Tailscale, and
   code-interpreter routing modes.
 
 Reference checkouts:
@@ -93,8 +93,8 @@ configuration, without rebuilding the upstream Onyx backend image.
 ### How it modifies Onyx
 
 The base `sitecustomize` module imports Onyx's web-search and open-url modules
-at interpreter startup. When `OPEN_URL_MAX_CHARS_PER_URL` or
-`OPEN_URL_MAX_CHARS_ACROSS_URLS` is set, it:
+at interpreter startup. When `ONYX_OPEN_URL_MAX_CHARS_PER_URL` or
+`ONYX_OPEN_URL_MAX_TOTAL_CHARS` is set, it:
 
 - Replaces `web_search.utils.MAX_CHARS_PER_URL`.
 - Rewrites default arguments on truncation helper functions that captured the
@@ -111,8 +111,8 @@ very large integer budget.
 This should become regular Onyx configuration instead of a monkey patch.
 Possible options:
 
-- `OPEN_URL_MAX_CHARS_PER_URL`
-- `OPEN_URL_MAX_CHARS_ACROSS_URLS`
+- `ONYX_OPEN_URL_MAX_CHARS_PER_URL`
+- `ONYX_OPEN_URL_MAX_TOTAL_CHARS`
 - Equivalent admin preferences or per-assistant tool settings
 
 The implementation should read the configured values at call time or pass them
@@ -159,13 +159,13 @@ window in a local document RAG workflow.
 
 Full mode passes clearer wrapper settings to `api_server`:
 
-- `ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS`
-- `ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`
-- `ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`
-- `ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`
+- `ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS`
+- `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`
+- `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`
+- `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`
 
 The compose layer also maps
-`ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS` to upstream
+`ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS` to upstream
 `MAX_CHUNKS_FED_TO_CHAT` so Onyx's own config import sees the lower value.
 
 The base `sitecustomize` patch then:
@@ -184,10 +184,10 @@ The base `sitecustomize` patch then:
 The wrapper defaults are intentionally lower than upstream:
 
 ```env
-ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS=24
-ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS=8
-ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT=6000
-ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=30000
+ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS=24
+ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS=8
+ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT=6000
+ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=30000
 ```
 
 ### Upstream merge request shape
@@ -271,18 +271,18 @@ Onyx source areas:
 ### Why this is needed
 
 Onyx describes the Python tool, Bash tool, and coding agent as running without
-network access when `CODE_INTERPRETER_VPN_ROUTED=false`. That matches
+network access when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=false`. That matches
 code-interpreter 0.4.4's default executor network, `none`.
 
-The wrapper can explicitly enable VPN-routed executor networking. When that is
-enabled, the upstream descriptions become actively harmful: the LLM is told not
-to use network operations even though network access is available and expected.
-The inverse would also be dangerous, so the text must track actual executor
-capabilities.
+The wrapper can explicitly enable executor networking through the shared stack
+namespace. When that is enabled, the upstream descriptions become actively
+harmful: the LLM is told not to use network operations even though network
+access is available and expected. The inverse would also be dangerous, so the
+text must track actual executor capabilities.
 
 ### How it modifies Onyx
 
-When `CODE_INTERPRETER_VPN_ROUTED=true` is present in `api_server`, the base
+When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` is present in `api_server`, the base
 patch rewrites LLM-facing text for:
 
 - `PythonTool.DESCRIPTION`
@@ -296,12 +296,10 @@ that Python tool package installation is limited, and that the coding agent is
 better for package installation or multi-step coding workflows. It also names
 local scraping and browser services available in the shared namespace.
 
-The patch checks exact upstream string matches before claiming success.
-`WRAPPER_PATCH_STRICT=true` is the default, so missing expected strings or
+The patch checks exact upstream string matches before claiming success. The
+wrapper runs these patches in strict mode, so missing expected strings or
 changed helper signatures fail startup instead of silently leaving stale tool
-text in place. The compose wrapper passes this setting to every service that
-mounts wrapper `sitecustomize` patches. Set `WRAPPER_PATCH_STRICT=false` only
-for temporary diagnosis.
+text in place.
 
 ### Upstream merge request shape
 
@@ -414,9 +412,10 @@ For allowlisted hosts only, it:
   document, seeds freshness metadata so future runs can skip the download.
 - If the parsed content hash differs, allows Onyx's normal re-index path.
 
-The allowlist is configured by `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS` and
-defaults to localhost addresses. The patch can be disabled with
-`ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED=false`.
+Full-mode Compose sets the internal freshness allowlist to localhost addresses.
+The patch still reads `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS` and
+`ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED` for upgrade/debug overrides, but
+those are not part of the user-facing `.env.wrapper` surface.
 
 The patch stores wrapper metadata keys:
 
@@ -431,8 +430,9 @@ The patch stores wrapper metadata keys:
 
 By default, the patch logs startup status and one-time warnings for unexpected
 conditions such as missing validators, HEAD failures, sentinel mismatches, or
-indexing-patch failures. Per-document hit and miss details are available with
-`ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_DEBUG=true`.
+indexing-patch failures. The internal
+`ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_DEBUG=true` override enables per-document hit
+and miss details while validating patch behavior.
 
 ### Upstream merge request shape
 
@@ -486,7 +486,7 @@ network before command construction.
 
 ### How it modifies Onyx
 
-When `CODE_INTERPRETER_VPN_ROUTED=true`, `docker-compose.code-interpreter-vpn.yml`
+When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, `docker-compose.code-interpreter-vpn.yml`
 sets `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`, so
 code-interpreter starts executor containers directly in the shared network
 namespace. The code-interpreter container also loads a `sitecustomize` patch
@@ -497,14 +497,15 @@ that:
 
 The wrapper compose already runs code-interpreter in the shared
 `netns-holder` namespace. Inheriting that namespace gives executor pods the
-same VPN-routed egress.
+same egress path: Mysterium when `MYST_VPN_ENABLED=true`, or direct bridge
+egress when VPN is explicitly disabled.
 
-When `PROXY_URL` is set, the same patch injects proxy environment variables
+When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, the same patch injects proxy environment variables
 into executor pod commands. This proxy injection is independent from the
-executor network setting: with `PROXY_URL` alone, executor pods remain
-network-isolated. With both `PROXY_URL` and `CODE_INTERPRETER_VPN_ROUTED=true`,
-executor pods inherit the VPN namespace and supported tools use the configured
-upstream proxy.
+executor network setting: with `ONYX_AGENT_OUTBOUND_PROXY_URL` alone, executor pods remain
+network-isolated. With both `ONYX_AGENT_OUTBOUND_PROXY_URL` and
+`ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor pods inherit the shared
+namespace and supported tools use the configured upstream proxy.
 
 For SOCKS proxies, the patch also:
 
@@ -518,7 +519,7 @@ For SOCKS proxies, the patch also:
 - Prepends that directory to `PYTHONPATH` only if setup succeeds.
 
 This is intentionally high trust. It removes the upstream executor network
-isolation when `CODE_INTERPRETER_VPN_ROUTED=true` and lets generated code make
+isolation when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` and lets generated code make
 outbound network requests. See
 [VPN routing and proxies](vpn_routing_and_proxies.md#code-interpreter-executor-pods)
 for the service-level routing behavior.

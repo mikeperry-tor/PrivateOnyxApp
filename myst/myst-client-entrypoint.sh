@@ -11,9 +11,9 @@ myst_cli() {
 }
 
 # Optional LAN access: append common private network CIDRs to route exemptions.
-# When ALLOW_LAN_ACCESS=true, LMStudio and other local inference APIs can be
+# When MYST_VPN_ALLOW_LAN_BYPASS=true, LMStudio and other local inference APIs can be
 # reached without VPN routing, while remaining connections stay fail-closed.
-if [ "${ALLOW_LAN_ACCESS:-false}" = "true" ]; then
+if [ "${MYST_VPN_ALLOW_LAN_BYPASS:-false}" = "true" ]; then
   # Common private network ranges per RFC 1918
   LAN_CIDRS="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
   if [ -n "${MYST_ROUTE_EXEMPT_CIDRS:-}" ]; then
@@ -21,7 +21,7 @@ if [ "${ALLOW_LAN_ACCESS:-false}" = "true" ]; then
   else
     MYST_ROUTE_EXEMPT_CIDRS="${LAN_CIDRS}"
   fi
-  echo "ALLOW_LAN_ACCESS=true: added LAN CIDRs to route exemptions"
+  echo "MYST_VPN_ALLOW_LAN_BYPASS=true: added LAN CIDRs to route exemptions"
 fi
 
 # ── Optional VPN bypass ────────────────────────────────────────────────────
@@ -35,8 +35,8 @@ if [ "${MYST_VPN_ENABLED:-true}" = "false" ]; then
   # rules even if a tunnel is somehow established.
   export MYST_FIREWALL_ENABLED=false
   set -- --local-service-discovery=false --consumer
-  if [ -n "${MYST_WIREGUARD_MTU:-}" ]; then
-    set -- "$@" --wireguard.mtu="${MYST_WIREGUARD_MTU}"
+  if [ -n "${MYST_VPN_WIREGUARD_MTU:-}" ]; then
+    set -- "$@" --wireguard.mtu="${MYST_VPN_WIREGUARD_MTU}"
   fi
   set -- "$@" daemon
   /usr/local/bin/docker-entrypoint.sh "$@" &
@@ -65,9 +65,9 @@ fi
 # Start daemon in consumer-only mode (no provider services).
 # Disable LAN discovery to avoid mDNS/Bonjour conflicts in host-network tests.
 set -- --local-service-discovery=false --consumer
-if [ -n "${MYST_WIREGUARD_MTU:-}" ]; then
-  echo "Using WireGuard MTU override: ${MYST_WIREGUARD_MTU}"
-  set -- "$@" --wireguard.mtu="${MYST_WIREGUARD_MTU}"
+if [ -n "${MYST_VPN_WIREGUARD_MTU:-}" ]; then
+  echo "Using WireGuard MTU override: ${MYST_VPN_WIREGUARD_MTU}"
+  set -- "$@" --wireguard.mtu="${MYST_VPN_WIREGUARD_MTU}"
 fi
 set -- "$@" daemon
 /usr/local/bin/docker-entrypoint.sh "$@" &
@@ -114,7 +114,7 @@ apply_route_exemptions() {
 }
 
 apply_wireguard_mtu() {
-  [ -n "${MYST_WIREGUARD_MTU:-}" ] || return 0
+  [ -n "${MYST_VPN_WIREGUARD_MTU:-}" ] || return 0
 
   if ! ip link show myst0 >/dev/null 2>&1; then
     return 0
@@ -125,11 +125,11 @@ apply_wireguard_mtu() {
     return 0
   fi
 
-  if [ "${_current_mtu}" != "${MYST_WIREGUARD_MTU}" ]; then
-    if ip link set dev myst0 mtu "${MYST_WIREGUARD_MTU}" >/dev/null 2>&1; then
-      echo "WireGuard MTU: set myst0 mtu=${MYST_WIREGUARD_MTU} (was ${_current_mtu})"
+  if [ "${_current_mtu}" != "${MYST_VPN_WIREGUARD_MTU}" ]; then
+    if ip link set dev myst0 mtu "${MYST_VPN_WIREGUARD_MTU}" >/dev/null 2>&1; then
+      echo "WireGuard MTU: set myst0 mtu=${MYST_VPN_WIREGUARD_MTU} (was ${_current_mtu})"
     else
-      echo "WireGuard MTU: failed to set myst0 mtu=${MYST_WIREGUARD_MTU} (current ${_current_mtu})"
+      echo "WireGuard MTU: failed to set myst0 mtu=${MYST_VPN_WIREGUARD_MTU} (current ${_current_mtu})"
     fi
   fi
 }
@@ -414,20 +414,20 @@ if [ "$NEEDS_ORDER_CHECK" = "true" ]; then
     fi
 
     # Auto-create a new order if all four required vars are set.
-    if [ -n "${MYST_ORDER_AMOUNT:-}" ] && [ -n "${MYST_ORDER_CURRENCY:-}" ] && \
-       [ -n "${MYST_ORDER_GATEWAY:-}" ] && [ -n "${MYST_ORDER_COUNTRY:-}" ]; then
+    if [ -n "${MYST_VPN_ORDER_AMOUNT:-}" ] && [ -n "${MYST_VPN_ORDER_CURRENCY:-}" ] && \
+       [ -n "${MYST_VPN_ORDER_GATEWAY:-}" ] && [ -n "${MYST_VPN_ORDER_COUNTRY:-}" ]; then
       if [ "$HAS_EXISTING_ORDERS" = "true" ]; then
         echo "Skipping auto-create: existing order(s) found."
       else
-        echo "Creating order: amount=${MYST_ORDER_AMOUNT} pay_currency=${MYST_ORDER_CURRENCY} gateway=${MYST_ORDER_GATEWAY} country=${MYST_ORDER_COUNTRY}..."
+        echo "Creating order: amount=${MYST_VPN_ORDER_AMOUNT} pay_currency=${MYST_VPN_ORDER_CURRENCY} gateway=${MYST_VPN_ORDER_GATEWAY} country=${MYST_VPN_ORDER_COUNTRY}..."
         set +e
         CREATE_OUT="$(myst_cli orders create \
           "$ID" \
-          "${MYST_ORDER_AMOUNT}" \
-          "${MYST_ORDER_CURRENCY}" \
-          "${MYST_ORDER_GATEWAY}" \
-          "${MYST_ORDER_COUNTRY}" \
-          "${MYST_ORDER_GATEWAY_DATA}" 2>&1)"
+          "${MYST_VPN_ORDER_AMOUNT}" \
+          "${MYST_VPN_ORDER_CURRENCY}" \
+          "${MYST_VPN_ORDER_GATEWAY}" \
+          "${MYST_VPN_ORDER_COUNTRY}" \
+          "${MYST_VPN_ORDER_GATEWAY_DATA}" 2>&1)"
         CREATE_RC=$?
         set -e
         if [ -n "$CREATE_OUT" ]; then
@@ -448,14 +448,14 @@ if [ "$NEEDS_ORDER_CHECK" = "true" ]; then
         fi
       fi
     else
-      echo "Set MYST_ORDER_AMOUNT / MYST_ORDER_CURRENCY / MYST_ORDER_GATEWAY / MYST_ORDER_COUNTRY"
+      echo "Set MYST_VPN_ORDER_AMOUNT / MYST_VPN_ORDER_CURRENCY / MYST_VPN_ORDER_GATEWAY / MYST_VPN_ORDER_COUNTRY"
       echo "to auto-create a funding order on next start. Available gateways:"
       myst_cli orders gateways 2>/dev/null | sed 's/^/  /' || true
     fi
 
     # Optionally block until balance is funded before attempting to connect.
-    if [ "${MYST_WAIT_FOR_FUNDS:-false}" = "true" ]; then
-      echo "MYST_WAIT_FOR_FUNDS=true - polling every 30s until balance > 0..."
+    if [ "${MYST_VPN_WAIT_FOR_FUNDS:-false}" = "true" ]; then
+      echo "MYST_VPN_WAIT_FOR_FUNDS=true - polling every 30s until balance > 0..."
       while true; do
         sleep 30
         BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
@@ -587,12 +587,12 @@ connect_one_attempt() {
     return 0
   fi
 
-  if [ -n "${MYST_PROVIDER_IDS:-}" ]; then
+  if [ -n "${MYST_VPN_PREFERRED_PROVIDER_IDS:-}" ]; then
     OLDIFS="$IFS"
     IFS=','
     _provider_list=""
     _provider_count=0
-    for _provider in ${MYST_PROVIDER_IDS}; do
+    for _provider in ${MYST_VPN_PREFERRED_PROVIDER_IDS}; do
       _provider="$(printf '%s' "${_provider}" | xargs)"
       [ -n "${_provider}" ] || continue
       _provider_count="$(( _provider_count + 1 ))"
@@ -605,7 +605,7 @@ connect_one_attempt() {
     IFS="$OLDIFS"
 
     if [ "$_provider_count" -eq 0 ]; then
-      log_with_ts "MYST_PROVIDER_IDS was set but no valid provider IDs were parsed."
+      log_with_ts "MYST_VPN_PREFERRED_PROVIDER_IDS was set but no valid provider IDs were parsed."
       return 1
     fi
 
@@ -689,7 +689,7 @@ if [ "${MYST_AUTO_CONNECT:-true}" = "true" ] && [ -n "$ID" ]; then
 
   _attempt=1
   while [ "$_attempt" -le "$_max_attempts" ]; do
-    if [ -n "${MYST_PROVIDER_IDS:-}" ]; then
+    if [ -n "${MYST_VPN_PREFERRED_PROVIDER_IDS:-}" ]; then
       log_with_ts "Connect attempt $_attempt/$_max_attempts mode=pinned-single-provider"
     else
       log_with_ts "Connect attempt $_attempt/$_max_attempts mode=auto-provider-selection"

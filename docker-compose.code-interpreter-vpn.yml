@@ -1,5 +1,5 @@
-## Code-interpreter VPN routing override.
-## Applied when CODE_INTERPRETER_VPN_ROUTED=true in .env.wrapper (via Makefile
+## Code-interpreter executor network override.
+## Applied when ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true in .env.wrapper (via Makefile
 ## COMPOSE_FILE layering). Configures code-interpreter 0.4.4 executor
 ## containers to join the shared netns-holder network namespace through
 ## PYTHON_EXECUTOR_DOCKER_NETWORK. The mounted sitecustomize.py patch forwards
@@ -19,9 +19,9 @@ services:
   code-interpreter:
     environment:
       # Activates the sitecustomize patch below.
-      CODE_INTERPRETER_VPN_ROUTED: "true"
+      ONYX_CODE_INTERPRETER_ENABLE_NETWORK: "true"
       PYTHON_EXECUTOR_DOCKER_NETWORK: "container:onyx-netns-holder-1"
-      WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
+      WRAPPER_PATCH_STRICT: "true"
       # Put the patch directory first on PYTHONPATH so sitecustomize.py is
       # auto-imported by the Python interpreter at startup.
       PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"
@@ -32,7 +32,7 @@ services:
       # containers.
       - ./onyx/patches/sitecustomize_code_interpreter:/app/wrapper-patches:ro
 
-  # The api_server also needs CODE_INTERPRETER_VPN_ROUTED=true so its
+  # The api_server also needs ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true so its
   # sitecustomize patch updates the Python/Bash tool descriptions and coding
   # agent prompts to advertise network access (otherwise the LLM would keep
   # avoiding network commands based on the stale "no network" descriptions).
@@ -40,5 +40,5 @@ services:
   # this override only adds the env var.
   api_server:
     environment:
-      CODE_INTERPRETER_VPN_ROUTED: "true"
-      WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
+      ONYX_CODE_INTERPRETER_ENABLE_NETWORK: "true"
+      WRAPPER_PATCH_STRICT: "true"

@@ -19,7 +19,7 @@
 # Environment:
 #   CONTAINER_BIN   — docker or podman (default: docker)
 #   CONTAINER_NAME  — myst container name (default: myst-client-vpn)
-#   MYST_ORDER_*    — order creation params (read from .env.wrapper via Makefile)
+#   MYST_VPN_ORDER_* — order creation params (read from .env.wrapper via Makefile)
 #
 # This script runs `docker exec` against the running myst container.
 # It does NOT start or stop containers — that's the Makefile's job.
@@ -390,11 +390,11 @@ cmd_signup() {
   echo "Creating a new payment order..."
 
   # Use env vars if set, otherwise use defaults
-  ORDER_AMOUNT="${MYST_ORDER_AMOUNT:-100}"
-  ORDER_CURRENCY="${MYST_ORDER_CURRENCY:-}"
-  ORDER_GATEWAY="${MYST_ORDER_GATEWAY:-}"
-  ORDER_COUNTRY="${MYST_ORDER_COUNTRY:-${MYST_COUNTRY:-US}}"
-  ORDER_GATEWAY_DATA="${MYST_ORDER_GATEWAY_DATA:-custom_id=mysterium-onyx}"
+  ORDER_AMOUNT="${MYST_VPN_ORDER_AMOUNT:-100}"
+  ORDER_CURRENCY="${MYST_VPN_ORDER_CURRENCY:-}"
+  ORDER_GATEWAY="${MYST_VPN_ORDER_GATEWAY:-}"
+  ORDER_COUNTRY="${MYST_VPN_ORDER_COUNTRY:-${MYST_COUNTRY:-US}}"
+  ORDER_GATEWAY_DATA="${MYST_VPN_ORDER_GATEWAY_DATA:-custom_id=mysterium-onyx}"
 
   # If gateway or currency not set, discover from gateways list
   if [ -z "$ORDER_GATEWAY" ] || [ -z "$ORDER_CURRENCY" ]; then
@@ -414,7 +414,7 @@ cmd_signup() {
 
   if [ -z "$ORDER_GATEWAY" ] || [ -z "$ORDER_CURRENCY" ]; then
     echo "ERROR: Could not determine payment gateway or currency."
-    echo "       Set MYST_ORDER_GATEWAY and MYST_ORDER_CURRENCY in .env.wrapper"
+    echo "       Set MYST_VPN_ORDER_GATEWAY and MYST_VPN_ORDER_CURRENCY in .env.wrapper"
     echo "       Available gateways:"
     myst_cli orders gateways 2>&1 | sed 's/^/         /' || true
     exit 1

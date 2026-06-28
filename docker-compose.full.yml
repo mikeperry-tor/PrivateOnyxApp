@@ -37,20 +37,20 @@ services:
       S3_AWS_ACCESS_KEY_ID: "${S3_AWS_ACCESS_KEY_ID:?S3_AWS_ACCESS_KEY_ID must be set}"
       S3_AWS_SECRET_ACCESS_KEY: "${S3_AWS_SECRET_ACCESS_KEY:?S3_AWS_SECRET_ACCESS_KEY must be set}"
       # Controls Web connector SSRF-style URL checks
-      OPEN_URL_VALIDATE_SSRF: ${OPEN_URL_VALIDATE_SSRF:-}
-      MCP_SERVER_ALLOW_PRIVATE_NETWORK: ${MCP_SERVER_ALLOW_PRIVATE_NETWORK:-}
-      MCP_SERVER_ALLOW_LOOPBACK: ${MCP_SERVER_ALLOW_LOOPBACK:-}
+      OPEN_URL_VALIDATE_SSRF: ${ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL:-true}
+      MCP_SERVER_ALLOW_PRIVATE_NETWORK: ${ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK:-true}
+      MCP_SERVER_ALLOW_LOOPBACK: ${ONYX_SECURITY_SSRF_ALLOW_LOOPBACK:-false}
       # Wrapper-level alias for Onyx's asymmetric query prefix setting.
-      ASYM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
-      EMBEDDING_BATCH_SIZE: "${EMBEDDING_BATCH_SIZE:-}"
+      ASYM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-}"
+      EMBEDDING_BATCH_SIZE: "${ONYX_RAG_EMBEDDING_BATCH_SIZE:-}"
       MODEL_SERVER_HOST: "127.0.0.1"
       MODEL_SERVER_PORT: "9101"
       INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
       INDEXING_MODEL_SERVER_PORT: "9101"
-      WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
+      WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/app/wrapper-patches-background:${PYTHONPATH:-}"
-      ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED: "${ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED:-true}"
-      ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS: "${ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS:-localhost,127.0.0.1,::1}"
+      ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED: "true"
+      ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS: "localhost,127.0.0.1,::1"
       # code-interpreter runs on 7000 in the shared netns (8000 is taken by background prometheus).
       CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
@@ -138,9 +138,9 @@ services:
   host-doc-drop-web-proxy:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
-    command: tcp-listen:${DOC_DROP_WEB_PORT:-8091},fork,reuseaddr tcp-connect:myst-client:${DOC_DROP_WEB_CONTAINER_PORT:-8091}
+    command: tcp-listen:8091,fork,reuseaddr tcp-connect:myst-client:8091
     ports:
-      - ${DOC_DROP_WEB_HOST:+${DOC_DROP_WEB_HOST}:}${DOC_DROP_WEB_PORT:-8091}:${DOC_DROP_WEB_CONTAINER_PORT:-8091}
+      - ${DOC_DROP_WEB_HOST:+${DOC_DROP_WEB_HOST}:}${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}:8091
     depends_on:
       netns-holder:
         condition: service_started
@@ -148,26 +148,26 @@ services:
         condition: service_started
         restart: true
 
-  # Read-only HTTP view of DOC_DROP_DIR from inside the shared myst namespace.
-  # Use with Onyx Web connector at http://localhost:${DOC_DROP_WEB_PORT:-8091}/
+  # Read-only HTTP view of ONYX_RAG_DOC_SOURCE_DIR from inside the shared myst namespace.
+  # Use with Onyx Web connector at http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/
   # so source links stay host-clickable while crawler access remains local.
   doc-drop-web:
     image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
     restart: unless-stopped
     network_mode: "service:netns-holder"
     volumes:
-      - ${DOC_DROP_DIR:-./doc-drop}:/import/docs:ro
+      - ${ONYX_RAG_DOC_SOURCE_DIR:-./doc-drop}:/import/docs:ro
       - ./onyx/doc_drop_webserver.py:/app/doc_drop_webserver.py:ro
     command:
       - python
       - /app/doc_drop_webserver.py
-      - ${DOC_DROP_WEB_CONTAINER_PORT:-8091}
+      - "8091"
       - --bind
       - 0.0.0.0
       - --directory
       - /import/docs
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:${DOC_DROP_WEB_CONTAINER_PORT:-8091}/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:8091/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -181,20 +181,20 @@ services:
 
   api_server:
     environment:
-      EMBEDDING_BATCH_SIZE: "${EMBEDDING_BATCH_SIZE:-}"
+      EMBEDDING_BATCH_SIZE: "${ONYX_RAG_EMBEDDING_BATCH_SIZE:-}"
       # Internal search/RAG context controls. The wrapper env names are clearer
       # than upstream internals; MAX_CHUNKS_FED_TO_CHAT is still passed for
       # Onyx compatibility.
-      ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS: "${ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS:-24}"
-      ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS: "${ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS:-8}"
-      ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT: "${ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT:-6000}"
-      ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS: "${ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS:-30000}"
-      MAX_CHUNKS_FED_TO_CHAT: "${ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS:-8}"
+      ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS: "${ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS:-24}"
+      ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS: "${ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS:-8}"
+      ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT: "${ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT:-6000}"
+      ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS: "${ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS:-30000}"
+      MAX_CHUNKS_FED_TO_CHAT: "${ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS:-8}"
       MODEL_SERVER_HOST: "127.0.0.1"
       MODEL_SERVER_PORT: "9101"
       INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
       INDEXING_MODEL_SERVER_PORT: "9101"
-      WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
+      WRAPPER_PATCH_STRICT: "true"
     depends_on:
       netns-holder:
         condition: service_started
@@ -216,11 +216,12 @@ services:
     restart: unless-stopped
     network_mode: "service:netns-holder"
     environment:
-      LOCAL_EMBEDDINGS_URL: "${LOCAL_EMBEDDINGS_URL:-http://host.docker.internal:1234/v1/embeddings}"
-      LOCAL_EMBEDDING_API_KEY: "${LOCAL_EMBEDDING_API_KEY:-}"
-      LOCAL_EMBEDDING_MODEL: "${LOCAL_EMBEDDING_MODEL:-}"
-      SHIM_QUERY_PREFIX: "${ONYX_EMBEDDING_QUERY_PREFIX:-}"
-      SHIM_PASSAGE_PREFIX: "${ONYX_EMBEDDING_PASSAGE_PREFIX:-}"
+      ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL: "${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-http://host.docker.internal:3210/v1/embeddings}"
+      ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY: "${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY:-}"
+      ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL: "${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL:-}"
+      ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL: "${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"
+      SHIM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-}"
+      SHIM_PASSAGE_PREFIX: "${ONYX_RAG_EMBEDDING_PASSAGE_PREFIX:-}"
     volumes:
       - ./onyx/local_embedding_shim.py:/app/local_embedding_shim.py:ro
     command:

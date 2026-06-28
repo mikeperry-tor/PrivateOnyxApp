@@ -43,34 +43,35 @@ CRW_IMAGE := ghcr.io/us/crw:0.18.3
 endif
 CONTAINER_BIN ?= $(call env_value,CONTAINER_BIN)
 DOCKER_SOCK_PATH ?= $(call env_value,DOCKER_SOCK_PATH)
-TEEP_VPN_ROUTED ?= $(call env_value,TEEP_VPN_ROUTED)
-TAILSCALE_VPN_ROUTED ?= $(call env_value,TAILSCALE_VPN_ROUTED)
-CODE_INTERPRETER_VPN_ROUTED ?= $(call env_value,CODE_INTERPRETER_VPN_ROUTED)
+TEEP_ROUTE_THROUGH_MYST_VPN ?= $(call env_value,TEEP_ROUTE_THROUGH_MYST_VPN)
+TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN ?= $(call env_value,TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN)
+ONYX_CODE_INTERPRETER_ENABLE_NETWORK ?= $(call env_value,ONYX_CODE_INTERPRETER_ENABLE_NETWORK)
 MYST_VPN_ENABLED ?= $(call env_value,MYST_VPN_ENABLED)
-PROXY_URL ?= $(call env_value,PROXY_URL)
+ONYX_AGENT_OUTBOUND_PROXY_URL ?= $(call env_value,ONYX_AGENT_OUTBOUND_PROXY_URL)
 # obscura and crw's SOCKS proxy connectors cannot resolve Docker-internal DNS
-# names (host.docker.internal) — they try to resolve the proxy hostname through
-# the SOCKS proxy itself, which fails. Derive PROXY_URL_RESOLVED by replacing
-# host.docker.internal with its resolved IP address. If PROXY_URL is empty or
-# already uses an IP/public hostname, PROXY_URL_RESOLVED equals PROXY_URL.
-PROXY_URL_RESOLVED :=
-ifneq ($(strip $(PROXY_URL)),)
-PROXY_HOST_INTERNAL := $(strip $(shell echo "$(PROXY_URL)" | grep -oE 'host\.docker\.internal' | head -1))
+# names (host.docker.internal) -- they try to resolve the proxy hostname
+# through the SOCKS proxy itself, which fails. Derive the resolved proxy URL by
+# replacing host.docker.internal with its resolved IP address. If
+# ONYX_AGENT_OUTBOUND_PROXY_URL is empty or already uses an IP/public hostname,
+# the resolved value equals ONYX_AGENT_OUTBOUND_PROXY_URL.
+ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED :=
+ifneq ($(strip $(ONYX_AGENT_OUTBOUND_PROXY_URL)),)
+PROXY_HOST_INTERNAL := $(strip $(shell echo "$(ONYX_AGENT_OUTBOUND_PROXY_URL)" | grep -oE 'host\.docker\.internal' | head -1))
 ifneq ($(strip $(PROXY_HOST_INTERNAL)),)
 # Resolve host.docker.internal via Docker (run a one-shot container). Falls
 # back to getent on the host if Docker resolution fails.
 PROXY_HOST_IP := $(strip $(shell "$(CONTAINER_BIN)" run --rm alpine:3.20 sh -c 'getent hosts host.docker.internal 2>/dev/null | awk "{print \$$1}" | head -1' 2>/dev/null || getent hosts host.docker.internal 2>/dev/null | awk '{print $$1}' | head -1 || true))
 ifneq ($(strip $(PROXY_HOST_IP)),)
-PROXY_URL_RESOLVED := $(strip $(shell echo "$(PROXY_URL)" | sed 's/host\.docker\.internal/$(PROXY_HOST_IP)/g'))
+ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED := $(strip $(shell echo "$(ONYX_AGENT_OUTBOUND_PROXY_URL)" | sed 's/host\.docker\.internal/$(PROXY_HOST_IP)/g'))
 else
 # Could not resolve; fall back to the original URL.
-PROXY_URL_RESOLVED := $(PROXY_URL)
+ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED := $(ONYX_AGENT_OUTBOUND_PROXY_URL)
 endif
 else
-PROXY_URL_RESOLVED := $(PROXY_URL)
+ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED := $(ONYX_AGENT_OUTBOUND_PROXY_URL)
 endif
 endif
-export PROXY_URL_RESOLVED
+export ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -91,31 +92,32 @@ PODMAN_COMPOSE_SUFFIX :=:$(PODMAN_OVERRIDE_FILE)
 PODMAN_FULL_COMPOSE_SUFFIX :=:$(PODMAN_FULL_OVERRIDE_FILE)
 endif
 
-# Conditional VPN routing overrides for teep and tailscale.
-# When TEEP_VPN_ROUTED=true, teep joins the netns-holder VPN namespace.
+# Conditional routing overrides for teep and tailscale.
+# When TEEP_ROUTE_THROUGH_MYST_VPN=true, teep joins the netns-holder namespace.
 TEEP_VPN_SUFFIX :=
-ifneq ($(filter true,$(TEEP_VPN_ROUTED)),)
+ifneq ($(filter true,$(TEEP_ROUTE_THROUGH_MYST_VPN)),)
 TEEP_VPN_SUFFIX :=:docker-compose.teep-vpn.yml
 endif
 
-# When TAILSCALE_VPN_ROUTED=true, tailscale joins the netns-holder VPN namespace.
+# When TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true, tailscale joins the
+# netns-holder namespace.
 TAILSCALE_VPN_SUFFIX :=
-ifneq ($(filter true,$(TAILSCALE_VPN_ROUTED)),)
+ifneq ($(filter true,$(TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN)),)
 TAILSCALE_VPN_SUFFIX :=:docker-compose.tailscale-vpn.yml
 endif
 
-# When CODE_INTERPRETER_VPN_ROUTED=true, code-interpreter executor pods inherit
-# the code-interpreter's netns (VPN-routed) via a sitecustomize patch.
+# When ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true, code-interpreter executor
+# pods inherit the code-interpreter's shared netns via a sitecustomize patch.
 CODE_INTERPRETER_VPN_SUFFIX :=
-ifneq ($(filter true,$(CODE_INTERPRETER_VPN_ROUTED)),)
+ifneq ($(filter true,$(ONYX_CODE_INTERPRETER_ENABLE_NETWORK)),)
 CODE_INTERPRETER_VPN_SUFFIX :=:docker-compose.code-interpreter-vpn.yml
 endif
 
-# When PROXY_URL is non-empty, apply the proxy override layer that threads a
-# single upstream proxy through crw, obscura (CDP + MCP), SearXNG, the
-# code-interpreter, and the code agent. See docker-compose.proxy.yml.
+# When ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty, apply the proxy override
+# layer that threads a single upstream proxy through crw, obscura (CDP + MCP),
+# SearXNG, the code-interpreter, and the code agent. See docker-compose.proxy.yml.
 PROXY_SUFFIX :=
-ifneq ($(strip $(PROXY_URL)),)
+ifneq ($(strip $(ONYX_AGENT_OUTBOUND_PROXY_URL)),)
 PROXY_SUFFIX :=:docker-compose.proxy.yml
 endif
 
@@ -200,7 +202,7 @@ help:
 	@echo "  make teep-build   # Build teep image from teep/build/Dockerfile"
 	@echo "  make embedserv-install # Create embedserv venv with uv and download the MLX embedding model"
 	@echo "  make embedserv-verify-model # Verify embedserv/models copy for the selected MLX embedding model"
-	@echo "  make embedserv-serve   # Launch mlx-openai-server on LOCAL_EMBEDDINGS_URL"
+	@echo "  make embedserv-serve   # Launch mlx-openai-server on ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL"
 	@echo ""
 	@echo "VPN signup & payment:"
 	@echo "  make vpn-signup-orderform  # Start standalone Myst container, create identity + CoinGate order, show payment URL"
@@ -216,17 +218,17 @@ help:
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override install-time low-port remap: make up-full ONYX_INSTALL_HOST_PORT_80=3001"
 	@echo "Override container engine: make up-lite CONTAINER_BIN=/opt/homebrew/bin/podman"
-	@echo "Override socket path: make up-lite DOCKER_SOCK_PATH=/path/to/docker-or-podman.sock"
 	@echo "Note: podman mode applies $(PODMAN_OVERRIDE_FILE) (disables code-interpreter + autoheal by default)"
-	@echo "VPN routing: set TEEP_VPN_ROUTED=true, TAILSCALE_VPN_ROUTED=true, or"
-	@echo "             CODE_INTERPRETER_VPN_ROUTED=true in $(ENV_FILE) to route those services through Myst VPN"
+	@echo "VPN routing: set TEEP_ROUTE_THROUGH_MYST_VPN=true or"
+	@echo "             TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true in $(ENV_FILE)"
+	@echo "Code interpreter network: set ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true in $(ENV_FILE)"
 	@echo "Disable VPN: set MYST_VPN_ENABLED=false in $(ENV_FILE) to idle myst-client without kill-switch/connect"
-	@echo "Proxy: set PROXY_URL in $(ENV_FILE) (http/https/socks5) to route crw, obscura, SearXNG,"
-	@echo "       code-interpreter, and code agent egress through an upstream proxy"
+	@echo "Proxy: set ONYX_AGENT_OUTBOUND_PROXY_URL in $(ENV_FILE) (http/https/socks5)"
+	@echo "       to route crw, obscura, SearXNG, code-interpreter, and code agent egress"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep pin: make teep-build TEEP_REF=<commit-sha>"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:<tag>"
-	@echo "Override embedding model: make embedserv-install MLX_EMBEDDING_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
+	@echo "Override embedding model: make embedserv-install ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
 
 upgrade: upgrade-python-deps myst-build teep-build searxng-image-ready tailscale-image-ready crw-image-ready upgrade-onyx
 
@@ -451,7 +453,7 @@ embedserv-install:
 		exit 1; \
 	fi; \
 	set -a; . "$(ENV_FILE)"; set +a; \
-	model_repo="$${MLX_EMBEDDING_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
 	venv_python="$(PWD)/$(EMBEDSERV_VENV)/bin/python"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
 	mkdir -p "$(EMBEDSERV_DIR)" "$$(dirname "$$model_dir")"; \
@@ -470,7 +472,7 @@ embedserv-verify-model: embedserv-install
 		exit 1; \
 	fi; \
 	set -a; . "$(ENV_FILE)"; set +a; \
-	model_repo="$${MLX_EMBEDDING_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
 	if [ ! -d "$$model_dir" ]; then \
 		echo "ERROR: model directory missing: $$model_dir"; \
@@ -493,9 +495,9 @@ embedserv-serve: embedserv-verify-model
 		exit 1; \
 	fi; \
 	set -a; . "$(ENV_FILE)"; set +a; \
-	model_repo="$${MLX_EMBEDDING_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
-	served_model="$${LOCAL_EMBEDDING_MODEL:-$$model_repo}"; \
-	embeddings_url="$${LOCAL_EMBEDDINGS_URL:-http://host.docker.internal:1234/v1/embeddings}"; \
+	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	served_model="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL:-$$model_repo}"; \
+	embeddings_url="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-http://host.docker.internal:3210/v1/embeddings}"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
 	parsed_url=$$(URL="$$embeddings_url" python3 -c 'from urllib.parse import urlparse; import os; parsed = urlparse(os.environ["URL"]); print(parsed.scheme); print(parsed.hostname or ""); print("" if parsed.port is None else parsed.port); print(parsed.path.rstrip("/"))'); \
 	scheme=$$(printf '%s\n' "$$parsed_url" | sed -n '1p'); \
@@ -503,15 +505,15 @@ embedserv-serve: embedserv-verify-model
 	port=$$(printf '%s\n' "$$parsed_url" | sed -n '3p'); \
 	path=$$(printf '%s\n' "$$parsed_url" | sed -n '4p'); \
 	if [ "$$scheme" != "http" ]; then \
-		echo "ERROR: LOCAL_EMBEDDINGS_URL must use http: $$embeddings_url"; \
+		echo "ERROR: ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL must use http: $$embeddings_url"; \
 		exit 1; \
 	fi; \
 	if [ -z "$$host" ] || [ -z "$$port" ]; then \
-		echo "ERROR: LOCAL_EMBEDDINGS_URL must include a host and explicit port: $$embeddings_url"; \
+		echo "ERROR: ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL must include a host and explicit port: $$embeddings_url"; \
 		exit 1; \
 	fi; \
 	if [ "$$path" != "/v1/embeddings" ]; then \
-		echo "ERROR: LOCAL_EMBEDDINGS_URL must end with /v1/embeddings: $$embeddings_url"; \
+		echo "ERROR: ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL must end with /v1/embeddings: $$embeddings_url"; \
 		exit 1; \
 	fi; \
 	if [ "$$host" = "host.docker.internal" ]; then \
@@ -532,7 +534,7 @@ embedserv-serve: embedserv-verify-model
 # Start standalone Myst container for initial signup/payment, then run the
 # signup helper which creates an identity, registers it, and creates a
 # payment order. The payment URL is printed to stdout.
-# MYST_AUTO_CONNECT and MYST_WAIT_FOR_FUNDS are disabled during signup.
+# MYST_AUTO_CONNECT and MYST_VPN_WAIT_FOR_FUNDS are disabled during signup.
 vpn-signup-orderform: myst-image-ready
 	@set -eu; \
 	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
@@ -540,7 +542,7 @@ vpn-signup-orderform: myst-image-ready
 	else \
 		echo "Starting standalone Myst signup container..."; \
 		mkdir -p $(MYST_DATA_DIR); \
-		MYST_AUTO_CONNECT=false MYST_WAIT_FOR_FUNDS=false \
+		MYST_AUTO_CONNECT=false MYST_VPN_WAIT_FOR_FUNDS=false \
 			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) up -d; \
 		echo "Waiting for container to initialize..."; \
 		sleep 3; \
@@ -552,7 +554,7 @@ vpn-signup-orderform: myst-image-ready
 # helper which creates an identity, registers it, and prints the consumer
 # channel address for direct on-chain $MYST transfer (Polygon). No payment
 # order is created.
-# MYST_AUTO_CONNECT and MYST_WAIT_FOR_FUNDS are disabled during signup.
+# MYST_AUTO_CONNECT and MYST_VPN_WAIT_FOR_FUNDS are disabled during signup.
 # MYST_SKIP_ORDER_CREATION prevents the entrypoint from auto-creating a
 # CoinGate order.
 vpn-signup-blockchain: myst-image-ready
@@ -562,7 +564,7 @@ vpn-signup-blockchain: myst-image-ready
 	else \
 		echo "Starting standalone Myst signup container..."; \
 		mkdir -p $(MYST_DATA_DIR); \
-		MYST_AUTO_CONNECT=false MYST_WAIT_FOR_FUNDS=false MYST_SKIP_ORDER_CREATION=true \
+		MYST_AUTO_CONNECT=false MYST_VPN_WAIT_FOR_FUNDS=false MYST_SKIP_ORDER_CREATION=true \
 			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) up -d; \
 		echo "Waiting for container to initialize..."; \
 		sleep 3; \

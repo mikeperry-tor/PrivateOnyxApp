@@ -1,17 +1,17 @@
 ## Proxy override layer.
-## Applied when PROXY_URL is non-empty in .env.wrapper (via Makefile
+## Applied when ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty in .env.wrapper (via Makefile
 ## COMPOSE_FILE layering). Threads a single upstream proxy through:
-##   - obscura (CDP `serve`)        : --proxy ${PROXY_URL}
-##   - obscura-mcp                  : --proxy ${PROXY_URL}
-##   - prefetch-blocking-proxy      : PROXY_URL for HEAD/PDF tunnel egress
+##   - obscura (CDP `serve`)        : --proxy ${ONYX_AGENT_OUTBOUND_PROXY_URL}
+##   - obscura-mcp                  : --proxy ${ONYX_AGENT_OUTBOUND_PROXY_URL}
+##   - prefetch-blocking-proxy      : proxy env for HEAD/PDF tunnel egress
 ##   - searxng-core                 : outgoing.proxies merged into settings.yml
 ##                                     at startup by searxng-proxy-entrypoint.sh
 ##   - code-interpreter             : HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY
 ##                                     env vars, which the sitecustomize patch
 ##                                     forwards into every executor pod.
 ##
-## When PROXY_URL is empty this file is NOT applied, so the no-proxy path is
-## byte-for-byte identical to the base compose.
+## When ONYX_AGENT_OUTBOUND_PROXY_URL is empty this file is NOT applied, so the
+## no-proxy path is byte-for-byte identical to the base compose.
 ##
 ## The proxy and the Mysterium VPN are orthogonal: if both are set, traffic is
 ## proxied through the VPN tunnel (proxy connect goes over VPN egress).
@@ -32,10 +32,11 @@ services:
   # IMPORTANT: obscura's SOCKS proxy connector cannot resolve Docker-internal
   # DNS names like host.docker.internal — it tries to resolve the proxy
   # hostname through the SOCKS proxy itself (Tor), which fails. The Makefile
-  # derives PROXY_URL_RESOLVED from PROXY_URL by replacing host.docker.internal
-  # with its resolved IP address, and passes it here. If PROXY_URL already
-  # uses an IP or a publicly-resolvable hostname, PROXY_URL_RESOLVED equals
-  # PROXY_URL.
+  # derives ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED from
+  # ONYX_AGENT_OUTBOUND_PROXY_URL by replacing host.docker.internal with its
+  # resolved IP address, and passes it here. If the proxy URL already uses an
+  # IP or a publicly-resolvable hostname, the resolved value equals the
+  # configured URL.
   obscura:
     command:
       - "serve"
@@ -45,7 +46,7 @@ services:
       - "9222"
       - "--stealth"
       - "--proxy"
-      - "${PROXY_URL_RESOLVED:-${PROXY_URL}}"
+      - "${ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED:-${ONYX_AGENT_OUTBOUND_PROXY_URL}}"
 
   # Obscura MCP server. Same distroless constraint as obscura above.
   obscura-mcp:
@@ -55,22 +56,22 @@ services:
       - "--host"
       - "0.0.0.0"
       - "--port"
-      - "${OBSCURA_MCP_PORT:-9223}"
+      - "9223"
       - "--stealth"
       - "--proxy"
-      - "${PROXY_URL_RESOLVED:-${PROXY_URL}}"
+      - "${ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED:-${ONYX_AGENT_OUTBOUND_PROXY_URL}}"
 
   
   # SearXNG. Its httpx network client builds explicit transport mounts from
   # outgoing.proxies in settings.yml and does NOT honor HTTP_PROXY env vars
   # when an explicit transport is provided. So the proxy must be merged into
   # settings.yml. The searxng-proxy-entrypoint.sh wrapper does this at startup
-  # (only when PROXY_URL is non-empty) by writing a merged copy to a
+  # (only when ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty) by writing a merged copy to a
   # container-local path and pointing SEARXNG_SETTINGS_PATH at it.
   searxng-core:
     entrypoint: ["/usr/local/bin/searxng-proxy-entrypoint.sh"]
     environment:
-      PROXY_URL: "${PROXY_URL}"
+      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL}"
     volumes:
       - ./searxng/searxng-proxy-entrypoint.sh:/usr/local/bin/searxng-proxy-entrypoint.sh:ro
 
@@ -80,22 +81,21 @@ services:
   # (urllib/requests/httpx), BashTool (curl/wget/git/pip), and coding-agent
   # bash sessions all egress through the proxy.
   #
-  # HTTP_PROXY/HTTPS_PROXY/ALL_PROXY are all set to PROXY_URL because httpx and
-  # urllib pick the matching-scheme var, while ALL_PROXY covers SOCKS for tools
-  # that prefer it. NO_PROXY excludes internal loopback + Docker-DNS hosts.
+  # Proxy env is read by the sitecustomize patch. NO_PROXY excludes internal
+  # loopback + Docker-DNS hosts.
   code-interpreter:
     environment:
-      # PROXY_URL is read by the sitecustomize patch, which detects SOCKS vs
-      # HTTP and injects the appropriate env vars into executor pods. We do
+      # ONYX_AGENT_OUTBOUND_PROXY_URL is read by the sitecustomize patch, which
+      # detects SOCKS vs HTTP and injects appropriate env vars into executor pods. We do
       # NOT set HTTP_PROXY/HTTPS_PROXY here because the code-interpreter
       # container itself doesn't make HTTP requests (it spawns executor pods),
       # and setting them to a SOCKS URL would break any HTTP client that
       # accidentally runs in the container (urllib treats SOCKS as HTTP CONNECT).
-      PROXY_URL: "${PROXY_URL}"
+      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL}"
       PROXY_LIBS_INSTALL_IMAGE: "${PROXY_LIBS_INSTALL_IMAGE:?PROXY_LIBS_INSTALL_IMAGE must be set}"
-      WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
+      WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"
-      ALL_PROXY: "${PROXY_URL}"
+      ALL_PROXY: "${ONYX_AGENT_OUTBOUND_PROXY_URL}"
       NO_PROXY: "${NO_PROXY_INTERNAL:-127.0.0.1,localhost,::1,myst-client,api_server,web_server,background,nginx,code-interpreter,obscura,crw,searxng-core,searxng-valkey,netns-holder,host-web-proxy,host-searxng-proxy}"
     volumes:
       - ./onyx/patches/sitecustomize_code_interpreter:/app/wrapper-patches:ro

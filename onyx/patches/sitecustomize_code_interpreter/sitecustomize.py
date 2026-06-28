@@ -58,9 +58,13 @@ SOCKS_LIBS_DIR = "/tmp/proxy-libs"
 SOCKS_LIBS_REQUIREMENTS = Path(__file__).with_name("proxy-libs-requirements.txt")
 
 
+def _proxy_url() -> str:
+    return os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
+
+
 def _is_socks_proxy() -> bool:
-    """True if PROXY_URL is a SOCKS proxy (socks4/socks5/socks5h scheme)."""
-    proxy_url = os.environ.get("PROXY_URL", "").strip().lower()
+    """True if the configured outbound proxy is SOCKS."""
+    proxy_url = _proxy_url().lower()
     return proxy_url.startswith(
         ("socks4://", "socks4a://", "socks5://", "socks5h://")
     )
@@ -70,7 +74,7 @@ def _install_socks_libs() -> bool:
     """Install PySocks and socksio into SOCKS_LIBS_DIR for SOCKS proxy support.
 
     Called synchronously at code-interpreter startup (sitecustomize) when
-    PROXY_URL is a SOCKS proxy. The installed packages are made available to
+    ONYX_AGENT_OUTBOUND_PROXY_URL is a SOCKS proxy. The installed packages are made available to
     executor pods through a Docker named volume mounted at SOCKS_LIBS_DIR.
 
     PySocks enables SOCKS support in ``requests`` (via ``requests[socks]``).
@@ -154,10 +158,10 @@ def _install_socks_libs() -> bool:
 def _proxy_env_vars(*, socks_libs_available: bool) -> list[str]:
     """Build the ``-e KEY=VALUE`` argument pairs for proxy env vars.
 
-    Returns an empty list when ``PROXY_URL`` is unset/empty.
+    Returns an empty list when ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is unset/empty.
 
     For **HTTP/HTTPS proxies**: injects ``HTTP_PROXY`` / ``HTTPS_PROXY`` /
-    ``ALL_PROXY`` (all = PROXY_URL) plus ``NO_PROXY`` so intra-namespace traffic
+    ``ALL_PROXY`` (all = configured proxy URL) plus ``NO_PROXY`` so intra-namespace traffic
     stays off the proxy. Python's ``urllib``, ``requests``, and ``httpx`` all
     honor these for HTTP CONNECT proxies.
 
@@ -173,7 +177,7 @@ def _proxy_env_vars(*, socks_libs_available: bool) -> list[str]:
     Lowercase variants (``http_proxy`` etc.) are also injected because some
     tools (notably ``curl`` and ``git``) only honor the lowercase form.
     """
-    proxy_url = os.environ.get("PROXY_URL", "").strip()
+    proxy_url = _proxy_url()
     if not proxy_url:
         return []
 
@@ -193,7 +197,7 @@ def _proxy_env_vars(*, socks_libs_available: bool) -> list[str]:
         # PySocks/socksio). Do NOT set HTTP_PROXY/HTTPS_PROXY — urllib
         # misinterprets them as HTTP CONNECT proxies and fails on SOCKS.
         pairs = [
-            ("PROXY_URL", proxy_url),
+            ("ONYX_AGENT_OUTBOUND_PROXY_URL", proxy_url),
             ("ALL_PROXY", proxy_url),
             ("NO_PROXY", no_proxy),
             ("all_proxy", proxy_url),
@@ -218,7 +222,7 @@ def _proxy_env_vars(*, socks_libs_available: bool) -> list[str]:
     else:
         # HTTP/HTTPS proxies: all standard env vars work with urllib/requests/httpx.
         pairs = [
-            ("PROXY_URL", proxy_url),
+            ("ONYX_AGENT_OUTBOUND_PROXY_URL", proxy_url),
             ("HTTP_PROXY", proxy_url),
             ("HTTPS_PROXY", proxy_url),
             ("ALL_PROXY", proxy_url),
@@ -288,7 +292,7 @@ def _apply_executor_patches(*, socks_libs_available: bool) -> None:
             patched = out
             print(
                 f"sitecustomize: injected proxy env vars into executor pod "
-                f"command (PROXY_URL set, {len(proxy_args) // 2} vars)",
+                f"command (ONYX_AGENT_OUTBOUND_PROXY_URL set, {len(proxy_args) // 2} vars)",
                 flush=True,
             )
 

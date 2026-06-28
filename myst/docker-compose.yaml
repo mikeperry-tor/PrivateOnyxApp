@@ -55,7 +55,7 @@
 #    These are expected on first run before the consumer channel contract
 #    exists, and stop after registration / funding completes.
 # 6. Check balance; if zero, show/create a payment order and optionally
-#    block until funded (see MYST_WAIT_FOR_FUNDS).
+#    block until funded (see MYST_VPN_WAIT_FOR_FUNDS).
 # 7. Attempt a VPN connection (if MYST_AUTO_CONNECT=true).
 # 8. Keep the daemon in the foreground; kill-switch remains active.
 #
@@ -96,11 +96,13 @@
 #   MYST_COUNTRY             Optional ISO 3166-1 alpha-2 country code to
 #                            restrict exit node selection (e.g. "US", "DE").
 #                            Default: "" (any country)
-#   MYST_PROVIDER_IDS        Comma-separated provider identity address(es) to
+#   MYST_VPN_PREFERRED_PROVIDER_IDS
+#                            Comma-separated provider identity address(es) to
 #                            pin to specific nodes (e.g. "0xABC...,0xDEF...").
 #                            When set, --location-type and --country are still
 #                            applied as secondary filters. Default: ""
-#   ALLOW_LAN_ACCESS         When "true", allows local network (RFC 1918)
+#   MYST_VPN_ALLOW_LAN_BYPASS
+#                            When "true", allows local network (RFC 1918)
 #                            addresses to bypass the VPN firewall, enabling
 #                            access to local inference APIs (LMStudio, etc).
 #                            Fail-closed behavior remains for non-LAN traffic.
@@ -132,25 +134,25 @@
 #     ./print-order-gateways.sh
 #     ./print-order-gateways.sh myst-client-vpn
 #
-#   MYST_ORDER_AMOUNT        MYST amount to purchase (e.g. "10").
-#   MYST_ORDER_CURRENCY      Payment cryptocurrency (e.g. "BTC", "ETH", "USDT").
+#   MYST_VPN_ORDER_AMOUNT    MYST amount to purchase (e.g. "10").
+#   MYST_VPN_ORDER_CURRENCY  Payment cryptocurrency (e.g. "BTC", "ETH", "USDT").
 #                            Source of truth for currently enabled gateway /
 #                            currency combinations:
 #                              ./print-order-gateways.sh
 #                            or:
 #                              docker exec myst-client-vpn \
 #                                myst cli orders gateways
-#   MYST_ORDER_GATEWAY       Gateway name returned by `orders gateways`.
+#   MYST_VPN_ORDER_GATEWAY   Gateway name returned by `orders gateways`.
 #                            `coingate` is a known example, not a guaranteed
 #                            exhaustive list of options.
-#   MYST_ORDER_COUNTRY       2-letter ISO country code used for tax calculation
+#   MYST_VPN_ORDER_COUNTRY   2-letter ISO country code used for tax calculation
 #                            (e.g. "US").
 #
 #   On every start with a zero balance the container will also print any
 #   existing pending orders (so you can track a previously placed order) and
 #   list available gateways when order vars are not set.
 #
-#   MYST_WAIT_FOR_FUNDS      When "true", block the connection attempt and
+#   MYST_VPN_WAIT_FOR_FUNDS  When "true", block the connection attempt and
 #                            poll every 30 s until balance becomes non-zero.
 #                            Useful when you want the container to self-heal
 #                            after a top-up without a restart. Default: "false"
@@ -194,7 +196,7 @@ services:
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
       MYST_AUTO_CONNECT: "${MYST_AUTO_CONNECT:-true}"
       # Optional WireGuard interface MTU override passed to the daemon.
-      MYST_WIREGUARD_MTU: "${MYST_WIREGUARD_MTU:-}"
+      MYST_VPN_WIREGUARD_MTU: "${MYST_VPN_WIREGUARD_MTU:-}"
       # Diagnostic override to skip peer route exclusion during P2P setup.
       MYST_SKIP_PEER_ROUTE_EXCLUDE: "false"
       # Comma-separated hostnames that should bypass myst0 and stay on eth0.
@@ -206,9 +208,9 @@ services:
       MYST_SERVICE_TYPE: "${MYST_SERVICE_TYPE:-wireguard}"
       MYST_LOCATION_TYPE: "${MYST_LOCATION_TYPE:-residential}"
       MYST_COUNTRY: "${MYST_COUNTRY:-US}"
-      MYST_PROVIDER_IDS: "${MYST_PROVIDER_IDS:-}"
+      MYST_VPN_PREFERRED_PROVIDER_IDS: "${MYST_VPN_PREFERRED_PROVIDER_IDS:-}"
       # Optional LAN access bypass for local inference APIs / services.
-      ALLOW_LAN_ACCESS: "${ALLOW_LAN_ACCESS:-false}"
+      MYST_VPN_ALLOW_LAN_BYPASS: "${MYST_VPN_ALLOW_LAN_BYPASS:-false}"
       # Connection retry policy (helps with provider-specific transient failures).
       MYST_CONNECT_MAX_ATTEMPTS: "6"
       MYST_CONNECT_RETRY_INTERVAL: "5"
@@ -242,15 +244,15 @@ services:
       # or:
       #   docker exec myst-client-vpn myst cli orders gateways
       # CoinGate is a known example, but not the only possible gateway name.
-      MYST_ORDER_AMOUNT: "${MYST_ORDER_AMOUNT:-}"     # Amount of MYST to purchase (e.g. "10")
-      MYST_ORDER_CURRENCY: "${MYST_ORDER_CURRENCY:-}"   # Payment currency (e.g. "BTC", "ETH", "USDT")
-      MYST_ORDER_GATEWAY: "${MYST_ORDER_GATEWAY:-}"    # Payment gateway name from `orders gateways` (e.g. "coingate")
-      MYST_ORDER_COUNTRY: "${MYST_ORDER_COUNTRY:-}"    # 2-letter ISO country code for tax (e.g. "US")
+      MYST_VPN_ORDER_AMOUNT: "${MYST_VPN_ORDER_AMOUNT:-}"     # Amount of MYST to purchase (e.g. "10")
+      MYST_VPN_ORDER_CURRENCY: "${MYST_VPN_ORDER_CURRENCY:-}"   # Payment currency (e.g. "BTC", "ETH", "USDT")
+      MYST_VPN_ORDER_GATEWAY: "${MYST_VPN_ORDER_GATEWAY:-}"    # Payment gateway name from `orders gateways` (e.g. "coingate")
+      MYST_VPN_ORDER_COUNTRY: "${MYST_VPN_ORDER_COUNTRY:-}"    # 2-letter ISO country code for tax (e.g. "US")
       # Gateway-specific metadata (e.g. custom_id for coingate, lightning_network=true)
       # Coingate requires this field; common pattern: custom_id=uniquevalue
-      MYST_ORDER_GATEWAY_DATA: "${MYST_ORDER_GATEWAY_DATA:-custom_id=mysterium-onyx}"
+      MYST_VPN_ORDER_GATEWAY_DATA: "${MYST_VPN_ORDER_GATEWAY_DATA:-custom_id=mysterium-onyx}"
       # Set to "true" to block startup until balance > 0 before attempting to connect.
-      MYST_WAIT_FOR_FUNDS: "${MYST_WAIT_FOR_FUNDS:-false}"
+      MYST_VPN_WAIT_FOR_FUNDS: "${MYST_VPN_WAIT_FOR_FUNDS:-false}"
       # When "true", skip the payment order check/creation block in the entrypoint.
       # Used by `make vpn-signup-blockchain` so the user can transfer $MYST directly
       # on-chain instead of getting a CoinGate order auto-created.

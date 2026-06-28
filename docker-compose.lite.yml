@@ -25,7 +25,7 @@ services:
       CACHE_BACKEND: "postgres"
       AUTH_BACKEND: "postgres"
       USER_AUTH_SECRET: "${USER_AUTH_SECRET:?USER_AUTH_SECRET must be set}"
-      WRAPPER_PATCH_STRICT: "${WRAPPER_PATCH_STRICT:-true}"
+      WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/app/wrapper-patches:/app/wrapper-patches-base:${PYTHONPATH:-}"
     volumes: !override
       - ./docker-data/file-system:/app/file-system

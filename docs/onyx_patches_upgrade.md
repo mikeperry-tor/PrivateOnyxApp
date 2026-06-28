@@ -51,7 +51,7 @@ SearXNG/CRW/Obscura request path and live parser assumptions, see
 | `onyx/patches/sitecustomize_base/sitecustomize.py` | `api_server` | Mounted at `/app/wrapper-patches-base`; `PYTHONPATH` in `docker-compose.yaml` | `backend/onyx/tools/tool_implementations/web_search/utils.py`, `backend/onyx/tools/tool_implementations/open_url/open_url_tool.py`, `backend/onyx/tools/tool_implementations/open_url/firecrawl.py`, code-interpreter tool/prompt files |
 | `onyx/patches/sitecustomize/sitecustomize.py` | `api_server` in lite mode | Mounted at `/app/wrapper-patches`; `PYTHONPATH` in `docker-compose.lite.yml` before base path | `backend/onyx/tools/tool_implementations/open_url/open_url_tool.py` |
 | `onyx/patches/sitecustomize_background/sitecustomize.py` | `background` | Mounted at `/app/wrapper-patches-background`; `PYTHONPATH` in `docker-compose.full.yml` | `backend/onyx/connectors/web/connector.py`, `backend/onyx/db/models.py` |
-| `onyx/patches/sitecustomize_code_interpreter/sitecustomize.py` | `code-interpreter` and spawned executor pods | Mounted by `docker-compose.code-interpreter-vpn.yml` when `CODE_INTERPRETER_VPN_ROUTED=true`; proxy env added by `docker-compose.proxy.yml` | Main Onyx compose defines the service; executor code is in `reference_repos/python-sandbox/code-interpreter/app/services/executor_docker.py` |
+| `onyx/patches/sitecustomize_code_interpreter/sitecustomize.py` | `code-interpreter` and spawned executor pods | Mounted by `docker-compose.code-interpreter-vpn.yml` when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`; proxy env added by `docker-compose.proxy.yml` | Main Onyx compose defines the service; executor code is in `reference_repos/python-sandbox/code-interpreter/app/services/executor_docker.py` |
 | `onyx/local_embedding_shim.py` | `api_server` and `background` model-server calls | `docker-compose.full.yml` points `MODEL_SERVER_*` and `INDEXING_MODEL_SERVER_*` to `127.0.0.1:9101` | `backend/model_server/*`, `backend/onyx/natural_language_processing/search_nlp_models.py`, `backend/onyx/indexing/embedder.py`, `backend/shared_configs/model_server_models.py` |
 | `onyx/doc_drop_webserver.py` | `doc-drop-web` | Mounted at `/app/doc_drop_webserver.py`; command in `docker-compose.full.yml` | Python `http.server.SimpleHTTPRequestHandler` behavior |
 | `searxng/engines/*.py`, `searxng/core-config/settings.yml`, `searxng/searxng-proxy-entrypoint.sh` | `searxng-core` | Mounted by `searxng/docker-compose.yml` and optional `docker-compose.proxy.yml` | `reference_repos/searxng/searx/settings_loader.py`, `reference_repos/searxng/searx/settings.yml`, stock engine modules |
@@ -79,12 +79,11 @@ Activation:
 
 Patch behavior:
 
-- `WRAPPER_PATCH_STRICT=true` is the default. Missing exact upstream strings,
-  changed helper signatures, or failed imports should fail startup instead of
-  silently leaving stale runtime behavior. Set `WRAPPER_PATCH_STRICT=false` only
-  for temporary diagnosis during an upgrade. The compose wrapper passes this
-  env var to every service that mounts wrapper `sitecustomize` patches.
-- Reads `OPEN_URL_MAX_CHARS_PER_URL` and `OPEN_URL_MAX_CHARS_ACROSS_URLS`.
+- Wrapper patches run in strict mode. Missing exact upstream strings, changed
+  helper signatures, or failed imports should fail startup instead of silently
+  leaving stale runtime behavior. The compose wrapper passes this internal env
+  var to every service that mounts wrapper `sitecustomize` patches.
+- Reads `ONYX_OPEN_URL_MAX_CHARS_PER_URL` and `ONYX_OPEN_URL_MAX_TOTAL_CHARS`.
 - Replaces `web_search.utils.MAX_CHARS_PER_URL`.
 - Rewrites default arguments for
   `truncate_search_result_content`,
@@ -117,10 +116,10 @@ Upgrade notes:
 
 Patch behavior:
 
-- Reads `ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS`,
-  `ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`,
-  `ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
-  `ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`.
+- Reads `ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS`,
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`,
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`.
 - Replaces `chat_configs.NUM_RETURNED_HITS`.
 - Replaces `chat_configs.MAX_CHUNKS_FED_TO_CHAT`.
 - Rewrites captured Pydantic defaults on
@@ -197,7 +196,7 @@ Upgrade notes:
 
 Patch behavior:
 
-- Only active when `CODE_INTERPRETER_VPN_ROUTED=true` is present in `api_server`.
+- Only active when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` is present in `api_server`.
 - Updates API-side LLM-facing text so Python, Bash, and coding-agent tools say
   the executor pods have VPN-routed network access.
 - Adds wrapper hints for local CRW, `/v1/search`, and CDP browser availability.
@@ -341,10 +340,10 @@ Local files:
 Patch behavior:
 
 - Pins the code-interpreter image with `CODE_INTERPRETER_IMAGE_TAG=0.4.4`.
-- When `CODE_INTERPRETER_VPN_ROUTED=true`, spawned executor containers inherit
+- When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, spawned executor containers inherit
   the shared `netns-holder` namespace via
   `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`.
-- When `PROXY_URL` is set, injects proxy env vars into every executor pod.
+- When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, injects proxy env vars into every executor pod.
 - For SOCKS proxies, creates a Docker volume named `onyx-proxy-libs`,
   synchronously installs the hashed `PySocks` and `socksio` lock into it using
   `PROXY_LIBS_INSTALL_IMAGE`, and only mounts/prepends `/tmp/proxy-libs` when
@@ -396,10 +395,10 @@ Wrapper compose assumptions:
   `network_mode: service:netns-holder`, sets `PORT=7000`, and points
   `CODE_INTERPRETER_BASE_URL` at `http://localhost:7000`.
 - `docker-compose.code-interpreter-vpn.yml` mounts the patch directory and adds
-  `CODE_INTERPRETER_VPN_ROUTED=true` plus
+  `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` plus
   `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`.
 - `docker-compose.proxy.yml` mounts the code-interpreter patch when proxy mode
-  is active and adds `PROXY_URL` / `ALL_PROXY` / `NO_PROXY` to the
+  is active and adds `ONYX_AGENT_OUTBOUND_PROXY_URL` / `ALL_PROXY` / `NO_PROXY` to the
   code-interpreter container. The patch decides which variables to forward to
   executor pods.
 
@@ -413,7 +412,7 @@ Upgrade notes:
 
 - If upstream changes command construction, proxy injection can fail open or
   fail closed. Verify logs contain the startup patch status and proxy injection
-  messages when `PROXY_URL` is set.
+  messages when `ONYX_AGENT_OUTBOUND_PROXY_URL` is set.
 - If the code-interpreter image changes Python version, revisit
   `PROXY_LIBS_INSTALL_IMAGE` in `stack.versions.env`.
 
@@ -445,8 +444,8 @@ Patch behavior:
   `manual_query_prefix`, `manual_passage_prefix`, etc.) into OpenAI-compatible
   `/v1/embeddings` calls (`{"model": ..., "input": [...]}`).
 - Applies query/passage prefixes from either Onyx request fields or wrapper env:
-  `SHIM_QUERY_PREFIX` / `ONYX_EMBEDDING_QUERY_PREFIX` and
-  `SHIM_PASSAGE_PREFIX` / `ONYX_EMBEDDING_PASSAGE_PREFIX`.
+  `SHIM_QUERY_PREFIX` / `ONYX_RAG_EMBEDDING_QUERY_PREFIX` and
+  `SHIM_PASSAGE_PREFIX` / `ONYX_RAG_EMBEDDING_PASSAGE_PREFIX`.
 - Keeps a small upstream connection pool to the configured
   OpenAI-compatible embedding server. If pooled connection reuse fails with a
   transport-level exception (`OSError`, `TimeoutError`, or
@@ -455,8 +454,8 @@ Patch behavior:
   This covers local embedding servers that silently close idle keep-alive
   sockets. HTTP error statuses from the upstream server are returned without
   retrying.
-- Supports `LOCAL_EMBEDDINGS_URL`, `LOCAL_EMBEDDING_API_KEY`,
-  `LOCAL_EMBEDDING_MODEL`, `SHIM_UPSTREAM_POOL_SIZE`, and
+- Supports `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`, `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY`,
+  `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL`, `SHIM_UPSTREAM_POOL_SIZE`, and
   `SHIM_METRICS_LOG_EVERY`.
 
 Onyx services: `api_server` and `background`.
@@ -470,7 +469,7 @@ Compose wiring:
   loopback references resolve inside the shared namespace.
 - `make embedserv-install`, `make embedserv-verify-model`, and
   `make embedserv-serve` install and run `mlx-openai-server` on the host-side
-  `LOCAL_EMBEDDINGS_URL` (default `http://host.docker.internal:1234/v1/embeddings`).
+  `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` (default `http://host.docker.internal:1234/v1/embeddings`).
 
 Upstream v4.1.7 assumptions to re-check:
 
@@ -645,7 +644,7 @@ Upgrade procedure:
 - Re-check `searxng/searxng-proxy-entrypoint.sh` when changing the overlay
   structure. Its proxy merge finds the top-level `outgoing:` and `engines:`
   blocks and injects `network: direct` into the custom engine entries so
-  loopback CRW requests bypass `PROXY_URL`.
+  loopback CRW requests bypass `ONYX_AGENT_OUTBOUND_PROXY_URL`.
 
 ## Docker Compose wrapper modifications
 
@@ -717,7 +716,7 @@ Patched Onyx services:
   `sitecustomize`, and depends on `local-embedding-shim`.
 - `api_server`: adds model-server env pointing to the shim, forwards
   user-facing internal-search context limit env vars, maps
-  `ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS` to upstream
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS` to upstream
   `MAX_CHUNKS_FED_TO_CHAT`, and depends on the shim.
 - `inference_model_server` and `indexing_model_server`: still extend upstream
   and mount caches/logs, but API/background model-server traffic is routed to
@@ -789,7 +788,7 @@ Upgrade notes:
 
 See the code-interpreter section above. The compose layer is intentionally
 conditional via `Makefile`: it is only added when
-`CODE_INTERPRETER_VPN_ROUTED=true`.
+`ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`.
 
 ### Proxy override
 
@@ -803,7 +802,7 @@ Behavior:
 - Adds `--proxy` to Obscura commands.
 - Starts SearXNG through `searxng-proxy-entrypoint.sh`, which merges proxy
   settings into `settings.yml`.
-- Adds `PROXY_URL` to code-interpreter so the code-interpreter `sitecustomize`
+- Adds `ONYX_AGENT_OUTBOUND_PROXY_URL` to code-interpreter so the code-interpreter `sitecustomize`
   can inject the right env vars into executor pods.
 
 Upgrade notes:
@@ -939,8 +938,8 @@ make down-full
 With feature flags:
 
 ```sh
-CODE_INTERPRETER_VPN_ROUTED=true make up-lite
-PROXY_URL=socks5h://host.docker.internal:9150 make up-lite
+ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true make up-lite
+ONYX_AGENT_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:9150 make up-lite
 make embedserv-serve
 ```
 
@@ -965,6 +964,6 @@ Manual behavior checks:
 - Query and passage prefixes appear in shim logs with the expected source.
 - Code-interpreter executor pods either remain network-isolated or are created
   with `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`, matching
-  the selected `CODE_INTERPRETER_VPN_ROUTED` setting.
+  the selected `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` setting.
 - Proxy mode shows executor pod commands receiving proxy env vars; SOCKS mode
   mounts `onyx-proxy-libs`.

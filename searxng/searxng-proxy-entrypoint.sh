@@ -3,7 +3,7 @@
 # SearXNG proxy entrypoint wrapper.
 #
 # Mounted as the searxng-core entrypoint by docker-compose.proxy.yml when
-# PROXY_URL is non-empty. Merges an `outgoing.proxies` block into a
+# ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty. Merges an `outgoing.proxies` block into a
 # container-local COPY of the mounted /etc/searxng/settings.yml, points
 # SEARXNG_SETTINGS_PATH at the merged copy, then execs the SearXNG image's
 # original entrypoint (/usr/local/searxng/entrypoint.sh).
@@ -17,17 +17,17 @@
 # explicit transport is configured, so the proxy must be merged into
 # settings.yml rather than passed as an env var.
 #
-# When PROXY_URL is empty this wrapper is not mounted (the Makefile only
-# applies docker-compose.proxy.yml when PROXY_URL is non-empty), so the
+# When ONYX_AGENT_OUTBOUND_PROXY_URL is empty this wrapper is not mounted (the Makefile only
+# applies docker-compose.proxy.yml when ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty), so the
 # no-proxy path is unchanged.
 set -eu
 
 SEARXNG_ENTRYPOINT="/usr/local/searxng/entrypoint.sh"
 SRC_SETTINGS="/etc/searxng/settings.yml"
-PROXY_URL="${PROXY_URL:-}"
+ONYX_AGENT_OUTBOUND_PROXY_URL="${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
 
-if [ -z "$PROXY_URL" ]; then
-  echo "searxng-proxy-entrypoint: PROXY_URL is empty; nothing to do." >&2
+if [ -z "$ONYX_AGENT_OUTBOUND_PROXY_URL" ]; then
+  echo "searxng-proxy-entrypoint: ONYX_AGENT_OUTBOUND_PROXY_URL is empty; nothing to do." >&2
   exec "$SEARXNG_ENTRYPOINT" "$@"
 fi
 
@@ -46,7 +46,7 @@ cp "$SRC_SETTINGS" "$MERGED_SETTINGS"
 # Merge proxy config into the settings copy using Python (the SearXNG image
 # ships it). We avoid a YAML library dependency by doing targeted text edits:
 #
-#  1. outgoing.proxies: insert a `proxies:` block (all:// -> PROXY_URL) under
+#  1. outgoing.proxies: insert a `proxies:` block (all:// -> ONYX_AGENT_OUTBOUND_PROXY_URL) under
 #     `outgoing:` so all external engine requests egress through the proxy.
 #     extra_proxy_timeout is an int (SearXNG schema: SettingsValue(int, 0)).
 #
@@ -59,7 +59,7 @@ cp "$SRC_SETTINGS" "$MERGED_SETTINGS"
 #     Firecrawl-compatible scraper) are NOT sent through the upstream proxy.
 #     Without this, the `all://` proxy pattern catches the loopback crw request
 #     and the proxy rejects it ("private address" / SOCKS failure).
-python3 - "$MERGED_SETTINGS" "$PROXY_URL" <<'PYEOF'
+python3 - "$MERGED_SETTINGS" "$ONYX_AGENT_OUTBOUND_PROXY_URL" <<'PYEOF'
 import sys
 import re
 

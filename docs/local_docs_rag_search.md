@@ -24,8 +24,8 @@ Onyx fork:
 - `doc-drop-web` exposes a local document directory as a small read-only HTTP
   site for Onyx's Web connector.
 - `host-doc-drop-web-proxy` publishes that site back to the host on
-  `DOC_DROP_WEB_PORT`, so the connector URL and resulting document links use
-  `http://localhost:8091/`.
+  `HOST_PORT_ONYX_RAG_DOC_WEB`, so the connector URL and resulting document
+  links use `http://localhost:8091/` by default.
 - `onyx/patches/sitecustomize_background/sitecustomize.py` adds a local-host
   PDF freshness optimization for the Web connector.
 - `onyx/patches/sitecustomize_base/sitecustomize.py` applies full-mode
@@ -44,11 +44,11 @@ boundary.
 
 ## End-To-End Flow
 
-1. Files are placed under `DOC_DROP_DIR`, defaulting to `./doc-drop`.
+1. Files are placed under `ONYX_RAG_DOC_SOURCE_DIR`, defaulting to `./doc-drop`.
 2. `doc-drop-web` mounts that directory read-only at `/import/docs` and serves
    it from inside the shared `netns-holder` namespace.
 3. `host-doc-drop-web-proxy` publishes the service to the host at
-   `http://localhost:${DOC_DROP_WEB_PORT:-8091}/`.
+   `http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/`.
 4. In Onyx Admin -> Connectors -> Web, create a Recursive Web connector pointed
    at `http://localhost:8091/`.
 5. The Onyx `background` worker crawls the directory listing and downloads
@@ -57,7 +57,7 @@ boundary.
    In full mode the wrapper points that to `127.0.0.1:9101`, which is the local
    embedding shim in the same network namespace.
 7. The shim converts Onyx model-server `EmbedRequest` payloads into
-   OpenAI-compatible embedding requests and sends them to `LOCAL_EMBEDDINGS_URL`.
+   OpenAI-compatible embedding requests and sends them to `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
 8. During chat/search, `api_server` uses the same shim path to embed the query
    before Onyx runs hybrid search against the indexed documents.
 9. Before internal-search results are returned to the answering model, the
@@ -78,8 +78,7 @@ Implementation:
 - Compose services: `doc-drop-web` and `host-doc-drop-web-proxy` in
   `docker-compose.full.yml`
 - Server script: `onyx/doc_drop_webserver.py`
-- User-facing env: `DOC_DROP_DIR`, `DOC_DROP_WEB_PORT`,
-  `DOC_DROP_WEB_CONTAINER_PORT`, and optional `DOC_DROP_WEB_HOST`
+- User-facing env: `ONYX_RAG_DOC_SOURCE_DIR` and `HOST_PORT_ONYX_RAG_DOC_WEB`
 
 Upgrade-sensitive compose details for these services live in
 [Full mode](onyx_patches_upgrade.md#full-mode-compose). The
@@ -111,9 +110,9 @@ Onyx v4.1+ has SSRF protection for URL-fetching paths. The wrapper seeds the
 default Onyx Security Hardening posture with:
 
 ```env
-OPEN_URL_VALIDATE_SSRF=true
-MCP_SERVER_ALLOW_PRIVATE_NETWORK=true
-MCP_SERVER_ALLOW_LOOPBACK=false
+ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL=true
+ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true
+ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false
 ```
 
 In Onyx v4.1.7 this maps to "Allow Private Network" when no Security Hardening
@@ -137,10 +136,9 @@ services just because the SSRF setting allows the wrapper's document server.
 Implementation:
 
 - `onyx/patches/sitecustomize_background/sitecustomize.py`
-- Environment:
-  `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED`,
-  `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS`, and
-  `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_DEBUG`
+- Internal environment:
+  `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED=true` and
+  `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS=localhost,127.0.0.1,::1`
 
 This section keeps the operational behavior in one place. The detailed patch
 rationale is in
@@ -174,10 +172,10 @@ Implementation:
 - Compose env: `docker-compose.full.yml`
 - Runtime patch: `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
 - User-facing env:
-  `ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS`,
-  `ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`,
-  `ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
-  `ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS`,
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`,
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`
 
 Onyx's internal search path is chunk-oriented, not excerpt-oriented. In v4.1.7,
 the `internal_search` tool and the `/search` API serialize the selected
@@ -189,14 +187,14 @@ sets can produce enough text to fill small or medium model context windows.
 Full mode therefore exposes wrapper-level names for the relevant budgets:
 
 ```env
-ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS=24
-ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS=8
-ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT=6000
-ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=30000
+ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS=24
+ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS=8
+ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT=6000
+ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=30000
 ```
 
-`ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS` limits the ranked sections kept
-before LLM document selection. `ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`
+`ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS` limits the ranked sections kept
+before LLM document selection. `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`
 limits how many selected sections are serialized back to the answering model;
 the compose layer also passes it to upstream Onyx as `MAX_CHUNKS_FED_TO_CHAT`.
 The two character budgets are applied after Onyx's context-expansion step, so a
@@ -248,7 +246,7 @@ Only `/encoder/bi-encoder-embed` performs real work. It accepts Onyx
 {"model": "<model>", "input": ["<text>", "..."]}
 ```
 
-to `LOCAL_EMBEDDINGS_URL`, which must be an OpenAI-compatible
+to `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`, which must be an OpenAI-compatible
 `/v1/embeddings` endpoint. The shim returns Onyx's expected response shape:
 
 ```json
@@ -286,8 +284,8 @@ Onyx upgrades.
 The wrapper recommends setting:
 
 ```env
-ONYX_EMBEDDING_QUERY_PREFIX="Instruct: Given a document query, retrieve the most relevant chunk.\nQuery: "
-ONYX_EMBEDDING_PASSAGE_PREFIX=""
+ONYX_RAG_EMBEDDING_QUERY_PREFIX="Instruct: Given a document query, retrieve the most relevant chunk.\nQuery: "
+ONYX_RAG_EMBEDDING_PASSAGE_PREFIX=""
 ```
 
 Compose passes these to the shim as `SHIM_QUERY_PREFIX` and
@@ -334,12 +332,15 @@ embedserv CLI path, so re-test that behavior before unpinning.
 The default model is:
 
 ```env
-MLX_EMBEDDING_MODEL="majentik/harrier-oss-v1-0.6b-MLX-8bit"
-LOCAL_EMBEDDING_MODEL="majentik/harrier-oss-v1-0.6b-MLX-8bit"
-LOCAL_EMBEDDINGS_URL="http://host.docker.internal:3210/v1/embeddings"
+ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL="majentik/harrier-oss-v1-0.6b-MLX-8bit"
+ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:3210/v1/embeddings"
 ```
 
-`make embedserv-serve` reads `LOCAL_EMBEDDINGS_URL`, requires an explicit port,
+`ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL` is optional. When unset, the shim
+defaults it to `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` for the bundled MLX server
+flow.
+
+`make embedserv-serve` reads `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`, requires an explicit port,
 requires the path to end in `/v1/embeddings`, and binds to `0.0.0.0` when the
 configured host is `host.docker.internal`. The Docker-side shim reaches that
 host service through `host.docker.internal`.
@@ -347,7 +348,7 @@ host service through `host.docker.internal`.
 If the host embedding service is on a LAN or host-local address, set:
 
 ```env
-ALLOW_LAN_ACCESS=true
+MYST_VPN_ALLOW_LAN_BYPASS=true
 ```
 
 This lets local inference APIs bypass the Myst VPN firewall while preserving the
@@ -372,10 +373,10 @@ For the local/custom embedding path:
    explicitly does not require asymmetric query instructions.
 
 The model name entered in Onyx is not necessarily the model served upstream.
-When `LOCAL_EMBEDDING_MODEL` is set, the shim uses that value for upstream
-requests regardless of the `model_name` sent by Onyx. This is intentional: it
-lets Onyx use the UI/model-type behavior it needs while the shim targets the
-real local model.
+When `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL` is set, the shim uses that value
+for upstream requests regardless of the `model_name` sent by Onyx. When it is
+unset, the shim uses `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL`. This lets Onyx use
+the UI/model-type behavior it needs while the shim targets the real local model.
 
 Changing embedding model, dimensionality, or prefix policy after documents are
 indexed can require rebuilding the index. Mixed embeddings from different
@@ -397,7 +398,7 @@ Look for these shim messages:
   the expected vector size.
 - `embed_http_error`: the upstream embedding server returned an HTTP error.
 - `embed_upstream_unreachable`: the shim could not connect to
-  `LOCAL_EMBEDDINGS_URL`.
+  `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
 - `upstream_connection_retry`: a pooled keep-alive connection was stale and the
   shim retried once.
 - `rerank_stub_called` or `query_analysis_stub_called`: Onyx used an endpoint
@@ -410,15 +411,16 @@ Common failure modes:
   port, and Onyx Security Hardening is not set to strict `Validate All`.
 - Directory listings work but hidden files are missing: this is expected.
 - Indexing starts but embedding fails with connection errors: confirm the host
-  embedding server is running at `LOCAL_EMBEDDINGS_URL`, `ALLOW_LAN_ACCESS=true`
-  is set when needed, and the URL uses the container-reachable host name.
+  embedding server is running at `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`,
+  `MYST_VPN_ALLOW_LAN_BYPASS=true` is set when needed, and the URL uses the
+  container-reachable host name.
 - Search returns weak results after successful indexing: verify query prefix
   logs, embedding dimension, model identity, and whether old documents were
   indexed with a different model or prefix.
 - Internal search returns relevant documents but fills the model context:
-  lower `ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`,
-  `ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, or
-  `ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`, then recreate `api_server`.
+  lower `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`,
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, or
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`, then recreate `api_server`.
 - Onyx reports reranker or query-analysis failures: either disable those Onyx
   features for this local path or provide real implementations instead of the
   shim stubs.

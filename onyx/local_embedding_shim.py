@@ -37,10 +37,14 @@ def parse_positive_int_env(var_name: str, default: int) -> int:
 HOST = "0.0.0.0"
 PORT = 9101
 EMBEDDINGS_URL = os.environ.get(
-    "LOCAL_EMBEDDINGS_URL", "http://host.docker.internal:1234/v1/embeddings"
+    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL",
+    "http://host.docker.internal:3210/v1/embeddings",
 )
-DEFAULT_MODEL = os.environ.get("LOCAL_EMBEDDING_MODEL", "").strip()
-API_KEY = os.environ.get("LOCAL_EMBEDDING_API_KEY", "").strip()
+DEFAULT_MODEL = (
+    os.environ.get("ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL", "").strip()
+    or os.environ.get("ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL", "").strip()
+)
+API_KEY = os.environ.get("ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY", "").strip()
 
 DEFAULT_QUERY_PREFIX = os.environ.get("SHIM_QUERY_PREFIX", "")
 DEFAULT_PASSAGE_PREFIX = os.environ.get("SHIM_PASSAGE_PREFIX", "")
@@ -130,9 +134,12 @@ class UpstreamConnectionPool:
     def __init__(self, url: str, pool_size: int, timeout_seconds: float):
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"Unsupported LOCAL_EMBEDDINGS_URL scheme: {parsed.scheme}")
+            raise ValueError(
+                "Unsupported ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL "
+                f"scheme: {parsed.scheme}"
+            )
         if not parsed.hostname:
-            raise ValueError("LOCAL_EMBEDDINGS_URL must include a hostname")
+            raise ValueError("ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL must include a hostname")
 
         self.scheme = parsed.scheme
         self.host = parsed.hostname
@@ -413,10 +420,10 @@ class Handler(BaseHTTPRequestHandler):
             requested_model = str(payload.get("model_name") or "").strip() or DEFAULT_MODEL
             if not requested_model:
                 raise ValueError(
-                    "Missing model_name in request and LOCAL_EMBEDDING_MODEL is not set"
+                    "Missing model_name in request and ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL is not set"
                 )
 
-            # If LOCAL_EMBEDDING_MODEL is configured, use it for upstream requests.
+            # If ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL is configured, use it for upstream requests.
             # Otherwise pass through the requested model name as-is.
             upstream_model = DEFAULT_MODEL if DEFAULT_MODEL else requested_model
 

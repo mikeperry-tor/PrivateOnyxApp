@@ -17,16 +17,16 @@ This proxy intercepts CRW's HTTP prefetch requests and:
    navigation.
 
 2. **For all other URLs**: issues a ``HEAD`` request to the real target
-   (through ``PROXY_URL`` if set) to check ``Content-Type``:
+   (through ``ONYX_AGENT_OUTBOUND_PROXY_URL`` if set) to check ``Content-Type``:
    - ``application/pdf`` → tunnels the original GET request through to the
      target and returns the full response (with body) so CRW's
      ``pdf_inspector`` can extract text.
    - Anything else → returns ``403 Forbidden`` so CRW escalates to CDP.
 
-When ``PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy routes its own
-upstream requests (HEAD and tunnel) through ``PROXY_URL``. This ensures the
-HEAD request and the PDF tunnel egress through the same proxy as obscura,
-so the target sees a consistent exit IP.
+When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
+routes its own upstream requests (HEAD and tunnel) through that proxy. This
+ensures the HEAD request and the PDF tunnel egress through the same proxy as
+obscura, so the target sees a consistent exit IP.
 
 Architecture::
 
@@ -36,7 +36,7 @@ Architecture::
                                    ├─ Other URL → HEAD → PDF? → tunnel GET
                                    │                        └─ 403
                                    │
-                                   └── upstream ──> PROXY_URL (Tor/VPN)
+                                   └── upstream ──> ONYX_AGENT_OUTBOUND_PROXY_URL (Tor/VPN)
                                                     (if set)
 
 CRW is configured with ``HTTP_PROXY=http://127.0.0.1:3128`` and
@@ -67,11 +67,11 @@ from urllib.parse import urlparse
 LISTEN_HOST = os.environ.get("PREFETCH_PROXY_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("PREFETCH_PROXY_PORT", "3128"))
 
-# Upstream proxy (PROXY_URL from .env.wrapper). When set, the proxy routes
-# its own HEAD and tunnel requests through this upstream. Supports:
+# Upstream proxy (ONYX_AGENT_OUTBOUND_PROXY_URL from .env.wrapper). When set,
+# the proxy routes its own HEAD and tunnel requests through this upstream. Supports:
 # http://, https://, socks5://, socks5h://
 # When empty, requests go direct (through the VPN namespace).
-UPSTREAM_PROXY = os.environ.get("PROXY_URL", "").strip()
+UPSTREAM_PROXY = os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
 
 # Search engine hostnames that should get an immediate 403 without any
 # network request. These are the eTLD+1 of the four SearXNG stub engines.

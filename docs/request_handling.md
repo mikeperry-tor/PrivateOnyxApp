@@ -30,7 +30,7 @@ the image digest. To map an image back to source, inspect the OCI label
 when building `container/dist.dockerfile`.
 
 This document focuses on request chains and browser/scraper behavior. For the
-Compose-level VPN namespace, optional `PROXY_URL`, teep, Tailscale, and
+Compose-level VPN namespace, optional `ONYX_AGENT_OUTBOUND_PROXY_URL`, teep, Tailscale, and
 code-interpreter routing switches, see
 [VPN routing and proxies](vpn_routing_and_proxies.md). For the Onyx runtime
 patches that shape Firecrawl payloads, tool availability, prompt text, and
@@ -41,7 +41,7 @@ overlay notes, see [Onyx wrapper patches](onyx_patches_upgrade.md).
 Unless a section says otherwise, diagrams assume `MYST_VPN_ENABLED=true`.
 When `MYST_VPN_ENABLED=false`, shared-namespace services keep the same internal
 addresses but external traffic leaves through the Docker bridge. When
-`PROXY_URL` is set, obscura, SearXNG, and the prefetch/PDF path use the
+`ONYX_AGENT_OUTBOUND_PROXY_URL` is set, obscura, SearXNG, and the prefetch/PDF path use the
 configured upstream proxy as described in
 [VPN routing and proxies](vpn_routing_and_proxies.md#proxy_url).
 
@@ -264,7 +264,7 @@ There are multiple layers of 429 handling:
 | **SearXNG engine suspension** | On 429, engine suspended for 180s | `settings.yml: SearxEngineTooManyRequests: 180` |
 | **SearXNG ban time** | Base ban 5s, max 120s | `settings.yml: ban_time_on_fail: 5, max_ban_time_on_fail: 120` |
 | **Onyx SearXNGClient retry** | 3 retries with exponential backoff (1s, 2s, 4s) | `@retry_builder(tries=3, delay=1, backoff=2)` |
-| **CDP shim cookie clearing** | Periodic cookie clearing to limit tracking surface | `OBSCURA_CLEAR_COOKIES_INTERVAL=3600` |
+| **CDP shim cookie clearing** | Periodic cookie clearing to limit tracking surface | `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL=3600` |
 
 **429 causes in this stack:**
 
@@ -307,7 +307,7 @@ LLM as cited search results.
 
 The stack uses an **event-driven wait** instead of a fixed delay to determine
 when a page is "done loading" and ready for content extraction. This is
-critical when `PROXY_URL` routes through Tor or a slow VPN, where page loads
+critical when `ONYX_AGENT_OUTBOUND_PROXY_URL` routes through Tor or a slow VPN, where page loads
 can take up to 60 seconds — a fixed 5s sleep would either cut off slow pages
 or waste time on fast ones.
 
@@ -501,8 +501,8 @@ activity ceases (event-driven), and CRW's smart heuristics handle any
 remaining post-navigate work (SPA selector poll, content stability,
 challenge retry) without a blind sleep.
 
-**Disabling `waitUntil` injection:** Set both `OBSCURA_WAIT_UNTIL_SEARCH`
-and `OBSCURA_WAIT_UNTIL_DEFAULT` to empty to disable the shim's injection.
+**Disabling `waitUntil` injection:** Set both `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH`
+and `OBSCURA_BROWSER_WAIT_UNTIL_WEB` to empty to disable the shim's injection.
 Obscura will default to `DomContentLoaded` and return the nav response as
 soon as the HTML is parsed, without waiting for network silence. CRW's smart
 heuristics still run in the post-navigate phase. This is not recommended —
@@ -527,7 +527,7 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
                                │                         └─ 403
                                ├─ Other HTTPS URL → CONNECT tunnel
                                │
-                               └── upstream ──> PROXY_URL (Tor/VPN)
+                               └── upstream ──> ONYX_AGENT_OUTBOUND_PROXY_URL (Tor/VPN)
                                                 (if set)
 ```
 
@@ -545,7 +545,7 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
      immediately — no network request, no double-hit. CRW sees
      `is_auth_blocked` and escalates to obscura.
    - **Other plain HTTP URLs**: issues a `HEAD` request to the real target
-     (through `PROXY_URL` if set) to check `Content-Type`:
+     (through `ONYX_AGENT_OUTBOUND_PROXY_URL` if set) to check `Content-Type`:
      - `application/pdf` → tunnels the original GET through and returns the
        full response so CRW's `pdf_inspector` can extract text.
      - Anything else → returns `403 Forbidden` so CRW escalates to obscura.
@@ -557,25 +557,25 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
    rather than `CRW_CRAWLER__PROXY`, so `REQUEST_PROXY` is not set and CRW
    usually does not send `createBrowserContext` at all.
 
-**PROXY_URL usage:**
+**ONYX_AGENT_OUTBOUND_PROXY_URL usage:**
 
-When `PROXY_URL` is set (e.g., Tor SOCKS proxy), the prefetch-blocking proxy
-routes its own upstream requests (HEAD and tunnel) through `PROXY_URL`. This
+When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set (e.g., Tor SOCKS proxy), the prefetch-blocking proxy
+routes its own upstream requests (HEAD and tunnel) through `ONYX_AGENT_OUTBOUND_PROXY_URL`. This
 ensures the HEAD request and PDF tunnel egress through the same proxy as
 obscura, so the target sees a consistent exit IP.
 
-The full service-by-service `PROXY_URL` behavior, including SearXNG settings
+The full service-by-service `ONYX_AGENT_OUTBOUND_PROXY_URL` behavior, including SearXNG settings
 generation and code-interpreter executor pod caveats, is documented in
 [VPN routing and proxies](vpn_routing_and_proxies.md#how-proxy_url-applies-by-service).
 
 | Component | Proxy used | How |
 |-----------|-----------|-----|
-| **Obscura (CDP browser)** | `PROXY_URL` | `--proxy` flag in docker-compose.proxy.yml |
-| **Prefetch-blocking proxy (HEAD/tunnel)** | `PROXY_URL` | `PROXY_URL` env var → upstream connection |
+| **Obscura (CDP browser)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `--proxy` flag in docker-compose.proxy.yml |
+| **Prefetch-blocking proxy (HEAD/tunnel)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `ONYX_AGENT_OUTBOUND_PROXY_URL` env var → upstream connection |
 | **CRW HTTP prefetch** | prefetch-blocking proxy | `HTTPS_PROXY` / `HTTP_PROXY` env vars on the CRW container |
-| **CRW CDP (obscura)** | `PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
-| **SearXNG** | `PROXY_URL` | `outgoing.proxies` in settings.yml |
-| **OnyxWebCrawler** | shared namespace direct egress | Does not go through CRW or explicit `PROXY_URL`; traffic uses the Mysterium VPN when `MYST_VPN_ENABLED=true`, otherwise the Docker bridge |
+| **CRW CDP (obscura)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
+| **SearXNG** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `outgoing.proxies` in settings.yml |
+| **OnyxWebCrawler** | shared namespace direct egress | Does not go through CRW or explicit `ONYX_AGENT_OUTBOUND_PROXY_URL`; traffic uses the Mysterium VPN when `MYST_VPN_ENABLED=true`, otherwise the Docker bridge |
 
 **CONNECT handling:**
 
@@ -585,7 +585,7 @@ CONNECT tunneling. The proxy handles CONNECT requests as follows:
   This forces CRW's auto mode to escalate to the CDP renderer (obscura),
   eliminating the double-hit. The search engine never sees the bare reqwest
   request.
-- **Non-search-engine hosts**: establishes the tunnel through `PROXY_URL`
+- **Non-search-engine hosts**: establishes the tunnel through `ONYX_AGENT_OUTBOUND_PROXY_URL`
   and pipes bidirectionally. If CRW later escalates to CDP, this can still
   produce both a reqwest fetch and an obscura navigation for that non-search
   URL. The stack accepts that tradeoff because:
@@ -649,7 +649,7 @@ This is critical for two reasons:
 |----------|---------|-------------|
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
-| `PROXY_URL` | (empty) | Upstream proxy for HEAD/tunnel requests. Supports `http://`, `https://`, `socks5://`, `socks5h://` |
+| `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HEAD/tunnel requests. Supports `http://`, `https://`, `socks5://`, `socks5h://` |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
 | `PREFETCH_HEAD_TIMEOUT` | `10` | Timeout for upstream HEAD requests (seconds) |
@@ -807,10 +807,10 @@ complete patch inventory and upstreaming notes.
   call this helper, but Onyx v4.1.7 already sends the same no-`waitFor` payload
   in lite mode.
 - `apply_open_url_char_limit_patches()` lets wrapper env vars
-  `OPEN_URL_MAX_CHARS_PER_URL` and `OPEN_URL_MAX_CHARS_ACROSS_URLS` override
+  `ONYX_OPEN_URL_MAX_CHARS_PER_URL` and `ONYX_OPEN_URL_MAX_TOTAL_CHARS` override
   upstream truncation defaults.
 - `apply_code_interpreter_network_description_patches()` updates tool
-  descriptions when `CODE_INTERPRETER_VPN_ROUTED=true`; it is not part of the
+  descriptions when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`; it is not part of the
   `open_url` request path, but it explains the local CRW/Firecrawl API to
   code-interpreter and coding-agent tools.
 - Lite mode additionally mounts `onyx/patches/sitecustomize`, which patches
@@ -1072,7 +1072,7 @@ Set `CDP_SHIM_LOG_LEVEL=debug` in docker-compose for verbose logging.
   are non-fatal — CRW continues after the error.
 
 **waitUntil injection not working**:
-- Check that `OBSCURA_WAIT_UNTIL_SEARCH` and `OBSCURA_WAIT_UNTIL_DEFAULT`
+- Check that `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` and `OBSCURA_BROWSER_WAIT_UNTIL_WEB`
   are set in the cdp-shim service environment (defaults: `networkidle2` and
   `load`).
 - Look for `"Injected waitUntil="` log lines at DEBUG level
@@ -1083,22 +1083,20 @@ Set `CDP_SHIM_LOG_LEVEL=debug` in docker-compose for verbose logging.
   may be timing out before network idle is reached. Check
   `OBSCURA_NAV_TIMEOUT_MS` — if it's too low for your proxy path, increase
   it (and `CRW_RENDERER__CHROME_TIMEOUT_MS` to match).
-- If pages are taking too long, try setting `OBSCURA_WAIT_UNTIL_SEARCH=load`
-  and/or `OBSCURA_WAIT_UNTIL_DEFAULT=domcontentloaded` depending on which URL
-  class is slow. The legacy `OBSCURA_WAIT_UNTIL` var overrides both per-URL
-  settings if present.
-- To disable the waitUntil injection: set both `OBSCURA_WAIT_UNTIL_SEARCH=""`
-  and `OBSCURA_WAIT_UNTIL_DEFAULT=""` (or set legacy `OBSCURA_WAIT_UNTIL=""`
-  only if you are relying on the legacy override behavior). Obscura will
-  default to `DomContentLoaded` and return the nav response as soon as the HTML
-  is parsed, without waiting for network silence.
+- If pages are taking too long, try setting `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH=load`
+  and/or `OBSCURA_BROWSER_WAIT_UNTIL_WEB=domcontentloaded` depending on which URL
+  class is slow.
+- To disable the waitUntil injection: set both `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH=""`
+  and `OBSCURA_BROWSER_WAIT_UNTIL_WEB=""`. Obscura will default to
+  `DomContentLoaded` and return the nav response as soon as the HTML is parsed,
+  without waiting for network silence.
 - If you see "Timeout after 12000ms" → 504 errors in CRW logs, the
   `CRW_RENDERER__CHROME_NAV_BUDGET_MS` is too low for your proxy path.
   Increase it (default 48000 for Tor/slow VPN; CRW's own default is 12000).
 
 **Cookie clearing not working**:
 - Check for `"Cleared browser cookies"` log lines (should appear every
-  `OBSCURA_CLEAR_COOKIES_INTERVAL` seconds).
+  `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL` seconds).
 - If obscura is unreachable, the clearing will fail — check for
   `"Error in clear_state_loop"` errors.
 
@@ -1172,12 +1170,12 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `CDP_SHIM_PORT` | `9224` | Listen port |
 | `OBSCURA_CDP_URL` | `ws://127.0.0.1:9222/devtools/browser` | Obscura CDP endpoint |
 | `CDP_SHIM_STRIP_STEALTH_JS` | `1` | Strip CRW's STEALTH_JS (1=yes, 0=no) |
-| `OBSCURA_WAIT_UNTIL_SEARCH` | `networkidle2` | `waitUntil` for search engine URLs (SERPs). SERPs are JS-heavy SPAs that load results via XHR — network idle ensures results have loaded. Options: `domcontentloaded`, `load`, `networkidle0`, `networkidle2`. |
-| `OBSCURA_WAIT_UNTIL_DEFAULT` | `load` | `waitUntil` for all other URLs (open_url web pages). Content is ready at `load`; many modern sites keep long-polling connections that prevent network idle. |
-| `OBSCURA_WAIT_UNTIL_SEARCH_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com` | Comma-separated search engine hostnames for per-URL `waitUntil` selection. |
+| `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` | `networkidle2` | `waitUntil` for search engine URLs (SERPs). SERPs are JS-heavy SPAs that load results via XHR — network idle ensures results have loaded. Options: `domcontentloaded`, `load`, `networkidle0`, `networkidle2`. |
+| `OBSCURA_BROWSER_WAIT_UNTIL_WEB` | `load` | `waitUntil` for all other URLs (open_url web pages). Content is ready at `load`; many modern sites keep long-polling connections that prevent network idle. |
+| `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com` | Comma-separated search engine hostnames for per-URL `waitUntil` selection. |
 | `CDP_SHIM_STRIP_PROXY_SERVER` | `1` | Strip `proxyServer` from `Target.createBrowserContext` (safety net — not needed with `HTTPS_PROXY` env vars since `REQUEST_PROXY` is not set). See §1.7. |
 | `CDP_SHIM_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
-| `OBSCURA_CLEAR_COOKIES_INTERVAL` | `3600` | Periodic cookie clearing interval (seconds, 0=disabled) |
+| `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL` | `3600` | Periodic cookie clearing interval (seconds, 0=disabled) |
 
 ### Prefetch-blocking proxy environment variables
 
@@ -1185,7 +1183,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 |----------|---------|-------------|
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
-| `PROXY_URL` | (empty) | Upstream proxy for HEAD/tunnel requests. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
+| `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HEAD/tunnel requests. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
 | `PREFETCH_HEAD_TIMEOUT` | `10` | Timeout for upstream HEAD requests (seconds) |
@@ -1343,7 +1341,7 @@ continuity.
 
 ### Mitigation
 
-The `OBSCURA_CLEAR_COOKIES_INTERVAL` setting (default: 3600s = 60 minutes)
+The `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL` setting (default: 3600s = 60 minutes)
 periodically clears cookies to limit the tracking surface.
 
 The most impactful anti-bot measures currently in place are:

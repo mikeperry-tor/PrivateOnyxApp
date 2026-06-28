@@ -110,24 +110,24 @@ Most likely variables you want to change:
   - The bundled installer shim exposes that executable to the upstream Onyx installer as `docker`, so local updates to `onyx/install.sh` do not need to be re-patched.
   - In podman mode, the wrapper also applies `docker-compose.podman.yml`, which disables `code-interpreter` and `autoheal` by default because they require a functional Docker daemon socket inside containers.
 - Teep LLM Provider/API config:
-  - Set at least one teep key (for example `NEARAI_API_KEY`, `VENICE_API_KEY`, or `CHUTES_API_KEY`)
+  - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_VENICE_API_KEY`, or `TEEP_CHUTES_API_KEY`)
 - Optional Tailscale Funnel exposure (public HTTPS 443 -> Onyx UI):
   - Set `TAILSCALE_FUNNEL_ENABLED=true`
-  - Set `TAILSCALE_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
-  - Optional overrides: `TAILSCALE_HOSTNAME`, `TAILSCALE_EXTRA_ARGS`
+  - Set `TAILSCALE_FUNNEL_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
+  - Optional overrides: `TAILSCALE_FUNNEL_HOSTNAME`, `TAILSCALE_FUNNEL_UP_ARGS`
 - **Master VPN switch**:
   - Set `MYST_VPN_ENABLED=false` to run the entire stack without the Mysterium VPN. The `myst-client` container still starts and joins the shared `netns-holder` namespace (so all service wiring stays identical), but it idles the daemon without arming the kill-switch or attempting to connect. Traffic egresses directly via the Docker bridge. This skips the Myst wallet/funding requirement entirely. See [Optional: Disabling the Mysterium VPN](#optional-disabling-the-mysterium-vpn) below.
 - **VPN routing for teep, tailscale, and code-interpreter**:
   - By default, teep and tailscale run on the default Docker network (no Myst VPN). Their traffic egresses directly via the docker host's networking stack (or host VPN). This is done so that your tailscale account and inference provider account are not linkable to the agent's web activity by IP address. The code interpreter has no network access as a sandboxing measure. To change this:
-    - Set `TEEP_VPN_ROUTED=true` to route teep LLM API traffic through the Mysterium VPN namespace.
-    - Set `TAILSCALE_VPN_ROUTED=true` to route Tailscale Funnel traffic through the VPN namespace.
-    - Set `CODE_INTERPRETER_VPN_ROUTED=true` to give Onyx's Python tool and coding-agent bash sessions outbound internet access through the VPN. **Security:** this removes the code-interpreter's network isolation — the LLM can make arbitrary outbound requests from generated code.
+    - Set `TEEP_ROUTE_THROUGH_MYST_VPN=true` to route teep LLM API traffic through the Mysterium VPN namespace.
+    - Set `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` to route Tailscale Funnel traffic through the VPN namespace.
+    - Set `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` to give Onyx's Python tool and coding-agent bash sessions outbound network access through the shared stack namespace. With `MYST_VPN_ENABLED=true`, that egress goes through Mysterium. **Security:** this removes the code-interpreter's network isolation — the LLM can make arbitrary outbound requests from generated code.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access** (for local inference APIs):
-  - Set `ALLOW_LAN_ACCESS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
+  - Set `MYST_VPN_ALLOW_LAN_BYPASS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
 - Optional Onyx SSRF defaults (for MCP servers and local doc-drop crawling):
-  - If you want both MCP servers on `host.docker.internal` and the doc-drop connector at `http://localhost:8091/`, use `OPEN_URL_VALIDATE_SSRF=true`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, and `MCP_SERVER_ALLOW_LOOPBACK=false`. That yields the `Allow Private Network` posture by default.
-    - `OPEN_URL_VALIDATE_SSRF`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK`, and `MCP_SERVER_ALLOW_LOOPBACK` seed Onyx's default SSRF Protection level at startup.
+  - If you want both MCP servers on `host.docker.internal` and the doc-drop connector at `http://localhost:8091/`, use `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL=true`, `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true`, and `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false`. That yields the `Allow Private Network` posture by default.
+    - `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL`, `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK`, and `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK` seed Onyx's default SSRF Protection level at startup.
     - After you save a value in Onyx Admin -> Security Hardening, the saved UI setting becomes the effective runtime policy and overrides these defaults.
 
 ### Initial VPN Connection (Myst Payment)
@@ -161,7 +161,7 @@ PAYMENT URL: https://coingate.com/pay/invoice/abc123...
 ═══════════════════════════════════════════════════════════
 ```
 
-The default order is for 100 $MYST (currently ~$20 USD), payable via CoinGate in several major cryptocurrencies. An email is required by the payment gateway. You can customize the order amount, currency, and gateway via `MYST_ORDER_*` variables in `.env.wrapper`.
+The default order is for 100 $MYST (currently ~$20 USD), payable via CoinGate in several major cryptocurrencies. An email is required by the payment gateway. You can customize the order amount, currency, and gateway via `MYST_VPN_ORDER_*` variables in `.env.wrapper`.
 
 **Step 2: Pay at the URL**
 
@@ -191,7 +191,7 @@ This automatically stops the standalone signup container (your wallet data is pr
 
 - If the payment order expires before you pay, just run `make vpn-signup-orderform` again. It reuses your existing identity and creates a new order.
 - The container build process may take some time to build all components on first run. Makefile dependency checks are used by `make up-lite` (or `make up-full`) to build images on first run, but not after the images exist.
-- Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
+- Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_VPN_PREFERRED_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
 - The payment URL is also printed in the container logs as a fallback: `docker logs myst-client-vpn 2>&1 | grep PAYMENT_URL`
 
 #### Option B: Direct $MYST Transfer (Skip the Order Page)
@@ -257,10 +257,10 @@ The node polls the on-chain channel balance and will reflect the transfer once t
 
 ## Onyx UI Configuration
 
-Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). The BiFrost provider is compatible. The URL depends on your `TEEP_VPN_ROUTED` setting:
+Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). The BiFrost provider is compatible. The URL depends on your `TEEP_ROUTE_THROUGH_MYST_VPN` setting:
 
-- **Default (`TEEP_VPN_ROUTED=false`):** Use `http://teep:8337/v1` (Docker DNS resolves the teep service on the default network).
-- **VPN-routed (`TEEP_VPN_ROUTED=true`):** Use `http://127.0.0.1:8337/v1` (shared loopback in the VPN namespace).
+- **Default (`TEEP_ROUTE_THROUGH_MYST_VPN=false`):** Use `http://teep:8337/v1` (Docker DNS resolves the teep service on the default network).
+- **VPN-routed (`TEEP_ROUTE_THROUGH_MYST_VPN=true`):** Use `http://127.0.0.1:8337/v1` (shared loopback in the VPN namespace).
 
 The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown.
 
@@ -270,7 +270,7 @@ The best privacy preserving providers supported by teep are currently `neardirec
 
 This stack can also be used with LMStudio or any other local LLM provider.  Simply use `host.docker.internal` to connect to your localhost instance, using the Onyx Admin UI configuration.
 
-If the local provider is running on a private/LAN address, you will usually also want `ALLOW_LAN_ACCESS=true` so traffic can bypass the Myst VPN firewall to reach your host or LAN service.
+If the local provider is running on a private/LAN address, you will usually also want `MYST_VPN_ALLOW_LAN_BYPASS=true` so traffic can bypass the Myst VPN firewall to reach your host or LAN service.
 
 ### LLM recommendations
 
@@ -305,7 +305,7 @@ You can publish the Onyx WebUI through Tailscale Funnel to access it remotely.
 - Public endpoint: `https://onyx.your-tailnet.ts.net` on port 443
 - By default, the tailscale service does not route through Mysterium VPN, to avoid linking your tailscale account to your search actvity at the Myst VPN exit server.
 - Tailscale uses the userspace networking mode, so no VPN activity is involved.
-- To route Tailscale through the VPN namespace instead, set `TAILSCALE_VPN_ROUTED=true` in `.env.wrapper`. **Warning:** this links your Tailscale identity to the VPN exit IP.
+- To route Tailscale through the VPN namespace instead, set `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` in `.env.wrapper`. **Warning:** this links your Tailscale identity to the VPN exit IP.
 
 Tailscale Funnel prerequisites:
 
@@ -317,7 +317,7 @@ Enable it in `.env.wrapper`:
 
 ```bash
 TAILSCALE_FUNNEL_ENABLED=true
-TAILSCALE_AUTHKEY=tskey-client-...
+TAILSCALE_FUNNEL_AUTHKEY=tskey-client-...
 ```
 
 Bring the stack up as usual (`make up-lite` or `make up-full`).
@@ -335,46 +335,48 @@ You can optionally route either or both services through the Mysterium VPN names
 
 ```bash
 # Route teep LLM proxy traffic through the VPN
-TEEP_VPN_ROUTED=true
+TEEP_ROUTE_THROUGH_MYST_VPN=true
 
 # Route Tailscale Funnel through the VPN
 # WARNING: This links your Tailscale identity to the VPN exit IP
-TAILSCALE_VPN_ROUTED=true
+TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true
 ```
 
 The Makefile conditionally applies `docker-compose.teep-vpn.yml` and/or `docker-compose.tailscale-vpn.yml` override files when these are set to `true`. These override files properly adjust host and port mappings of teep and tailscale for the VPN interface. Restart the stack after changing these settings.
 
-#### Optional: VPN Routing for the Code-Interpreter
+#### Optional: Network Access for the Code-Interpreter
 
 By default, Onyx's code-interpreter (the `onyxdotapp/code-interpreter` image from [onyx-dot-app/python-sandbox](https://github.com/onyx-dot-app/python-sandbox)) hardcodes `--network none` on every executor pod it spawns. This means the Python tool and coding-agent bash sessions have **zero network access** — the LLM-generated code cannot make any outbound requests. This is a security isolation measure baked into the upstream image.
 
-You can optionally give executor pods outbound internet access through the Mysterium VPN by setting:
+You can optionally give executor pods outbound network access through the shared stack namespace by setting:
 
 ```bash
-# Give code-interpreter executor pods VPN-routed internet access
+# Give code-interpreter executor pods network access
 # SECURITY: This removes the code-interpreter's network isolation.
-CODE_INTERPRETER_VPN_ROUTED=true
+ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true
 ```
+
+With `MYST_VPN_ENABLED=true`, executor pod egress goes through Mysterium. If `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, proxy env is forwarded into executor pods.
 
 The code tool descriptions and code agent prompts are updated to mention internet access, and include service hints for the in-namespace scraping/browser services that executor pods can reach via localhost (since they inherit the netns-holder namespace).
 
 Restart the stack after changing this setting (`make down-lite && make up-lite`, or the full-mode equivalents).
 
-### Optional: Outbound Proxy (`PROXY_URL`)
+### Optional: Outbound Proxy (`ONYX_AGENT_OUTBOUND_PROXY_URL`)
 
-Set `PROXY_URL` in `.env.wrapper` to route internet egress from **crw**, **obscura** (both the CDP `serve` instance and the MCP server), **SearXNG**, the **code-interpreter**, and the **code agent** through a single upstream proxy. This is orthogonal to the Mysterium VPN: if both are set, traffic is proxied **through** the VPN tunnel (the proxy connection itself egresses over the VPN).
+Set `ONYX_AGENT_OUTBOUND_PROXY_URL` in `.env.wrapper` to route internet egress from **crw**, **obscura** (both the CDP `serve` instance and the MCP server), **SearXNG**, the **code-interpreter**, and the **code agent** through a single upstream proxy. This is orthogonal to the Mysterium VPN: if both are set, traffic is proxied **through** the VPN tunnel (the proxy connection itself egresses over the VPN).
 
 Accepts any scheme:
 
 ```bash
 # HTTP / HTTPS proxy
-PROXY_URL="http://user:pass@proxy.example.com:8080"
+ONYX_AGENT_OUTBOUND_PROXY_URL="http://user:pass@proxy.example.com:8080"
 
 # SOCKS5 proxy
-PROXY_URL="socks5://proxy.example.com:1080"
+ONYX_AGENT_OUTBOUND_PROXY_URL="socks5://proxy.example.com:1080"
 
 # SOCKS5 with remote DNS resolution
-PROXY_URL="socks5h://proxy.example.com:1080"
+ONYX_AGENT_OUTBOUND_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
 > **NOTE** The proxy setup has not been audited for leaks. You still likely want the Myst VPN, or at least a host VPN, in case of proxy bypass. In particular, Obscura/Chrome does not support SOCKS5 usernames and passwords, and will bypass the proxy entirely if these are set. Additionally, the python code interpreter tool will bypass socks proxies when used with urllib, since urllib does not honor ALL_PROXY or support SOCKS.
@@ -389,11 +391,11 @@ For implementation details, troubleshooting notes, and Onyx upgrade assumptions,
 
 Setup steps:
 
-1. Put PDFs into `DOC_DROP_DIR` (default `./doc-drop`).
+1. Put PDFs into `ONYX_RAG_DOC_SOURCE_DIR` (default `./doc-drop`).
 2. Start or restart full stack: `make up-full`.
 3. In Onyx Admin → Connectors → Web, create a connector.
 4. Set Web connector type to **Recursive**.
-5. Set URL to `http://localhost:8091/` (or `http://localhost:<DOC_DROP_WEB_PORT>/`).
+5. Set URL to `http://localhost:8091/` (or `http://localhost:<HOST_PORT_ONYX_RAG_DOC_WEB>/`).
 6. Sync the connector.
 
 Notes:
@@ -424,7 +426,7 @@ make embedserv-serve
 
 These rules use `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs), and LM Studio's is non-existent.
 
-You must also set `ALLOW_LAN_ACCESS=true` in `.env.wrapper`, so traffic can bypass the Myst VPN firewall to reach this embedding service.
+You must also set `MYST_VPN_ALLOW_LAN_BYPASS=true` in `.env.wrapper`, so traffic can bypass the Myst VPN firewall to reach this embedding service.
 
 ### Optional: Using Teep for Embeddings
 
@@ -449,11 +451,11 @@ To use this shim:
 
 In addition to the stealth Obscura browser that the crw Firecrawl API uses, a second obscura instance runs as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) HTTP server by default. This exposes obscura's stealth browser automation tools directly to Onyx chat agents — they can navigate pages, take snapshots, click elements, fill forms, extract content, and more, all through the MCP tool interface.
 
-The MCP server runs in the netns-holder VPN namespace, so all browser traffic egresses through the Mysterium VPN tunnel with stealth anti-fingerprinting enabled. It listens on `127.0.0.1:${OBSCURA_MCP_PORT:-9223}` inside the namespace (default port 9223). Configure the port via `OBSCURA_MCP_PORT` in `.env.wrapper`.
+The MCP server runs in the netns-holder VPN namespace, so all browser traffic egresses through the Mysterium VPN tunnel with stealth anti-fingerprinting enabled. It listens on `127.0.0.1:9223` inside the namespace.
 
 **Step 1: Configure SSRF Protection to allow loopback**
 
-The obscura MCP server listens on `127.0.0.1` inside the netns-holder namespace. The api_server (which runs in the same namespace) reaches it via localhost, but Onyx's SSRF protection blocks loopback addresses by default — even at the `Allow Private Network` level (the wrapper's default via `MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, `MCP_SERVER_ALLOW_LOOPBACK=false`).
+The obscura MCP server listens on `127.0.0.1` inside the netns-holder namespace. The api_server (which runs in the same namespace) reaches it via localhost, but Onyx's SSRF protection blocks loopback addresses by default — even at the `Allow Private Network` level (the wrapper's default via `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true`, `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false`).
 
 To allow the MCP client to reach `127.0.0.1`, set SSRF Protection to **Disabled**:
 
@@ -470,7 +472,7 @@ This allows loopback and private-network targets for MCP servers, open_url, and 
 1. Go to **Admin Panel -> MCP Servers** ([http://localhost:3000/admin/mcp-servers](http://localhost:3000/admin/mcp-servers)).
 2. Click **Add MCP Server**.
 3. Set **Name** to `obscura` (or any name you prefer).
-4. Set **Server URL** to `http://127.0.0.1:9223/mcp` (or your configured `OBSCURA_MCP_PORT`).
+4. Set **Server URL** to `http://127.0.0.1:9223/mcp`.
    - The api_server runs in the same netns-holder namespace, so it reaches the MCP server via localhost.
 5. Set **Auth Type** to **None** (the MCP HTTP transport has no built-in auth; it's only reachable within the VPN namespace).
 6. Click **Save**, then click **Discover Tools** to verify the connection.
@@ -487,7 +489,7 @@ Chat agents using that assistant can now drive a stealth browser to navigate, re
 
 **Security notes:**
 
-- The MCP HTTP transport has no built-in auth. It binds `0.0.0.0` inside the netns-holder namespace, so it's only reachable by other services in that namespace (and the host-web-proxy bridge). For additional origin restrictions, set `OBSCURA_MCP_ALLOWED_ORIGINS` in `.env.wrapper` to a comma-separated list of allowed Origin values.
+- The MCP HTTP transport has no built-in auth. It binds `0.0.0.0` inside the netns-holder namespace, so it's only reachable by other services in that namespace (and the host-web-proxy bridge).
 - The browser session is shared across all tool calls within a single MCP server instance. Multiple concurrent chat sessions share the same browser state.
 - See the [obscura MCP documentation](https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md) for full details.
 
@@ -522,4 +524,4 @@ The reality is that many websites subject Tor and datacenter VPNs to increased c
 
 Until this landscape changes, residential IP address leasing is the only reliable option for a self-hosted private research agent, and Mysterium was the best choice among those, since the server side is open source, and payment is made in cryptocurrency.
 
-If you want to see the difference, you can use set `PROXY_URL=socks5h://host.docker.internal:9150` and `ALLOW_LAN_ACCESS=true` in `.env.wrapper` to use the host Tor Browser proxy. SearXNG provides search engine success statistics on the "Engines" of the [Preferences Pane](http://localhost:8080/preferences), which is available on your host. Again, be aware that the `PROXY_URL` config is not audited for proxy bypass leaks.
+If you want to see the difference, you can use set `ONYX_AGENT_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:9150` and `MYST_VPN_ALLOW_LAN_BYPASS=true` in `.env.wrapper` to use the host Tor Browser proxy. SearXNG provides search engine success statistics on the "Engines" of the [Preferences Pane](http://localhost:8080/preferences), which is available on your host. Again, be aware that the `ONYX_AGENT_OUTBOUND_PROXY_URL` config is not audited for proxy bypass leaks.

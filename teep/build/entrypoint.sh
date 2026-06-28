@@ -6,11 +6,11 @@ if [ "$#" -eq 0 ]; then
   set -- serve
 fi
 
-# Thread additional flags from environment only for serve mode.
-if [ "$1" = "serve" ] && [ -n "${TEEP_SERVE_FLAGS:-}" ]; then
+# Thread additional args from environment only for serve mode.
+if [ "$1" = "serve" ] && [ -n "${TEEP_SERVE_ARGS:-}" ]; then
   # Intentional word splitting so multiple flags can be passed via env.
   # shellcheck disable=SC2086
-  exec /usr/local/bin/teep serve ${TEEP_SERVE_FLAGS}
+  exec /usr/local/bin/teep serve ${TEEP_SERVE_ARGS}
 fi
 
 exec /usr/local/bin/teep "$@"

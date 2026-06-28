@@ -168,16 +168,16 @@ def apply_internal_search_context_patches() -> None:
     """
 
     candidate_sections = _parse_int_at_least(
-        "ONYX_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS", 1
+        "ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS", 1
     )
     context_sections = _parse_int_at_least(
-        "ONYX_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS", 1
+        "ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS", 1
     )
     max_chars_per_result = _parse_int_at_least(
-        "ONYX_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT", 0
+        "ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT", 0
     )
     max_total_chars = _parse_int_at_least(
-        "ONYX_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS", 0
+        "ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS", 0
     )
 
     if (
@@ -303,8 +303,8 @@ def apply_internal_search_context_patches() -> None:
 
 
 def apply_open_url_char_limit_patches() -> None:
-    per_url = _parse_positive_int("OPEN_URL_MAX_CHARS_PER_URL")
-    across_urls = _parse_positive_int("OPEN_URL_MAX_CHARS_ACROSS_URLS")
+    per_url = _parse_positive_int("ONYX_OPEN_URL_MAX_CHARS_PER_URL")
+    across_urls = _parse_positive_int("ONYX_OPEN_URL_MAX_TOTAL_CHARS")
 
     if per_url is None and across_urls is None:
         return
@@ -353,8 +353,8 @@ def apply_open_url_char_limit_patches() -> None:
     )
 
 
-def _is_vpn_routed() -> bool:
-    return os.environ.get("CODE_INTERPRETER_VPN_ROUTED", "").lower() in (
+def _is_code_interpreter_network_enabled() -> bool:
+    return os.environ.get("ONYX_CODE_INTERPRETER_ENABLE_NETWORK", "").lower() in (
         "1",
         "true",
         "yes",
@@ -397,7 +397,7 @@ def apply_code_interpreter_network_description_patches() -> None:
     "network-isolated sandbox", "Internet access for this session is
     disabled").
 
-    When ``CODE_INTERPRETER_VPN_ROUTED=true`` is set on the api_server
+    When ``ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`` is set on the api_server
     container, a companion sitecustomize patch in the code-interpreter
     container rewrites ``--network none`` to ``--network container:<self>``,
     giving executor pods VPN-routed internet access. This function updates the
@@ -406,7 +406,7 @@ def apply_code_interpreter_network_description_patches() -> None:
     the LLM would continue to avoid network commands based on the stale
     "no network" descriptions.
     """
-    if not _is_vpn_routed():
+    if not _is_code_interpreter_network_enabled():
         return
 
     # ── PythonTool description ──────────────────────────────────────────
@@ -570,7 +570,7 @@ def apply_firecrawl_wait_for_patch() -> None:
     even when the page is ready) and is insufficient on slow pages (Tor/
     VPN loads can take 20-40s, far exceeding any reasonable fixed sleep).
     Instead, page load waiting is handled by the CDP shim's ``waitUntil``
-    injection (``OBSCURA_WAIT_UNTIL=networkidle2``), which makes obscura
+    injection (``OBSCURA_BROWSER_WAIT_UNTIL_SEARCH=networkidle2``), which makes obscura
     adaptively wait for network silence before returning the nav response.
     CRW then uses its smart heuristics (SPA selector poll, content
     stability, challenge retry) for any remaining post-navigate work.
@@ -586,7 +586,7 @@ def apply_firecrawl_wait_for_patch() -> None:
 
     def _patched_get_webpage_content(self, url: str):
         # No waitFor field — page load waiting is handled by the CDP shim's
-        # waitUntil injection (OBSCURA_WAIT_UNTIL=networkidle2). CRW uses
+        # waitUntil injection (OBSCURA_BROWSER_WAIT_UNTIL_SEARCH=networkidle2). CRW uses
         # its smart SPA selector poll + content stability heuristics for
         # any remaining post-navigate work instead of a blind fixed sleep.
         payload: dict = {

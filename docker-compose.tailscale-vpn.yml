@@ -1,9 +1,9 @@
 ## Tailscale VPN routing override.
-## Applied when TAILSCALE_VPN_ROUTED=true in .env.wrapper (via Makefile
-## COMPOSE_FILE layering). Moves tailscale-funnel into the shared
-## netns-holder namespace so Tailscale traffic egresses through the
-## Mysterium VPN tunnel, and retargets the funnel proxy to nginx directly
-## in the shared namespace.
+## Applied when TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true in .env.wrapper
+## (via Makefile COMPOSE_FILE layering). Moves tailscale-funnel into the
+## shared netns-holder namespace so Tailscale traffic egresses through the
+## Mysterium VPN tunnel, and retargets the funnel proxy to nginx directly in
+## the shared namespace.
 ##
 ## WARNING: When this override is applied, your Tailscale identity becomes
 ## linked to the VPN exit IP address. The default (no override) keeps

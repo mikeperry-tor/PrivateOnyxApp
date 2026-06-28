@@ -14,7 +14,7 @@ Before changing a subsystem, read the matching document below, then inspect the 
 
 - `README.md` - user setup, first-run flow, optional features, and host endpoints.
 - `docs/request_handling.md` - `web_search`, `open_url`, CRW, Obscura, CDP shim, prefetch blocking, readiness, cookies, and anti-bot behavior.
-- `docs/vpn_routing_and_proxies.md` - shared VPN namespace layout, Mysterium, explicit no-VPN mode, optional routing switches, `PROXY_URL`, and `NO_PROXY`.
+- `docs/vpn_routing_and_proxies.md` - shared VPN namespace layout, Mysterium, explicit no-VPN mode, optional routing switches, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and `NO_PROXY`.
 - `docs/onyx_patch_info.md` - why local runtime patches exist.
 - `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/CRW/Obscura/ Teep upgrade checklist and patch validation, for use when image/source pins or runtime Python locks are updated.
 - `docs/local_docs_rag_search.md` - full-mode local document RAG, local doc serving, PDF freshness, embedding shim, and diagnostics.
@@ -101,7 +101,7 @@ This stack protects private research, document contents, browsing behavior, infe
 ### Component-Specific Rules
 
 - Compose layering: the Makefile assembles `COMPOSE_FILE`. Keep optional behavior in override files, keep Docker and Podman behavior separated, and preserve generated local secret flow plus Compose `${VAR:?message}` checks.
-- VPN/proxy routing: preserve explicit VPN/no-VPN behavior, host-proxy access, shared namespace membership where documented, optional routing switches, and `PROXY_URL`/`NO_PROXY` handling. Do not introduce automatic direct-egress fallback when VPN or proxy connectivity fails.
+- VPN/proxy routing: preserve explicit VPN/no-VPN behavior, host-proxy access, shared namespace membership where documented, optional routing switches, and `ONYX_AGENT_OUTBOUND_PROXY_URL`/`NO_PROXY` handling. Do not introduce automatic direct-egress fallback when VPN or proxy connectivity fails.
 - Request handling: keep supported search engines routed through the custom CRW/SearXNG path; preserve CRW/Obscura rendering, prefetch blocking, per-host rate control, anti-bot visibility, and the documented CDP shim behavior. Do not replace this path with plain HTTP fetching or fixed sleeps.
 - Documentation: update docs in the same change when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
 - Patch upgrades: before changing Onyx, code-interpreter, SearXNG, CRW, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.

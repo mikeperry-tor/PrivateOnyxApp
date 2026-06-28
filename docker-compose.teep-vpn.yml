@@ -1,7 +1,7 @@
 ## Teep VPN routing override.
-## Applied when TEEP_VPN_ROUTED=true in .env.wrapper (via Makefile COMPOSE_FILE
-## layering). Moves teep into the shared netns-holder namespace so LLM API
-## traffic egresses through the Mysterium VPN tunnel, and re-adds the
+## Applied when TEEP_ROUTE_THROUGH_MYST_VPN=true in .env.wrapper (via Makefile
+## COMPOSE_FILE layering). Moves teep into the shared netns-holder namespace so
+## LLM API traffic egresses through the Mysterium VPN tunnel, and re-adds the
 ## host-teep-proxy socat bridge for host-side port access.
 ##
 ## When this override is NOT applied (default), teep runs on the default
@@ -27,9 +27,9 @@ services:
   host-teep-proxy:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
-    command: tcp-listen:${TEEP_PORT:-8337},fork,reuseaddr tcp-connect:myst-client:${TEEP_CONTAINER_PORT:-8337}
+    command: tcp-listen:8337,fork,reuseaddr tcp-connect:myst-client:8337
     ports:
-      - ${TEEP_HOST:+${TEEP_HOST}:}${TEEP_PORT:-8337}:${TEEP_CONTAINER_PORT:-8337}
+      - ${TEEP_HOST:+${TEEP_HOST}:}${HOST_PORT_TEEP:-8337}:8337
     depends_on:
       netns-holder:
         condition: service_started

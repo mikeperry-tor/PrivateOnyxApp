@@ -14,8 +14,9 @@ headless browser) to provide:
 2. **waitUntil injection** — CRW sends ``Page.navigate`` with only ``{url}``
    and no ``waitUntil`` field. Obscura defaults to ``DomContentLoaded`` and
    returns immediately, without waiting for JS-driven content to load. When
-   ``OBSCURA_WAIT_UNTIL`` is set (e.g. ``networkidle2``), the shim injects
-   it into every ``Page.navigate`` so obscura adaptively waits for network
+   ``OBSCURA_BROWSER_WAIT_UNTIL_SEARCH`` / ``OBSCURA_BROWSER_WAIT_UNTIL_WEB``
+   are set, the shim injects the selected value into ``Page.navigate`` so
+   obscura adaptively waits for network
    silence before returning the nav response. This is event-driven: fast
    pages return in ~500ms (the network-idle quiet period), while slow
    Tor/proxy pages get up to ``OBSCURA_NAV_TIMEOUT_MS`` (obscura env var).
@@ -87,12 +88,12 @@ STRIP_STEALTH_JS = os.environ.get("CDP_SHIM_STRIP_STEALTH_JS", "1") == "1"
 #
 # Two env vars control per-URL waitUntil injection:
 #
-# OBSCURA_WAIT_UNTIL_SEARCH: Used for search engine URLs (SERPs). These pages
+# OBSCURA_BROWSER_WAIT_UNTIL_SEARCH: Used for search engine URLs (SERPs). These pages
 #   are JS-heavy SPAs that load results via XHR/fetch, so networkidle2
 #   (≤2 active connections for 500ms) ensures the results have loaded.
 #   Default: "networkidle2".
 #
-# OBSCURA_WAIT_UNTIL_DEFAULT: Used for all other URLs (open_url web pages).
+# OBSCURA_BROWSER_WAIT_UNTIL_WEB: Used for all other URLs (open_url web pages).
 #   These pages typically have their content ready at the `load` event
 #   (all subresources finished), and waiting for network idle adds latency
 #   without benefit — many modern sites keep long-polling connections open
@@ -100,28 +101,22 @@ STRIP_STEALTH_JS = os.environ.get("CDP_SHIM_STRIP_STEALTH_JS", "1") == "1"
 #   Default: "load".
 #
 # Search engine hosts are matched by eTLD+1 against
-# OBSCURA_WAIT_UNTIL_SEARCH_HOSTS (comma-separated, same list as the
+# OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS (comma-separated, same list as the
 # prefetch-blocking proxy's PREFETCH_BLOCK_HOSTS).
 #
 # Leave both empty to disable injection entirely (obscura defaults to
 # DomContentLoaded; CRW uses its smart heuristics for post-navigate work).
-WAIT_UNTIL_SEARCH = os.environ.get("OBSCURA_WAIT_UNTIL_SEARCH", "networkidle2").strip()
-WAIT_UNTIL_DEFAULT = os.environ.get("OBSCURA_WAIT_UNTIL_DEFAULT", "load").strip()
+WAIT_UNTIL_SEARCH = os.environ.get("OBSCURA_BROWSER_WAIT_UNTIL_SEARCH", "networkidle2").strip()
+WAIT_UNTIL_WEB = os.environ.get("OBSCURA_BROWSER_WAIT_UNTIL_WEB", "load").strip()
 # Search engine hosts for per-URL waitUntil selection.
 WAIT_UNTIL_SEARCH_HOSTS = frozenset(
     h.strip().lower()
     for h in os.environ.get(
-        "OBSCURA_WAIT_UNTIL_SEARCH_HOSTS",
+        "OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS",
         "google.com,search.brave.com,html.duckduckgo.com,startpage.com",
     ).split(",")
     if h.strip()
 )
-# Backward compat: if OBSCURA_WAIT_UNTIL is set, it overrides both per-URL
-# values (single waitUntil for all URLs).
-_LEGACY_WAIT_UNTIL = os.environ.get("OBSCURA_WAIT_UNTIL", "").strip()
-if _LEGACY_WAIT_UNTIL:
-    WAIT_UNTIL_SEARCH = _LEGACY_WAIT_UNTIL
-    WAIT_UNTIL_DEFAULT = _LEGACY_WAIT_UNTIL
 # Interval for periodic cookie clearing (seconds). 0 = disabled.
 # In the normal wrapper path, CRW creates targets on obscura's default CDP
 # context. Cookies can persist across CRW WebSocket connections in that
@@ -132,7 +127,7 @@ if _LEGACY_WAIT_UNTIL:
 # Default: 3600 (60 minutes) — long enough for multi-query research
 # sessions, short enough to limit tracking surface.
 CLEAR_STATE_INTERVAL_SECONDS = int(
-    os.environ.get("OBSCURA_CLEAR_COOKIES_INTERVAL", "3600")
+    os.environ.get("OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL", "3600")
 )
 # Reconnect delay when obscura connection drops (seconds).
 RECONNECT_DELAY_SECONDS = float(os.environ.get("CDP_SHIM_RECONNECT_DELAY", "2"))
@@ -340,7 +335,7 @@ class CdpProxy:
         # WAIT_UNTIL_SEARCH (default "networkidle2") because SERPs are
         # JS-heavy SPAs that load results via XHR/fetch — network idle
         # ensures the results have loaded. All other URLs (open_url web
-        # pages) use WAIT_UNTIL_DEFAULT (default "load") because their
+        # pages) use WAIT_UNTIL_WEB (default "load") because their
         # content is typically ready at the load event, and many modern
         # sites keep long-polling connections open that prevent network
         # idle from ever being reached.
@@ -365,7 +360,7 @@ class CdpProxy:
                     for h in WAIT_UNTIL_SEARCH_HOSTS
                 ) if nav_host else False
 
-                wait_until_val = WAIT_UNTIL_SEARCH if is_search else WAIT_UNTIL_DEFAULT
+                wait_until_val = WAIT_UNTIL_SEARCH if is_search else WAIT_UNTIL_WEB
                 if wait_until_val:
                     params["waitUntil"] = wait_until_val
                     msg["params"] = params
@@ -606,11 +601,11 @@ async def main() -> None:
         UPSTREAM_WS_URL,
     )
     logger.info(
-        "Config: strip_stealth=%s, wait_until_search=%s, wait_until_default=%s, "
+        "Config: strip_stealth=%s, wait_until_search=%s, wait_until_web=%s, "
         "strip_proxy=%s, clear_state_interval=%ds",
         STRIP_STEALTH_JS,
         WAIT_UNTIL_SEARCH or "(disabled)",
-        WAIT_UNTIL_DEFAULT or "(disabled)",
+        WAIT_UNTIL_WEB or "(disabled)",
         STRIP_PROXY_SERVER,
         CLEAR_STATE_INTERVAL_SECONDS,
     )
