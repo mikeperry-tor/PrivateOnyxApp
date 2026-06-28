@@ -8,6 +8,9 @@ The main conclusion is mixed:
 
 - Obscura and CRW currently block private/internal targets from the tested
   browser and Onyx `open_url()` agent tool.
+- The prefetch-blocking proxy is not itself hardened against direct internal
+  targets. When called directly from inside the shared namespace, it can tunnel
+  to localhost, Docker aliases, private IPs, and `host.docker.internal`.
 - Onyx SSRF settings affect only Onyx-managed URL-fetching paths and startup
   defaults for the Admin Security Hardening policy; they are not firewall
   rules for CRW, Obscura, or code-interpreter.
@@ -138,6 +141,99 @@ DNS-name probe. It failed even with `--allow-private-network`. That appears to
 be a Docker DNS artifact of services using `network_mode: service:netns-holder`:
 the stable aliases on `netns-holder`, such as `api_server` and `myst-client`,
 are the meaningful service-DNS names for this namespace.
+
+## Prefetch-Blocking Proxy
+
+The wrapper's `crw/prefetch_blocking_proxy.py` exists to shape CRW's HTTP
+prefetch behavior:
+
+- known search-engine hosts receive `403` without an upstream request;
+- non-search plain HTTP URLs receive a real `HEAD` request for PDF detection;
+- non-PDF plain HTTP URLs then receive `403`;
+- PDF responses are forwarded so CRW can extract text;
+- non-search `CONNECT` requests are tunneled.
+
+This proxy is not an SSRF firewall. It is bound to `0.0.0.0:3128` inside the
+shared namespace, and its filtering is focused on search-engine prefetches, not
+internal destinations.
+
+Direct probes from the shared namespace showed:
+
+- `CONNECT 127.0.0.1:9101` returned `200 Connection Established`;
+- `CONNECT localhost:9101` returned `200 Connection Established`;
+- `CONNECT api_server:8080` returned `200 Connection Established`;
+- `CONNECT myst-client:9101` returned `200 Connection Established`;
+- `CONNECT host.docker.internal:3000` returned `200 Connection Established`;
+- `CONNECT 172.18.0.8:9101` returned `200 Connection Established`.
+
+After the tunnel was established, the caller could send ordinary HTTP through
+it and read internal responses, including the embedding shim health endpoint,
+the Onyx API health endpoint, and the host-published Onyx WebUI.
+
+Plain absolute-URL `GET` requests through the proxy returned `403` for the
+tested internal URLs, but only after the proxy made a real upstream `HEAD`
+request to classify the content type. That means direct proxy callers get at
+least a blind internal `HEAD` primitive, and they get full response forwarding
+whenever the target is classified as `application/pdf`. The unrestricted
+`CONNECT` path is the larger issue because it provides a generic TCP tunnel.
+
+This does not appear to bypass the tested CRW and Obscura protections by
+itself:
+
+- CRW rejected internal `open_url` scrape targets before relying on the proxy
+  to fetch them.
+- Obscura's private-network block prevented a rendered page from reaching
+  `myst-client:3128` by default.
+
+However, any network-enabled process already running inside the shared
+namespace can call the proxy directly. That includes network-enabled
+code-interpreter executor pods. In that mode the proxy is an additional
+internal-access path, not a boundary.
+
+Hardening options:
+
+- bind the proxy to loopback only if every legitimate caller shares the same
+  namespace and no other untrusted process in that namespace should call it;
+- reject loopback, RFC1918, Docker bridge, link-local, multicast, host-gateway,
+  and stack service DNS names after DNS resolution;
+- apply the same destination validation to `CONNECT`, `GET`, and `HEAD`;
+- validate every resolved address to resist DNS rebinding;
+- allow only expected schemes and ports for CRW prefetch use;
+- fail closed if DNS resolution or address classification fails.
+
+The most important point is that this proxy should not be placed on any network
+shared with untrusted code unless it has destination validation. If
+code-interpreter networking remains enabled, the executor isolation design
+should also keep executor pods away from `127.0.0.1:3128` and any service alias
+that reaches it.
+
+## Other Wrapper Shims And Sidecars
+
+Other wrapper-managed listeners are also reachable inside the shared namespace:
+
+- `cdp-shim` listens on `0.0.0.0:9224` and transparently forwards CDP traffic
+  to Obscura on `127.0.0.1:9222`, while rewriting selected methods for
+  wait/load behavior, stealth-script stripping, proxy-field stripping, and
+  cookie clearing.
+- `local-embedding-shim` listens on `0.0.0.0:9101` and forwards embedding
+  requests to the configured OpenAI-compatible upstream.
+- `doc-drop-web` listens on `0.0.0.0:8091` and serves the mounted local document
+  directory read-only.
+- Obscura's own CDP and MCP services listen on `0.0.0.0:9222` and
+  `0.0.0.0:9223`.
+
+These services are intended to be internal stack APIs, not public endpoints.
+They were not found to bypass Obscura's private-network block in the rendered
+browser tests, but they are still callable by any process that already has
+network access inside the shared namespace. Network-enabled code-interpreter
+executors therefore should be treated as able to call these APIs unless their
+network placement prevents it.
+
+For this reason, shim hardening should combine service-level validation with
+namespace isolation. Binding an internal shim to loopback is useful only when
+the only loopback peers in that namespace are trusted. Once untrusted executor
+pods inherit the same namespace, loopback listeners become reachable by that
+untrusted code.
 
 ## Code-Interpreter Gap
 
