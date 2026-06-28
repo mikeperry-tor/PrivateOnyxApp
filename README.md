@@ -126,9 +126,10 @@ Most likely variables you want to change:
 - **Optional LAN access** (for local inference APIs):
   - Set `MYST_VPN_ALLOW_LAN_BYPASS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
 - Optional Onyx SSRF defaults (for MCP servers and local doc-drop crawling):
-  - If you want both MCP servers on `host.docker.internal` and the doc-drop connector at `http://localhost:8091/`, use `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL=true`, `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true`, and `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false`. That yields the `Allow Private Network` posture by default.
-    - `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL`, `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK`, and `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK` seed Onyx's default SSRF Protection level at startup.
-    - After you save a value in Onyx Admin -> Security Hardening, the saved UI setting becomes the effective runtime policy and overrides these defaults.
+  - `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL`, `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK`, and `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK` only seed Onyx's default Admin -> Security Hardening -> SSRF Protection level at startup. After you save a value in the UI, the saved setting is authoritative.
+  - If you want MCP servers on `host.docker.internal` and the doc-drop connector at `http://localhost:8091/`, use `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL=true`, `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true`, and `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false`. That yields `Allow Private Network`: Web connectors can crawl local/private targets, and MCP/OAuth endpoints can use private LAN or `host.docker.internal` addresses, while loopback MCP/OAuth targets such as `127.0.0.1` remain blocked.
+  - Set `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` only when you intentionally need loopback MCP/OAuth access. In Onyx v4.1 this seeds `Disabled`, which is broader than the wrapper default.
+  - These Onyx SSRF settings are not network firewall rules for CRW or Obscura browser traffic, and they do not govern the local embedding shim's upstream call.
 
 ### Initial VPN Connection (Myst Payment)
 
@@ -405,8 +406,8 @@ Notes:
 - Onyx v4.1+ has SSRF Protection that can block this service if you save a
   Security Hardening override in the Admin UI.
 - The defaults in `.env.wrapper.example` seed the `Allow Private Network` posture
-  in the Security Hardening UI, which allows this localhost connector while still keeping
-  loopback/link-local protections on LLM-initiated fetch paths.
+  in the Security Hardening UI. That is enough for this Web connector because
+  Onyx only enforces Web connector SSRF checks at strict `Validate All`.
 - If you already saved a different value in Onyx Admin -> Security Hardening,
   that saved setting takes precedence. For doc-drop crawling, avoid the strict
   `Validate All` setting.
@@ -463,7 +464,13 @@ To allow the MCP client to reach `127.0.0.1`, set SSRF Protection to **Disabled*
 2. Set **SSRF Protection** to **Disabled**.
 3. Click **Save**.
 
-This allows loopback and private-network targets for MCP servers, open_url, and OAuth endpoints. Cloud-metadata and link-local addresses (169.254.0.0/16) remain blocked as an always-on floor. This is safe in the wrapper deployment because all services run inside the VPN namespace — there are no external clients that could exploit the relaxed SSRF policy.
+This allows loopback and private-network targets for MCP and OAuth endpoints.
+Cloud-metadata and link-local addresses (169.254.0.0/16) remain blocked as an
+always-on floor. Treat this as a trusted-local deployment choice: it lets Onyx
+reach more internal endpoints, but it is not a browser sandbox and it does not
+stop JavaScript running in Obscura from attempting requests to network-reachable
+internal addresses. Browser same-origin/CORS behavior may limit response reads,
+but it is not a stack-internal access-control boundary.
 
 > **Note:** If you prefer not to disable SSRF protection globally, you can alternatively run the obscura-mcp service on a non-loopback address by giving the netns-holder namespace a dedicated bridge IP. However, the simplest path is the Disabled setting above, since the wrapper's threat model already assumes all services are co-located in the VPN namespace.
 

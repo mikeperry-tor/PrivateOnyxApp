@@ -117,8 +117,12 @@ ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false
 
 In Onyx v4.1.7 this maps to "Allow Private Network" when no Security Hardening
 setting has been saved in the Admin UI. That is the desired default for local
-doc-drop crawling: private-network destinations are allowed, while loopback and
-link-local protections remain on for LLM-initiated fetch paths.
+doc-drop crawling: the Web connector is allowed to crawl the local document
+server, MCP/OAuth endpoints may use private LAN or `host.docker.internal`
+addresses, and loopback MCP/OAuth endpoints such as `127.0.0.1` remain blocked.
+Setting `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` seeds the broader "Disabled"
+posture and should be reserved for cases that intentionally need loopback
+MCP/OAuth access, such as the internal Obscura MCP server.
 
 Once an admin saves Security Hardening settings in Onyx, the saved UI value is
 the effective runtime policy and these env vars only act as startup defaults.
@@ -130,6 +134,12 @@ There is an intentional tradeoff here. The document source is local and trusted
 by the operator, so the wrapper optimizes for making Onyx's Web connector see
 that source. Do not point the doc-drop connector at arbitrary untrusted local
 services just because the SSRF setting allows the wrapper's document server.
+
+These settings do not govern the local embedding shim's upstream call and are
+not firewall rules for CRW or Obscura browser traffic. In particular, they do
+not stop JavaScript running in Obscura from attempting requests to internal
+network addresses that are reachable from the browser namespace; browser
+same-origin/CORS behavior is not a stack-internal access-control boundary.
 
 ## PDF Freshness Patch
 

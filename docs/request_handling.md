@@ -785,6 +785,22 @@ The provider is selected in
 If no content provider is configured, `OnyxWebCrawler` is the upstream default;
 the README setup tells you to configure Firecrawl and set it as default.
 
+SSRF handling differs by provider. The recommended Firecrawl path sends the
+target URL as JSON to the configured CRW endpoint (`http://localhost:3010/v1/scrape`
+in this wrapper); Onyx's upstream `ssrf_safe_get()` target validation is not
+applied to that URL before CRW/Obscura handles it. The fallback
+`OnyxWebCrawler` path does use `ssrf_safe_get()` and therefore applies Onyx's
+SSRF Protection policy to the target URL. Even when the fallback crawler is
+allowed to fetch private-network targets, loopback/link-local targets remain
+blocked on that LLM-controlled fetch path.
+
+The `ONYX_SECURITY_SSRF_*` wrapper env vars only seed Onyx's Admin -> Security
+Hardening SSRF Protection level. They are not firewall rules for CRW, the CDP
+shim, or Obscura. A page rendered in Obscura can still attempt browser requests
+to internal addresses that are reachable from the browser namespace; browser
+same-origin/CORS behavior may limit reading responses, but it is not a
+stack-internal access-control boundary.
+
 ### 2.1.1 Wrapper runtime patches
 
 The wrapper mounts `onyx/patches/sitecustomize_base` into the API server and

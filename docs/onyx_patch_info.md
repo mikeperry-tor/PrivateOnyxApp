@@ -52,6 +52,14 @@ Upstreamable versions of these changes should keep current Onyx defaults
 unchanged. Riskier behavior, especially code-interpreter network access and
 trusted HTTP freshness, should remain explicit opt-in configuration.
 
+The wrapper's `ONYX_SECURITY_SSRF_*` env vars are not prerequisites for the
+runtime patches themselves. They only seed Onyx's Admin -> Security Hardening
+SSRF Protection level for URL-fetching paths such as Web connectors, MCP/OAuth
+endpoints, and the fallback `OnyxWebCrawler` provider. The local embedding shim
+uses explicit model-server routing instead, and CRW/Obscura browser traffic is
+governed by the Compose network/proxy/VPN layout rather than those Onyx SSRF
+settings.
+
 ## Modification summary
 
 | Area | Onyx service or component | Local mechanism | Upstream shape |
