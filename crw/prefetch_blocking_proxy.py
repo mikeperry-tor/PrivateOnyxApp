@@ -23,6 +23,15 @@ This proxy intercepts CRW's HTTP prefetch requests and:
      ``pdf_inspector`` can extract text.
    - Anything else → returns ``403 Forbidden`` so CRW escalates to CDP.
 
+Before any CONNECT tunnel, HEAD request, or PDF forwarding, the proxy rejects
+loopback, private/RFC1918, link-local, multicast, reserved, and other
+non-global IP destinations. It also rejects ``localhost``,
+``host.docker.internal``, their subdomains, and single-label Docker-style
+hostnames. When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is empty, DNS names are
+resolved locally and all returned addresses are classified. When an upstream
+proxy is set, target DNS resolution is intentionally skipped to avoid leaking
+target DNS outside the configured proxy path.
+
 When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
 routes its own upstream requests (HEAD and tunnel) through that proxy. This
 ensures the HEAD request and the PDF tunnel egress through the same proxy as
@@ -53,11 +62,11 @@ for the prefetch-blocking proxy design.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 import socket
 import ssl
-import time
 import traceback
 from typing import Any
 from urllib.parse import urlparse
@@ -96,11 +105,185 @@ TUNNEL_BUFFER = 65536
 # Max response body size for PDF tunneling (50 MB, matching CRW's limit).
 MAX_PDF_BYTES = int(os.environ.get("PREFETCH_MAX_PDF_BYTES", str(50 * 1024 * 1024)))
 
+# Hostnames that should never be proxied, even when an upstream proxy is
+# configured and arbitrary DNS resolution is intentionally avoided.
+BLOCKED_HOSTNAMES = frozenset(
+    h.strip().lower().rstrip(".")
+    for h in os.environ.get(
+        "PREFETCH_BLOCK_INTERNAL_HOSTS",
+        "localhost,host.docker.internal",
+    ).split(",")
+    if h.strip()
+)
+
 logging.basicConfig(
     level=os.environ.get("PREFETCH_PROXY_LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s [prefetch-proxy] %(levelname)s %(message)s",
 )
 logger = logging.getLogger("prefetch-proxy")
+
+
+# ── Destination validation ────────────────────────────────────────────────
+
+
+def _normalize_host(host: str) -> str:
+    """Normalize a parsed host for comparison and IP classification."""
+    host = host.strip().strip("[]").lower().rstrip(".")
+    return host
+
+
+def _parse_ip_literal(
+    ip_text: str,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Parse an IPv4/IPv6 literal, returning None for DNS names."""
+    try:
+        return ipaddress.ip_address(ip_text)
+    except ValueError:
+        return None
+
+
+def _ip_block_reason(ip_text: str) -> str | None:
+    """Return a block reason for internal/non-global IPs, else None."""
+    ip = _parse_ip_literal(ip_text)
+    if ip is None:
+        return None
+
+    if ip.is_loopback:
+        return "loopback IP"
+    if ip.is_private:
+        return "private/RFC1918 IP"
+    if ip.is_link_local:
+        return "link-local IP"
+    if ip.is_multicast:
+        return "multicast IP"
+    if ip.is_unspecified:
+        return "unspecified IP"
+    if ip.is_reserved:
+        return "reserved IP"
+    if not ip.is_global:
+        return "non-global IP"
+    return None
+
+
+def _loose_ipv4_literal(host: str) -> str | None:
+    """Parse legacy IPv4 forms such as 2130706433 or 0177.0.0.1."""
+    if not host or not all(c in "0123456789abcdefABCDEFxX." for c in host):
+        return None
+    try:
+        return socket.inet_ntoa(socket.inet_aton(host))
+    except OSError:
+        return None
+
+
+def _hostname_block_reason(host: str) -> str | None:
+    """Return a block reason for hostnames that are internal by name."""
+    if not host:
+        return "empty host"
+    if "%" in host:
+        return "IPv6 zone identifier"
+    if host in BLOCKED_HOSTNAMES:
+        return "blocked internal hostname"
+    if any(host.endswith("." + blocked) for blocked in BLOCKED_HOSTNAMES):
+        return "blocked internal hostname suffix"
+    if "." not in host:
+        return "single-label/internal hostname"
+    return None
+
+
+def _parse_authority(authority: str, default_port: int) -> tuple[str, int]:
+    """Parse host[:port] authority, including bracketed IPv6 literals."""
+    parsed = urlparse("//" + authority)
+    host = parsed.hostname or ""
+    try:
+        port = parsed.port or default_port
+    except ValueError as e:
+        raise ValueError(f"invalid port in target {authority!r}") from e
+    return host, port
+
+
+async def _resolve_host(host: str, port: int) -> set[str]:
+    """Resolve host to all stream addresses. Called only without upstream proxy."""
+    loop = asyncio.get_running_loop()
+    addrs = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    resolved: set[str] = set()
+    for addr in addrs:
+        sockaddr = addr[4]
+        if sockaddr:
+            resolved.add(sockaddr[0])
+    return resolved
+
+
+async def _blocked_destination_reason(host: str, port: int) -> str | None:
+    """Validate a proxy target before any upstream connection is opened.
+
+    Literal IPs and known internal hostnames are blocked in every mode. When no
+    explicit upstream proxy is configured, DNS names are also resolved locally
+    and every returned address is classified. When an upstream proxy is set,
+    this function intentionally avoids DNS resolution to prevent DNS leakage.
+    """
+    host = _normalize_host(host)
+
+    if not 0 < port <= 65535:
+        return "invalid port"
+
+    if _parse_ip_literal(host) and not _ip_block_reason(host):
+        return None
+
+    ip_reason = _ip_block_reason(host)
+    if ip_reason:
+        return ip_reason
+    if _loose_ipv4_literal(host):
+        loose_ip = _loose_ipv4_literal(host)
+        loose_reason = _ip_block_reason(loose_ip or "")
+        if loose_reason:
+            return f"{loose_reason} via IPv4 shorthand {loose_ip}"
+        return None
+
+    hostname_reason = _hostname_block_reason(host)
+    if hostname_reason:
+        return hostname_reason
+
+    if UPSTREAM_PROXY:
+        return None
+
+    try:
+        resolved_ips = await _resolve_host(host, port)
+    except (socket.gaierror, OSError) as e:
+        return f"DNS resolution failed: {e}"
+
+    if not resolved_ips:
+        return "DNS resolution returned no addresses"
+
+    for resolved_ip in sorted(resolved_ips):
+        resolved_reason = _ip_block_reason(resolved_ip)
+        if resolved_reason:
+            return f"DNS resolved to blocked {resolved_ip} ({resolved_reason})"
+
+    return None
+
+
+async def _reject_blocked_destination(
+    method: str,
+    host: str,
+    port: int,
+    writer: asyncio.StreamWriter,
+    peer: Any,
+) -> bool:
+    reason = await _blocked_destination_reason(host, port)
+    if not reason:
+        return False
+
+    logger.warning(
+        "BLOCKED %s %s:%d (%s, peer=%s) -> 403",
+        method,
+        _normalize_host(host) or "(empty)",
+        port,
+        reason,
+        peer,
+    )
+    writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+    await writer.drain()
+    return True
 
 
 # ── Upstream proxy connection helpers ────────────────────────────────────
@@ -138,11 +321,23 @@ async def _connect_via_upstream(
 
     if scheme in ("socks5", "socks5h"):
         return await _connect_via_socks5(
-            proxy_host, proxy_port, target_host, target_port, proxy_user, proxy_pass, scheme
+            proxy_host,
+            proxy_port,
+            target_host,
+            target_port,
+            proxy_user,
+            proxy_pass,
+            scheme,
         )
     elif scheme in ("http", "https"):
         return await _connect_via_http_connect(
-            proxy_host, proxy_port, target_host, target_port, proxy_user, proxy_pass, scheme
+            proxy_host,
+            proxy_port,
+            target_host,
+            target_port,
+            proxy_user,
+            proxy_pass,
+            scheme,
         )
     else:
         raise ValueError(f"Unsupported proxy scheme: {scheme}")
@@ -200,9 +395,12 @@ async def _connect_via_socks5(
             writer.close()
             raise ConnectionError("SOCKS5: auth failed")
 
-    # SOCKS5 connect request
-    # For socks5h, the proxy resolves the hostname; for socks5, we resolve.
-    if scheme == "socks5h":
+    # SOCKS5 connect request. Send DNS names to the proxy for both socks5 and
+    # socks5h so an explicit upstream proxy does not trigger local DNS leaks.
+    normalized_host = _normalize_host(target_host)
+    literal_ip = _parse_ip_literal(normalized_host)
+    loose_ip = _loose_ipv4_literal(normalized_host)
+    if literal_ip is None and loose_ip is None:
         host_bytes = target_host.encode("utf-8")
         writer.write(
             b"\x05\x01\x00\x03"
@@ -211,23 +409,16 @@ async def _connect_via_socks5(
             + target_port.to_bytes(2, "big")
         )
     else:
-        # socks5: resolve locally, send IPv4 or IPv6
         try:
-            addrs = await asyncio.get_event_loop().getaddrinfo(
-                target_host, target_port, type=socket.SOCK_STREAM
-            )
-            addr_tuple = addrs[0][4]
-            ip_bytes = socket.inet_pton(
-                socket.AF_INET if len(addr_tuple) == 2 else socket.AF_INET6,
-                addr_tuple[0],
-            )
-            atyp = b"\x01" if len(addr_tuple) == 2 else b"\x04"
+            parsed_ip = ipaddress.ip_address(loose_ip or normalized_host)
+            ip_bytes = parsed_ip.packed
+            atyp = b"\x01" if parsed_ip.version == 4 else b"\x04"
             writer.write(
                 b"\x05\x01\x00" + atyp + ip_bytes + target_port.to_bytes(2, "big")
             )
-        except (socket.gaierror, OSError):
+        except ValueError:
             writer.close()
-            raise ConnectionError(f"SOCKS5: cannot resolve {target_host}")
+            raise ConnectionError(f"SOCKS5: invalid target IP {target_host}")
     await writer.drain()
 
     # Read SOCKS5 response
@@ -504,12 +695,12 @@ async def _handle_connect(
       and is the default for open_url
     """
     # Parse target (host:port)
-    if ":" in target:
-        target_host, target_port_str = target.rsplit(":", 1)
-        target_port = int(target_port_str)
-    else:
-        target_host = target
-        target_port = 443
+    try:
+        target_host, target_port = _parse_authority(target, 443)
+    except ValueError:
+        client_writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+        await client_writer.drain()
+        return
 
     # Search engine short-circuit: return 403 immediately
     if _is_search_engine(target_host):
@@ -520,6 +711,11 @@ async def _handle_connect(
         )
         client_writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
         await client_writer.drain()
+        return
+
+    if await _reject_blocked_destination(
+        "CONNECT", target_host, target_port, client_writer, peer
+    ):
         return
 
     # Non-search-engine: tunnel through (accepts double-hit for open_url)
@@ -580,12 +776,12 @@ async def _handle_get(
     else:
         # Relative URL — use Host header
         host_header = headers.get("host", "")
-        if ":" in host_header:
-            target_host, port_str = host_header.rsplit(":", 1)
-            target_port = int(port_str)
-        else:
-            target_host = host_header
-            target_port = 80
+        try:
+            target_host, target_port = _parse_authority(host_header, 80)
+        except ValueError:
+            client_writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+            await client_writer.drain()
+            return
         use_tls = False
         path = target
 
@@ -600,6 +796,11 @@ async def _handle_get(
         )
         client_writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
         await client_writer.drain()
+        return
+
+    if await _reject_blocked_destination(
+        method, target_host, target_port, client_writer, peer
+    ):
         return
 
     # For non-search-engine hosts, check content-type via HEAD
@@ -667,11 +868,13 @@ async def _handle_get(
 
 async def main() -> None:
     logger.info(
-        "Prefetch-blocking proxy starting on %s:%d (upstream: %s, block_hosts: %s)",
+        "Prefetch-blocking proxy starting on %s:%d (upstream: %s, block_hosts: %s, block_internal_hosts: %s, dns_internal_check: %s)",
         LISTEN_HOST,
         LISTEN_PORT,
         UPSTREAM_PROXY or "(direct)",
         ", ".join(sorted(SEARCH_ENGINE_HOSTS)),
+        ", ".join(sorted(BLOCKED_HOSTNAMES)),
+        "disabled (upstream proxy set)" if UPSTREAM_PROXY else "enabled",
     )
 
     server = await asyncio.start_server(
