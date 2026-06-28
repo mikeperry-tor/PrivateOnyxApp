@@ -1,16 +1,18 @@
-# Internal Network Security Investigation
+# Internal Network Security
 
-This document records the June 28, 2026 investigation into whether
-LLM-controlled network paths can reach localhost, Docker service names,
-internal service IPs, or stack API endpoints.
+This document describes the current internal-network security posture for
+LLM-controlled network paths, including localhost, Docker service names,
+internal service IPs, and stack API endpoints.
 
-The main conclusion is mixed:
+The main conclusions:
 
-- Obscura and CRW currently block private/internal targets from the tested
-  browser and Onyx `open_url()` agent tool.
-- The prefetch-blocking proxy is not itself hardened against direct internal
-  targets. When called directly from inside the shared namespace, it can tunnel
-  to localhost, Docker aliases, private IPs, and `host.docker.internal`.
+- Obscura and CRW block private/internal targets from the browser and Onyx
+  `open_url()` agent tool paths.
+- The prefetch-blocking proxy performs destination validation for `CONNECT`,
+  `HEAD`, and PDF forwarding. It blocks localhost, `host.docker.internal`,
+  single-label Docker-style hostnames, non-global IP literals, and DNS names
+  that resolve to blocked addresses when no explicit upstream proxy is
+  configured.
 - Onyx SSRF settings affect only Onyx-managed URL-fetching paths and startup
   defaults for the Admin Security Hardening policy; they are not firewall
   rules for CRW, Obscura, or code-interpreter.
@@ -21,8 +23,7 @@ The main conclusion is mixed:
 
 ## Version Scope
 
-The investigation was conducted against the committed pins in
-`stack.versions.env`:
+This document applies to the committed pins in `stack.versions.env`:
 
 | Component | Version / image |
 | --- | --- |
@@ -39,8 +40,8 @@ The investigation was conducted against the committed pins in
 | MinIO | `minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1` |
 | Valkey | `docker.io/valkey/valkey:9-alpine` |
 
-The live stack was running in full mode. The relevant browser, scraper, Onyx,
-RAG, and code-interpreter services shared the `netns-holder` network namespace.
+In full mode, the relevant browser, scraper, Onyx, RAG, and code-interpreter
+services share the `netns-holder` network namespace.
 
 Related implementation docs:
 
@@ -55,12 +56,12 @@ Related implementation docs:
   posture.
 - [Onyx patch information](onyx_patch_info.md) and
   [Onyx wrapper patches](onyx_patches_upgrade.md) document the runtime patches,
-  shims, and upgrade checks relevant to this investigation.
+  shims, and upgrade checks relevant to this posture.
 
-## Live Namespace Shape
+## Namespace Shape
 
-In the inspected full stack, these services shared the network namespace owned
-by `onyx-netns-holder-1`:
+In full mode, these services share the network namespace owned by
+`onyx-netns-holder-1`:
 
 - `myst-client`
 - `searxng-core`
@@ -77,10 +78,10 @@ by `onyx-netns-holder-1`:
 - `local-embedding-shim`
 - `code-interpreter`
 
-That namespace exposed many local listeners, including Onyx Web/API, CRW,
+That namespace exposes many local listeners, including Onyx Web/API, CRW,
 Obscura CDP/MCP, SearXNG, code-interpreter, doc-drop, the embedding shim, and
-the prefetch proxy. Private and LAN routes were also present through the Docker
-bridge, while general egress used the Mysterium tunnel.
+the prefetch proxy. Private and LAN routes exist through the Docker bridge,
+while general egress uses the Mysterium tunnel when VPN mode is enabled.
 
 The important security point: if an LLM-controlled process can make arbitrary
 network connections from this namespace, there are useful internal targets to
@@ -95,7 +96,7 @@ request path is:
 Onyx FirecrawlClient -> CRW /v1/scrape -> CDP shim -> Obscura
 ```
 
-CRW rejected direct scrape targets for the tested local and internal forms:
+CRW rejects direct scrape targets for local and internal forms such as:
 
 - `http://127.0.0.1:9101/health`
 - `http://localhost:9101/health`
@@ -104,13 +105,13 @@ CRW rejected direct scrape targets for the tested local and internal forms:
 - `http://myst-client:9101/health`
 - `http://host.docker.internal:3000/`
 
-The observed response was a `400` invalid request with messages such as
+The response is a `400` invalid request with messages such as
 `Access to 127.0.0.1 is not allowed`, `host is not allowed`, or
 `Access to 172.18.0.8 is not allowed`.
 
-This means the CRW-backed `open_url` main-document path currently blocks
-loopback, Docker bridge IPs, Docker DNS aliases that resolve to private
-addresses, and `host.docker.internal`.
+The CRW-backed `open_url` main-document path blocks loopback, Docker bridge
+IPs, Docker DNS aliases that resolve to private addresses, and
+`host.docker.internal`.
 
 This protection belongs to CRW/Obscura, not to Onyx's upstream
 `ssrf_safe_get()` path. In the FirecrawlClient configuration, Onyx posts the
@@ -123,25 +124,22 @@ Obscura `v0.1.9` has a private-network deny behavior by default. The CLI help
 documents `--allow-private-network` as the opt-in that permits loopback,
 RFC1918, and link-local fetches.
 
-The investigation confirmed that this block applies after DNS resolution:
+This block applies after DNS resolution:
 
-- `http://host.docker.internal:3000/` failed by default and succeeded with
+- `http://host.docker.internal:3000/` is blocked by default and allowed with
   `--allow-private-network`.
-- `http://api_server:8080/health` failed by default and succeeded with
+- `http://api_server:8080/health` is blocked by default and allowed with
   `--allow-private-network`.
-- `http://myst-client:9101/health` failed by default and succeeded with
+- `http://myst-client:9101/health` is blocked by default and allowed with
   `--allow-private-network`.
 
-Rendered-page probes were also tested. A temporary HTTP listener was bound in
-the shared namespace, and an Obscura-rendered page attempted to reach it with
-`fetch()`, `sendBeacon()`, image, script, and iframe subresources. With the
-default Obscura configuration, no loopback or service-DNS request reached the
-listener. With `--allow-private-network`, the control request did reach the
-listener.
+Rendered pages cannot reach loopback or service-DNS targets with `fetch()`,
+`sendBeacon()`, image, script, or iframe subresources under the default
+Obscura configuration. The `--allow-private-network` flag permits these
+private-network attempts.
 
-The running `obscura` service command did not include
-`--allow-private-network`, and its environment did not set
-`OBSCURA_ALLOW_PRIVATE_NETWORK`.
+The `obscura` service command excludes `--allow-private-network`, and its
+environment leaves `OBSCURA_ALLOW_PRIVATE_NETWORK` unset.
 
 Do not rely on browser same-origin policy or CORS as the stack-internal access
 control boundary. The meaningful boundary here is Obscura's private-network
@@ -151,11 +149,45 @@ every response.
 
 ## SearXNG DNS Note
 
-`searxng-core` did not behave like the shared-namespace aliases in the Obscura
-DNS-name probe. It failed even with `--allow-private-network`. That appears to
-be a Docker DNS artifact of services using `network_mode: service:netns-holder`:
-the stable aliases on `netns-holder`, such as `api_server` and `myst-client`,
-are the meaningful service-DNS names for this namespace.
+`searxng-core` does not behave like the shared-namespace aliases in Obscura
+DNS-name checks. Docker DNS aliases on `netns-holder`, such as `api_server`
+and `myst-client`, are the meaningful service-DNS names for this namespace.
+
+## Onyx SSRF Protection Interaction
+
+The wrapper seeds Onyx Admin -> Security Hardening with:
+
+```env
+ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL=true
+ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true
+ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false
+```
+
+For Onyx `v4.1.7`, that maps to the "Allow Private Network" posture when no
+Admin UI value has been saved. The intended reason is full-mode local RAG:
+the Web connector must be able to crawl the trusted local doc-drop server, and
+some MCP/OAuth use cases may need private LAN or `host.docker.internal`
+addresses. Loopback is blocked in that default posture.
+
+Important boundaries:
+
+- These env vars are startup defaults only. Once an admin saves Security
+  Hardening settings in the UI, the saved UI value is authoritative.
+- They apply to Onyx-managed URL-fetching paths such as the fallback
+  `OnyxWebCrawler` path that uses `ssrf_safe_get()`.
+- They do not apply to CRW's own target validation.
+- They do not apply to Obscura's browser network stack.
+- They do not apply to code-interpreter executor pods or arbitrary generated
+  code.
+- They do not govern the local embedding shim's upstream call.
+
+If the fallback `OnyxWebCrawler` is active instead of the recommended CRW
+Firecrawl provider, Onyx SSRF policy becomes the main protection for
+LLM-controlled `open_url` fetches. A stricter "Validate All" posture may block
+full-mode doc-drop crawling. A broader "Disabled" posture, or
+`ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` during first-run seeding, can allow
+loopback access on Onyx-managed fetch paths and should be avoided unless a
+specific trusted local integration requires it.
 
 ## Prefetch-Blocking Proxy
 
@@ -168,36 +200,32 @@ prefetch behavior:
 - PDF responses are forwarded so CRW can extract text;
 - non-search `CONNECT` requests are tunneled.
 
-This proxy is not an SSRF firewall. It is bound to `0.0.0.0:3128` inside the
-shared namespace, and its filtering is focused on search-engine prefetches, not
-internal destinations.
+The proxy listens on `0.0.0.0:3128` inside the shared namespace so CRW can use
+`HTTP_PROXY`/`HTTPS_PROXY=http://127.0.0.1:3128`. It also acts as a destination
+validator and rejects blocked targets without opening an upstream connection:
 
-Direct probes from the shared namespace showed:
+- literal loopback, private/RFC1918, link-local, multicast, unspecified,
+  reserved, and other non-global IP addresses are blocked;
+- legacy IPv4 shorthand forms such as `2130706433` and `0177.0.0.1` are
+  normalized and classified during validation;
+- `localhost`, `host.docker.internal`, subdomains of those names, and
+  single-label Docker-style hostnames such as `api_server` and `myst-client`
+  are blocked by name;
+- when `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, DNS names are resolved locally
+  and the proxy blocks the request if any returned address is internal or
+  otherwise non-global;
+- when `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, the proxy intentionally does not
+  perform target DNS resolution for this validation step, avoiding target DNS
+  leakage outside the configured upstream proxy path;
+- blocked destination attempts are logged at warning level with the method,
+  host, port, peer, and block reason;
+- blocked direct proxy calls return `403` without opening a tunnel, `HEAD`
+  request, or PDF forwarding path.
 
-- `CONNECT 127.0.0.1:9101` returned `200 Connection Established`;
-- `CONNECT localhost:9101` returned `200 Connection Established`;
-- `CONNECT api_server:8080` returned `200 Connection Established`;
-- `CONNECT myst-client:9101` returned `200 Connection Established`;
-- `CONNECT host.docker.internal:3000` returned `200 Connection Established`;
-- `CONNECT 172.18.0.8:9101` returned `200 Connection Established`.
+This proxy validation aligns with the CRW and Obscura protections:
 
-After the tunnel was established, the caller could send ordinary HTTP through
-it and read internal responses, including the embedding shim health endpoint,
-the Onyx API health endpoint, and the host-published Onyx WebUI.
-
-Plain absolute-URL `GET` requests through the proxy returned `403` for the
-tested internal URLs, but only after the proxy made a real upstream `HEAD`
-request to classify the content type. That means direct proxy callers get at
-least a blind internal `HEAD` primitive, and they get full response forwarding
-whenever the target is classified as `application/pdf`. The unrestricted
-`CONNECT` path is the larger issue because it provides a generic TCP tunnel.
-
-This does not appear to bypass the tested CRW and Obscura protections by
-itself:
-
-- CRW rejected internal `open_url` scrape targets before relying on the proxy
-  to fetch them.
-- Obscura's private-network block prevented a rendered page from reaching
+- CRW rejects internal `open_url` scrape targets at target validation.
+- Obscura's private-network block prevents rendered pages from reaching
   `myst-client:3128` by default.
 
 However, any network-enabled process already running inside the shared
@@ -205,22 +233,10 @@ namespace can call the proxy directly. That includes network-enabled
 code-interpreter executor pods. In that mode the proxy is an additional
 internal-access path, not a boundary.
 
-Hardening options:
-
-- bind the proxy to loopback only if every legitimate caller shares the same
-  namespace and no other untrusted process in that namespace should call it;
-- reject loopback, RFC1918, Docker bridge, link-local, multicast, host-gateway,
-  and stack service DNS names after DNS resolution;
-- apply the same destination validation to `CONNECT`, `GET`, and `HEAD`;
-- validate every resolved address to resist DNS rebinding;
-- allow only expected schemes and ports for CRW prefetch use;
-- fail closed if DNS resolution or address classification fails.
-
-The most important point is that this proxy should not be placed on any network
-shared with untrusted code unless it has destination validation. If
-code-interpreter networking remains enabled, the executor isolation design
-should also keep executor pods away from `127.0.0.1:3128` and any service alias
-that reaches it.
+This proxy should not be treated as the only boundary for a namespace shared
+with untrusted code. If code-interpreter networking is enabled, executor pods
+can reach other shared-namespace listeners directly unless their network
+placement prevents it.
 
 ## Other Wrapper Shims And Sidecars
 
@@ -238,9 +254,9 @@ Other wrapper-managed listeners are also reachable inside the shared namespace:
   `0.0.0.0:9223`.
 
 These services are intended to be internal stack APIs, not public endpoints.
-They were not found to bypass Obscura's private-network block in the rendered
-browser tests, but they are still callable by any process that already has
-network access inside the shared namespace. Network-enabled code-interpreter
+Obscura's private-network block protects rendered browser traffic from these
+listeners by default. Any process with network access inside the shared
+namespace can call these APIs directly. Network-enabled code-interpreter
 executors therefore should be treated as able to call these APIs unless their
 network placement prevents it.
 
@@ -268,8 +284,8 @@ When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, the Makefile layers
 PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1
 ```
 
-Executor pods then inherit the shared stack namespace. In the live stack, direct
-probes from code-interpreter reached:
+Executor pods then inherit the shared stack namespace. In network-enabled mode,
+generated code can reach internal targets such as:
 
 - `http://127.0.0.1:9101/health`
 - `http://172.18.0.8:9101/health`
@@ -277,51 +293,16 @@ probes from code-interpreter reached:
 - `http://myst-client:9101/health`
 - `http://host.docker.internal:3000/`
 
-This is expected from the current override and is the largest remaining gap.
-Generated code can use raw sockets or tools that ignore proxy variables.
+This is expected from the network-enabled override and is the largest code
+execution security gap. Generated code can use raw sockets or tools that ignore
+proxy variables.
 Therefore `ONYX_AGENT_OUTBOUND_PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY`,
 `ALL_PROXY`, and `NO_PROXY` are routing hints, not a security boundary.
 
-The current proxy override also intentionally sets `NO_PROXY` for internal
+The proxy override intentionally sets `NO_PROXY` for internal
 loopback and Docker DNS names so normal stack-internal service calls stay off
 the upstream proxy. That is appropriate for trusted service code, but it is the
 opposite of what an untrusted network-enabled executor needs.
-
-## Onyx SSRF Protection Interaction
-
-The wrapper seeds Onyx Admin -> Security Hardening with:
-
-```env
-ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL=true
-ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true
-ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false
-```
-
-For Onyx `v4.1.7`, that maps to the "Allow Private Network" posture when no
-Admin UI value has been saved yet. The intended reason is full-mode local RAG:
-the Web connector must be able to crawl the trusted local doc-drop server, and
-some MCP/OAuth use cases may need private LAN or `host.docker.internal`
-addresses. Loopback is still blocked in that default posture.
-
-Important boundaries:
-
-- These env vars are startup defaults only. Once an admin saves Security
-  Hardening settings in the UI, the saved UI value is authoritative.
-- They apply to Onyx-managed URL-fetching paths such as the fallback
-  `OnyxWebCrawler` path that uses `ssrf_safe_get()`.
-- They do not apply to CRW's own target validation.
-- They do not apply to Obscura's browser network stack.
-- They do not apply to code-interpreter executor pods or arbitrary generated
-  code.
-- They do not govern the local embedding shim's upstream call.
-
-If the fallback `OnyxWebCrawler` is active instead of the recommended CRW
-Firecrawl provider, Onyx SSRF policy becomes the main protection for
-LLM-controlled `open_url` fetches. A stricter "Validate All" posture may block
-full-mode doc-drop crawling. A broader "Disabled" posture, or
-`ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` during first-run seeding, can allow
-loopback access on Onyx-managed fetch paths and should be avoided unless a
-specific trusted local integration requires it.
 
 ## Options To Close Code-Interpreter Gaps
 

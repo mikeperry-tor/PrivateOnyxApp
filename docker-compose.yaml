@@ -330,6 +330,9 @@ services:
   # When ONYX_AGENT_OUTBOUND_PROXY_URL is set (e.g., Tor SOCKS proxy), this
   # proxy routes its own upstream requests through that proxy, ensuring the HEAD
   # request and PDF tunnel egress through the same proxy as obscura.
+  # It also blocks internal/private destinations without opening CONNECT, HEAD,
+  # or PDF forwarding paths; target DNS resolution checks are performed only
+  # when no explicit upstream proxy is configured.
   #
   # See crw/prefetch_blocking_proxy.py for the implementation and
   # docs/request_handling.md §1.7 for the design.

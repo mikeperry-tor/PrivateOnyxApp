@@ -12,10 +12,10 @@ Related implementation docs:
 - [Onyx patch information](onyx_patch_info.md) describes the runtime
   `sitecustomize` patches used by the API server, background worker, and
   code-interpreter containers.
-- [Internal network security](internal_network_security.md) records tested
-  localhost/private-network reachability, prefetch-proxy direct-use risks,
-  Obscura/CRW blocking behavior, and the remaining code-interpreter networking
-  gap.
+- [Internal network security](internal_network_security.md) describes
+  localhost/private-network reachability, prefetch-proxy destination
+  validation, Obscura/CRW blocking behavior, and code-interpreter networking
+  risks.
 
 ## Compose Layering
 
@@ -108,7 +108,7 @@ idle mode:
 - the healthcheck is based on TequilAPI reachability instead of connected VPN
   status
 
-Services still join `netns-holder`, so internal addressing remains the same.
+Services join `netns-holder`, so internal addressing remains the same.
 External traffic leaves directly through the Docker bridge instead of through
 Mysterium.
 
@@ -251,13 +251,24 @@ The local proxy in `crw/prefetch_blocking_proxy.py` handles CRW's prefetch
 step:
 
 - known search engine hosts receive an immediate 403 with no upstream request
+- internal/private destinations receive 403 without opening any `CONNECT`,
+  `HEAD`, or PDF forwarding path
 - non-search URLs receive a HEAD request to detect PDFs
-- PDFs are tunneled back to CRW so its PDF extraction path still works
+- PDFs are tunneled back to CRW for its PDF extraction path
 - non-PDF pages receive 403 so CRW escalates to obscura/CDP
 
 When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `prefetch-blocking-proxy` uses it for its own HEAD
 requests and PDF tunnels. That keeps any unavoidable non-browser prefetch
 traffic on the same proxy path as obscura.
+
+Destination validation applies to literal IP addresses, localhost,
+`host.docker.internal`, and single-label Docker-style names without opening an
+upstream connection. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, the proxy
+also resolves target DNS names locally and blocks any name that resolves to
+loopback, private/RFC1918, link-local, reserved, or otherwise non-global
+addresses. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, the proxy skips that
+target DNS resolution check so target DNS is not leaked outside the configured
+upstream proxy path.
 
 The CDP shim in `crw/cdp_shim.py` sits between CRW and obscura. Among its
 runtime behaviors, it strips CRW's `proxyServer` field from

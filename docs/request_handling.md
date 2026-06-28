@@ -200,7 +200,7 @@ zero.
 |--------|------------------|--------------------------|
 | `google2` | `https://www.google.com/search?q=...` | Organic result links are anchors containing an `h3`, optionally under `div.g` or `div[data-ved]`; snippets may appear under `VwiC3b` / `IsZvec` classes. |
 | `brave2` | `https://search.brave.com/search?q=...` | Organic result cards have `data-type="web"`; title links carry class `l1`; title/snippet text remains under `title` and `snippet-description` classes. |
-| `duckduckgo2` | `https://html.duckduckgo.com/html/?q=...` | HTML endpoint result cards include both `result` and `web-result`; title links use `result__a`; snippets use `result__snippet`; `/l/?uddg=...` redirects still carry the real URL. |
+| `duckduckgo2` | `https://html.duckduckgo.com/html/?q=...` | HTML endpoint result cards include both `result` and `web-result`; title links use `result__a`; snippets use `result__snippet`; `/l/?uddg=...` redirects carry the real URL. |
 | `startpage2` | `https://www.startpage.com/sp/search?query=...&cat=web` | Post-hydration organic cards carry a `result` class but not `a-bg-result`; title links prefer `data-testid="gl-title-link"` or `result-title`; captcha pages still expose title/meta/form markers caught by `captcha_xpath`. |
 
 The upgrade inventory in
@@ -273,13 +273,13 @@ There are multiple layers of 429 handling:
 
 1. **Parallel fan-out**: SearXNG issues 4 requests per query, and the agent
    can issue multiple queries simultaneously. The per-host rate limiter
-   serializes these, but the search engine may still see a burst from the
+   serializes these, but the search engine may see a burst from the
    same VPN exit IP.
 2. **IP reputation**: VPN/Tor exit IPs are often flagged by anti-bot systems
    regardless of request pattern.
 3. **Residual fingerprint drift**: obscura's TLS and browser-level
    fingerprinting is much better than bare HTTP, but some JS-visible values
-   are still re-seeded during page initialization while cookies can persist
+   are re-seeded during page initialization while cookies can persist
    for a while (see Known Limitations).
 
 The compose default routes CRW's HTTP prefetch through the prefetch-blocking
@@ -366,9 +366,8 @@ a chance to complete before CRW's nav budget fires. The CRW nav budget
 (`chrome_nav_budget_ms`) is the inner race around CRW's post-navigation phase
 (SPA selector poll, content stability, challenge retry, and DOM extraction).
 CRW's `wait_for_page_ready` waits for `Page.loadEventFired` before that race.
-The default 12000ms budget was too small on Tor/slow VPN paths because
-obscura's navigation and the post-navigation work could not finish before CRW
-attempted a partial snapshot or returned a timeout.
+The wrapper uses a 48000ms budget so Tor/slow VPN paths have enough time for
+obscura navigation and CRW post-navigation work.
 
 **Note on CRW's effective deadline:** CRW computes its own per-request
 deadline via `effective_deadline_ms()`, which auto-extends to
@@ -388,7 +387,7 @@ The 300s deadline accommodates multi-request scenarios where the agent
 issues many parallel `open_url` or search queries. With
 `PER_HOST_MAX_CONCURRENT=1`, requests to the same eTLD+1 are serialized —
 the 300s deadline gives queued requests enough budget to complete after
-waiting behind earlier requests, while still serializing per-host to avoid
+waiting behind earlier requests, while serializing per-host to avoid
 429s. No happy-path impact: fast pages complete in ~1-5s regardless of the
 deadline. The Tower outer timeout auto-widens to cover this.
 
@@ -406,7 +405,7 @@ chrome/obscura CDP renderer. This preserves CRW's prefetch/PDF handling while
 preventing search engines from seeing a bare reqwest request before the browser
 navigation.
 
-The prefetch still matters for PDF handling and for non-search HTTP paths:
+The prefetch matters for PDF handling and for non-search HTTP paths:
 plain HTTP URLs can be HEAD-checked by the proxy, and HTTPS non-search URLs may
 be tunneled so CRW can detect `application/pdf` without a browser PDF viewer.
 See §1.7 for the proxy details.
@@ -469,7 +468,7 @@ With `deadline_ms_default=300000` (5 min effective deadline), up to 6
 requests per engine can complete sequentially within the deadline. The 300s
 deadline accommodates multi-request scenarios (e.g., agent issuing 5+
 parallel search queries, or crawling many URLs from the same GitHub
-repository) while still serializing per-host to avoid 429s.
+repository) while serializing per-host to avoid 429s.
 
 **Mitigation:** `CRW_REQUEST__DEADLINE_MS_DEFAULT=300000` (5 min) sets the
 effective per-request deadline to 300s, accommodating multi-request
@@ -480,11 +479,11 @@ above — up to 6 requests per engine can complete sequentially). No
 happy-path impact: fast pages complete in ~1-5s regardless of the
 deadline. The Tower outer timeout auto-widens to cover this.
 
-The current settings (`PER_HOST_MAX_CONCURRENT=1`,
+These settings (`PER_HOST_MAX_CONCURRENT=1`,
 `REQUESTS_PER_SECOND=0.33`) are tuned for anti-bot stealth, not throughput.
 Increasing `PER_HOST_MAX_CONCURRENT` would allow parallel requests but
-risks triggering 429s from the search engines — the exact problem the
-rate limiter was added to solve.
+risks triggering 429s from the search engines. The per-host rate limiter keeps
+same-engine requests serialized.
 
 **Why no `waitFor` sleep?** A fixed `waitFor` sleep (CRW's alternative
 mechanism) is actively harmful in this stack:
@@ -526,6 +525,7 @@ also handles PDF detection/tunneling for Firecrawl/open_url traffic.
 CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
                                │
                                ├─ Search engine URL → 403 (no network request)
+                               ├─ Internal/private target → 403 (logged)
                                ├─ Plain HTTP URL → HEAD → PDF? → tunnel GET
                                │                         └─ 403
                                ├─ Other HTTPS URL → CONNECT tunnel
@@ -547,6 +547,15 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
      `html.duckduckgo.com`, `startpage.com`): returns `403 Forbidden`
      immediately — no network request, no double-hit. CRW sees
      `is_auth_blocked` and escalates to obscura.
+   - **Internal/private destinations**: returns `403` without opening any
+     tunnel, `HEAD`, or PDF forwarding path. This covers localhost,
+     `host.docker.internal`, single-label Docker-style hostnames, literal
+     loopback/private/link-local/reserved/non-global IP addresses, and legacy
+     IPv4 shorthand forms. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, the
+     proxy also resolves DNS names and blocks any name that resolves to a
+     blocked address. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, this DNS
+     resolution check is skipped to avoid leaking target DNS outside the
+     configured upstream proxy path. Blocked attempts are logged.
    - **Other plain HTTP URLs**: issues a `HEAD` request to the real target
      (through `ONYX_AGENT_OUTBOUND_PROXY_URL` if set) to check `Content-Type`:
      - `application/pdf` → tunnels the original GET through and returns the
@@ -588,8 +597,12 @@ CONNECT tunneling. The proxy handles CONNECT requests as follows:
   This forces CRW's auto mode to escalate to the CDP renderer (obscura),
   eliminating the double-hit. The search engine never sees the bare reqwest
   request.
+- **Internal/private hosts**: returns `403` without opening the tunnel. The same
+  destination validation is used for `CONNECT`, `GET`, and `HEAD`, so direct
+  callers cannot use the proxy as a generic internal TCP tunnel or blind
+  internal `HEAD` primitive.
 - **Non-search-engine hosts**: establishes the tunnel through `ONYX_AGENT_OUTBOUND_PROXY_URL`
-  and pipes bidirectionally. If CRW later escalates to CDP, this can still
+  and pipes bidirectionally. If CRW later escalates to CDP, this can
   produce both a reqwest fetch and an obscura navigation for that non-search
   URL. The stack accepts that tradeoff because:
   - PDFs over HTTPS require the tunnel (can't detect content-type without
@@ -654,6 +667,7 @@ This is critical for two reasons:
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HEAD/tunnel requests. Supports `http://`, `https://`, `socks5://`, `socks5h://` |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
+| `PREFETCH_BLOCK_INTERNAL_HOSTS` | `localhost,host.docker.internal` | Comma-separated internal hostnames to block by name without opening an upstream request. Subdomains are blocked too; single-label Docker-style hostnames are always blocked. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
 | `PREFETCH_HEAD_TIMEOUT` | `10` | Timeout for upstream HEAD requests (seconds) |
 | `PREFETCH_TUNNEL_TIMEOUT` | `15` | Timeout for establishing tunnel connections (seconds) |
@@ -670,7 +684,7 @@ from Onyx to a content provider. In the README-recommended configuration, that
 provider is **Firecrawl**, configured with API Base URL
 `http://localhost:3010/v1/scrape` and any non-empty API key placeholder.
 Self-hosted CRW runs open by default unless auth keys are configured. Upstream
-Onyx still falls back to `OnyxWebCrawler` if no content provider is configured,
+Onyx falls back to `OnyxWebCrawler` if no content provider is configured,
 but that is not the recommended wrapper setup.
 
 **Option A: FirecrawlClient (recommended — CRW → CDP shim → obscura)**
@@ -799,7 +813,7 @@ blocked on that LLM-controlled fetch path.
 
 The `ONYX_SECURITY_SSRF_*` wrapper env vars only seed Onyx's Admin -> Security
 Hardening SSRF Protection level. They are not firewall rules for CRW, the CDP
-shim, or Obscura. A page rendered in Obscura can still attempt browser requests
+shim, or Obscura. A page rendered in Obscura can attempt browser requests
 to internal addresses that are reachable from the browser namespace; browser
 same-origin/CORS behavior may limit reading responses, but it is not a
 stack-internal access-control boundary.
@@ -814,7 +828,7 @@ imports selected helpers from the base patch module and then applies the
 lite-only Open URL availability patch.
 
 These patches do not choose the active content provider; the Onyx Admin
-Firecrawl setting still does that. They do adjust behavior around the
+Firecrawl setting does that. They adjust behavior around the
 `open_url` path. See [Onyx patch information](onyx_patch_info.md) for the
 complete patch inventory and upstreaming notes.
 
@@ -822,7 +836,7 @@ complete patch inventory and upstreaming notes.
   `FirecrawlClient._get_webpage_content` to send only
   `{url, formats: ["markdown"]}` to the configured endpoint. This is a guard
   against future upstream Onyx changes adding a `waitFor` field. It is called
-  by the base sitecustomize path; the lite sitecustomize does not currently
+  by the base sitecustomize path; the lite sitecustomize does not
   call this helper, but Onyx v4.1.7 already sends the same no-`waitFor` payload
   in lite mode.
 - `apply_open_url_char_limit_patches()` lets wrapper env vars
@@ -966,7 +980,7 @@ CRW exposes Firecrawl-compatible scrape endpoints. This stack uses:
   sends `{url, formats: ["markdown"]}` to the configured URL. The base/full
   sitecustomize path defensively preserves that no-`waitFor` payload; lite mode
   already has that shape in Onyx v4.1.7.
-- `/v2/scrape` is still supported by CRW and matches Onyx's upstream
+- `/v2/scrape` is supported by CRW and matches Onyx's upstream
   `FIRECRAWL_SCRAPE_URL` constant, but it is not the URL shown in the README
   setup steps for this wrapper.
 
@@ -1060,7 +1074,7 @@ Set `CDP_SHIM_LOG_LEVEL=debug` in docker-compose for verbose logging.
 
 **Stealth JS not being stripped**:
 - Check that `CDP_SHIM_STRIP_STEALTH_JS=1` is set.
-- Check that CRW is still injecting `STEALTH_JS` (look for
+- Check that CRW injects `STEALTH_JS` (look for
   `"Stripped CRW STEALTH_JS"` log lines). If CRW changes the script content,
   the marker detection (`"Hide navigator.webdriver"`) may need updating.
 
@@ -1098,7 +1112,7 @@ Set `CDP_SHIM_LOG_LEVEL=debug` in docker-compose for verbose logging.
   (`CDP_SHIM_LOG_LEVEL=debug`).
 - Search engine URLs should show `waitUntil=networkidle2`; other URLs
   should show `waitUntil=load`.
-- If pages are still returning too early (empty SERP, SPA shell), obscura
+- If pages return too early (empty SERP, SPA shell), obscura
   may be timing out before network idle is reached. Check
   `OBSCURA_NAV_TIMEOUT_MS` — if it's too low for your proxy path, increase
   it (and `CRW_RENDERER__CHROME_TIMEOUT_MS` to match).
@@ -1173,9 +1187,9 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `NO_PROXY` | `127.0.0.1,localhost,::1` | Keeps CRW loopback traffic, including the CDP shim WebSocket and health checks, direct. |
 | `CRW_CRAWLER__PROXY` | (unset) | Intentionally not used for the prefetch-blocking proxy. Setting it would make CRW include `proxyServer` in `Target.createBrowserContext`; the shim can strip this as a safety net, but the compose default avoids that path entirely. |
 | `CRW_RENDERER__CHROME__WS_URL` | `ws://127.0.0.1:9224/devtools/browser` | CDP shim endpoint (not obscura directly) |
-| `CRW_RENDERER__CHROME_TIMEOUT_MS` | `50000` | Per-page navigation timeout for the chrome (obscura) renderer tier. Must be ≥ `OBSCURA_NAV_TIMEOUT_MS` so CRW's deadline doesn't fire before obscura's nav timeout. CRW's own default is 30s; bumped to 50s for Tor/slow VPN. |
+| `CRW_RENDERER__CHROME_TIMEOUT_MS` | `50000` | Per-page navigation timeout for the chrome (obscura) renderer tier. Must be ≥ `OBSCURA_NAV_TIMEOUT_MS` so CRW's deadline doesn't fire before obscura's nav timeout. |
 | `CRW_RENDERER__HTTP_TIMEOUT_MS` | `60000` | HTTP prefetch timeout. CRW always runs an HTTP prefetch before the CDP renderer (even with `RENDER_JS_DEFAULT=true`) to check Content-Type — PDFs bypass obscura. Ceiling, not delay — completes in 1-3s on happy path. Contributes to `ladder_min`. No happy-path impact. |
-| `CRW_RENDERER__CHROME_NAV_BUDGET_MS` | `48000` | Post-navigate budget for the chrome renderer tier. This races CRW's post-navigation work after `Page.loadEventFired`: SPA selector poll, content stability, challenge retry, and DOM extraction. CRW's default is 12000ms (calibrated for fast networks), but on Tor/slow VPN this can fire too early. |
+| `CRW_RENDERER__CHROME_NAV_BUDGET_MS` | `48000` | Post-navigate budget for the chrome renderer tier. This races CRW's post-navigation work after `Page.loadEventFired`: SPA selector poll, content stability, challenge retry, and DOM extraction. |
 | `CRW_REQUEST__DEADLINE_MS_DEFAULT` | `300000` | Baseline per-request deadline (ms). With `auto_extend_deadline_for_ladder=true` (default), effective deadline is `max(this, ladder_min=~138s)` = 300s. Accommodates multi-request scenarios (parallel search fan-out, GitHub URL crawling) by giving queued requests in the per-host rate limiter enough budget to complete while serializing per-host to avoid 429s. No happy-path impact. See §1.6.1. |
 | `CRW_CRAWLER__REQUESTS_PER_SECOND` | `0.33` | Per-host rate limit (~3s interval). The rate-limit sleep is deducted from the request's deadline budget before navigation begins. See §1.6.1 for the compounding interaction with parallel fan-out. |
 | `CRW_CRAWLER__PER_HOST_MAX_CONCURRENT` | `1` | Max concurrent requests per eTLD+1. The semaphore is held for the entire fetch duration (navigation + render), serializing requests to the same search engine. See §1.6.1 for deadline compounding under parallel fan-out. |
@@ -1204,6 +1218,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HEAD/tunnel requests. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
+| `PREFETCH_BLOCK_INTERNAL_HOSTS` | `localhost,host.docker.internal` | Comma-separated internal hostnames to block by name without opening an upstream request. Subdomains are blocked too; single-label Docker-style hostnames are always blocked. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
 | `PREFETCH_HEAD_TIMEOUT` | `10` | Timeout for upstream HEAD requests (seconds) |
 | `PREFETCH_TUNNEL_TIMEOUT` | `15` | Timeout for establishing tunnel connections (seconds) |
@@ -1260,7 +1275,7 @@ repeated in the overlay:
 The README-recommended `open_url` path asks CRW for `formats: ["markdown"]`.
 That works well for normal HTML pages, but it is lossy for raw plaintext files
 served over HTTP, such as `raw.githubusercontent.com` YAML, TOML, source code,
-or shell scripts. CRW records the upstream MIME type, but the current scrape
+or shell scripts. CRW records the upstream MIME type, but the scrape
 pipeline only bypasses HTML extraction for PDFs. Non-PDF bodies are stored in
 `FetchResult.html` and then passed to `crw_extract::extract()` as `raw_html`
 ([`http_only.rs:273`](../reference_repos/crw/crates/crw-renderer/src/http_only.rs:273),
@@ -1285,7 +1300,7 @@ The available formats are `markdown`, `html`, `rawHtml`, `plainText`, `links`,
 ([`types.rs:11`](../reference_repos/crw/crates/crw-core/src/types.rs:11)).
 `rawHtml` would preserve the original bytes decoded as text when requested
 ([`lib.rs:704`](../reference_repos/crw/crates/crw-extract/src/lib.rs:704)),
-but Onyx's Firecrawl content provider currently requests only `markdown` and
+but Onyx's Firecrawl content provider requests only `markdown` and
 extracts `data.markdown` from the response. `plainText` is also generated by
 an HTML plaintext extractor and explicitly collapses whitespace
 ([`plaintext.rs:3`](../reference_repos/crw/crates/crw-extract/src/plaintext.rs:3)),
@@ -1304,7 +1319,7 @@ by requesting and preferring `rawHtml` for raw-file URLs.
 
 ## Known Limitations: Fingerprint Stability
 
-### The remaining stability problem
+### Stability Limit
 
 Obscura `v0.1.9` selects a realistic browser profile from a built-in pool for
 each `BrowserContext`, and the default is a single stable profile rather than
@@ -1313,7 +1328,7 @@ rotation. That keeps the User-Agent, `navigator.platform`,
 consistent. `--stealth` also uses the stealth HTTP client so navigation and
 scripted fetch/XHR traffic share a browser-like TLS/HTTP fingerprint.
 
-Some JS-visible values are still initialized from a per-page seed in
+Some JS-visible values are initialized from a per-page seed in
 `bootstrap.js` during `__obscura_init()`:
 
 ```javascript
@@ -1363,7 +1378,7 @@ continuity.
 The `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL` setting (default: 3600s = 60 minutes)
 periodically clears cookies to limit the tracking surface.
 
-The most impactful anti-bot measures currently in place are:
+The most impactful anti-bot measures in place are:
 1. **STEALTH_JS stripping** — lets Obscura's own fingerprint model own the
    browser surfaces instead of combining it with CRW's injected script.
 2. **Obscura stealth mode** — browser-like TLS/HTTP fingerprinting, stable
