@@ -86,8 +86,9 @@ This stack protects private research, document contents, browsing behavior, infe
 
 - Prefer small, explicit changes over broad rewrites.
 - Prefer structured parsers or compose-aware inspection over ad hoc text hacks when changing configuration formats.
-- Prefer component-configurable behavior over indefinite compatibility shims.
+- Prefer component-configurable behavior over shims. Remove shims when component configurations are discovered.
 - When necessary, runtime patches should be narrow, startup-validated, and documented in `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`.
+- Don't preserve compatibility for old behavior. Prefer current, explicit behavior over indefinite backwards compatibility.
 - Keep optional features opt-in and visibly configured.
 
 ### General Failure Handling
@@ -103,7 +104,7 @@ This stack protects private research, document contents, browsing behavior, infe
 - Compose layering: the Makefile assembles `COMPOSE_FILE`. Keep optional behavior in override files, keep Docker and Podman behavior separated, and preserve generated local secret flow plus Compose `${VAR:?message}` checks.
 - VPN/proxy routing: preserve explicit VPN/no-VPN behavior, host-proxy access, shared namespace membership where documented, optional routing switches, and `ONYX_AGENT_OUTBOUND_PROXY_URL`/`NO_PROXY` handling. Do not introduce automatic direct-egress fallback when VPN or proxy connectivity fails.
 - Request handling: keep supported search engines routed through the custom CRW/SearXNG path; preserve CRW/Obscura rendering, prefetch blocking, per-host rate control, anti-bot visibility, and the documented CDP shim behavior. Do not replace this path with plain HTTP fetching or fixed sleeps.
-- Documentation: update docs in the same change when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
+- Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
 - Patch upgrades: before changing Onyx, code-interpreter, SearXNG, CRW, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
 - Untracked stack files: Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data. Do not read, stage, or rewrite them unless the user explicitly asks.
 
