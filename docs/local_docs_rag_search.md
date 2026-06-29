@@ -9,7 +9,7 @@ Use this document for operator-facing setup, request flow, and diagnostics. For
 the patch rationale and possible upstream shape, see
 [`docs/onyx_patch_info.md`](onyx_patch_info.md), especially
 [Background Web connector PDF freshness](onyx_patch_info.md#background-web-connector-pdf-freshness),
-[Internal search context limits](onyx_patch_info.md#internal-search-context-limits),
+[Internal search content caps](onyx_patch_info.md#internal-search-content-caps),
 [Local embedding shim](onyx_patch_info.md#local-embedding-shim), and
 [Docker Compose wrapper modifications](onyx_patch_info.md#docker-compose-wrapper-modifications).
 For line-numbered Onyx upgrade checks, use
@@ -32,8 +32,8 @@ Onyx fork:
   links use `http://localhost:8091/` by default.
 - `onyx/patches/sitecustomize_background/sitecustomize.py` adds a local-host
   PDF freshness optimization for the Web connector.
-- `onyx/patches/sitecustomize_base/sitecustomize.py` applies full-mode
-  internal-search context limits so selected chunks do not overwhelm the
+- `onyx/patches/sitecustomize_base/sitecustomize.py` can apply optional
+  internal-search content caps so selected chunks do not overwhelm the
   answering model.
 - `local-embedding-shim` implements the subset of Onyx's model-server HTTP API
   that indexing and search need for embeddings, then forwards the actual
@@ -64,9 +64,9 @@ boundary.
    OpenAI-compatible embedding requests and sends them to `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
 8. During chat/search, `api_server` uses the same shim path to embed the query
    before Onyx runs hybrid search against the indexed documents.
-9. Before internal-search results are returned to the answering model, the
-   wrapper limits candidate sections, LLM-facing sections, and result content
-   character budgets using the full-mode env settings below.
+9. If configured, the wrapper applies per-result and aggregate character caps
+   after Onyx has selected and serialized internal-search results for the
+   answering model.
 
 The important subtlety is that `127.0.0.1` and `localhost` are not always the
 same machine in this stack. `MODEL_SERVER_HOST=127.0.0.1` means loopback inside
@@ -179,15 +179,13 @@ that the database `Document` model still stores compatible fields. If Onyx adds
 native incremental freshness for Web PDFs, prefer that and remove or narrow this
 patch.
 
-## Internal Search Context Limits
+## Internal Search Content Caps
 
 Implementation:
 
 - Compose env: `docker-compose.full.yml`
 - Runtime patch: `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
 - User-facing env:
-  `ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS`,
-  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`,
   `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
   `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`
 
@@ -198,26 +196,22 @@ nearby matching chunks and expand a selected section with adjacent chunks before
 formatting the result. That is useful for answer quality, but local document
 sets can produce enough text to fill small or medium model context windows.
 
-Full mode therefore exposes wrapper-level names for the relevant budgets:
+Full mode therefore exposes optional wrapper-level character caps:
 
 ```env
-ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS=24
-ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS=8
-ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT=6000
-ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=30000
+ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT=0
+ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=0
 ```
 
-`ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS` limits the ranked sections kept
-before LLM document selection. `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`
-limits how many selected sections are serialized back to the answering model;
-the compose layer also passes it to upstream Onyx as `MAX_CHUNKS_FED_TO_CHAT`.
-The two character budgets are applied after Onyx's context-expansion step, so a
-single expanded result cannot dominate the final tool response.
+Empty or `0` means no wrapper cap. Positive values cap the serialized result
+text after Onyx's own retrieval, LLM section selection, context expansion, and
+section merging have already run. The first value limits each result's
+`content`; the second limits total returned `content` across all results.
 
-Lower these values when internal search is consuming too much of the model
-window. Raise them when search is missing necessary context even though the
-right document is being found. Changes require recreating `api_server` because
-the base `sitecustomize` patch runs at Python startup.
+Set these values when internal search is consuming too much of the model
+window. Leave them empty or `0` when relying on a large, correctly configured
+chat context window. Changes require recreating `api_server` because the base
+`sitecustomize` patch runs at Python startup.
 
 ## Embedding Shim
 
@@ -432,8 +426,7 @@ Common failure modes:
   logs, embedding dimension, model identity, and whether old documents were
   indexed with a different model or prefix.
 - Internal search returns relevant documents but fills the model context:
-  lower `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS`,
-  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, or
+  set `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT` or
   `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`, then recreate `api_server`.
 - Onyx reports reranker or query-analysis failures: either disable those Onyx
   features for this local path or provide real implementations instead of the

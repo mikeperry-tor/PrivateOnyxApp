@@ -103,7 +103,7 @@ def _parse_positive_int(var_name: str) -> int | None:
     return value
 
 
-def _parse_int_at_least(var_name: str, minimum: int) -> int | None:
+def _parse_optional_positive_int(var_name: str) -> int | None:
     raw = os.environ.get(var_name)
     if not raw:
         return None
@@ -117,10 +117,12 @@ def _parse_int_at_least(var_name: str, minimum: int) -> int | None:
         )
         return None
 
-    if value < minimum:
+    if value == 0:
+        return None
+
+    if value < 0:
         print(
-            f"sitecustomize: ignoring {var_name}={raw!r} "
-            f"(must be >= {minimum})",
+            f"sitecustomize: ignoring {var_name}={raw!r} (must be >= 0)",
             flush=True,
         )
         return None
@@ -135,16 +137,6 @@ def _env_flag_enabled(var_name: str) -> bool:
         "yes",
         "on",
     )
-
-
-def _set_pydantic_field_default(model_cls, field_name: str, value: int) -> None:
-    try:
-        model_cls.model_fields[field_name].default = value
-        model_cls.model_rebuild(force=True)
-    except Exception as e:  # pragma: no cover
-        _warn_or_raise(
-            f"failed patching {model_cls.__name__}.{field_name} default: {e}"
-        )
 
 
 def _truncate_text_with_notice(text: str, max_chars: int) -> str:
@@ -245,147 +237,100 @@ def apply_llm_max_tokens_override_patch() -> None:
 
 
 def apply_internal_search_context_patches() -> None:
-    """Apply wrapper limits to Onyx internal search context payloads.
+    """Apply optional character caps to Onyx internal search payloads.
 
-    Onyx v4.1.7 has two useful but awkwardly named/internal controls:
-    ``NUM_RETURNED_HITS`` is a candidate/result-section count, while
-    ``MAX_CHUNKS_FED_TO_CHAT`` is used as both a rough token budget and a final
-    section count. The wrapper exposes clearer env names and adds character
-    caps after Onyx's context expansion step, where sections can grow beyond
-    the nominal chunk count.
+    The wrapper leaves Onyx's own candidate and section-count logic untouched.
+    These caps run after Onyx has merged/expanded sections and formatted the
+    LLM-facing JSON.
     """
 
-    candidate_sections = _parse_int_at_least(
-        "ONYX_RAG_INTERNAL_SEARCH_MAX_CANDIDATE_SECTIONS", 1
+    max_chars_per_result = _parse_optional_positive_int(
+        "ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT"
     )
-    context_sections = _parse_int_at_least(
-        "ONYX_RAG_INTERNAL_SEARCH_MAX_CONTEXT_SECTIONS", 1
-    )
-    max_chars_per_result = _parse_int_at_least(
-        "ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT", 0
-    )
-    max_total_chars = _parse_int_at_least(
-        "ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS", 0
+    max_total_chars = _parse_optional_positive_int(
+        "ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS"
     )
 
-    if (
-        candidate_sections is None
-        and context_sections is None
-        and max_chars_per_result is None
-        and max_total_chars is None
-    ):
+    if max_chars_per_result is None and max_total_chars is None:
         return
 
-    if candidate_sections is not None or context_sections is not None:
-        try:
-            from onyx.configs import chat_configs
-            from onyx.tools import models as tool_models
-        except Exception as e:  # pragma: no cover
-            print(
-                f"sitecustomize: failed importing search limit modules: {e}",
-                flush=True,
-            )
-            _raise_if_strict()
-            return
-
-        if candidate_sections is not None:
-            chat_configs.NUM_RETURNED_HITS = candidate_sections
-            tool_models.NUM_RETURNED_HITS = candidate_sections
-            _set_pydantic_field_default(
-                tool_models.SearchToolOverrideKwargs,
-                "num_hits",
-                candidate_sections,
-            )
-
-        if context_sections is not None:
-            chat_configs.MAX_CHUNKS_FED_TO_CHAT = context_sections
-            tool_models.MAX_CHUNKS_FED_TO_CHAT = context_sections
-            _set_pydantic_field_default(
-                tool_models.SearchToolOverrideKwargs,
-                "max_llm_chunks",
-                context_sections,
-            )
-
-    if max_chars_per_result is not None or max_total_chars is not None:
-        try:
-            from onyx.tools.tool_implementations import utils as tool_utils
-        except Exception as e:  # pragma: no cover
-            print(
-                f"sitecustomize: failed importing search formatter module: {e}",
-                flush=True,
-            )
-            _raise_if_strict()
-            return
-
-        original_convert = tool_utils.convert_inference_sections_to_llm_string
-
-        @functools.wraps(original_convert)
-        def _limited_convert_inference_sections_to_llm_string(*args, **kwargs):
-            docs_str, citation_mapping = original_convert(*args, **kwargs)
-            if not docs_str:
-                return docs_str, citation_mapping
-
-            try:
-                payload = json.loads(docs_str)
-                results = payload.get("results", [])
-            except Exception as e:
-                print(
-                    f"sitecustomize: failed parsing internal search payload: {e}",
-                    flush=True,
-                )
-                if _strict_mode():
-                    raise
-                return docs_str, citation_mapping
-
-            remaining_total = max_total_chars
-            for entry in results:
-                content = entry.get("content")
-                if not isinstance(content, str):
-                    continue
-
-                cap = len(content)
-                if max_chars_per_result is not None:
-                    cap = min(cap, max_chars_per_result)
-                if remaining_total is not None:
-                    cap = min(cap, remaining_total)
-
-                limited_content = _truncate_text_with_notice(content, cap)
-                entry["content"] = limited_content
-
-                if remaining_total is not None:
-                    remaining_total = max(0, remaining_total - len(limited_content))
-
-            return (
-                json.dumps(payload, indent=2, ensure_ascii=False),
-                citation_mapping,
-            )
-
-        tool_utils.convert_inference_sections_to_llm_string = (
-            _limited_convert_inference_sections_to_llm_string
+    try:
+        from onyx.tools.tool_implementations import utils as tool_utils
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing search formatter module: {e}",
+            flush=True,
         )
+        _raise_if_strict()
+        return
 
-        # search_tool imports the formatter by name. Patch the imported symbol
-        # too if the module is already importable during startup.
+    original_convert = tool_utils.convert_inference_sections_to_llm_string
+
+    @functools.wraps(original_convert)
+    def _limited_convert_inference_sections_to_llm_string(*args, **kwargs):
+        docs_str, citation_mapping = original_convert(*args, **kwargs)
+        if not docs_str:
+            return docs_str, citation_mapping
+
         try:
-            from onyx.tools.tool_implementations.search import search_tool
-
-            search_tool.convert_inference_sections_to_llm_string = (
-                _limited_convert_inference_sections_to_llm_string
-            )
-        except Exception as e:  # pragma: no cover
+            payload = json.loads(docs_str)
+            results = payload.get("results", [])
+        except Exception as e:
             print(
-                f"sitecustomize: search_tool formatter patch deferred/unavailable: {e}",
+                f"sitecustomize: failed parsing internal search payload: {e}",
                 flush=True,
             )
             if _strict_mode():
                 raise
+            return docs_str, citation_mapping
+
+        remaining_total = max_total_chars
+        for entry in results:
+            content = entry.get("content")
+            if not isinstance(content, str):
+                continue
+
+            cap = len(content)
+            if max_chars_per_result is not None:
+                cap = min(cap, max_chars_per_result)
+            if remaining_total is not None:
+                cap = min(cap, remaining_total)
+
+            limited_content = _truncate_text_with_notice(content, cap)
+            entry["content"] = limited_content
+
+            if remaining_total is not None:
+                remaining_total = max(0, remaining_total - len(limited_content))
+
+        return (
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            citation_mapping,
+        )
+
+    tool_utils.convert_inference_sections_to_llm_string = (
+        _limited_convert_inference_sections_to_llm_string
+    )
+
+    # search_tool imports the formatter by name. Patch the imported symbol
+    # too if the module is already importable during startup.
+    try:
+        from onyx.tools.tool_implementations.search import search_tool
+
+        search_tool.convert_inference_sections_to_llm_string = (
+            _limited_convert_inference_sections_to_llm_string
+        )
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: search_tool formatter patch deferred/unavailable: {e}",
+            flush=True,
+        )
+        if _strict_mode():
+            raise
 
     print(
-        "sitecustomize: applied internal search context limits "
-        f"(candidate_sections={candidate_sections}, "
-        f"context_sections={context_sections}, "
+        "sitecustomize: applied internal search content caps "
         f"max_chars_per_result={max_chars_per_result}, "
-        f"max_total_chars={max_total_chars})",
+        f"max_total_chars={max_total_chars}",
         flush=True,
     )
 
