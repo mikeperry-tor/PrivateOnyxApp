@@ -82,6 +82,77 @@ Activation:
 - The same base patches are also available in lite mode behind the lite-specific
   patch directory.
 
+### LLM context window override env
+
+Compose behavior:
+
+- `docker-compose.yaml` maps wrapper `ONYX_AGENT_LLM_MAX_TOKENS` to upstream
+  `GEN_AI_MAX_TOKENS` for `api_server`.
+- If unset or empty, Compose passes an empty `GEN_AI_MAX_TOKENS`, which Onyx
+  parses as `None`.
+- If set to a positive integer, `sitecustomize` makes that value override both
+  stored `ModelConfiguration.max_input_tokens` values and provider/LiteLLM
+  metadata lookups.
+
+Onyx service: `api_server`.
+
+Upstream v4.1.7 assumptions to re-check:
+
+- `backend/onyx/configs/model_configs.py:59` reads `GEN_AI_MAX_TOKENS`.
+- `backend/onyx/llm/utils.py:621` makes `GEN_AI_MAX_TOKENS` override
+  LiteLLM/provider metadata when computing max input tokens.
+- `backend/onyx/llm/factory.py:312` prefers stored
+  `ModelConfiguration.max_input_tokens` before falling back to provider/model
+  lookup; the wrapper patch must continue to intercept this DB-first helper.
+- `backend/onyx/llm/utils.py:737` also reads stored model configuration before
+  fallback lookup; the wrapper patch must continue to intercept this helper too.
+
+Upgrade notes:
+
+- If upstream changes `GEN_AI_MAX_TOKENS` parsing, confirm an empty compose
+  value still behaves like no override.
+- If upstream renames or removes `GEN_AI_MAX_TOKENS`, update or remove the
+  compose mapping.
+- If upstream exposes a first-class max-input-token override that wins before DB
+  and provider values, remove this runtime patch and map
+  `ONYX_AGENT_LLM_MAX_TOKENS` to that setting.
+
+### Previous tool-result preservation
+
+Patch behavior:
+
+- Reads `ONYX_AGENT_PRESERVE_TOOL_RESULTS`.
+- When true, replaces `chat_utils._build_tool_call_response_history_message()`
+  so saved `tool_call_response` content is returned for non-image tools instead
+  of `TOOL_CALL_RESPONSE_CROSS_MESSAGE`.
+- Preserves image-generation metadata behavior.
+- Wraps `chat_utils.convert_chat_history()` to recompute token counts for all
+  `TOOL_CALL_RESPONSE` messages instead of keeping upstream's fixed non-image
+  estimate.
+
+Onyx service: `api_server`.
+
+Upstream v4.1.7 assumptions to re-check:
+
+- `backend/onyx/prompts/chat_prompts.py:95` defines
+  `TOOL_CALL_RESPONSE_CROSS_MESSAGE`.
+- `backend/onyx/chat/chat_utils.py:576` defines
+  `_build_tool_call_response_history_message()`.
+- `backend/onyx/chat/chat_utils.py:581` returns the placeholder for every
+  non-image tool.
+- `backend/onyx/chat/chat_utils.py:773` creates `TOOL_CALL_RESPONSE` history
+  messages and `:775` assigns non-image tool responses a fixed token count.
+- Custom and MCP tool calls should still be stored through the same `ToolCall`
+  / `convert_chat_history()` path.
+
+Upgrade notes:
+
+- If upstream starts preserving or summarizing prior tool responses natively,
+  remove this patch or map the wrapper env to the new upstream setting.
+- If upstream changes tool response storage or splits MCP/custom tool history
+  into a separate path, verify `ONYX_AGENT_PRESERVE_TOOL_RESULTS=true` covers
+  those tools before carrying the patch forward.
+
 ### open_url and web_search character budgets
 
 Patch behavior:

@@ -38,6 +38,8 @@ small set of local deployment requirements that Onyx v4.1.7 does not expose as
 configuration:
 
 - Let a private deployment tune tool limits without rebuilding Onyx images.
+- Optionally preserve prior tool-call outputs across chat turns for research
+  workflows that prefer recall over prompt compactness.
 - Keep internal-search result count and content budgets small enough for local
   document RAG without relying on obscure upstream env names.
 - Keep generated tool descriptions accurate when executor capabilities differ
@@ -68,6 +70,8 @@ settings.
 
 | Area | Onyx service or component | Local mechanism | Upstream shape |
 | --- | --- | --- | --- |
+| LLM context window override env | `api_server` | Compose maps `ONYX_AGENT_LLM_MAX_TOKENS` to upstream `GEN_AI_MAX_TOKENS`; `sitecustomize` makes it win before DB/provider limits | First-class wrapper/admin override for model context window |
+| Prior tool-result preservation | `api_server` | `sitecustomize` optionally replaces Onyx's previous-tool-response placeholder with saved tool responses | Per-agent/admin setting for how much previous tool output to keep |
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
 | Internal search context limits | `api_server` | `sitecustomize` rewrites search defaults and wraps result formatting; full compose passes wrapper env aliases | Admin/env settings for candidate count, returned context count, and content budgets |
 | Firecrawl scrape payload | `api_server` | `sitecustomize` replaces `FirecrawlClient._get_webpage_content` | Configurable Firecrawl request options |
@@ -78,6 +82,111 @@ settings.
 | Local embedding bridge | `api_server`, `background` | Shim service implements selected model-server endpoints | First-class OpenAI-compatible embedding provider |
 | Compose wrapper | Runtime services | Compose `extends`, overrides, sidecars, network namespace | Official compose extension points and documented env knobs |
 | Install hooks | Install/upgrade flow | Makefile plus installer wrapper scripts | Installer flags for engine, image tag, config ref, and noninteractive setup |
+
+## LLM context window override env
+
+Local files:
+
+- `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- `onyx/patches/sitecustomize_base/sitecustomize.py`
+- `docker-compose.yaml`
+- `.env.wrapper.example`
+
+Onyx source areas:
+
+- `backend/onyx/configs/model_configs.py`
+- `backend/onyx/llm/factory.py`
+- `backend/onyx/llm/utils.py`
+
+### Why this is needed
+
+Onyx can already override some model context-window detection with
+`GEN_AI_MAX_TOKENS`, but the normal chat construction path prefers a stored
+`ModelConfiguration.max_input_tokens` value before consulting the provider
+lookup path that honors that env var. The wrapper needs
+`ONYX_AGENT_LLM_MAX_TOKENS` to act as a true deployment-wide override, for
+example when a provider advertises no context limit, advertises a limit that is
+too low, or advertises a 1M-token window but the admin wants Onyx to stay below
+500k.
+
+### How it works
+
+`docker-compose.yaml` maps `ONYX_AGENT_LLM_MAX_TOKENS` to Onyx's upstream
+`GEN_AI_MAX_TOKENS` environment variable for `api_server`.
+
+Leaving `ONYX_AGENT_LLM_MAX_TOKENS` empty passes an empty
+`GEN_AI_MAX_TOKENS`. Onyx reads this as `None` because
+`backend/onyx/configs/model_configs.py` parses
+`int(os.environ.get("GEN_AI_MAX_TOKENS") or 0) or None`, so an empty value has
+the same effect as no override.
+
+When `GEN_AI_MAX_TOKENS` is set to a positive integer, the base
+`sitecustomize` patch makes that value win before both:
+
+- the stored `ModelConfiguration.max_input_tokens` DB value used by
+  `llm_from_provider()`
+- the DB/provider/LiteLLM fallback path in
+  `get_max_input_tokens_from_llm_provider()`
+
+Changing `ONYX_AGENT_LLM_MAX_TOKENS` therefore only requires restarting the
+stack. The model row does not need to be removed or re-synced.
+
+### Upstream merge request shape
+
+Onyx could expose a clearer per-provider or per-model context-window override
+in Admin settings and document the precedence against provider-discovered
+limits.
+
+## Prior tool-result preservation
+
+Local files:
+
+- `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- `onyx/patches/sitecustomize_base/sitecustomize.py`
+- `docker-compose.yaml`
+- `.env.wrapper.example`
+
+Onyx source areas:
+
+- `backend/onyx/chat/chat_utils.py`
+- `backend/onyx/prompts/chat_prompts.py`
+
+### Why this is needed
+
+Onyx v4.1.7 reconstructs previous assistant tool-call history with the tool
+call name and arguments, but replaces every non-image tool response with the
+fixed placeholder `This tool call completed but the results are no longer
+accessible.` This keeps future prompts compact, but it means follow-up turns
+cannot inspect raw prior `internal_search`, `web_search`, `open_url`,
+code-interpreter, code-agent, custom tool, or MCP tool output unless the
+assistant's final answer already captured it.
+
+The wrapper defaults to preserving saved tool responses because this deployment
+is tuned for multi-turn research workflows where follow-up turns often need to
+inspect earlier tool output.
+
+### How it modifies Onyx
+
+By default, `ONYX_AGENT_PRESERVE_TOOL_RESULTS=true` and the base
+`sitecustomize` patch:
+
+- Replaces `chat_utils._build_tool_call_response_history_message()` so saved
+  `tool_call_response` text is returned for all non-image tools instead of the
+  placeholder.
+- Keeps upstream image-generation metadata behavior unchanged.
+- Wraps `chat_utils.convert_chat_history()` to recompute token counts for
+  `TOOL_CALL_RESPONSE` messages, since upstream normally assigns non-image
+  placeholder responses a small fixed token estimate.
+
+Set `ONYX_AGENT_PRESERVE_TOOL_RESULTS=false` to restore upstream placeholder
+behavior.
+
+### Upstream merge request shape
+
+Onyx could expose this as a per-agent or admin setting with an explicit prompt
+budget warning. A more refined upstream implementation could preserve only
+selected tool classes, compress large tool outputs, or apply per-tool size
+caps before carrying them into later turns.
 
 ## Open URL and web search character budgets
 

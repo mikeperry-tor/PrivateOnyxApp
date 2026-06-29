@@ -128,6 +128,15 @@ def _parse_int_at_least(var_name: str, minimum: int) -> int | None:
     return value
 
 
+def _env_flag_enabled(var_name: str) -> bool:
+    return os.environ.get(var_name, "").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _set_pydantic_field_default(model_cls, field_name: str, value: int) -> None:
     try:
         model_cls.model_fields[field_name].default = value
@@ -154,6 +163,85 @@ def _truncate_text_with_notice(text: str, max_chars: int) -> str:
     suffix = notice_template.format(omitted=len(text) - keep)
     keep = max(0, max_chars - len(suffix))
     return text[:keep] + suffix
+
+
+def apply_llm_max_tokens_override_patch() -> None:
+    """Make GEN_AI_MAX_TOKENS override DB and provider context limits.
+
+    Upstream Onyx v4.1.7 lets GEN_AI_MAX_TOKENS override provider/LiteLLM
+    fallback metadata, but the normal chat construction path checks stored
+    ModelConfiguration.max_input_tokens first. The wrapper exposes this as an
+    admin override, so a configured value must win before the DB lookup too.
+    """
+
+    try:
+        from onyx.configs.model_configs import GEN_AI_MAX_TOKENS
+        from onyx.llm import factory
+        from onyx.llm import utils as llm_utils
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing LLM max-token override modules: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    if not GEN_AI_MAX_TOKENS:
+        return
+
+    try:
+        configured_source = inspect.getsource(
+            factory._get_model_configured_max_input_tokens
+        )
+        provider_source = inspect.getsource(
+            llm_utils.get_max_input_tokens_from_llm_provider
+        )
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(f"could not inspect LLM max-token helpers: {e}")
+        return
+
+    if "model_configuration.max_input_tokens" not in configured_source:
+        _warn_or_raise(
+            "factory._get_model_configured_max_input_tokens no longer "
+            "contains the expected DB max_input_tokens lookup"
+        )
+        return
+    if "model_configuration.max_input_tokens" not in provider_source:
+        _warn_or_raise(
+            "llm_utils.get_max_input_tokens_from_llm_provider no longer "
+            "contains the expected DB max_input_tokens lookup"
+        )
+        return
+
+    original_get_model_configured_max_input_tokens = (
+        factory._get_model_configured_max_input_tokens
+    )
+    original_get_max_input_tokens_from_llm_provider = (
+        llm_utils.get_max_input_tokens_from_llm_provider
+    )
+
+    @functools.wraps(original_get_model_configured_max_input_tokens)
+    def _override_model_configured_max_input_tokens(*args, **kwargs):
+        return GEN_AI_MAX_TOKENS
+
+    @functools.wraps(original_get_max_input_tokens_from_llm_provider)
+    def _override_max_input_tokens_from_llm_provider(*args, **kwargs):
+        return GEN_AI_MAX_TOKENS
+
+    factory._get_model_configured_max_input_tokens = (
+        _override_model_configured_max_input_tokens
+    )
+    factory.get_max_input_tokens_from_llm_provider = (
+        _override_max_input_tokens_from_llm_provider
+    )
+    llm_utils.get_max_input_tokens_from_llm_provider = (
+        _override_max_input_tokens_from_llm_provider
+    )
+    print(
+        "sitecustomize: forcing LLM max input tokens to "
+        f"GEN_AI_MAX_TOKENS={GEN_AI_MAX_TOKENS}",
+        flush=True,
+    )
 
 
 def apply_internal_search_context_patches() -> None:
@@ -298,6 +386,108 @@ def apply_internal_search_context_patches() -> None:
         f"context_sections={context_sections}, "
         f"max_chars_per_result={max_chars_per_result}, "
         f"max_total_chars={max_total_chars})",
+        flush=True,
+    )
+
+
+def apply_preserve_tool_results_patch() -> None:
+    """Optionally preserve prior-turn tool responses in future LLM context.
+
+    Upstream Onyx reconstructs previous assistant tool-call history with a
+    placeholder for every non-image tool response. When enabled, keep the
+    saved tool_call_response instead and recompute response token counts so
+    context trimming reflects the larger payload.
+    """
+
+    if not _env_flag_enabled("ONYX_AGENT_PRESERVE_TOOL_RESULTS"):
+        return
+
+    try:
+        from onyx.chat import chat_utils
+        from onyx.configs.constants import MessageType
+        from onyx.prompts.chat_prompts import TOOL_CALL_RESPONSE_CROSS_MESSAGE
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing tool-result preservation modules: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    try:
+        source = inspect.getsource(chat_utils._build_tool_call_response_history_message)
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(
+            "could not inspect chat_utils._build_tool_call_response_history_message: "
+            f"{e}"
+        )
+        return
+
+    if "TOOL_CALL_RESPONSE_CROSS_MESSAGE" not in source:
+        _warn_or_raise(
+            "chat_utils._build_tool_call_response_history_message no longer "
+            "contains the expected placeholder behavior"
+        )
+        return
+
+    original_convert_chat_history = chat_utils.convert_chat_history
+
+    def _preserving_tool_call_response_history_message(
+        tool_name: str,
+        generated_images: list[dict] | None,
+        tool_call_response: str | None,
+    ) -> str:
+        if tool_name == chat_utils.IMAGE_GENERATION_TOOL_NAME:
+            if generated_images:
+                llm_image_context: list[dict[str, str]] = []
+                for image in generated_images:
+                    file_id = image.get("file_id")
+                    revised_prompt = image.get("revised_prompt")
+                    if not isinstance(file_id, str):
+                        continue
+
+                    llm_image_context.append(
+                        {
+                            "file_id": file_id,
+                            "revised_prompt": (
+                                revised_prompt
+                                if isinstance(revised_prompt, str)
+                                else ""
+                            ),
+                        }
+                    )
+
+                if llm_image_context:
+                    return json.dumps(llm_image_context)
+
+        if tool_call_response:
+            return tool_call_response
+
+        return TOOL_CALL_RESPONSE_CROSS_MESSAGE
+
+    @functools.wraps(original_convert_chat_history)
+    def _preserving_convert_chat_history(*args, **kwargs):
+        result = original_convert_chat_history(*args, **kwargs)
+
+        token_counter = kwargs.get("token_counter")
+        if token_counter is None and len(args) >= 5:
+            token_counter = args[4]
+        if token_counter is None:
+            _warn_or_raise("convert_chat_history token_counter not found")
+            return result
+
+        for msg in result.simple_messages:
+            if msg.message_type == MessageType.TOOL_CALL_RESPONSE:
+                msg.token_count = token_counter(msg.message)
+
+        return result
+
+    chat_utils._build_tool_call_response_history_message = (
+        _preserving_tool_call_response_history_message
+    )
+    chat_utils.convert_chat_history = _preserving_convert_chat_history
+    print(
+        "sitecustomize: preserving previous tool-call responses in chat history",
         flush=True,
     )
 
