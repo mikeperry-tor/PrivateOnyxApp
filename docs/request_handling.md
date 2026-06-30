@@ -165,7 +165,7 @@ headers = {
     "Authorization": "Bearer " + CRW_API_KEY,  # Makefile-generated placeholder
 }
 payload = {
-    "url": target_url,           # e.g. https://www.google.com/search?q=...
+    "url": target_url,           # e.g. https://www.google.com/search?q=...&udm=14
     "formats": ["rawHtml"],      # full rendered DOM
     "onlyMainContent": False,    # keep full SERP (not readability-narrowed)
     # No renderer pin — use CRW auto render decision. The compose default
@@ -199,7 +199,7 @@ zero.
 
 | Engine | Target URL shape | DOM assumption to verify |
 |--------|------------------|--------------------------|
-| `google2` | `https://www.google.com/search?q=...` | Organic result links are anchors containing an `h3`, optionally under `div.g` or `div[data-ved]`; snippets may appear under `VwiC3b` / `IsZvec` classes. |
+| `google2` | `https://www.google.com/search?q=...&udm=14` | Google Web-only SERPs are requested with `udm=14` to avoid AI Overview rendering; organic result title links remain anchors containing an `h3`; snippets are looked up from the closest result card, commonly `div.g`, `MjjYud`, `N54PNb`, `yuRUbf`, or `data-ved` ancestors, with text under `VwiC3b` / `IsZvec` / `kb0PBd` / `ITZIwc` / `data-sncf` nodes. |
 | `brave2` | `https://search.brave.com/search?q=...` | Organic result cards have `data-type="web"`; title links carry class `l1`; title/snippet text remains under `title` and `snippet-description` classes. |
 | `duckduckgo2` | `https://html.duckduckgo.com/html/?q=...` | HTML endpoint result cards include both `result` and `web-result`; title links use `result__a`; snippets use `result__snippet`; `/l/?uddg=...` redirects carry the real URL. |
 | `startpage2` | `https://www.startpage.com/sp/search?query=...&cat=web` | Post-hydration organic cards carry a `result` class but not `a-bg-result`; title links prefer `data-testid="gl-title-link"` or `result-title`; captcha pages still expose title/meta/form markers caught by `captcha_xpath`. |

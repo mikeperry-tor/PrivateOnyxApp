@@ -24,7 +24,7 @@ rendered Google DOM with XPath.
 """
 
 import typing as t
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 
 from lxml import html
 
@@ -55,20 +55,33 @@ language_support = False
 
 time_range_dict = {"day": "d", "week": "w", "month": "m", "year": "y"}
 
-# Google SERP result containers.  Google rotates class names frequently; these
-# selectors target the stable structural anchors (data-ved attribute on result
-# links + the h3 title).  This mirrors what the stock google.py does but is
-# intentionally lenient: we accept several known result-block shapes.
-results_xpath = '//div[contains(@class, "g")]//a[./h3] | //div[@data-ved]//a[./h3]'
+# Google SERP result links.  Google rotates class names frequently; the most
+# stable hook across classic and udm=14 ("Web") SERPs is still a title anchor
+# containing an h3.  Card/snippet lookup happens from the anchor's ancestor
+# below, because the snippet is often a sibling of the title link.
+results_xpath = '//a[@href][.//h3]'
 title_xpath = ".//h3"
-# content node is best-effort; Google buries snippets in varying containers.
-content_xpath = './/div[contains(@class, "VwiC3b") or contains(@class, "IsZvec")]'
+result_container_xpath = (
+    './ancestor::div[contains(concat(" ", normalize-space(@class), " "), " g ")'
+    ' or contains(@class, "MjjYud")'
+    ' or contains(@class, "N54PNb")'
+    ' or contains(@class, "yuRUbf")'
+    " or @data-ved][1]"
+)
+# Content nodes are best-effort; Google buries snippets in varying containers.
+content_xpath = (
+    './/div[contains(@class, "VwiC3b")'
+    ' or contains(@class, "IsZvec")'
+    ' or contains(@class, "kb0PBd")'
+    ' or contains(@class, "ITZIwc")'
+    " or @data-sncf]"
+)
 
 
 def request(query: str, params: "OnlineParams") -> None:
     """Build the Google search URL and hand it to crw for stealth rendering."""
     start = (params["pageno"] - 1) * 10
-    query_args: t.Dict[str, str] = {"q": query, "hl": "en"}
+    query_args: t.Dict[str, str] = {"q": query, "hl": "en", "udm": "14"}
     if start:
         query_args["start"] = str(start)
     if params.get("time_range") in time_range_dict:
@@ -95,19 +108,42 @@ def response(resp: "SXNG_Response"):
         if not title:
             continue
 
-        raw_url = result.get("href")
-        if not raw_url:
+        url = _normalize_result_url(result.get("href"))
+        if not url:
             continue
-        # strip Google's /url?q= redirector
-        url = raw_url
-        if raw_url.startswith("/url?q="):
-            url = raw_url[7:].split("&sa=")[0]
-            from urllib.parse import unquote
-            url = unquote(url)
 
-        content_nodes = eval_xpath(result, content_xpath)
+        container_nodes = eval_xpath(result, result_container_xpath)
+        content_root = container_nodes[0] if container_nodes else result
+        content_nodes = eval_xpath(content_root, content_xpath)
         content = extract_text(content_nodes[0]) if content_nodes else ""
 
         results.append({"url": url, "title": title, "content": content})
 
     return results
+
+
+def _normalize_result_url(raw_url: str | None) -> str:
+    """Return an external result URL, or an empty string for Google chrome."""
+    if not raw_url:
+        return ""
+
+    if raw_url.startswith("/url?"):
+        query = parse_qs(urlparse(raw_url).query)
+        raw_url = (query.get("q") or query.get("url") or [""])[0]
+    elif raw_url.startswith("/"):
+        raw_url = urljoin("https://www.google.com", raw_url)
+
+    url = unquote(raw_url)
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+
+    # Skip Google SERP/navigation links.  Do not blanket-drop every google.com
+    # hostname: docs.google.com, support.google.com, etc. can be real results.
+    host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+    if host in {"www.google.com", "google.com"} and parsed.path.startswith(
+        ("/search", "/sorry", "/preferences")
+    ):
+        return ""
+
+    return url
