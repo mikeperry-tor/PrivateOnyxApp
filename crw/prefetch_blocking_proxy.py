@@ -83,12 +83,12 @@ LISTEN_PORT = int(os.environ.get("PREFETCH_PROXY_PORT", "3128"))
 UPSTREAM_PROXY = os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
 
 # Search engine hostnames that should get an immediate 403 without any
-# network request. These are the eTLD+1 of the four SearXNG stub engines.
+# network request. These are the hostnames/eTLD+1s of the SearXNG stub engines.
 SEARCH_ENGINE_HOSTS = frozenset(
     h.strip().lower()
     for h in os.environ.get(
         "PREFETCH_BLOCK_HOSTS",
-        "google.com,search.brave.com,html.duckduckgo.com,startpage.com",
+        "google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com",
     ).split(",")
     if h.strip()
 )

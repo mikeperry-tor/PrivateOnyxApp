@@ -275,7 +275,7 @@ services:
       #   4. networkidle0     — 0 active network requests for 500ms
       OBSCURA_BROWSER_WAIT_UNTIL_SEARCH: "${OBSCURA_BROWSER_WAIT_UNTIL_SEARCH:-networkidle2}"
       OBSCURA_BROWSER_WAIT_UNTIL_WEB: "${OBSCURA_BROWSER_WAIT_UNTIL_WEB:-load}"
-      OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS: "google.com,search.brave.com,html.duckduckgo.com,startpage.com"
+      OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS: "google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com"
       # Interval for periodic cookie clearing on obscura (seconds). In the
       # normal wrapper path CRW uses Target.createTarget on obscura's default
       # context, so cookies can persist between CDP WebSocket connections.
@@ -354,7 +354,7 @@ services:
       ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
       # Comma-separated list of search engine hostnames to block immediately
       # (return 403 without any network request).
-      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com}"
+      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
     volumes:
       - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
     command:

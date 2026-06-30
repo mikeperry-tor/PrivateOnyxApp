@@ -113,7 +113,7 @@ WAIT_UNTIL_SEARCH_HOSTS = frozenset(
     h.strip().lower()
     for h in os.environ.get(
         "OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS",
-        "google.com,search.brave.com,html.duckduckgo.com,startpage.com",
+        "google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com",
     ).split(",")
     if h.strip()
 )

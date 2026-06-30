@@ -564,7 +564,7 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
    or 403 status causes escalation to the CDP renderer.
 3. The proxy intercepts every HTTP request from CRW:
    - **Search engine URLs** (`google.com`, `search.brave.com`,
-     `html.duckduckgo.com`, `startpage.com`): returns `403 Forbidden`
+     `html.duckduckgo.com`, `startpage.com`, `bing.com`): returns `403 Forbidden`
      immediately — no network request, no double-hit. CRW sees
      `is_auth_blocked` and escalates to obscura.
    - **Internal/private destinations**: returns `403` without opening any
@@ -635,6 +635,19 @@ CONNECT tunneling. The proxy handles CONNECT requests as follows:
 For plain HTTP URLs (non-CONNECT GET), the proxy does a HEAD check and
 returns 403 for non-PDFs, tunneling only for PDFs.
 
+**Keeping search-engine host lists aligned:**
+
+Every CRW-backed SearXNG engine must have its target host covered by
+`PREFETCH_BLOCK_HOSTS`. Otherwise CRW's reqwest prefetch can hit that search
+engine before obscura navigates, creating the double-hit this proxy exists to
+avoid. When adding, removing, or retargeting a CRW-backed engine, update:
+
+- `crw/prefetch_blocking_proxy.py`'s default `PREFETCH_BLOCK_HOSTS`;
+- the `prefetch-blocking-proxy` service default in `docker-compose.yaml`;
+- `crw/cdp_shim.py` and the `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS` compose
+  default when the engine still needs SERP-specific `networkidle2` navigation;
+- the environment-variable tables and parser assumptions in this document.
+
 **PDF handling:**
 
 PDFs are handled through two paths:
@@ -686,7 +699,7 @@ This is critical for two reasons:
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HEAD/tunnel requests. Supports `http://`, `https://`, `socks5://`, `socks5h://` |
-| `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
+| `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_BLOCK_INTERNAL_HOSTS` | `localhost,host.docker.internal` | Comma-separated internal hostnames to block by name without opening an upstream request. Subdomains are blocked too; single-label Docker-style hostnames are always blocked. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
 | `PREFETCH_HEAD_TIMEOUT` | `10` | Timeout for upstream HEAD requests (seconds) |
@@ -1225,7 +1238,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `CDP_SHIM_STRIP_STEALTH_JS` | `1` | Strip CRW's STEALTH_JS (1=yes, 0=no) |
 | `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` | `networkidle2` | `waitUntil` for search engine URLs (SERPs). SERPs are JS-heavy SPAs that load results via XHR — network idle ensures results have loaded. Options: `domcontentloaded`, `load`, `networkidle0`, `networkidle2`. |
 | `OBSCURA_BROWSER_WAIT_UNTIL_WEB` | `load` | `waitUntil` for all other URLs (open_url web pages). Content is ready at `load`; many modern sites keep long-polling connections that prevent network idle. |
-| `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com` | Comma-separated search engine hostnames for per-URL `waitUntil` selection. |
+| `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames for per-URL `waitUntil` selection. |
 | `CDP_SHIM_STRIP_PROXY_SERVER` | `1` | Strip `proxyServer` from `Target.createBrowserContext` (safety net — not needed with `HTTPS_PROXY` env vars since `REQUEST_PROXY` is not set). See §1.7. |
 | `CDP_SHIM_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
 | `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL` | `3600` | Periodic cookie clearing interval (seconds, 0=disabled) |
@@ -1237,7 +1250,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HEAD/tunnel requests. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
-| `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
+| `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_BLOCK_INTERNAL_HOSTS` | `localhost,host.docker.internal` | Comma-separated internal hostnames to block by name without opening an upstream request. Subdomains are blocked too; single-label Docker-style hostnames are always blocked. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
 | `PREFETCH_HEAD_TIMEOUT` | `10` | Timeout for upstream HEAD requests (seconds) |
