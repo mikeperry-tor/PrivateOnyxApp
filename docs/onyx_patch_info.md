@@ -822,7 +822,7 @@ as `SEARXNG_PORT`, `SEARXNG_BIND_ADDRESS`, `SEARXNG_BASE_URL`,
 `SEARXNG_METHOD`, and `SEARXNG_VALKEY_URL`, stay inherited from the image
 defaults rather than being duplicated in the overlay.
 
-### SearXNG last-resort scoring patch
+### SearXNG round-robin scheduling and last-resort scoring patches
 
 Local files:
 
@@ -832,14 +832,38 @@ Local files:
 
 SearXNG source area:
 
+- `reference_repos/searxng/searx/search/__init__.py`
 - `reference_repos/searxng/searx/results.py`
 - `reference_repos/searxng/searx/result_types/_base.py`
 
 The wrapper enables `bing2` as a search engine of last resort. Bing can be
 useful when Google, Brave, DuckDuckGo, or Startpage are blocked or sparse, but
 its web results are often broad enough to add noise to the top of an aggregate
-result set. SearXNG's stock engine `weight` setting is not a good fit for this
-role.
+result set. The wrapper now addresses that operationally in two places:
+
+- `SEARXNG_ROUND_ROBIN=true` changes request scheduling so each query uses one
+  CRW-backed web provider at a time. Normal providers rotate first; engines
+  marked `last_resort: true`, currently `bing2`, are selected only when all
+  selected normal providers are already suspended or unavailable. When the
+  configured provider pool is present in a request, other selected SearXNG
+  engines are dropped so only the chosen provider runs.
+- The scoring patch still protects parallel or explicit multi-engine searches
+  by making last-resort engines confirm normal results without penalizing them.
+
+SearXNG's stock engine `weight` setting is not a good fit for the scoring half
+of this role.
+
+The scheduling patch wraps `searx.search.Search._get_requests()`, the point at
+which SearXNG turns `SearchQuery.engineref_list` into engine request work. It
+uses SearXNG's existing per-processor `suspended_status` as the health signal
+before request threads are launched. The patch also wraps
+`Search.search_standard()` so a query can retry within the same SearXNG HTTP
+request: if the chosen provider returns no main results and records itself as
+unresponsive, SearXNG chooses another untried normal provider, or the
+last-resort tier when all normal providers have failed or are unavailable.
+Retries stop when a provider returns main results, when a provider returns an
+empty-but-responsive result set, or when all configured providers have been
+tried or are already down.
 
 Stock SearXNG merges duplicate URL results before scoring. For a merged result,
 `calculate_score()` multiplies the weights of every engine that found that URL,
@@ -850,14 +874,14 @@ for each occurrence. A low Bing weight therefore does two things at once:
 - Results found by Bing and a normal engine are also demoted, which is not
   desirable because Bing should not penalize corroborated results.
 
-The wrapper patch changes only the merged-result scoring path. It is mounted
-into `searxng-core` as a `sitecustomize.py` module and runs in strict mode by
-default through `WRAPPER_PATCH_STRICT=true`. At startup it inspects the upstream
-source shape for `calculate_score()`,
+The wrapper SearXNG patch module is mounted into `searxng-core` as a
+`sitecustomize.py` module and runs in strict mode by default through
+`WRAPPER_PATCH_STRICT=true`. At startup it inspects the upstream source shape
+for `Search._get_requests()`, `calculate_score()`,
 `ResultContainer._merge_main_result()`, `ResultContainer.close()`, and
 `ResultContainer.get_ordered_results()`. If those functions no longer contain
-the expected scoring, merge, and ordering fragments, strict mode raises and
-SearXNG fails closed instead of silently applying a stale patch.
+the expected scheduling, scoring, merge, and ordering fragments, strict mode
+raises and SearXNG fails closed instead of silently applying a stale patch.
 
 The patched merge method records per-engine result positions while preserving
 SearXNG's existing merged `positions` and `engines` fields. The patched close
@@ -882,18 +906,31 @@ last_resort_confirmation_bonus: 0.15
 
 Consequences:
 
-- Bing-only results remain available when other engines fail, but they do not
-  crowd out normal-engine results while those engines are healthy.
+- With the default `SEARXNG_ROUND_ROBIN=true`, ordinary Onyx web searches use
+  one CRW-backed provider per query instead of hitting every search engine.
+  Other default-category SearXNG engines are dropped when the configured
+  provider pool is present.
+- Bing remains available when normal providers are already suspended or
+  unavailable, but it is not queried while a normal provider can be selected.
+- The scheduler is health-aware and now performs same-request retry after a
+  provider records itself as unresponsive. This can increase worst-case latency
+  when several providers fail sequentially, but avoids returning an empty
+  SearXNG response while another configured provider is still eligible.
+- The round-robin cursor is in-memory and process-local. It resets on SearXNG
+  restart; if SearXNG is later run with multiple Python worker processes, each
+  worker has its own cursor.
+- In round-robin mode, the last-resort scoring patch is mostly inert for
+  ordinary single-provider searches, but remains important for explicit
+  multi-engine searches and for `SEARXNG_ROUND_ROBIN=false`.
+- In parallel mode, Bing-only results remain available when other engines fail,
+  but they do not crowd out normal-engine results while those engines are
+  healthy.
 - A Bing match can modestly promote a URL already found elsewhere.
 - Normal results that Bing also finds are not penalized by Bing's fallback
   weight.
 - SearXNG's public JSON still exposes one merged `score`; the per-engine
   position map is internal to the patched container and is not part of the
   response schema.
-- The patch intentionally does not change SearXNG's parallel fan-out. Bing is
-  queried with the other engines, then demoted at ranking time. A true
-  second-pass fallback query would reduce Bing traffic but would require a more
-  invasive scheduler change and would add latency on sparse/blocked searches.
 
 Alternatives considered:
 
@@ -902,12 +939,16 @@ Alternatives considered:
 - Keep Bing weight at `1.0` and post-process Bing-only results in a plugin.
   That avoids core scoring changes, but it is less explicit, less robust across
   SearXNG's grouping pass, and cannot cleanly apply a confirmation bonus.
-- Run Bing only after normal engines return too few results. This is the
-  cleanest "last resort" model operationally, but it changes the request
-  scheduler rather than just the scoring path.
+- Run Bing only after normal engines return too few results in the same HTTP
+  request. This is the cleanest "last resort" model operationally, but it
+  requires a two-phase scheduler and would add latency on sparse/blocked
+  searches.
 - Hard-code the engine name `bing2` in the scoring function. The wrapper uses
   config attributes instead so future noisy engines can opt into the same
   behavior without another scoring patch.
+- Use Valkey for a cross-worker round-robin cursor. This would make rotation
+  global across multiple SearXNG worker processes, but the current container
+  shape does not require that extra state and dependency surface.
 
 ### Upstream merge request shape
 

@@ -117,7 +117,11 @@ configured upstream proxy as described in
 
 **Key characteristics of the search path:**
 - Involves the SearXNG container as an intermediary aggregation layer
-- SearXNG fans out to 5 custom engines in parallel, each hitting CRW separately
+- By default, SearXNG rotates among one non-last-resort CRW-backed web engine
+  per query (`google2`, `brave2`, `duckduckgo2`, `startpage2`) and uses
+  last-resort engines such as `bing2` only when the normal providers are
+  already suspended or unavailable. Set `SEARXNG_ROUND_ROBIN=false` to restore
+  SearXNG's normal parallel fan-out to all selected engines.
 - CRW's per-host rate limiter serializes requests to the same search engine
 - The CDP shim strips CRW's conflicting STEALTH_JS, injects `waitUntil` into
   `Page.navigate` for adaptive waiting, strips `proxyServer` only as a safety
@@ -152,9 +156,15 @@ on failure with exponential backoff (1s, 2s, 4s).
 
 ### 1.2 SearXNG → CRW (custom engines)
 
-SearXNG fans out the query to all enabled engines **in parallel**. The five
-custom engines (`google2`, `brave2`, `duckduckgo2`, `startpage2`, `bing2`) are
-defined in [`searxng/engines/`](../searxng/engines/). Each engine's `request()`
+SearXNG normally fans out a query to all selected engines in parallel. This
+wrapper defaults `SEARXNG_ROUND_ROBIN=true`, so the startup patch in
+[`searxng/patches/sitecustomize.py`](../searxng/patches/sitecustomize.py)
+reduces each request to one available CRW-backed web provider before SearXNG
+launches engine threads. When that provider pool is present, other selected
+SearXNG engines from the default category are dropped for that request so only
+the chosen provider runs. The five custom engines (`google2`, `brave2`,
+`duckduckgo2`, `startpage2`, `bing2`) are defined in
+[`searxng/engines/`](../searxng/engines/). Each scheduled engine's `request()`
 function rewrites the SearXNG HTTP params to POST to CRW's `/v1/scrape`
 endpoint instead of fetching the search engine directly:
 
@@ -222,6 +232,18 @@ engine would be penalized. The wrapper patch tracks result positions by engine:
 The current `bing2` values in `searxng/core-config/settings.yml` are
 `last_resort_fallback_weight: 0.05` and
 `last_resort_confirmation_bonus: 0.15`.
+
+When `SEARXNG_ROUND_ROBIN=true`, the same patch file also schedules one
+CRW-backed provider per query. It classifies engines marked `last_resort: true`
+in the same pass as the round-robin selection: normal providers rotate first,
+and `bing2` is eligible only when all selected normal providers are already
+suspended or unavailable. It also drops other selected SearXNG engines whenever
+the configured provider pool is present, so ordinary Onyx searches receive one
+provider's results. If the selected provider returns no main results and
+records itself as unresponsive, the patch retries the same SearXNG request with
+another untried provider, reaching `bing2` only after the normal provider tier
+has failed or is unavailable. In that mode the scoring patch is mostly inert
+when one provider succeeds, but it remains active for `SEARXNG_ROUND_ROBIN=false`.
 
 The upgrade inventory in
 [SearXNG companion stack](onyx_patches_upgrade.md#searxng-companion-stack)
@@ -291,10 +313,12 @@ There are multiple layers of 429 handling:
 
 **429 causes in this stack:**
 
-1. **Parallel fan-out**: SearXNG issues 4 requests per query, and the agent
-   can issue multiple queries simultaneously. The per-host rate limiter
-   serializes these, but the search engine may see a burst from the
-   same VPN exit IP.
+1. **Search-provider fan-out**: With the default `SEARXNG_ROUND_ROBIN=true`,
+   each individual SearXNG query uses one CRW-backed search provider, but the
+   agent can still issue multiple independent queries simultaneously. Setting
+   `SEARXNG_ROUND_ROBIN=false` restores SearXNG's parallel fan-out to all
+   selected engines. The per-host rate limiter serializes same-host requests,
+   but a search engine may still see bursts from the same VPN exit IP.
 2. **IP reputation**: VPN/Tor exit IPs are often flagged by anti-bot systems
    regardless of request pattern.
 3. **Residual fingerprint drift**: obscura's TLS and browser-level
@@ -348,8 +372,15 @@ sanitized CDP trace mode described in
 
 ### 1.5 Result Processing
 
-SearXNG aggregates results from all engines, deduplicates, and returns JSON
-to Onyx. Onyx's `WebSearchTool` interweaves results from multiple queries in
+SearXNG aggregates results from the engines scheduled for the request,
+deduplicates, and returns JSON to Onyx. With the default
+`SEARXNG_ROUND_ROBIN=true`, the wrapper's SearXNG startup patch schedules one
+available CRW-backed search provider per query and selects `bing2` only when
+the normal providers are already suspended or unavailable; other default
+SearXNG engines are dropped when that provider pool is selected. If a scheduled
+provider fails and records itself as unresponsive, SearXNG retries the same
+query with another eligible provider before returning the final JSON. Onyx's
+`WebSearchTool` separately interweaves results from multiple query strings in
 round-robin fashion, converts to `InferenceSection`s, and returns them to the
 LLM as cited search results.
 
@@ -495,9 +526,14 @@ eTLD+1. The semaphore is held for the **entire fetch duration** (navigation
 + render), and the rate-limit sleep is deducted from the request's deadline
 budget before navigation begins.
 
-This creates a **deadline compounding** problem under parallel fan-out:
+This creates a **deadline compounding** problem when multiple CRW requests to
+the same host are queued. With the default `SEARXNG_ROUND_ROBIN=true`, that is
+most likely when Onyx issues multiple independent search query strings and the
+round-robin scheduler selects the same provider for more than one of them. With
+`SEARXNG_ROUND_ROBIN=false`, SearXNG's parallel engine fan-out can create the
+same queue inside a single logical search.
 
-**Scenario: 3 search queries → 12 CRW requests → 3 per engine**
+**Scenario: 3 search queries → 3 Google requests**
 
 For Google (3 requests to `google.com`, semaphore=1, 3s interval, ~45s
 nav per request on Tor):
@@ -1281,9 +1317,9 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `CRW_RENDERER__CHROME_TIMEOUT_MS` | `50000` | Per-page navigation timeout for the chrome (obscura) renderer tier. Must be ≥ `OBSCURA_NAV_TIMEOUT_MS` so CRW's deadline doesn't fire before obscura's nav timeout. |
 | `CRW_RENDERER__HTTP_TIMEOUT_MS` | `60000` | HTTP prefetch timeout. CRW always runs an HTTP prefetch before the CDP renderer (even with `RENDER_JS_DEFAULT=true`) to check Content-Type — PDFs bypass obscura. Ceiling, not delay — completes in 1-3s on happy path. Contributes to `ladder_min`. No happy-path impact. |
 | `CRW_RENDERER__CHROME_NAV_BUDGET_MS` | `48000` | Post-navigate budget for the chrome renderer tier. This races CRW's post-navigation work after `Page.loadEventFired`: SPA selector poll, content stability, challenge retry, and DOM extraction. |
-| `CRW_REQUEST__DEADLINE_MS_DEFAULT` | `300000` | Baseline per-request deadline (ms). With `auto_extend_deadline_for_ladder=true` (default), effective deadline is `max(this, ladder_min=~138s)` = 300s. Accommodates multi-request scenarios (parallel search fan-out, GitHub URL crawling) by giving queued requests in the per-host rate limiter enough budget to complete while serializing per-host to avoid 429s. No happy-path impact. See §1.6.1. |
-| `CRW_CRAWLER__REQUESTS_PER_SECOND` | `0.33` | Per-host rate limit (~3s interval). The rate-limit sleep is deducted from the request's deadline budget before navigation begins. See §1.6.1 for the compounding interaction with parallel fan-out. |
-| `CRW_CRAWLER__PER_HOST_MAX_CONCURRENT` | `1` | Max concurrent requests per eTLD+1. The semaphore is held for the entire fetch duration (navigation + render), serializing requests to the same search engine. See §1.6.1 for deadline compounding under parallel fan-out. |
+| `CRW_REQUEST__DEADLINE_MS_DEFAULT` | `300000` | Baseline per-request deadline (ms). With `auto_extend_deadline_for_ladder=true` (default), effective deadline is `max(this, ladder_min=~138s)` = 300s. Accommodates multi-request scenarios (multiple search query strings, `SEARXNG_ROUND_ROBIN=false` parallel fan-out, GitHub URL crawling) by giving queued requests in the per-host rate limiter enough budget to complete while serializing per-host to avoid 429s. No happy-path impact. See §1.6.1. |
+| `CRW_CRAWLER__REQUESTS_PER_SECOND` | `0.33` | Per-host rate limit (~3s interval). The rate-limit sleep is deducted from the request's deadline budget before navigation begins. See §1.6.1 for the compounding interaction with queued same-host requests. |
+| `CRW_CRAWLER__PER_HOST_MAX_CONCURRENT` | `1` | Max concurrent requests per eTLD+1. The semaphore is held for the entire fetch duration (navigation + render), serializing requests to the same search engine. See §1.6.1 for deadline compounding under queued same-host requests. |
 | `CRW_CRAWLER__STEALTH__JITTER_FACTOR` | `0.2` | ±20% jitter on rate-limit intervals (crawl path only) |
 
 ### CDP shim environment variables
@@ -1346,6 +1382,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `SearxEngineAccessDenied` | `180` | Suspension time for 403 errors (seconds) |
 | `SearxEngineCaptcha` | `3600` | Suspension time for CAPTCHA (seconds) |
 | `server.secret_key` | Ephemeral `SEARXNG_SECRET` generated by the Makefile | Overwrites the overlay value for wrapper starts |
+| `SEARXNG_ROUND_ROBIN` | `true` | Container env consumed by the wrapper SearXNG startup patch; schedules one CRW-backed web provider per query, drops other selected engines when that provider pool is present, retries another provider after unresponsive failures, and uses last-resort providers only when normal providers are suspended/unavailable |
 | `outgoing.request_timeout` | `6.0` | Default SearXNG HTTP client timeout; custom CRW-backed engines override this with longer per-engine timeouts |
 | Engine `timeout` | `60.0` | Per-engine timeout (seconds) — accommodates obscura render time |
 | `google2`, `brave2`, `duckduckgo2`, `startpage2`, `bing2` | enabled | Custom CRW-backed engines mounted from `searxng/engines/` |

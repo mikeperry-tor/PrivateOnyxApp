@@ -11,6 +11,7 @@ services:
     env_file: ./.env
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET must be set}
+      SEARXNG_ROUND_ROBIN: "${SEARXNG_ROUND_ROBIN:-true}"
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/usr/local/searxng/wrapper-patches:${PYTHONPATH:-}"
     volumes:

@@ -607,6 +607,7 @@ Local files:
 Upstream SearXNG references:
 
 - `reference_repos/searxng/searx/results.py`
+- `reference_repos/searxng/searx/search/__init__.py`
 - `reference_repos/searxng/searx/result_types/_base.py`
 - `reference_repos/searxng/searx/settings_loader.py`
 - `reference_repos/searxng/searx/settings.yml`
@@ -633,9 +634,13 @@ Behavior:
 - `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` parse the
   rendered SERP DOM with XPath. They replace the stock search-engine variants
   that are blocked or challenge-prone on VPN/datacenter exit IPs.
-- `bing2` is configured as a last-resort engine. It still fetches in parallel
-  with the other engines, but the SearXNG scoring patch demotes Bing-only
-  results and treats Bing matches on normal-engine results as confirmation.
+- `bing2` is configured as a last-resort engine. With the default
+  `SEARXNG_ROUND_ROBIN=true`, the SearXNG scheduling patch rotates among one
+  normal CRW-backed provider per query and selects `bing2` only when all
+  selected normal providers are already suspended or unavailable. With
+  `SEARXNG_ROUND_ROBIN=false` or explicit multi-engine usage, the scoring patch
+  demotes Bing-only results and treats Bing matches on normal-engine results as
+  confirmation.
 
 Upgrade notes:
 
@@ -678,15 +683,28 @@ Upgrade notes:
   `bing2.last_resort_confirmation_bonus` in the overlay unless the scoring
   model is intentionally changed.
 
-### Last-resort scoring patch
+### Round-robin scheduling and last-resort scoring patch
 
 Behavior:
 
 - `searxng/patches/sitecustomize.py` is mounted into `searxng-core` and added
   to `PYTHONPATH`, so Python imports it during SearXNG startup.
-- The patch inspects upstream `searx.results` functions in strict mode before
-  replacing them. Missing expected source fragments must stop startup instead
-  of silently producing stale ranking behavior.
+- When `SEARXNG_ROUND_ROBIN=true`, the patch wraps
+  `searx.search.Search._get_requests()` before SearXNG launches engine
+  threads. It reduces the selected CRW-backed web provider list to one
+  available normal provider, or one available last-resort provider if every
+  selected normal provider is already suspended or unavailable. When that
+  provider pool is present, other selected SearXNG engines are dropped for the
+  request.
+- The patch also wraps `Search.search_standard()` so a round-robin search can
+  retry within the same SearXNG HTTP request after the selected provider
+  records itself as unresponsive and returns no main results. Retries stop
+  after a provider returns main results, after an empty-but-responsive result
+  set, or after all configured providers have been tried or are already down.
+- The patch inspects upstream `searx.search` and `searx.results` functions in
+  strict mode before replacing them. Missing expected source fragments must
+  stop startup instead of silently producing stale scheduling or ranking
+  behavior.
 - The patched merge path records result positions by engine. The patched close
   path preserves stock scoring for ordinary results, scores last-resort-only
   results with `last_resort_fallback_weight`, and applies
@@ -697,6 +715,28 @@ Behavior:
 
 Upgrade notes:
 
+- Re-check `reference_repos/searxng/searx/search/__init__.py` for the stock
+  `Search._get_requests()` flow. Confirm SearXNG still builds a request list
+  by iterating `self.search_query.engineref_list`, skips suspended processors
+  with `processor.extend_container_if_suspended(...)`, and appends
+  `(engineref.name, self.search_query.query, request_params)` tuples before
+  `search_multiple_requests()` starts threads.
+- Re-check `Search.search_standard()` to confirm it still calls
+  `_get_requests()`, assigns `self.actual_timeout`, and invokes
+  `search_multiple_requests(requests)`.
+- Verify round-robin selection with synthetic or live checks: with all normal
+  providers available, successive searches should use exactly one of
+  `google2`, `brave2`, `duckduckgo2`, or `startpage2`; `bing2` should not be
+  scheduled, and unrelated default-category engines such as `wikipedia` should
+  not run. When normal providers are suspended/unavailable, `bing2` should be
+  eligible as the fallback tier.
+- Verify retry behavior with a synthetic or live failure: if the first selected
+  provider records an unresponsive error and returns no main results, the same
+  SearXNG request should try another untried provider before returning. The
+  query should return empty only after every configured provider has failed,
+  is suspended, or has returned an empty-but-responsive result set.
+- Confirm `SEARXNG_ROUND_ROBIN=false` restores SearXNG's selected-engine
+  fan-out so the last-resort scoring patch still protects merged Bing results.
 - Re-check `reference_repos/searxng/searx/results.py` for the stock
   `calculate_score()` algorithm. If upstream stops multiplying engine weights,
   changes how duplicate positions are represented, or introduces first-class
@@ -718,6 +758,8 @@ Upgrade notes:
   not be penalized, and the confirmation bonus should be visible in the merged
   score.
 - Confirm SearXNG startup logs include
+  `sitecustomize: patched SearXNG round-robin search provider scheduling and retry`
+  when `SEARXNG_ROUND_ROBIN=true`, and always include
   `sitecustomize: patched SearXNG last-resort engine scoring` in strict mode.
 
 ### SearXNG settings overlay

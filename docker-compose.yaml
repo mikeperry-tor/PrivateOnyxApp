@@ -63,6 +63,10 @@ services:
       # Self-hosted crw runs open by default; this is only a non-empty bearer
       # placeholder for SearXNG's crw-backed stub engines.
       CRW_ONYX_API_KEY: ${CRW_ONYX_API_KEY:?CRW_ONYX_API_KEY must be set}
+      # Use one configured CRW-backed web provider per search query. Last-resort
+      # providers such as bing2 are selected only when normal providers are
+      # already suspended or unavailable.
+      SEARXNG_ROUND_ROBIN: "${SEARXNG_ROUND_ROBIN:-true}"
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/usr/local/searxng/wrapper-patches:${PYTHONPATH:-}"
       # Page load waiting is handled by the CDP shim's waitUntil injection
@@ -488,8 +492,9 @@ services:
       # FallbackRenderer (which handles /v1/scrape from SearXNG engines)
       # uses crawler.requests_per_second to compute the per-host interval
       # (interval = 1/rps). The default 10 RPS = 100ms interval, which lets
-      # SearXNG's parallel engine fan-out hit Google/Brave/DDG/Startpage
-      # nearly simultaneously from the same VPN IP and trigger 429s.
+      # multiple simultaneous Onyx search queries or SEARXNG_ROUND_ROBIN=false
+      # fan-out hit a provider nearly simultaneously from the same VPN IP and
+      # trigger 429s.
       # 0.33 RPS = ~3s interval between requests to the same eTLD+1,
       # serializing the burst that Onyx's parallel web_search queries create.
       # Keyed by eTLD+1 so www.google.com and google.com share one limiter.
@@ -502,9 +507,9 @@ services:
       #
       # Deadline compounding: the semaphore blocks queued requests while
       # their per-request deadline clock keeps ticking. On Tor/slow VPN
-      # where a single nav takes ~45s, the 3rd request to the same engine
-      # in a parallel fan-out (e.g. 3 search queries → 3 Google requests)
-      # will have most of its ~108s deadline consumed by the time it
+      # where a single nav takes ~45s, the 3rd request to the same provider
+      # (e.g. 3 search queries → 3 Google requests) will have most of its
+      # ~108s deadline consumed by the time it
       # acquires the semaphore, leaving insufficient nav budget. This is
       # acceptable — SearXNG aggregates partial results from engines that
       # succeed. See docs/request_handling.md §1.6.1.

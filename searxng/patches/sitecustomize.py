@@ -7,7 +7,19 @@ from __future__ import annotations
 
 import inspect
 import os
+import threading
 import typing as t
+
+_ROUND_ROBIN_LOCK = threading.Lock()
+_ROUND_ROBIN_CURSOR = 0
+_ROUND_ROBIN_PROVIDER_ENV = "SEARXNG_ROUND_ROBIN_PROVIDERS"
+_ROUND_ROBIN_DEFAULT_PROVIDERS = (
+    "google2",
+    "brave2",
+    "duckduckgo2",
+    "startpage2",
+    "bing2",
+)
 
 
 def _env_enabled(name: str, default: bool = True) -> bool:
@@ -72,6 +84,236 @@ def _is_last_resort_engine(name: str) -> bool:
     if getattr(engine, "last_resort", False) is True:
         return True
     return getattr(engine, "score_mode", "") == "last_resort"
+
+
+def _round_robin_providers() -> tuple[str, ...]:
+    raw = os.environ.get(_ROUND_ROBIN_PROVIDER_ENV)
+    if raw is None:
+        return _ROUND_ROBIN_DEFAULT_PROVIDERS
+    return tuple(name.strip() for name in raw.split(",") if name.strip())
+
+
+def _is_processor_available(engine_name: str) -> bool:
+    from searx.search.processors import PROCESSORS
+
+    processor = PROCESSORS.get(engine_name)
+    if processor is None:
+        return False
+    return not processor.suspended_status.is_suspended
+
+
+def _choose_round_robin_engine(engine_names: list[str]) -> str | None:
+    global _ROUND_ROBIN_CURSOR
+
+    if not engine_names:
+        return None
+
+    with _ROUND_ROBIN_LOCK:
+        engine_name = engine_names[_ROUND_ROBIN_CURSOR % len(engine_names)]
+        _ROUND_ROBIN_CURSOR += 1
+        return engine_name
+
+
+def _round_robin_ref_map(
+    engineref_list: list[object],
+) -> tuple[dict[str, object], list[str]]:
+    provider_order = _round_robin_providers()
+    if not provider_order:
+        return {}, []
+
+    provider_names = set(provider_order)
+    first_ref_by_name = {}
+    for engineref in engineref_list:
+        name = getattr(engineref, "name", "")
+        if name in provider_names and name not in first_ref_by_name:
+            first_ref_by_name[name] = engineref
+
+    if not first_ref_by_name:
+        return {}, []
+
+    return first_ref_by_name, [
+        name for name in provider_order if name in first_ref_by_name
+    ]
+
+
+def _round_robin_selected_refs(
+    engineref_list: list[object],
+    *,
+    exclude: set[str] | None = None,
+) -> list[object]:
+    first_ref_by_name, selected_provider_order = _round_robin_ref_map(
+        engineref_list
+    )
+    if not first_ref_by_name:
+        return engineref_list
+
+    excluded = exclude or set()
+    candidate_provider_order = [
+        name for name in selected_provider_order if name not in excluded
+    ]
+    if not candidate_provider_order:
+        return []
+
+    available_regular = [
+        name
+        for name in candidate_provider_order
+        if not _is_last_resort_engine(name) and _is_processor_available(name)
+    ]
+    available_last_resort = [
+        name
+        for name in candidate_provider_order
+        if _is_last_resort_engine(name) and _is_processor_available(name)
+    ]
+    chosen = _choose_round_robin_engine(
+        available_regular or available_last_resort
+    )
+    if chosen is None:
+        return [first_ref_by_name[name] for name in candidate_provider_order]
+
+    return [first_ref_by_name[chosen]]
+
+
+def _has_round_robin_provider_pool(engineref_list: list[object]) -> bool:
+    first_ref_by_name, _selected_provider_order = _round_robin_ref_map(
+        engineref_list
+    )
+    return bool(first_ref_by_name)
+
+
+def _has_untried_round_robin_provider(
+    engineref_list: list[object],
+    attempted: set[str],
+) -> bool:
+    _first_ref_by_name, selected_provider_order = _round_robin_ref_map(
+        engineref_list
+    )
+    return any(name not in attempted for name in selected_provider_order)
+
+
+def _has_main_results(result_container: object) -> bool:
+    return bool(getattr(result_container, "main_results_map", {}))
+
+
+def _new_unresponsive_provider_names(
+    *,
+    result_container: object,
+    before: set[object],
+    attempted_this_round: set[str],
+) -> set[str]:
+    after = set(getattr(result_container, "unresponsive_engines", set()))
+    return {
+        getattr(item, "engine", "")
+        for item in after - before
+        if getattr(item, "engine", "") in attempted_this_round
+    }
+
+
+def apply_round_robin_search_patch() -> None:
+    """Optionally schedule one CRW-backed web provider per SearXNG request."""
+
+    if not _env_enabled("SEARXNG_ROUND_ROBIN", False):
+        return
+
+    try:
+        import searx.search as search_mod
+    except Exception as exc:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing SearXNG search modules: {exc}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    if getattr(search_mod.Search, "_wrapper_round_robin_patch", False):
+        return
+
+    _require_source(
+        "searx.search.Search._get_requests",
+        search_mod.Search._get_requests,
+        (
+            "for engineref in self.search_query.engineref_list:",
+            "if processor.extend_container_if_suspended(self.result_container):",
+            "requests.append((engineref.name, self.search_query.query, request_params))",
+        ),
+    )
+    _require_source(
+        "searx.search.Search.search_standard",
+        search_mod.Search.search_standard,
+        (
+            "requests, self.actual_timeout = self._get_requests()",
+            "if requests:",
+            "self.search_multiple_requests(requests)",
+        ),
+    )
+
+    original_get_requests = search_mod.Search._get_requests
+    original_search_standard = search_mod.Search.search_standard
+
+    def _patched_get_requests(self):
+        original_refs = self.search_query.engineref_list
+        selected_refs = _round_robin_selected_refs(
+            original_refs,
+            exclude=getattr(self, "_wrapper_round_robin_attempted", set()),
+        )
+        if selected_refs is original_refs:
+            return original_get_requests(self)
+
+        self.search_query.engineref_list = selected_refs
+        try:
+            return original_get_requests(self)
+        finally:
+            self.search_query.engineref_list = original_refs
+
+    def _patched_search_standard(self):
+        if not _has_round_robin_provider_pool(self.search_query.engineref_list):
+            return original_search_standard(self)
+
+        attempted: set[str] = set()
+        while True:
+            setattr(self, "_wrapper_round_robin_attempted", attempted)
+            try:
+                requests, self.actual_timeout = self._get_requests()
+            finally:
+                if hasattr(self, "_wrapper_round_robin_attempted"):
+                    delattr(self, "_wrapper_round_robin_attempted")
+
+            if not requests:
+                return True
+
+            attempted_this_round = {
+                engine_name for engine_name, _query, _params in requests
+            }
+            attempted.update(attempted_this_round)
+            before_unresponsive = set(self.result_container.unresponsive_engines)
+
+            self.start_time = search_mod.default_timer()
+            self.search_multiple_requests(requests)
+
+            if _has_main_results(self.result_container):
+                return True
+
+            failed_providers = _new_unresponsive_provider_names(
+                result_container=self.result_container,
+                before=before_unresponsive,
+                attempted_this_round=attempted_this_round,
+            )
+            if not failed_providers:
+                return True
+
+            if not _has_untried_round_robin_provider(
+                self.search_query.engineref_list,
+                attempted,
+            ):
+                return True
+
+    search_mod.Search._get_requests = _patched_get_requests
+    search_mod.Search.search_standard = _patched_search_standard
+    search_mod.Search._wrapper_round_robin_patch = True
+
+    print(
+        "sitecustomize: patched SearXNG round-robin search provider scheduling and retry",
+        flush=True,
+    )
 
 
 def _score_positions(
@@ -319,4 +561,5 @@ def apply_last_resort_scoring_patch() -> None:
     )
 
 
+apply_round_robin_search_patch()
 apply_last_resort_scoring_patch()
