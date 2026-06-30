@@ -11,9 +11,12 @@ services:
     env_file: ./.env
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET must be set}
+      WRAPPER_PATCH_STRICT: "true"
+      PYTHONPATH: "/usr/local/searxng/wrapper-patches:${PYTHONPATH:-}"
     volumes:
       - ./core-config/:/etc/searxng/:Z
       - core-data:/var/cache/searxng/
+      - ./patches:/usr/local/searxng/wrapper-patches:ro
       # crw + obscura stealth-browser backed stub engines (see _crw.py).
       # Mounted as individual files to preserve the image's built-in engines.
       - ./engines/_crw.py:/usr/local/searxng/searx/engines/_crw.py:ro
@@ -21,6 +24,7 @@ services:
       - ./engines/brave2.py:/usr/local/searxng/searx/engines/brave2.py:ro
       - ./engines/duckduckgo2.py:/usr/local/searxng/searx/engines/duckduckgo2.py:ro
       - ./engines/startpage2.py:/usr/local/searxng/searx/engines/startpage2.py:ro
+      - ./engines/bing2.py:/usr/local/searxng/searx/engines/bing2.py:ro
 
   valkey:
     container_name: searxng-valkey

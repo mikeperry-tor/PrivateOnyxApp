@@ -3,8 +3,9 @@
 (Firecrawl-compatible) scrape endpoint, which drives the obscura stealth CDP
 browser.
 
-This module is imported by the ``google2`` / ``brave2`` / ``duckduckgo2`` stub
-engines.  It is NOT itself a SearXNG engine (no ``request``/``response`` here).
+This module is imported by the ``google2`` / ``brave2`` / ``duckduckgo2`` /
+``startpage2`` / ``bing2`` stub engines.  It is NOT itself a SearXNG engine
+(no ``request``/``response`` here).
 
 Architecture
 ------------

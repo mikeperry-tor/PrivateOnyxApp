@@ -53,7 +53,7 @@ cp "$SRC_SETTINGS" "$MERGED_SETTINGS"
 #  2. outgoing.networks.direct: define a `direct` network with `proxies: {}`
 #     (empty = no proxy) so engines assigned to it bypass the proxy entirely.
 #
-#  3. crw-backed engines (google2, brave2, duckduckgo2, startpage2): set
+#  3. crw-backed engines (google2, brave2, duckduckgo2, startpage2, bing2): set
 #     `network: direct`
 #     so their loopback POSTs to http://127.0.0.1:3010/v1/scrape (the local crw
 #     Firecrawl-compatible scraper) are NOT sent through the upstream proxy.
@@ -65,7 +65,7 @@ import re
 
 path = sys.argv[1]
 proxy_url = sys.argv[2]
-CRW_ENGINES = {"google2", "brave2", "duckduckgo2", "startpage2"}
+CRW_ENGINES = {"google2", "brave2", "duckduckgo2", "startpage2", "bing2"}
 
 with open(path, "r", encoding="utf-8") as fh:
     lines = fh.readlines()

@@ -19,6 +19,7 @@ use_default_settings:
       - startpage
       - startpage news
       - startpage images
+      - bing
 
 search:
   # Result formats available from the web endpoint; remove a format to deny
@@ -65,3 +66,13 @@ engines:
     timeout: 60.0
     disabled: false
     enable_http: true
+
+  - name: bing2
+    engine: bing2
+    shortcut: bi2
+    timeout: 60.0
+    disabled: false
+    enable_http: true
+    last_resort: true
+    last_resort_fallback_weight: 0.05
+    last_resort_confirmation_bonus: 0.15

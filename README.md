@@ -24,7 +24,7 @@ The Docker Compose files in this stack relies on the following components:
 
 4. [Obscura](https://github.com/h4ckf0r0day/obscura) is combined with [crw](https://github.com/us/crw) to provide the Onyx agent with an actual headless browser with anti-fingerprinting defenses, as a Firecrawl-compatible API endpoint. This helps reduce fingerprint-based bans by websites. Both run inside the shared Myst namespace so scrape/crawl traffic egresses through the VPN endpoint IP.
 
-5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends. The DuckDuckGo, Brave, and Google engines of SearXNG have been [monkey-patched](https://github.com/searxng/searxng/discussions/5651) to use the Obscura+crw instance to fetch their search results, which significantly reduces captchas and bans by these search engines.
+5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends. The Google, Brave, DuckDuckGo, Startpage, and Bing web engines are wrapper-provided CRW-backed variants that use the Obscura+crw instance to fetch their search results, which significantly reduces captchas and bans by these search engines.
 
 6. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to the Onyx web interface. The TLS key is generated locally and signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
 
@@ -382,7 +382,7 @@ ONYX_AGENT_OUTBOUND_PROXY_URL="socks5h://proxy.example.com:1080"
 
 > **NOTE** The proxy setup has not been audited for leaks. You still likely want the Myst VPN, or at least a host VPN, in case of proxy bypass. In particular, Obscura/Chrome does not support SOCKS5 usernames and passwords, and will bypass the proxy entirely if these are set. Additionally, the python code interpreter tool will bypass socks proxies when used with urllib, since urllib does not honor ALL_PROXY or support SOCKS.
 
-**SearXNG crw-engine loopback exclusion:** The crw-backed SearXNG engines (`google2`, `brave2`, `duckduckgo2`, `startpage2`) POST their search queries to the local crw scraper at `http://127.0.0.1:3010/v1/scrape` (loopback inside the `netns-holder` namespace). The `searxng-proxy-entrypoint.sh` wrapper defines a `direct` network (`proxies: {}`) and assigns these engines to it, so their loopback requests to crw bypass the upstream proxy. Without this, the `all://` proxy pattern would catch the loopback request and the proxy would reject it as a private address. All other SearXNG engines (which fetch external URLs directly) use the default network and egress through the proxy.
+**SearXNG crw-engine loopback exclusion:** The crw-backed SearXNG engines (`google2`, `brave2`, `duckduckgo2`, `startpage2`, `bing2`) POST their search queries to the local crw scraper at `http://127.0.0.1:3010/v1/scrape` (loopback inside the `netns-holder` namespace). The `searxng-proxy-entrypoint.sh` wrapper defines a `direct` network (`proxies: {}`) and assigns these engines to it, so their loopback requests to crw bypass the upstream proxy. Without this, the `all://` proxy pattern would catch the loopback request and the proxy would reject it as a private address. All other SearXNG engines (which fetch external URLs directly) use the default network and egress through the proxy.
 
 ### Optional: Local Document RAG via Web Connector
 

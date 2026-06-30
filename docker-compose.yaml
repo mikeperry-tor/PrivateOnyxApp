@@ -63,6 +63,8 @@ services:
       # Self-hosted crw runs open by default; this is only a non-empty bearer
       # placeholder for SearXNG's crw-backed stub engines.
       CRW_ONYX_API_KEY: ${CRW_ONYX_API_KEY:?CRW_ONYX_API_KEY must be set}
+      WRAPPER_PATCH_STRICT: "true"
+      PYTHONPATH: "/usr/local/searxng/wrapper-patches:${PYTHONPATH:-}"
       # Page load waiting is handled by the CDP shim's waitUntil injection
       # (OBSCURA_BROWSER_WAIT_UNTIL_SEARCH=networkidle2 for SERPs,
       # OBSCURA_BROWSER_WAIT_UNTIL_WEB=load for web pages), not by a CRW
@@ -72,6 +74,7 @@ services:
     volumes: !override
       - ./searxng/core-config/:/etc/searxng/:Z
       - ./docker-data/searxng-cache:/var/cache/searxng
+      - ./searxng/patches:/usr/local/searxng/wrapper-patches:ro
       # crw + obscura stealth-browser backed stub engines. Mounted as
       # individual files (not the whole dir) so the image's built-in engines
       # are preserved. Loaded by SearXNG via the `engine:` field in
@@ -81,6 +84,7 @@ services:
       - ./searxng/engines/brave2.py:/usr/local/searxng/searx/engines/brave2.py:ro
       - ./searxng/engines/duckduckgo2.py:/usr/local/searxng/searx/engines/duckduckgo2.py:ro
       - ./searxng/engines/startpage2.py:/usr/local/searxng/searx/engines/startpage2.py:ro
+      - ./searxng/engines/bing2.py:/usr/local/searxng/searx/engines/bing2.py:ro
     depends_on:
       netns-holder:
         condition: service_started

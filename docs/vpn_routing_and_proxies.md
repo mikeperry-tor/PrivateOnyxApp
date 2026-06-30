@@ -293,7 +293,7 @@ The generated settings add:
 - `extra_proxy_timeout: 20`
 - a `direct` outgoing network with `proxies: {}`
 - `network: direct` on the local CRW-backed engines (`google2`, `brave2`,
-  `duckduckgo2`, and `startpage2`)
+  `duckduckgo2`, `startpage2`, and `bing2`)
 
 The direct network is needed because those engines call the local CRW API at
 `http://127.0.0.1:3010`. Those loopback calls must not be sent to the upstream
