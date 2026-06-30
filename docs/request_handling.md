@@ -203,7 +203,7 @@ zero.
 | `brave2` | `https://search.brave.com/search?q=...` | Organic result cards have `data-type="web"`; title links carry class `l1`; title/snippet text remains under `title` and `snippet-description` classes. |
 | `duckduckgo2` | `https://html.duckduckgo.com/html/?q=...` | HTML endpoint result cards include both `result` and `web-result`; title links use `result__a`; snippets use `result__snippet`; `/l/?uddg=...` redirects carry the real URL. |
 | `startpage2` | `https://www.startpage.com/sp/search?query=...&cat=web` | Post-hydration organic cards carry a `result` class but not `a-bg-result`; title links prefer `data-testid="gl-title-link"` or `result-title`; captcha pages still expose title/meta/form markers caught by `captcha_xpath`. |
-| `bing2` | `https://www.bing.com/search?q=...` | Organic results are `li.b_algo` cards under `ol#b_results`; title links are `h2 > a`; snippets prefer `b_caption` paragraphs; `/ck/a?u=a1...` redirects carry a base64url-encoded real URL; captcha/Turing pages are detected before parsing. |
+| `bing2` | `https://www.bing.com/search?q=...` | Organic results are `li.b_algo` cards under `ol#b_results`; title links are `h2 > a`; snippets prefer `b_caption` paragraphs; `/ck/a?u=a1...` redirects carry a base64url-encoded real URL; dictionary/answer widgets that masquerade as `b_algo` cards are skipped before result extraction; captcha/Turing pages are detected before parsing. |
 
 `bing2` is intentionally enabled as a **last-resort** engine. Bing results can
 be broad and noisy, so the wrapper mounts

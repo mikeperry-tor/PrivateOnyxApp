@@ -62,7 +62,9 @@ base_url = "https://www.bing.com"
 #
 # Keep the result container narrow. Bing mixes knowledge cards, ads, videos, and
 # inline widgets into the same page; accepting only b_algo cards avoids most of
-# that noise before the last-resort ranking tier even sees it.
+# that noise before the last-resort ranking tier even sees it. Some answer
+# widgets still masquerade as b_algo cards, so response() applies an additional
+# non-web-result filter before extracting the title and link.
 results_xpath = '//ol[@id="b_results"]/li[contains(concat(" ", normalize-space(@class), " "), " b_algo ")]'
 link_xpath = ".//h2/a[@href]"
 content_xpath = (
@@ -80,6 +82,24 @@ captcha_xpath = (
     '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "turing")]'
     ' | //input[contains(translate(@name, '
     '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "captcha")]'
+)
+_xpath_upper = '"ABCDEFGHIJKLMNOPQRSTUVWXYZ"'
+_xpath_lower = '"abcdefghijklmnopqrstuvwxyz"'
+_non_web_marker_condition = " or ".join(
+    [
+        f'contains(translate(@class, {_xpath_upper}, {_xpath_lower}), "b_ans")',
+        f'contains(translate(@class, {_xpath_upper}, {_xpath_lower}), "b_dict")',
+        f'contains(translate(@class, {_xpath_upper}, {_xpath_lower}), "b_entitytp")',
+        f'contains(translate(@class, {_xpath_upper}, {_xpath_lower}), "dictionary")',
+        f'contains(translate(@class, {_xpath_upper}, {_xpath_lower}), "l_ecrd")',
+        f'contains(translate(@id, {_xpath_upper}, {_xpath_lower}), "dictionary")',
+        f'contains(translate(@data-appns, {_xpath_upper}, {_xpath_lower}), "dictionary")',
+        f'contains(translate(@data-tag, {_xpath_upper}, {_xpath_lower}), "dictionary")',
+        f'contains(translate(@aria-label, {_xpath_upper}, {_xpath_lower}), "dictionary")',
+    ]
+)
+non_web_result_block_xpath = (
+    f"self::*[{_non_web_marker_condition}] | .//*[{_non_web_marker_condition}]"
 )
 
 
@@ -147,6 +167,11 @@ def _raise_if_captcha(dom) -> None:
         )
 
 
+def _is_non_web_result_block(item) -> bool:
+    """Return True for Bing dictionary/answer widgets that mimic web results."""
+    return bool(eval_xpath(item, non_web_result_block_xpath))
+
+
 def _extract_content(item) -> str:
     content_els = eval_xpath(item, content_xpath)
     for node in content_els:
@@ -168,6 +193,9 @@ def response(resp: "SXNG_Response") -> list[dict[str, t.Any]]:
 
     results: list[dict[str, t.Any]] = []
     for item in eval_xpath_list(dom, results_xpath):
+        if _is_non_web_result_block(item):
+            continue
+
         link = eval_xpath_getindex(item, link_xpath, 0, None)
         if link is None:
             continue
