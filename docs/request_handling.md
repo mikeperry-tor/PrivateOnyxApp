@@ -1242,6 +1242,10 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `CDP_SHIM_STRIP_PROXY_SERVER` | `1` | Strip `proxyServer` from `Target.createBrowserContext` (safety net — not needed with `HTTPS_PROXY` env vars since `REQUEST_PROXY` is not set). See §1.7. |
 | `CDP_SHIM_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
 | `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL` | `3600` | Periodic cookie clearing interval (seconds, 0=disabled) |
+| `CDP_SHIM_TRACE` | `0` | Optional sanitized CDP trace mode for short browser/debug sessions. When `1`, logs selected command timings plus navigation, lifecycle, network response, and network failure events. |
+| `CDP_SHIM_TRACE_INCLUDE_QUERY_VALUES` | `0` | When `0`, trace URLs redact query values to avoid logging private searches. Set to `1` only for local, short-lived debugging where full query logging is acceptable. |
+| `CDP_SHIM_TRACE_SAFE_QUERY_KEYS` | `udm,hl,gl,start,tbs,safe,filter` | Query keys whose values remain visible in trace logs even when query-value redaction is enabled. Keeps diagnostics like `udm=14` visible without logging search terms. |
+| `CDP_SHIM_TRACE_MAX_URL_CHARS` | `240` | Maximum length for sanitized URLs in trace logs. |
 
 ### Prefetch-blocking proxy environment variables
 

@@ -283,6 +283,12 @@ services:
       # obscura v0.1.9 clears the default jar on create/dispose. Default: 3600
       # (60 min). Set to 0 to disable.
       OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL: "${OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL:-3600}"
+      # Optional sanitized CDP lifecycle/network trace for short debugging
+      # sessions. Query values are redacted by default; see
+      # docs/request_handling.md for the trace-specific controls.
+      CDP_SHIM_TRACE: "${CDP_SHIM_TRACE:-0}"
+      CDP_SHIM_TRACE_INCLUDE_QUERY_VALUES: "${CDP_SHIM_TRACE_INCLUDE_QUERY_VALUES:-0}"
+      CDP_SHIM_TRACE_SAFE_QUERY_KEYS: "${CDP_SHIM_TRACE_SAFE_QUERY_KEYS:-udm,hl,gl,start,tbs,safe,filter}"
     volumes:
       - ./crw/cdp_shim.py:/app/cdp_shim.py:ro
       - ./crw/cdp-shim-requirements.txt:/app/requirements.txt:ro

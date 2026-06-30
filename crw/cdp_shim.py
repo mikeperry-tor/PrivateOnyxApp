@@ -60,7 +60,7 @@ import os
 import time
 import traceback
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -141,6 +141,23 @@ MAX_RECONNECT_ATTEMPTS = int(os.environ.get("CDP_SHIM_MAX_RECONNECT", "10"))
 # --proxy flag instead. Set to "0" only when intentionally testing CRW's
 # per-request browserContext proxy path.
 STRIP_PROXY_SERVER = os.environ.get("CDP_SHIM_STRIP_PROXY_SERVER", "1") == "1"
+# Optional CDP trace mode for debugging browser/search-engine behavior. This is
+# intentionally disabled by default and redacts query values so searches are
+# not written to logs. Set CDP_SHIM_TRACE_INCLUDE_QUERY_VALUES=1 only for local,
+# short-lived debugging sessions where logging full URLs is acceptable.
+TRACE_CDP = os.environ.get("CDP_SHIM_TRACE", "0") == "1"
+TRACE_INCLUDE_QUERY_VALUES = (
+    os.environ.get("CDP_SHIM_TRACE_INCLUDE_QUERY_VALUES", "0") == "1"
+)
+TRACE_SAFE_QUERY_KEYS = frozenset(
+    key.strip()
+    for key in os.environ.get(
+        "CDP_SHIM_TRACE_SAFE_QUERY_KEYS",
+        "udm,hl,gl,start,tbs,safe,filter",
+    ).split(",")
+    if key.strip()
+)
+TRACE_MAX_URL_CHARS = int(os.environ.get("CDP_SHIM_TRACE_MAX_URL_CHARS", "240"))
 
 logging.basicConfig(
     level=os.environ.get("CDP_SHIM_LOG_LEVEL", "INFO").upper(),
@@ -151,6 +168,88 @@ logger = logging.getLogger("cdp-shim")
 # Suppress websockets server INFO logs (healthcheck TCP probes cause 400 noise).
 logging.getLogger("websockets.server").setLevel(logging.WARNING)
 logging.getLogger("websockets").setLevel(logging.WARNING)
+
+
+def _redact_url(url: Any) -> str:
+    """Return a log-safe URL with sensitive query values redacted."""
+    if not isinstance(url, str) or not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return str(url)[:TRACE_MAX_URL_CHARS]
+
+    if parsed.scheme == "data":
+        return "data:<redacted>"
+
+    if not parsed.scheme or not parsed.netloc:
+        return url[:TRACE_MAX_URL_CHARS]
+
+    query_items: list[tuple[str, str]] = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if TRACE_INCLUDE_QUERY_VALUES or key in TRACE_SAFE_QUERY_KEYS:
+            query_items.append((key, value))
+        else:
+            query_items.append((key, "<redacted>"))
+
+    redacted = urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            urlencode(query_items, doseq=True),
+            "",
+        )
+    )
+    return redacted[:TRACE_MAX_URL_CHARS]
+
+
+def _safe_event_params(params: Any) -> dict[str, Any]:
+    """Extract a small, log-safe subset from CDP event params."""
+    if not isinstance(params, dict):
+        return {}
+
+    out: dict[str, Any] = {}
+    if "type" in params:
+        out["type"] = params.get("type")
+    if "timestamp" in params:
+        out["timestamp"] = params.get("timestamp")
+
+    response = params.get("response")
+    if isinstance(response, dict):
+        out["status"] = response.get("status")
+        out["mimeType"] = response.get("mimeType")
+        out["url"] = _redact_url(response.get("url"))
+
+    request = params.get("request")
+    if isinstance(request, dict):
+        out["url"] = _redact_url(request.get("url"))
+        out["method"] = request.get("method")
+
+    frame = params.get("frame")
+    if isinstance(frame, dict):
+        out["url"] = _redact_url(frame.get("url"))
+        out["mimeType"] = frame.get("mimeType")
+
+    target_info = params.get("targetInfo")
+    if isinstance(target_info, dict):
+        out["type"] = target_info.get("type")
+        out["url"] = _redact_url(target_info.get("url"))
+
+    for key in (
+        "requestId",
+        "loaderId",
+        "frameId",
+        "name",
+        "errorText",
+        "blockedReason",
+        "canceled",
+    ):
+        if key in params:
+            out[key] = params.get(key)
+
+    return out
 
 
 # ── WebSocket proxy with CDP interception ────────────────────────────────
@@ -170,6 +269,7 @@ class CdpProxy:
     def __init__(self, crw_ws: Any) -> None:
         self.crw_ws = crw_ws
         self.upstream_ws: Any = None
+        self.pending_commands: dict[int, dict[str, Any]] = {}
 
     async def run(self) -> None:
         """Connect to obscura and run bidirectional proxy loops."""
@@ -306,6 +406,14 @@ class CdpProxy:
             await self.upstream_ws.send(raw_msg)
             return
 
+        if TRACE_CDP and isinstance(msg_id, int):
+            trace_url = params.get("url") if isinstance(params, dict) else None
+            self.pending_commands[msg_id] = {
+                "method": method,
+                "url": _redact_url(trace_url),
+                "started_at": time.monotonic(),
+            }
+
         # ── Intercept: Page.addScriptToEvaluateOnNewDocument ────────
         if (
             STRIP_STEALTH_JS
@@ -365,6 +473,9 @@ class CdpProxy:
                     params["waitUntil"] = wait_until_val
                     msg["params"] = params
                     raw_msg = json.dumps(msg)
+                    if TRACE_CDP and isinstance(msg_id, int):
+                        self.pending_commands[msg_id]["waitUntil"] = wait_until_val
+                        self.pending_commands[msg_id]["search"] = is_search
                     logger.debug(
                         "Injected waitUntil=%s into Page.navigate (id=%s, url=%s, search=%s)",
                         wait_until_val,
@@ -372,6 +483,14 @@ class CdpProxy:
                         nav_url[:80],
                         is_search,
                     )
+            if TRACE_CDP:
+                logger.info(
+                    "CDP trace command Page.navigate id=%s url=%s waitUntil=%s search=%s",
+                    msg_id,
+                    _redact_url(params.get("url")),
+                    params.get("waitUntil"),
+                    self.pending_commands.get(msg_id, {}).get("search"),
+                )
             await self.upstream_ws.send(raw_msg)
             return
 
@@ -407,6 +526,33 @@ class CdpProxy:
                 )
             await self.upstream_ws.send(raw_msg)
             return
+
+        if TRACE_CDP and method in {
+            "Target.createTarget",
+            "Target.attachToTarget",
+            "Page.enable",
+            "Network.enable",
+            "Runtime.enable",
+            "Page.getFrameTree",
+            "Runtime.evaluate",
+        }:
+            trace_params = {}
+            if isinstance(params, dict):
+                trace_params = {
+                    key: _redact_url(value) if key == "url" else value
+                    for key, value in params.items()
+                    if key in {"url", "targetId", "type", "expression"}
+                }
+                if "expression" in trace_params:
+                    trace_params["expression_len"] = len(
+                        str(trace_params.pop("expression"))
+                    )
+            logger.info(
+                "CDP trace command %s id=%s params=%s",
+                method,
+                msg_id,
+                trace_params,
+            )
 
         # ── Default: forward unchanged ──────────────────────────────
         await self.upstream_ws.send(raw_msg)
@@ -456,6 +602,52 @@ class CdpProxy:
             return
 
         msg_id = msg.get("id")
+        method = msg.get("method")
+        params = msg.get("params", {})
+
+        if TRACE_CDP and method:
+            if method in {
+                "Page.frameNavigated",
+                "Page.lifecycleEvent",
+                "Network.requestWillBeSent",
+                "Network.responseReceived",
+                "Network.loadingFailed",
+                "Network.loadingFinished",
+                "Target.targetCreated",
+                "Target.targetInfoChanged",
+            }:
+                logger.info(
+                    "CDP trace event %s params=%s",
+                    method,
+                    _safe_event_params(params),
+                )
+
+        if TRACE_CDP and msg_id is not None:
+            pending = self.pending_commands.pop(msg_id, None)
+            if pending:
+                elapsed_ms = int((time.monotonic() - pending["started_at"]) * 1000)
+                if "error" in msg:
+                    logger.info(
+                        "CDP trace response %s id=%s elapsed_ms=%d error=%s url=%s waitUntil=%s",
+                        pending.get("method"),
+                        msg_id,
+                        elapsed_ms,
+                        msg.get("error"),
+                        pending.get("url"),
+                        pending.get("waitUntil"),
+                    )
+                else:
+                    result = msg.get("result")
+                    result_keys = sorted(result.keys()) if isinstance(result, dict) else []
+                    logger.info(
+                        "CDP trace response %s id=%s elapsed_ms=%d result_keys=%s url=%s waitUntil=%s",
+                        pending.get("method"),
+                        msg_id,
+                        elapsed_ms,
+                        result_keys,
+                        pending.get("url"),
+                        pending.get("waitUntil"),
+                    )
 
         # ── Check for error responses ───────────────────────────────
         if msg_id is not None and "error" in msg:
@@ -602,13 +794,21 @@ async def main() -> None:
     )
     logger.info(
         "Config: strip_stealth=%s, wait_until_search=%s, wait_until_web=%s, "
-        "strip_proxy=%s, clear_state_interval=%ds",
+        "strip_proxy=%s, clear_state_interval=%ds, trace=%s",
         STRIP_STEALTH_JS,
         WAIT_UNTIL_SEARCH or "(disabled)",
         WAIT_UNTIL_WEB or "(disabled)",
         STRIP_PROXY_SERVER,
         CLEAR_STATE_INTERVAL_SECONDS,
+        TRACE_CDP,
     )
+    if TRACE_CDP:
+        logger.info(
+            "CDP trace query logging: include_values=%s, safe_keys=%s, max_url_chars=%d",
+            TRACE_INCLUDE_QUERY_VALUES,
+            ",".join(sorted(TRACE_SAFE_QUERY_KEYS)) or "(none)",
+            TRACE_MAX_URL_CHARS,
+        )
 
     # Start the periodic state clearing loop.
     clear_task = asyncio.create_task(clear_state_loop())
