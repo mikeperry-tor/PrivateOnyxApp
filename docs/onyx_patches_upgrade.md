@@ -649,6 +649,20 @@ Upgrade notes:
   result cards. For Bing, verify `ol#b_results > li.b_algo`, `h2 > a` title
   links, `b_caption` snippets, `/ck/a?u=a1...` redirect decoding, and
   captcha/Turing page detection.
+- When changing Obscura, re-test Google `google2` through the rendered CDP
+  path specifically. As of 2026-06-30, direct host `curl` could receive
+  Google's JS retry shell for `https://www.google.com/search?q=...&udm=14`,
+  while Obscura on the same query/exit path received an immediate
+  `HTTP 429` document, navigated into `/sorry/index?...`, loaded
+  `recaptcha/enterprise.js`, and produced no organic-result DOM markers.
+  Obscura is actively improving fingerprint and stealth behavior, so an
+  Obscura update may change this failure mode into either a successful
+  `udm=14` SERP or a different challenge path.
+- Use `CDP_SHIM_TRACE=1` during those Obscura/Google checks to distinguish an
+  immediate 429/sorry response from a JavaScript retry shell or a successful
+  rendered SERP. Keep query-value logging redacted by leaving
+  `CDP_SHIM_TRACE_INCLUDE_QUERY_VALUES=0`; the default safe query keys still
+  show diagnostics such as `udm=14`.
 - Confirm SearXNG still loads custom modules from `searx.engines.*` and that
   `OnlineParams` still honors the in-place `method`, `url`, `data`, and
   `headers` rewrite.

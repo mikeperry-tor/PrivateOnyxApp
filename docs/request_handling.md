@@ -319,6 +319,33 @@ When a search engine returns 429:
 6. Onyx's `WebSearchTool` logs partial failures and continues with results
    from other engines/queries that succeeded.
 
+**Observed Google `udm=14` / Obscura behavior (2026-06-30):**
+
+While adding `udm=14` to `google2`, two different Google responses were
+observed from the same host:
+
+- A direct host `curl` request to
+  `https://www.google.com/search?q=...&hl=en&udm=14` returned Google's
+  JavaScript retry shell (`/httpservice/retry/...`) rather than result DOM.
+- A direct CDP navigation through Obscura to the same `udm=14` URL did not
+  traverse that JS retry shell. The main document response was immediately
+  `HTTP 429 text/html`, the frame navigated to a Google `/sorry/index?...`
+  page, and the page then loaded `https://www.google.com/recaptcha/enterprise.js`
+  with HTTP 200. The final DOM had no result markers (`<h3>`, `MjjYud`,
+  `N54PNb`, `yuRUbf`, `VwiC3b`, `IsZvec`, `kb0PBd`, `ITZIwc`, or
+  `data-sncf`) and did contain Google's unusual-traffic / CAPTCHA text.
+
+This means a Google failure can be a server-side anti-bot / sorry response
+specific to the Obscura browser fingerprint and exit IP, even when a bare HTTP
+client sees a retry shell. Do not treat an empty Google result set after a 429
+as a parser failure until the rendered DOM has been inspected. Use the
+sanitized CDP trace mode described in
+[CDP trace diagnostics](#cdp-trace-diagnostics) to distinguish:
+
+- immediate 429/sorry navigation;
+- JavaScript retry shell followed by a different final URL;
+- successful `udm=14` SERP DOM whose result selectors need updating.
+
 ### 1.5 Result Processing
 
 SearXNG aggregates results from all engines, deduplicates, and returns JSON
@@ -1102,6 +1129,37 @@ The shim logs at the following levels:
 | `ERROR` | Upstream connection failures, proxy errors, fallback forward failures |
 
 Set `CDP_SHIM_LOG_LEVEL=debug` in docker-compose for verbose logging.
+
+### CDP trace diagnostics
+
+For short browser-path investigations, set `CDP_SHIM_TRACE=1` on the
+`cdp-shim` service. Trace mode logs selected CDP command timings plus
+navigation, lifecycle, network response, and network failure events. It is
+intended for questions like "did Obscura receive a Google 429 immediately, or
+did it first render a JS retry shell?"
+
+Trace URLs redact query values by default. For example, a Google request is
+logged with the search query redacted but diagnostic keys such as `udm=14`,
+`hl`, `start`, and `tbs` retained. Keep
+`CDP_SHIM_TRACE_INCLUDE_QUERY_VALUES=0` unless you are doing a short, local
+debugging session where full query logging is explicitly acceptable. Use
+`CDP_SHIM_TRACE_SAFE_QUERY_KEYS` to adjust the allowlist of non-sensitive query
+keys that remain visible.
+
+Useful trace patterns:
+
+- `CDP trace command Page.navigate ... waitUntil=networkidle2 search=True`:
+  the shim classified the URL as a SERP and injected the search wait strategy.
+- `CDP trace event Network.responseReceived ... status=429 ... url=...udm=14`:
+  the browser path received a target-site rate-limit / anti-bot page.
+- `CDP trace event Page.frameNavigated ... /sorry/index?...`: Google moved the
+  rendered frame into its sorry/CAPTCHA flow.
+- `CDP trace event Network.responseReceived ... recaptcha/enterprise.js`:
+  a CAPTCHA/sorry page loaded reCAPTCHA assets after the main document block.
+
+Trace mode does not dump response bodies or rendered DOM. If selector debugging
+is needed, capture `rawHtml` from CRW separately and handle it as private
+browsing/search data.
 
 ### Diagnosing issues
 
