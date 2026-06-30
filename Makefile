@@ -19,7 +19,7 @@ MYST_IMAGE := mysteriumnetwork/myst:docker_host_fixes_with_logs
 endif
 
 TEEP_REPO ?= https://github.com/13rac1/teep.git
-TEEP_DEFAULT_REF := cacfa5ab2a4e8cc52ec8a2020a763f7306ad3438
+TEEP_DEFAULT_REF := 46ee4b854641d3932c880ae5ac66d5f2d2a26791
 TEEP_REF ?= $(call env_value,TEEP_REF)
 ifeq ($(strip $(TEEP_REF)),)
 TEEP_REF := $(TEEP_DEFAULT_REF)
