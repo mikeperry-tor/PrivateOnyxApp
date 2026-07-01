@@ -631,6 +631,10 @@ Behavior:
 - `_crw.extract_crw_html()` maps CRW anti-bot failures back to SearXNG engine
   exceptions so engine suspension stats work instead of silently returning an
   empty result list.
+- `_crw.raise_no_results()` is used by each custom engine when its parser finds
+  zero organic rows. It logs the engine, parser-miss reason, and rendered HTML
+  length without logging query text or raw SERP HTML, then raises
+  `SearxEngineAccessDeniedException` so round-robin can retry another provider.
 - `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` parse the
   rendered SERP DOM with XPath. They replace the stock search-engine variants
   that are blocked or challenge-prone on VPN/datacenter exit IPs.
@@ -675,6 +679,10 @@ Upgrade notes:
   `SearxEngineTooManyRequestsException`,
   `SearxEngineAccessDeniedException`, `SearxEngineCaptchaException`, and
   `SearxEngineResponseException`.
+- Confirm each custom engine still raises through `_crw.raise_no_results()`
+  when the rendered SERP has no parseable organic results. A parser miss should
+  appear in SearXNG `unresponsive_engines` and trigger round-robin retry rather
+  than returning a successful empty result set to Onyx.
 - Keep `enable_http: true` on the custom engines. Their SearXNG-side request is
   a loopback HTTP POST to CRW, even though CRW/Obscura later navigates HTTPS
   target search-engine pages.
@@ -698,9 +706,11 @@ Behavior:
   request.
 - The patch also wraps `Search.search_standard()` so a round-robin search can
   retry within the same SearXNG HTTP request after the selected provider
-  records itself as unresponsive and returns no main results. Retries stop
-  after a provider returns main results, after an empty-but-responsive result
-  set, or after all configured providers have been tried or are already down.
+  records itself as unresponsive and returns no main results. The custom
+  CRW-backed engines are expected to classify zero parseable organic rows as
+  unresponsive via `_crw.raise_no_results()`. Retries stop after a provider
+  returns main results or after all configured providers have been tried or are
+  already down.
 - The patch inspects upstream `searx.search` and `searx.results` functions in
   strict mode before replacing them. Missing expected source fragments must
   stop startup instead of silently producing stale scheduling or ranking
@@ -733,8 +743,9 @@ Upgrade notes:
 - Verify retry behavior with a synthetic or live failure: if the first selected
   provider records an unresponsive error and returns no main results, the same
   SearXNG request should try another untried provider before returning. The
-  query should return empty only after every configured provider has failed,
-  is suspended, or has returned an empty-but-responsive result set.
+  query should return empty only after every configured provider has failed or
+  is suspended. A live provider returning a successful empty result from one of
+  the custom engines indicates the no-results failure contract has drifted.
 - Confirm `SEARXNG_ROUND_ROBIN=false` restores SearXNG's selected-engine
   fan-out so the last-resort scoring patch still protects merged Bing results.
 - Re-check `reference_repos/searxng/searx/results.py` for the stock

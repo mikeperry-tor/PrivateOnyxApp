@@ -129,13 +129,25 @@ def response(resp: "SXNG_Response"):
     """Parse the rendered Startpage SERP HTML returned by crw."""
     text = _crw.extract_crw_html(resp)
     if not text:
-        return []
+        _crw.raise_no_results(
+            "startpage2",
+            reason="empty CRW HTML",
+            html_text=text,
+        )
 
     results = []
     dom = html.fromstring(text)
     _raise_if_captcha(dom)
 
-    for result in eval_xpath_list(dom, results_xpath):
+    result_nodes = eval_xpath_list(dom, results_xpath)
+    if not result_nodes:
+        _crw.raise_no_results(
+            "startpage2",
+            reason="result XPath matched zero organic cards",
+            html_text=text,
+        )
+
+    for result in result_nodes:
         link_nodes = eval_xpath(result, link_xpath)
         if not link_nodes:
             link_nodes = eval_xpath(result, link_fallback_xpath)
@@ -160,5 +172,12 @@ def response(resp: "SXNG_Response"):
         content = extract_text(content_nodes[0]) if content_nodes else ""
 
         results.append({"url": url, "title": title, "content": content})
+
+    if not results:
+        _crw.raise_no_results(
+            "startpage2",
+            reason="organic cards matched but no valid rows were extracted",
+            html_text=text,
+        )
 
     return results

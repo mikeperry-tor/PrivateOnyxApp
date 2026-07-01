@@ -196,7 +196,12 @@ params["headers"] = headers
 The engine's `response()` function decodes the CRW JSON envelope and parses
 the rendered HTML with XPath to extract search results. If CRW reports a
 block (429/403/CAPTCHA), the appropriate SearXNG exception is raised so
-SearXNG's engine suspension machinery kicks in.
+SearXNG's engine suspension machinery kicks in. The custom engines also treat
+zero parseable organic results as provider unavailability: they log a
+privacy-preserving diagnostic and raise `SearxEngineAccessDeniedException`
+rather than returning an empty successful result set. In round-robin mode this
+lets SearXNG try another provider instead of handing Onyx an empty search
+response because one live SERP was a soft-block shell or parser miss.
 
 #### Custom engine parser assumptions
 
@@ -242,7 +247,10 @@ the configured provider pool is present, so ordinary Onyx searches receive one
 provider's results. If the selected provider returns no main results and
 records itself as unresponsive, the patch retries the same SearXNG request with
 another untried provider, reaching `bing2` only after the normal provider tier
-has failed or is unavailable. In that mode the scoring patch is mostly inert
+has failed or is unavailable. The custom engines are expected to raise when
+their parser finds zero organic rows, so a live provider should not silently
+produce an empty SearXNG result unless all eligible providers have failed or the
+engine contract has drifted. In that mode the scoring patch is mostly inert
 when one provider succeeds, but it remains active for `SEARXNG_ROUND_ROBIN=false`.
 
 The upgrade inventory in

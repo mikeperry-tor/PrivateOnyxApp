@@ -186,13 +186,25 @@ def response(resp: "SXNG_Response") -> list[dict[str, t.Any]]:
     """Parse the rendered Bing SERP HTML returned by crw."""
     text = _crw.extract_crw_html(resp)
     if not text:
-        return []
+        _crw.raise_no_results(
+            "bing2",
+            reason="empty CRW HTML",
+            html_text=text,
+        )
 
     dom = html.fromstring(text)
     _raise_if_captcha(dom)
 
     results: list[dict[str, t.Any]] = []
-    for item in eval_xpath_list(dom, results_xpath):
+    result_nodes = eval_xpath_list(dom, results_xpath)
+    if not result_nodes:
+        _crw.raise_no_results(
+            "bing2",
+            reason="result XPath matched zero b_algo cards",
+            html_text=text,
+        )
+
+    for item in result_nodes:
         if _is_non_web_result_block(item):
             continue
 
@@ -213,6 +225,13 @@ def response(resp: "SXNG_Response") -> list[dict[str, t.Any]]:
                 "title": title,
                 "content": _extract_content(item),
             }
+        )
+
+    if not results:
+        _crw.raise_no_results(
+            "bing2",
+            reason="b_algo cards matched but no valid organic rows were extracted",
+            html_text=text,
         )
 
     return results

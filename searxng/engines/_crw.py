@@ -30,6 +30,7 @@ Why omit ``renderer`` and ``waitFor``
 """
 
 import json
+import logging
 import typing as t
 
 if t.TYPE_CHECKING:
@@ -46,6 +47,8 @@ import os
 # non-empty bearer token works. The Makefile supplies an ephemeral placeholder
 # to keep this header present without making it operator-managed config.
 CRW_API_KEY = os.environ["CRW_ONYX_API_KEY"]
+
+logger = logging.getLogger("searx.engines._crw")
 
 # Page load waiting is handled by the CDP shim (crw/cdp_shim.py), which
 # injects `waitUntil: "networkidle2"` into every Page.navigate call so
@@ -202,3 +205,38 @@ def _raise_crw_block_exception(envelope: dict) -> None:
 
     # Generic response error for any other failure.
     raise SearxEngineResponseException(f"crw: {error_msg}")
+
+
+def raise_no_results(
+    engine_name: str,
+    *,
+    reason: str,
+    html_text: str | None,
+) -> t.NoReturn:
+    """Treat empty organic parsing as a provider block / parser miss.
+
+    Returning an empty result list tells SearXNG the engine succeeded, which in
+    round-robin mode would hand Onyx an empty search response without trying the
+    next provider.  For the CRW-backed search engines, zero parseable organic
+    rows usually means a soft anti-bot shell, a target DOM change, or an answer
+    widget page rather than a useful web SERP.  Raise an access-denied exception
+    so SearXNG records the provider as unresponsive and the scheduler can retry.
+
+    Do not log the query or raw HTML: SERP bodies can contain private query
+    terms and result snippets.
+    """
+    from searx.exceptions import SearxEngineAccessDeniedException
+
+    html_len = len(html_text or "")
+    logger.warning(
+        "%s: no parseable organic results (%s; html_len=%s); treating as blocked or parser miss",
+        engine_name,
+        reason,
+        html_len,
+    )
+    raise SearxEngineAccessDeniedException(
+        message=(
+            f"{engine_name}: no parseable organic results "
+            f"({reason}; html_len={html_len})"
+        ),
+    )

@@ -19,8 +19,8 @@ rendered Google DOM with XPath.
 
     Google's anti-bot is aggressive and IP-reputation based.  Even with
     obscura's stealth mode, a rate-limited VPN exit IP will still get 429s.
-    This engine degrades gracefully (returns no results) in that case rather
-    than raising, so it doesn't drag down the aggregate result set.
+    The shared crw helper raises SearXNG block exceptions for those responses
+    so SearXNG can suspend the provider and retry another round-robin engine.
 """
 
 import typing as t
@@ -95,12 +95,24 @@ def response(resp: "SXNG_Response"):
     """Parse the rendered Google SERP HTML returned by crw."""
     text = _crw.extract_crw_html(resp)
     if not text:
-        return []
+        _crw.raise_no_results(
+            "google2",
+            reason="empty CRW HTML",
+            html_text=text,
+        )
 
     results = []
     dom = html.fromstring(text)
 
-    for result in eval_xpath_list(dom, results_xpath):
+    result_nodes = eval_xpath_list(dom, results_xpath)
+    if not result_nodes:
+        _crw.raise_no_results(
+            "google2",
+            reason="result XPath matched zero title links",
+            html_text=text,
+        )
+
+    for result in result_nodes:
         title_nodes = eval_xpath(result, title_xpath)
         if not title_nodes:
             continue
@@ -118,6 +130,13 @@ def response(resp: "SXNG_Response"):
         content = extract_text(content_nodes[0]) if content_nodes else ""
 
         results.append({"url": url, "title": title, "content": content})
+
+    if not results:
+        _crw.raise_no_results(
+            "google2",
+            reason="title links matched but no valid organic rows were extracted",
+            html_text=text,
+        )
 
     return results
 

@@ -828,6 +828,7 @@ Local files:
 
 - `searxng/patches/sitecustomize.py`
 - `searxng/core-config/settings.yml`
+- `searxng/engines/_crw.py`
 - `searxng/engines/bing2.py`
 
 SearXNG source area:
@@ -860,10 +861,15 @@ before request threads are launched. The patch also wraps
 `Search.search_standard()` so a query can retry within the same SearXNG HTTP
 request: if the chosen provider returns no main results and records itself as
 unresponsive, SearXNG chooses another untried normal provider, or the
-last-resort tier when all normal providers have failed or are unavailable.
-Retries stop when a provider returns main results, when a provider returns an
-empty-but-responsive result set, or when all configured providers have been
-tried or are already down.
+last-resort tier when all normal providers have failed or are unavailable. The
+CRW-backed engines support this by treating zero parseable organic rows as a
+provider block/parser miss: `_crw.raise_no_results()` logs the engine name,
+reason, and rendered HTML length without logging the query or raw body, then
+raises `SearxEngineAccessDeniedException`. That keeps parser drift and soft
+anti-bot shells visible to SearXNG's engine suspension machinery instead of
+returning a misleading empty successful result. Retries stop when a provider
+returns main results or when all configured providers have been tried or are
+already down.
 
 Stock SearXNG merges duplicate URL results before scoring. For a merged result,
 `calculate_score()` multiplies the weights of every engine that found that URL,
@@ -916,6 +922,11 @@ Consequences:
   provider records itself as unresponsive. This can increase worst-case latency
   when several providers fail sequentially, but avoids returning an empty
   SearXNG response while another configured provider is still eligible.
+- The custom CRW-backed engines intentionally fail closed on zero parseable
+  organic results. This can mark a provider briefly down for very obscure
+  queries that genuinely have no web results, but that is preferable for Onyx
+  agent search because a single provider's empty page should not suppress other
+  configured providers.
 - The round-robin cursor is in-memory and process-local. It resets on SearXNG
   restart; if SearXNG is later run with multiple Python worker processes, each
   worker has its own cursor.

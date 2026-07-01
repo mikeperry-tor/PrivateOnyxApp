@@ -72,12 +72,24 @@ def response(resp: "SXNG_Response"):
     """Parse the rendered DuckDuckGo HTML SERP returned by crw."""
     text = _crw.extract_crw_html(resp)
     if not text:
-        return []
+        _crw.raise_no_results(
+            "duckduckgo2",
+            reason="empty CRW HTML",
+            html_text=text,
+        )
 
     results = []
     dom = html.fromstring(text)
 
-    for result in eval_xpath_list(dom, results_xpath):
+    result_nodes = eval_xpath_list(dom, results_xpath)
+    if not result_nodes:
+        _crw.raise_no_results(
+            "duckduckgo2",
+            reason="result XPath matched zero web-result cards",
+            html_text=text,
+        )
+
+    for result in result_nodes:
         link_nodes = eval_xpath(result, link_xpath)
         if not link_nodes:
             continue
@@ -96,5 +108,12 @@ def response(resp: "SXNG_Response"):
         content = extract_text(snippet_nodes[0]) if snippet_nodes else ""
 
         results.append({"url": url, "title": title, "content": content})
+
+    if not results:
+        _crw.raise_no_results(
+            "duckduckgo2",
+            reason="web-result cards matched but no valid organic rows were extracted",
+            html_text=text,
+        )
 
     return results
