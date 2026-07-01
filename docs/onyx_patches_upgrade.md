@@ -121,7 +121,10 @@ Upgrade notes:
 
 Patch behavior:
 
-- Always enabled in the base API-server patch path.
+- Reads `ONYX_AGENT_PRESERVE_REASONING`, which defaults to `true`.
+- When the setting is explicitly `false`, the patch returns before importing or
+  mutating Onyx chat/LLM modules.
+- Enabled by the base API-server patch path when the setting is true.
 - Also invoked by the lite API-server patch path before the lite-only Open URL
   availability patch.
 - Carries saved assistant/tool-call `reasoning_tokens` into reconstructed

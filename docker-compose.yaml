@@ -684,6 +684,9 @@ services:
       # When true, previous-turn tool responses are preserved in future LLM
       # context instead of being replaced with Onyx's generic placeholder.
       ONYX_AGENT_PRESERVE_TOOL_RESULTS: "${ONYX_AGENT_PRESERVE_TOOL_RESULTS:-true}"
+      # When true, previous assistant reasoning is preserved in future LLM
+      # context for reasoning-capable OpenAI-compatible providers.
+      ONYX_AGENT_PRESERVE_REASONING: "${ONYX_AGENT_PRESERVE_REASONING:-true}"
       # Fail startup if wrapper monkey patches no longer match upstream Onyx.
       WRAPPER_PATCH_STRICT: "true"
       # Page load waiting is handled by the CDP shim's waitUntil injection

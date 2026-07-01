@@ -141,6 +141,15 @@ def _env_flag_enabled(var_name: str) -> bool:
     )
 
 
+def _env_flag_default_true(var_name: str) -> bool:
+    return os.environ.get(var_name, "true").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _first_non_empty_string(*values: Any) -> str | None:
     for value in values:
         if isinstance(value, str) and value:
@@ -265,6 +274,9 @@ def apply_reasoning_content_preservation_patch() -> None:
     GLM and Kimi variants served through teep, may need that prior reasoning
     beside assistant tool-call messages when a tool response follows.
     """
+
+    if not _env_flag_default_true("ONYX_AGENT_PRESERVE_REASONING"):
+        return
 
     try:
         from onyx.chat import chat_utils

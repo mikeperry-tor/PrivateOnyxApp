@@ -147,6 +147,8 @@ Local files:
 - `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
 - `onyx/patches/sitecustomize_base/sitecustomize.py`
 - `onyx/patches/sitecustomize/sitecustomize.py`
+- `docker-compose.yaml`
+- `.env.wrapper.example`
 
 Onyx source areas:
 
@@ -179,6 +181,8 @@ tool-use turns.
 The base API-server `sitecustomize` patch, also invoked by the lite
 `sitecustomize` path:
 
+- Reads `ONYX_AGENT_PRESERVE_REASONING`, which defaults to `true`. Set it to
+  `false` to leave Onyx's upstream reasoning-history behavior unpatched.
 - Wraps `chat_utils.convert_chat_history()` so saved `reasoning_tokens` from
   prior assistant messages and tool-call rows are attached to reconstructed
   `ChatMessageSimple` assistant messages.
