@@ -55,8 +55,8 @@ proxy, or shim behavior, see
 
 | Wrapper file | Onyx service patched | Activation path | Upstream Onyx references |
 | --- | --- | --- | --- |
-| `onyx/patches/sitecustomize_base/sitecustomize.py` | `api_server` | Mounted at `/app/wrapper-patches-base`; `PYTHONPATH` in `docker-compose.yaml` | `backend/onyx/tools/tool_implementations/web_search/utils.py`, `backend/onyx/tools/tool_implementations/open_url/open_url_tool.py`, `backend/onyx/tools/tool_implementations/open_url/firecrawl.py`, code-interpreter tool/prompt files |
-| `onyx/patches/sitecustomize/sitecustomize.py` | `api_server` in lite mode | Mounted at `/app/wrapper-patches`; `PYTHONPATH` in `docker-compose.lite.yml` before base path | `backend/onyx/tools/tool_implementations/open_url/open_url_tool.py` |
+| `onyx/patches/sitecustomize_base/sitecustomize.py` | `api_server` | Mounted at `/app/wrapper-patches-base`; `PYTHONPATH` in `docker-compose.yaml` | `backend/onyx/chat/chat_utils.py`, `backend/onyx/chat/llm_loop.py`, `backend/onyx/chat/llm_step.py`, `backend/onyx/llm/multi_llm.py`, `backend/onyx/deep_research/dr_loop.py`, fake-tool agent loops, web/open-url modules, code-interpreter tool/prompt files |
+| `onyx/patches/sitecustomize/sitecustomize.py` | `api_server` in lite mode | Mounted at `/app/wrapper-patches`; `PYTHONPATH` in `docker-compose.lite.yml` before base path | Base reasoning-preservation helper plus `backend/onyx/tools/tool_implementations/open_url/open_url_tool.py` |
 | `onyx/patches/sitecustomize_background/sitecustomize.py` | `background` | Mounted at `/app/wrapper-patches-background`; `PYTHONPATH` in `docker-compose.full.yml` | `backend/onyx/connectors/web/connector.py`, `backend/onyx/db/models.py` |
 | `onyx/patches/sitecustomize_code_interpreter/sitecustomize.py` | `code-interpreter` and spawned executor pods | Mounted by `docker-compose.code-interpreter-vpn.yml` when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`; proxy env added by `docker-compose.proxy.yml` | Main Onyx compose defines the service; executor code is in `reference_repos/python-sandbox/code-interpreter/app/services/executor_docker.py` |
 | `onyx/local_embedding_shim.py` | `api_server` and `background` model-server calls | `docker-compose.full.yml` points `MODEL_SERVER_*` and `INDEXING_MODEL_SERVER_*` to `127.0.0.1:9101` | `backend/model_server/*`, `backend/onyx/natural_language_processing/search_nlp_models.py`, `backend/onyx/indexing/embedder.py`, `backend/shared_configs/model_server_models.py` |
@@ -116,6 +116,52 @@ Upgrade notes:
 - If upstream exposes a first-class max-input-token override that wins before DB
   and provider values, remove this runtime patch and map
   `ONYX_AGENT_LLM_MAX_TOKENS` to that setting.
+
+### Assistant reasoning preservation
+
+Patch behavior:
+
+- Always enabled in the base API-server patch path.
+- Also invoked by the lite API-server patch path before the lite-only Open URL
+  availability patch.
+- Carries saved assistant/tool-call `reasoning_tokens` into reconstructed
+  `ChatMessageSimple` assistant messages.
+- Adds current-loop reasoning to assistant tool-call messages in normal chat,
+  deep research, research-agent, and coding-agent loops before tool responses
+  are sent back to the model.
+- Adds `reasoning_content` and
+  `provider_specific_fields.reasoning_content` to the LiteLLM request
+  dictionaries for assistant messages carrying preserved reasoning.
+
+Onyx service: `api_server`.
+
+Upstream v4.1.7 assumptions to re-check:
+
+- `backend/onyx/chat/models.py:147` defines `ChatMessageSimple` without
+  reasoning fields.
+- `backend/onyx/chat/chat_utils.py:750` reconstructs assistant tool-call
+  history with `message=""` and no reasoning field.
+- `backend/onyx/chat/llm_loop.py:1134` builds live assistant tool-call
+  messages with no reasoning field.
+- `backend/onyx/chat/llm_step.py:693` builds structured assistant messages
+  with only `role`, `content`, and `tool_calls`.
+- `backend/onyx/llm/multi_llm.py:126` serializes Pydantic messages through
+  `model_dump(exclude_none=True)` before calling LiteLLM.
+- The deep-research, research-agent, and coding-agent loops still append
+  assistant tool-call messages through the exact snippets patched by
+  `sitecustomize`.
+
+Upgrade notes:
+
+- If upstream adds first-class reasoning fields to `ChatMessageSimple` and
+  `AssistantMessage`, remove the serializer monkey patch and verify saved and
+  live tool-call histories populate those fields.
+- If upstream starts preserving Anthropic `thinking_blocks`, do not collapse
+  signed blocks into plain `reasoning_content`; preserve provider-native
+  fields only for providers that accept them.
+- Re-test at least one teep OpenAI-compatible GLM-5.2 or Kimi/Kimi-K2.6
+  tool-using conversation. Inspect the request payload or LiteLLM debug logs
+  for assistant `reasoning_content` immediately before tool responses.
 
 ### Previous tool-result preservation
 

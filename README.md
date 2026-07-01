@@ -258,12 +258,12 @@ The node polls the on-chain channel balance and will reflect the transfer once t
 
 ## Onyx UI Configuration
 
-Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). The BiFrost provider is compatible. The URL depends on your `TEEP_ROUTE_THROUGH_MYST_VPN` setting:
+Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). Select the **OpenAI-Compatible** provider type for teep. This is important for GLM-5.2 and Kimi-K2.6 reasoning models: the wrapper's Onyx patches preserve prior assistant reasoning as LiteLLM/OpenAI-compatible `reasoning_content` fields, and the OpenAI-Compatible provider keeps teep's raw model IDs on that request path. The BiFrost provider is also compatible, but OpenAI-Compatible is the recommended teep selection. The URL depends on your `TEEP_ROUTE_THROUGH_MYST_VPN` setting:
 
 - **Default (`TEEP_ROUTE_THROUGH_MYST_VPN=false`):** Use `http://teep:8337/v1` (Docker DNS resolves the teep service on the default network).
 - **VPN-routed (`TEEP_ROUTE_THROUGH_MYST_VPN=true`):** Use `http://127.0.0.1:8337/v1` (shared loopback in the VPN namespace).
 
-The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown.
+The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown. Use teep's exact model ID as listed; provider catalogs may spell GLM and Kimi model names with different dots, dashes, or compressed forms, and the OpenAI-Compatible path avoids LiteLLM native-provider remapping.
 
 ### Inference Provider Recommendations
 
@@ -279,7 +279,7 @@ Verifiable private inference is only currently possible with Open Weight models.
 
 For a research agent like Onyx, the primary desirable property is a low hallucination rate. The [Artificial Analysis Omniscience Index](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) provides a [Hallucination Rate benchmark](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) that is worth tracking for this purpose.
 
-Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.2 is the best option for text, and Kimi-2.6 is the best multimodal option.
+Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.2 is the best option for text, and Kimi-K2.6 is the best multimodal option. Configure these through teep with Onyx's OpenAI-Compatible provider type so preserved reasoning fields continue across tool-using turns.
 
 ### Web Search Provider Configuration
 

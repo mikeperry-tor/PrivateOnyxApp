@@ -38,6 +38,8 @@ small set of local deployment requirements that Onyx v4.1.7 does not expose as
 configuration:
 
 - Let a private deployment tune tool limits without rebuilding Onyx images.
+- Preserve prior assistant reasoning fields across multi-step tool calls for
+  OpenAI-compatible private inference providers.
 - Optionally preserve prior tool-call outputs across chat turns for research
   workflows that prefer recall over prompt compactness.
 - Keep internal-search result count and content budgets small enough for local
@@ -71,6 +73,7 @@ settings.
 | Area | Onyx service or component | Local mechanism | Upstream shape |
 | --- | --- | --- | --- |
 | LLM context window override env | `api_server` | Compose maps `ONYX_AGENT_LLM_MAX_TOKENS` to upstream `GEN_AI_MAX_TOKENS`; `sitecustomize` makes it win before DB/provider limits | First-class wrapper/admin override for model context window |
+| Assistant reasoning preservation | `api_server` | `sitecustomize` carries saved/live assistant reasoning into LiteLLM `reasoning_content` fields | Native chat-history support for provider reasoning fields |
 | Prior tool-result preservation | `api_server` | `sitecustomize` optionally replaces Onyx's previous-tool-response placeholder with saved tool responses | Per-agent/admin setting for how much previous tool output to keep |
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
 | Internal search content caps | `api_server` | `sitecustomize` optionally wraps result formatting; full compose passes wrapper env aliases | Admin/env settings for per-result and aggregate tool-response budgets |
@@ -136,6 +139,74 @@ stack. The model row does not need to be removed or re-synced.
 Onyx could expose a clearer per-provider or per-model context-window override
 in Admin settings and document the precedence against provider-discovered
 limits.
+
+## Assistant reasoning preservation
+
+Local files:
+
+- `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- `onyx/patches/sitecustomize_base/sitecustomize.py`
+- `onyx/patches/sitecustomize/sitecustomize.py`
+
+Onyx source areas:
+
+- `backend/onyx/chat/models.py`
+- `backend/onyx/chat/chat_utils.py`
+- `backend/onyx/chat/llm_loop.py`
+- `backend/onyx/chat/llm_step.py`
+- `backend/onyx/deep_research/dr_loop.py`
+- `backend/onyx/tools/fake_tools/research_agent.py`
+- `backend/onyx/tools/fake_tools/coding_agent.py`
+- `backend/onyx/llm/multi_llm.py`
+
+### Why this is needed
+
+Onyx v4.1.7 parses LiteLLM `reasoning_content` responses and saves reasoning
+text as `reasoning_tokens` on assistant messages and tool-call rows. However,
+the lightweight history model used for later LLM calls, `ChatMessageSimple`,
+does not expose a reasoning field. When Onyx rebuilds prior assistant
+tool-call history, it sends only assistant `content` and `tool_calls`, followed
+by tool responses.
+
+Reasoning-capable OpenAI-compatible models can require the prior assistant
+reasoning to accompany assistant tool-call messages. This is especially
+important for teep-backed GLM-5.2 and Kimi/Kimi-K2.6 style models, where
+LiteLLM and upstream providers normalize or expect `reasoning_content` around
+tool-use turns.
+
+### How it modifies Onyx
+
+The base API-server `sitecustomize` patch, also invoked by the lite
+`sitecustomize` path:
+
+- Wraps `chat_utils.convert_chat_history()` so saved `reasoning_tokens` from
+  prior assistant messages and tool-call rows are attached to reconstructed
+  `ChatMessageSimple` assistant messages.
+- Patches live tool loops in normal chat, deep research, research-agent calls,
+  and coding-agent calls so the current `llm_step_result.reasoning` is attached
+  before a follow-up LLM request sees the assistant tool-call message.
+- Wraps `llm_step._build_structured_assistant_message()` so reasoning survives
+  the transition from `ChatMessageSimple` to Onyx's internal
+  `AssistantMessage`.
+- Wraps `multi_llm._prompt_to_dicts()` so the LiteLLM request dictionary
+  includes `reasoning_content` and
+  `provider_specific_fields.reasoning_content` for assistant messages that
+  carry preserved reasoning.
+
+The patch does not synthesize Anthropic `thinking_blocks` or OpenAI Responses
+API `reasoning_items`. It preserves Onyx's existing reasoning text as the
+LiteLLM/OpenAI-compatible `reasoning_content` field, which is the best fit for
+teep's OpenAI-compatible chat completions endpoint.
+
+### Upstream merge request shape
+
+Onyx should add first-class reasoning fields to its lightweight chat-history
+models and structured assistant-message model, then copy saved/live reasoning
+into those fields anywhere assistant messages with tool calls are constructed.
+The upstream implementation should preserve provider-specific constraints:
+OpenAI-compatible providers should receive `reasoning_content`, Anthropic
+should only receive valid signed thinking blocks, and Responses API paths
+should keep their native reasoning item shape.
 
 ## Prior tool-result preservation
 

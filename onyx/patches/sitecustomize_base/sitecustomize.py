@@ -11,8 +11,10 @@ from wrapper_env_patches import apply_internal_search_context_patches
 from wrapper_env_patches import apply_llm_max_tokens_override_patch
 from wrapper_env_patches import apply_open_url_char_limit_patches
 from wrapper_env_patches import apply_preserve_tool_results_patch
+from wrapper_env_patches import apply_reasoning_content_preservation_patch
 
 apply_llm_max_tokens_override_patch()
+apply_reasoning_content_preservation_patch()
 apply_open_url_char_limit_patches()
 apply_internal_search_context_patches()
 apply_firecrawl_wait_for_patch()

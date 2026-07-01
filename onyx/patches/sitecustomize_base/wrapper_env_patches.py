@@ -10,6 +10,8 @@ import functools
 import inspect
 import json
 import os
+from types import ModuleType
+from typing import Any
 
 
 # We cannot remove truncation logic entirely without editing upstream code, so
@@ -139,6 +141,102 @@ def _env_flag_enabled(var_name: str) -> bool:
     )
 
 
+def _first_non_empty_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _set_extra_attr(obj: Any, name: str, value: Any) -> None:
+    try:
+        setattr(obj, name, value)
+    except Exception:
+        try:
+            object.__setattr__(obj, name, value)
+        except Exception:
+            obj.__dict__[name] = value
+
+
+def _attach_reasoning_fields(message: Any, reasoning: str | None) -> None:
+    """Carry prior reasoning across Onyx's internal message model boundary."""
+    reasoning_content = _first_non_empty_string(reasoning)
+    if not reasoning_content:
+        return
+
+    _set_extra_attr(message, "reasoning_content", reasoning_content)
+
+    provider_specific_fields = getattr(message, "provider_specific_fields", None)
+    if isinstance(provider_specific_fields, dict):
+        provider_specific_fields = dict(provider_specific_fields)
+    else:
+        provider_specific_fields = {}
+    provider_specific_fields.setdefault("reasoning_content", reasoning_content)
+    _set_extra_attr(message, "provider_specific_fields", provider_specific_fields)
+
+
+def _dump_message_with_reasoning_fields(message: Any) -> dict[str, Any]:
+    if hasattr(message, "model_dump"):
+        dumped = message.model_dump(exclude_none=True)
+    else:
+        dumped = dict(message)
+
+    if dumped.get("role") != "assistant":
+        return dumped
+
+    reasoning_content = _first_non_empty_string(
+        dumped.get("reasoning_content"),
+        getattr(message, "reasoning_content", None),
+    )
+    if not reasoning_content:
+        return dumped
+
+    dumped["reasoning_content"] = reasoning_content
+
+    provider_specific_fields = dumped.get("provider_specific_fields")
+    if isinstance(provider_specific_fields, dict):
+        provider_specific_fields = dict(provider_specific_fields)
+    else:
+        provider_specific_fields = {}
+    provider_specific_fields.setdefault("reasoning_content", reasoning_content)
+    dumped["provider_specific_fields"] = provider_specific_fields
+
+    return dumped
+
+
+def _patch_function_source(
+    *,
+    module: ModuleType,
+    function_name: str,
+    replacements: dict[str, str],
+    patch_name: str,
+) -> None:
+    function = getattr(module, function_name)
+    try:
+        source = inspect.getsource(function)
+        filename = inspect.getsourcefile(function) or f"<{patch_name}>"
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(f"could not inspect {patch_name}: {e}")
+        return
+
+    patched_source = source
+    for old, new in replacements.items():
+        if old not in patched_source:
+            _warn_or_raise(f"{patch_name} patch did not match expected upstream text")
+            return
+        patched_source = patched_source.replace(old, new, 1)
+
+    namespace: dict[str, Any] = {}
+    exec(compile(patched_source, filename, "exec"), function.__globals__, namespace)
+    patched_function = namespace.get(function_name)
+    if not callable(patched_function):
+        _warn_or_raise(f"{patch_name} patch did not rebuild {function_name}")
+        return
+
+    setattr(module, function_name, functools.wraps(function)(patched_function))
+    print(f"sitecustomize: patched {patch_name}", flush=True)
+
+
 def _truncate_text_with_notice(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
@@ -155,6 +253,209 @@ def _truncate_text_with_notice(text: str, max_chars: int) -> str:
     suffix = notice_template.format(omitted=len(text) - keep)
     keep = max(0, max_chars - len(suffix))
     return text[:keep] + suffix
+
+
+def apply_reasoning_content_preservation_patch() -> None:
+    """Preserve assistant reasoning fields when Onyx rebuilds LLM history.
+
+    Onyx stores model reasoning text as ``reasoning_tokens`` on chat messages
+    and tool-call rows, but its lightweight ``ChatMessageSimple`` and
+    ``AssistantMessage`` request models do not carry that text back into later
+    LiteLLM requests. Reasoning-capable OpenAI-compatible models, including
+    GLM and Kimi variants served through teep, may need that prior reasoning
+    beside assistant tool-call messages when a tool response follows.
+    """
+
+    try:
+        from onyx.chat import chat_utils
+        from onyx.configs.constants import MessageType
+        from onyx.llm import multi_llm
+        from onyx.chat import llm_step
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing reasoning preservation modules: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    try:
+        structured_source = inspect.getsource(
+            llm_step._build_structured_assistant_message
+        )
+        prompt_dump_source = inspect.getsource(multi_llm._prompt_to_dicts)
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(f"could not inspect reasoning preservation helpers: {e}")
+        return
+
+    if "tool_calls=tool_calls_list" not in structured_source:
+        _warn_or_raise(
+            "llm_step._build_structured_assistant_message no longer contains "
+            "the expected tool_calls assignment"
+        )
+        return
+    if "model_dump(exclude_none=True)" not in prompt_dump_source:
+        _warn_or_raise(
+            "multi_llm._prompt_to_dicts no longer contains the expected "
+            "Pydantic model_dump serialization"
+        )
+        return
+
+    original_build_structured_assistant_message = (
+        llm_step._build_structured_assistant_message
+    )
+    original_convert_chat_history = chat_utils.convert_chat_history
+
+    @functools.wraps(original_build_structured_assistant_message)
+    def _reasoning_structured_assistant_message(*args, **kwargs):
+        assistant_message = original_build_structured_assistant_message(
+            *args, **kwargs
+        )
+        msg = args[0] if args else kwargs.get("msg")
+        reasoning_content = _first_non_empty_string(
+            getattr(msg, "reasoning_content", None) if msg is not None else None,
+            getattr(msg, "reasoning", None) if msg is not None else None,
+        )
+        _attach_reasoning_fields(assistant_message, reasoning_content)
+        return assistant_message
+
+    @functools.wraps(original_convert_chat_history)
+    def _reasoning_convert_chat_history(*args, **kwargs):
+        result = original_convert_chat_history(*args, **kwargs)
+        chat_history = kwargs.get("chat_history")
+        if chat_history is None and args:
+            chat_history = args[0]
+        if not chat_history:
+            return result
+
+        assistant_reasoning: list[str | None] = []
+        for chat_message in chat_history:
+            if chat_message.message_type != MessageType.ASSISTANT:
+                continue
+
+            if chat_message.tool_calls:
+                tool_calls_by_turn: dict[int, list[Any]] = {}
+                for tool_call in chat_message.tool_calls:
+                    turn_number = getattr(tool_call, "turn_number", None)
+                    if turn_number is None:
+                        continue
+                    tool_calls_by_turn.setdefault(turn_number, []).append(tool_call)
+
+                for turn_number in sorted(tool_calls_by_turn.keys()):
+                    turn_tool_calls = tool_calls_by_turn[turn_number]
+                    turn_tool_calls.sort(key=lambda tc: getattr(tc, "tool_id", 0))
+                    assistant_reasoning.append(
+                        _first_non_empty_string(
+                            *[
+                                getattr(tool_call, "reasoning_tokens", None)
+                                for tool_call in turn_tool_calls
+                            ]
+                        )
+                    )
+
+            assistant_reasoning.append(
+                _first_non_empty_string(
+                    getattr(chat_message, "reasoning_tokens", None)
+                )
+            )
+
+        reasoning_iter = iter(assistant_reasoning)
+        for simple_message in result.simple_messages:
+            if simple_message.message_type == MessageType.ASSISTANT:
+                _attach_reasoning_fields(simple_message, next(reasoning_iter, None))
+
+        return result
+
+    def _reasoning_prompt_to_dicts(prompt):
+        if isinstance(prompt, list):
+            return [_dump_message_with_reasoning_fields(msg) for msg in prompt]
+        return [_dump_message_with_reasoning_fields(prompt)]
+
+    llm_step._build_structured_assistant_message = (
+        _reasoning_structured_assistant_message
+    )
+    multi_llm._prompt_to_dicts = _reasoning_prompt_to_dicts
+    chat_utils.convert_chat_history = _reasoning_convert_chat_history
+
+    try:
+        from onyx.chat import llm_loop
+
+        llm_loop._wrapper_attach_reasoning_fields = _attach_reasoning_fields
+        _patch_function_source(
+            module=llm_loop,
+            function_name="run_llm_loop",
+            patch_name="chat llm_loop reasoning preservation",
+            replacements={
+                "                simple_chat_history.append(assistant_with_tools)\n": (
+                    "                _wrapper_attach_reasoning_fields(\n"
+                    "                    assistant_with_tools, llm_step_result.reasoning\n"
+                    "                )\n"
+                    "                simple_chat_history.append(assistant_with_tools)\n"
+                )
+            },
+        )
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed to patch chat llm loop reasoning: {e}", flush=True)
+        _raise_if_strict()
+
+    for module_name, function_name, old, new in [
+        (
+            "onyx.deep_research.dr_loop",
+            "run_deep_research_llm_loop",
+            "                    simple_chat_history.append(assistant_with_tools)\n",
+            (
+                "                    _wrapper_attach_reasoning_fields(\n"
+                "                        assistant_with_tools,\n"
+                "                        llm_step_result.reasoning or most_recent_reasoning,\n"
+                "                    )\n"
+                "                    simple_chat_history.append(assistant_with_tools)\n"
+            ),
+        ),
+        (
+            "onyx.tools.fake_tools.research_agent",
+            "run_research_agent_call",
+            "                        msg_history.append(assistant_with_tools)\n",
+            (
+                "                        _wrapper_attach_reasoning_fields(\n"
+                "                            assistant_with_tools,\n"
+                "                            llm_step_result.reasoning or most_recent_reasoning,\n"
+                "                        )\n"
+                "                        msg_history.append(assistant_with_tools)\n"
+            ),
+        ),
+        (
+            "onyx.tools.fake_tools.coding_agent",
+            "run_coding_agent_call",
+            "                    msg_history.append(assistant_with_tools)\n",
+            (
+                "                    _wrapper_attach_reasoning_fields(\n"
+                "                        assistant_with_tools,\n"
+                "                        llm_step_result.reasoning or most_recent_reasoning,\n"
+                "                    )\n"
+                "                    msg_history.append(assistant_with_tools)\n"
+            ),
+        ),
+    ]:
+        try:
+            module = __import__(module_name, fromlist=[function_name])
+            module._wrapper_attach_reasoning_fields = _attach_reasoning_fields
+            _patch_function_source(
+                module=module,
+                function_name=function_name,
+                patch_name=f"{module_name}.{function_name} reasoning preservation",
+                replacements={old: new},
+            )
+        except Exception as e:  # pragma: no cover
+            print(
+                f"sitecustomize: failed to patch {module_name} reasoning: {e}",
+                flush=True,
+            )
+            _raise_if_strict()
+
+    print(
+        "sitecustomize: preserving assistant reasoning_content in LLM history",
+        flush=True,
+    )
 
 
 def apply_llm_max_tokens_override_patch() -> None:

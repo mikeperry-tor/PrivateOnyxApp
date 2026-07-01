@@ -21,7 +21,9 @@ def _apply_base_env_patches() -> None:
     try:
         from wrapper_env_patches import apply_code_interpreter_network_description_patches
         from wrapper_env_patches import apply_open_url_char_limit_patches
+        from wrapper_env_patches import apply_reasoning_content_preservation_patch
 
+        apply_reasoning_content_preservation_patch()
         apply_open_url_char_limit_patches()
         apply_code_interpreter_network_description_patches()
     except Exception as e:  # pragma: no cover
