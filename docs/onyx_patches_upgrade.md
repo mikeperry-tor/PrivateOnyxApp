@@ -127,6 +127,11 @@ Patch behavior:
 - Enabled by the base API-server patch path when the setting is true.
 - Also invoked by the lite API-server patch path before the lite-only Open URL
   availability patch.
+- Reorders Onyx's per-call `USER_REMINDER` in normal chat history so the
+  reminder stays next to the latest real user message instead of trailing after
+  assistant/tool messages. This uses the same setting because provider
+  templates can discard preserved reasoning fields when a user-role reminder is
+  the final message after a tool turn.
 - Carries saved assistant/tool-call `reasoning_tokens` into reconstructed
   `ChatMessageSimple` assistant messages.
 - Adds current-loop reasoning to assistant tool-call messages in normal chat,
@@ -162,10 +167,19 @@ Upstream v4.1.7 assumptions to re-check:
   reasoning fields.
 - `backend/onyx/chat/chat_utils.py:750` reconstructs assistant tool-call
   history with `message=""` and no reasoning field.
+- `backend/onyx/chat/llm_loop.py:479` builds chat history in the order
+  `[system], [history_before_last_user], [custom_agent], [context_files],
+  [forgotten_files], [last_user_message], [messages_after_last_user],
+  [reminder]`; the wrapper moves `[reminder]` directly after
+  `[last_user_message]`.
+- `backend/onyx/chat/llm_loop.py:506` appends `reminder_message` at the end of
+  `construct_message_history()`.
 - `backend/onyx/chat/llm_loop.py:1134` builds live assistant tool-call
   messages with no reasoning field.
 - `backend/onyx/chat/llm_step.py:693` builds structured assistant messages
   with only `role`, `content`, and `tool_calls`.
+- `backend/onyx/chat/llm_step.py:963` converts `MessageType.USER_REMINDER` to
+  an OpenAI-compatible user-role message wrapped in `<system-reminder>` tags.
 - `backend/onyx/llm/multi_llm.py:126` serializes Pydantic messages through
   `model_dump(exclude_none=True)` before calling LiteLLM.
 - The deep-research, research-agent, and coding-agent loops still append
@@ -183,7 +197,8 @@ Upgrade notes:
 - Re-test at least one teep OpenAI-compatible GLM-5.2 or Kimi/Kimi-K2.6
   tool-using conversation. Inspect the metadata trace, request payload, or
   LiteLLM debug logs for assistant `reasoning_content` and `reasoning`
-  immediately before tool responses.
+  immediately before tool responses, and confirm there is no trailing user-role
+  reminder after the final assistant/tool history in the outbound request.
 - If a model still behaves as if reasoning was stripped, temporarily flip
   `_REASONING_TRACE_ENABLED` in the patch and compare the
   `state_set_reasoning_tokens`, `attach_reasoning_fields`,
@@ -194,6 +209,11 @@ Upgrade notes:
   assistant reasoning indexes, reasoning lengths, and short hashes so
   multi-user-turn tool conversations can be checked without logging message
   text.
+- If the outbound request keeps reasoning fields but the provider still drops
+  them, inspect the provider chat template behavior for adjacent user-role
+  messages. The next fallback should be merging the reminder into the latest
+  user message under `<system-reminder>` tags, not removing reminder content
+  unless Onyx has replaced it with an upstream-safe mechanism.
 
 ### Previous tool-result preservation
 

@@ -40,6 +40,8 @@ configuration:
 - Let a private deployment tune tool limits without rebuilding Onyx images.
 - Preserve prior assistant reasoning fields across multi-step tool calls for
   OpenAI-compatible private inference providers.
+- Keep Onyx's per-call user reminder from trailing after assistant/tool history
+  when reasoning fields must remain visible to provider chat templates.
 - Optionally preserve prior tool-call outputs across chat turns for research
   workflows that prefer recall over prompt compactness.
 - Keep internal-search result count and content budgets small enough for local
@@ -74,6 +76,7 @@ settings.
 | --- | --- | --- | --- |
 | LLM context window override env | `api_server` | Compose maps `ONYX_AGENT_LLM_MAX_TOKENS` to upstream `GEN_AI_MAX_TOKENS`; `sitecustomize` makes it win before DB/provider limits | First-class wrapper/admin override for model context window |
 | Assistant reasoning preservation | `api_server` | `sitecustomize` carries saved/live assistant reasoning into LiteLLM `reasoning_content` fields | Native chat-history support for provider reasoning fields |
+| Chat reminder placement for reasoning preservation | `api_server` | `sitecustomize` keeps Onyx's user-role reminder adjacent to the latest user request instead of trailing after assistant/tool history | Reminder placement that does not invalidate provider reasoning templates |
 | Prior tool-result preservation | `api_server` | `sitecustomize` optionally replaces Onyx's previous-tool-response placeholder with saved tool responses | Per-agent/admin setting for how much previous tool output to keep |
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
 | Internal search content caps | `api_server` | `sitecustomize` optionally wraps result formatting; full compose passes wrapper env aliases | Admin/env settings for per-result and aggregate tool-response budgets |
@@ -230,6 +233,60 @@ debug suppression and calls LiteLLM's debug hook; only use it during controlled
 local validation because LiteLLM debug logs can include full request/response
 details.
 
+## Chat reminder placement for reasoning preservation
+
+Local files:
+
+- `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- `onyx/patches/sitecustomize_base/sitecustomize.py`
+- `onyx/patches/sitecustomize/sitecustomize.py`
+- `docker-compose.yaml`
+- `.env.wrapper.example`
+
+Onyx source areas:
+
+- `backend/onyx/chat/llm_loop.py`
+- `backend/onyx/chat/llm_step.py`
+
+### Why this is needed
+
+Onyx v4.1.7 can add a per-call `USER_REMINDER` message for citation, URL,
+file-link, persona, or final-answer guidance. Onyx constructs that reminder as
+the final message in the LLM request and `llm_step` serializes it as an
+OpenAI-compatible `role="user"` message wrapped in `<system-reminder>` tags.
+
+For teep/Tinfoil GLM-5.2 through the OpenAI-compatible provider path, a final
+user-role message after assistant tool-call and tool-response messages causes
+the provider chat template to discard the prior assistant reasoning fields for
+that turn. Onyx and LiteLLM can therefore send the preserved
+`reasoning_content` fields correctly, while the downstream template still
+removes them before model execution.
+
+### How it modifies Onyx
+
+This change is gated by the same `ONYX_AGENT_PRESERVE_REASONING` setting as the
+assistant reasoning-field preservation patch. When the setting is explicitly
+`false`, Onyx keeps its upstream reminder behavior.
+
+When enabled, the base API-server `sitecustomize` patch rewrites
+`llm_loop.construct_message_history()` so any `USER_REMINDER` is appended
+immediately after the most recent real user message and before
+`messages_after_last_user` assistant/tool history. The reminder remains a
+separate Onyx `USER_REMINDER` and still becomes a user-role
+`<system-reminder>` message in the final LiteLLM request. Only its position
+changes:
+
+- upstream order:
+  `[system], history_before, last_user, assistant/tool messages, reminder`
+- wrapper order:
+  `[system], history_before, last_user, reminder, assistant/tool messages`
+
+The patch intentionally keeps the reminder instead of suppressing it, because
+Onyx uses these reminders for important answer-format and workflow nudges.
+If a future provider template also rejects adjacent user-role messages, the
+next upgrade investigation should consider merging the reminder text into the
+latest user message rather than dropping it outright.
+
 ### Upstream merge request shape
 
 Onyx should add first-class reasoning fields to its lightweight chat-history
@@ -239,6 +296,12 @@ The upstream implementation should preserve provider-specific constraints:
 OpenAI-compatible providers should receive `reasoning_content`, Anthropic
 should only receive valid signed thinking blocks, and Responses API paths
 should keep their native reasoning item shape.
+
+Onyx should also avoid emitting reminder messages after assistant/tool history
+for providers whose chat templates treat a trailing user turn as the start of a
+new reasoning segment. A provider-aware upstream implementation could either
+place reminders next to the triggering user request or merge them into that
+request under the existing `<system-reminder>` convention.
 
 ## Prior tool-result preservation
 

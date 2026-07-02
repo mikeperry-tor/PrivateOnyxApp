@@ -790,6 +790,37 @@ def apply_reasoning_content_preservation_patch() -> None:
         llm_loop._wrapper_attach_reasoning_fields = _attach_reasoning_fields
         _patch_function_source(
             module=llm_loop,
+            function_name="construct_message_history",
+            patch_name="chat reminder placement for reasoning preservation",
+            replacements={
+                (
+                    "    # 5. Add last user message (with context images attached)\n"
+                    "    result.append(last_user_message)\n"
+                    "\n"
+                    "    # 6. Add messages after last user message (tool calls, responses, etc.)\n"
+                    "    result.extend(messages_after_last_user)\n"
+                    "\n"
+                    "    # 7. Add reminder message at the very end\n"
+                    "    if reminder_message:\n"
+                    "        result.append(reminder_message)\n"
+                ): (
+                    "    # 5. Add last user message (with context images attached)\n"
+                    "    result.append(last_user_message)\n"
+                    "\n"
+                    "    # 6. Keep reminders adjacent to the user request instead of\n"
+                    "    # trailing after assistant/tool messages. Some reasoning model\n"
+                    "    # templates discard prior assistant reasoning fields when a tool\n"
+                    "    # turn is followed by a final user-role reminder.\n"
+                    "    if reminder_message:\n"
+                    "        result.append(reminder_message)\n"
+                    "\n"
+                    "    # 7. Add messages after last user message (tool calls, responses, etc.)\n"
+                    "    result.extend(messages_after_last_user)\n"
+                )
+            },
+        )
+        _patch_function_source(
+            module=llm_loop,
             function_name="run_llm_loop",
             patch_name="chat llm_loop reasoning preservation",
             replacements={
