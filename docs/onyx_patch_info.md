@@ -38,8 +38,9 @@ small set of local deployment requirements that Onyx v4.1.7 does not expose as
 configuration:
 
 - Let a private deployment tune tool limits without rebuilding Onyx images.
-- Preserve prior assistant reasoning fields across multi-step tool calls for
-  OpenAI-compatible private inference providers.
+- Preserve active-turn assistant reasoning fields across multi-step tool calls
+  for OpenAI-compatible private inference providers, with optional preservation
+  across all prior turns.
 - Keep Onyx's per-call user reminder from trailing after assistant/tool history
   when reasoning fields must remain visible to provider chat templates.
 - Optionally preserve prior tool-call outputs across chat turns for research
@@ -75,7 +76,7 @@ settings.
 | Area | Onyx service or component | Local mechanism | Upstream shape |
 | --- | --- | --- | --- |
 | LLM context window override env | `api_server` | Compose maps `ONYX_AGENT_LLM_MAX_TOKENS` to upstream `GEN_AI_MAX_TOKENS`; `sitecustomize` makes it win before DB/provider limits | First-class wrapper/admin override for model context window |
-| Assistant reasoning preservation | `api_server` | `sitecustomize` carries saved/live assistant reasoning into LiteLLM `reasoning_content` fields | Native chat-history support for provider reasoning fields |
+| Assistant reasoning preservation | `api_server` | `sitecustomize` carries active-turn saved/live assistant reasoning into LiteLLM `reasoning_content` fields by default; optional all-history mode preserves older turns too | Native chat-history support for provider reasoning fields |
 | Chat reminder placement for reasoning preservation | `api_server` | `sitecustomize` keeps Onyx's user-role reminder adjacent to the latest user request instead of trailing after assistant/tool history | Reminder placement that does not invalidate provider reasoning templates |
 | Prior tool-result preservation | `api_server` | `sitecustomize` optionally replaces Onyx's previous-tool-response placeholder with saved tool responses | Per-agent/admin setting for how much previous tool output to keep |
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
@@ -184,11 +185,15 @@ tool-use turns.
 The base API-server `sitecustomize` patch, also invoked by the lite
 `sitecustomize` path:
 
-- Reads `ONYX_AGENT_PRESERVE_REASONING`, which defaults to `true`. Set it to
+- Reads `ONYX_AGENT_PRESERVE_TURN_REASONING`, which defaults to `true`, and
+  `ONYX_AGENT_PRESERVE_ALL_REASONING`, which defaults to `false`. Set both to
   `false` to leave Onyx's upstream reasoning-history behavior unpatched.
 - Wraps `chat_utils.convert_chat_history()` so saved `reasoning_tokens` from
-  prior assistant messages and tool-call rows are attached to reconstructed
-  `ChatMessageSimple` assistant messages.
+  assistant messages and tool-call rows can be attached to reconstructed
+  `ChatMessageSimple` assistant messages. With the default turn-only setting,
+  this applies only to assistant messages after the most recent user message.
+  When `ONYX_AGENT_PRESERVE_ALL_REASONING=true`, it applies to all
+  reconstructed assistant messages.
 - Patches live tool loops in normal chat, deep research, research-agent calls,
   and coding-agent calls so the current `llm_step_result.reasoning` is attached
   before a follow-up LLM request sees the assistant tool-call message.
@@ -264,8 +269,9 @@ removes them before model execution.
 
 ### How it modifies Onyx
 
-This change is gated by the same `ONYX_AGENT_PRESERVE_REASONING` setting as the
-assistant reasoning-field preservation patch. When the setting is explicitly
+This change is gated by the reasoning-preservation settings. When either
+`ONYX_AGENT_PRESERVE_TURN_REASONING` or `ONYX_AGENT_PRESERVE_ALL_REASONING` is
+enabled, the reminder-placement patch is active. When both are explicitly
 `false`, Onyx keeps its upstream reminder behavior.
 
 When enabled, the base API-server `sitecustomize` patch rewrites

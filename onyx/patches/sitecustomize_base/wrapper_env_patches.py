@@ -535,7 +535,12 @@ def apply_reasoning_content_preservation_patch() -> None:
     beside assistant tool-call messages when a tool response follows.
     """
 
-    if not _env_flag_default_true("ONYX_AGENT_PRESERVE_REASONING"):
+    preserve_turn_reasoning = _env_flag_default_true(
+        "ONYX_AGENT_PRESERVE_TURN_REASONING"
+    )
+    preserve_all_reasoning = _env_flag_enabled("ONYX_AGENT_PRESERVE_ALL_REASONING")
+
+    if not (preserve_turn_reasoning or preserve_all_reasoning):
         return
 
     try:
@@ -724,14 +729,47 @@ def apply_reasoning_content_preservation_patch() -> None:
                 )
             )
 
+        last_user_idx = max(
+            (
+                idx
+                for idx, simple_message in enumerate(result.simple_messages)
+                if simple_message.message_type == MessageType.USER
+            ),
+            default=-1,
+        )
+        attached_reasoning = 0
+        skipped_reasoning = 0
+
         reasoning_iter = iter(assistant_reasoning)
-        for simple_message in result.simple_messages:
+        for idx, simple_message in enumerate(result.simple_messages):
             if simple_message.message_type == MessageType.ASSISTANT:
+                reasoning_content = next(reasoning_iter, None)
+                should_attach_reasoning = preserve_all_reasoning or (
+                    preserve_turn_reasoning
+                    and last_user_idx >= 0
+                    and idx > last_user_idx
+                )
+                if not should_attach_reasoning:
+                    if reasoning_content:
+                        skipped_reasoning += 1
+                    continue
+
                 _attach_reasoning_fields(
                     simple_message,
-                    next(reasoning_iter, None),
+                    reasoning_content,
                     source="convert_chat_history",
                 )
+                if reasoning_content:
+                    attached_reasoning += 1
+
+        _trace_reasoning(
+            "convert_chat_history_reasoning_scope",
+            preserve_turn_reasoning=preserve_turn_reasoning,
+            preserve_all_reasoning=preserve_all_reasoning,
+            last_user_idx=last_user_idx,
+            attached_reasoning=attached_reasoning,
+            skipped_reasoning=skipped_reasoning,
+        )
 
         return result
 
@@ -896,7 +934,8 @@ def apply_reasoning_content_preservation_patch() -> None:
             _raise_if_strict()
 
     print(
-        "sitecustomize: preserving assistant reasoning_content in LLM history",
+        "sitecustomize: preserving assistant reasoning_content in LLM history "
+        f"turn={preserve_turn_reasoning} all={preserve_all_reasoning}",
         flush=True,
     )
 
