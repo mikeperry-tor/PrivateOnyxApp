@@ -187,7 +187,8 @@ The base API-server `sitecustomize` patch, also invoked by the lite
 
 - Reads `ONYX_AGENT_PRESERVE_TURN_REASONING`, which defaults to `true`, and
   `ONYX_AGENT_PRESERVE_ALL_REASONING`, which defaults to `false`. Set both to
-  `false` to leave Onyx's upstream reasoning-history behavior unpatched.
+  `false` to leave Onyx's upstream reasoning-field preservation behavior
+  unpatched.
 - Wraps `chat_utils.convert_chat_history()` so saved `reasoning_tokens` from
   assistant messages and tool-call rows can be attached to reconstructed
   `ChatMessageSimple` assistant messages. With the default turn-only setting,
@@ -269,12 +270,13 @@ removes them before model execution.
 
 ### How it modifies Onyx
 
-This change is gated by the reasoning-preservation settings. When either
-`ONYX_AGENT_PRESERVE_TURN_REASONING` or `ONYX_AGENT_PRESERVE_ALL_REASONING` is
-enabled, the reminder-placement patch is active. When both are explicitly
-`false`, Onyx keeps its upstream reminder behavior.
+This change is always applied by the base API-server `sitecustomize` patch. It
+is intentionally independent of `ONYX_AGENT_PRESERVE_TURN_REASONING` and
+`ONYX_AGENT_PRESERVE_ALL_REASONING`, because the trailing user-role reminder is
+an ordering/template-compatibility problem even when reasoning fields are not
+being preserved.
 
-When enabled, the base API-server `sitecustomize` patch rewrites
+The patch rewrites
 `llm_loop.construct_message_history()` so any `USER_REMINDER` is appended
 immediately after the most recent real user message and before
 `messages_after_last_user` assistant/tool history. The reminder remains a

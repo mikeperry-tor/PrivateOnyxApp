@@ -123,16 +123,17 @@ Patch behavior:
 
 - Reads `ONYX_AGENT_PRESERVE_TURN_REASONING`, which defaults to `true`, and
   `ONYX_AGENT_PRESERVE_ALL_REASONING`, which defaults to `false`.
-- When both settings are explicitly `false`, the patch returns before importing
-  or mutating Onyx chat/LLM modules.
-- Enabled by the base API-server patch path when either setting is true.
+- When both settings are explicitly `false`, the reasoning-field preservation
+  parts return before mutating Onyx chat/LLM modules. The reminder-placement
+  patch still applies.
+- Reasoning-field preservation is enabled by the base API-server patch path
+  when either setting is true.
 - Also invoked by the lite API-server patch path before the lite-only Open URL
   availability patch.
 - Reorders Onyx's per-call `USER_REMINDER` in normal chat history so the
   reminder stays next to the latest real user message instead of trailing after
-  assistant/tool messages. This is enabled when either reasoning-preservation
-  setting is true because provider templates can discard preserved reasoning
-  fields when a user-role reminder is the final message after a tool turn.
+  assistant/tool messages. This is always enabled because provider templates
+  can treat a trailing user-role reminder as a new turn boundary.
 - Carries saved assistant/tool-call `reasoning_tokens` into reconstructed
   `ChatMessageSimple` assistant messages. In default turn-only mode, saved
   reasoning is attached only to reconstructed assistant messages after the most
