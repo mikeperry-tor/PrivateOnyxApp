@@ -193,14 +193,42 @@ The base API-server `sitecustomize` patch, also invoked by the lite
   the transition from `ChatMessageSimple` to Onyx's internal
   `AssistantMessage`.
 - Wraps `multi_llm._prompt_to_dicts()` so the LiteLLM request dictionary
-  includes `reasoning_content` and
-  `provider_specific_fields.reasoning_content` for assistant messages that
-  carry preserved reasoning.
+  includes top-level `reasoning_content` and `reasoning` aliases for assistant
+  messages that carry preserved reasoning. `reasoning_content` matches
+  LiteLLM's normalized field, while `reasoning` matches OpenAI-compatible
+  streams from providers such as GLM/Tinfoil that LiteLLM maps back into
+  `reasoning_content` on response. The patch may carry reasoning internally in
+  `provider_specific_fields.reasoning_content`, matching LiteLLM's provider
+  fallback convention, but removes that duplicate nested copy before the final
+  OpenAI-compatible request dictionary is sent.
+- When internal reasoning tracing is enabled, wraps LiteLLM's OpenAI chat
+  request transform to emit a metadata-only census of the final message body
+  LiteLLM hands to the OpenAI client. This confirms whether
+  `reasoning_content` and `reasoning` survived LiteLLM's OpenAI-compatible
+  transform without logging raw reasoning text.
+- Also wraps outbound `httpx` chat-completions sends to emit the same
+  metadata-only census for the serialized JSON request body leaving the
+  Onyx/LiteLLM process.
 
 The patch does not synthesize Anthropic `thinking_blocks` or OpenAI Responses
 API `reasoning_items`. It preserves Onyx's existing reasoning text as the
 LiteLLM/OpenAI-compatible `reasoning_content` field, which is the best fit for
 teep's OpenAI-compatible chat completions endpoint.
+
+For upgrade/debug work, the patch also contains private developer switches in
+`onyx/patches/sitecustomize_base/wrapper_env_patches.py`. They are intentionally
+not exposed through `.env.wrapper.example`. `_REASONING_TRACE_ENABLED` emits
+metadata-only Onyx trace lines for reasoning receipt, reattachment, structured
+assistant-message conversion, role counts/role ordering, and the final message
+dictionaries passed to LiteLLM. It also emits metadata-only LiteLLM transform
+boundary lines named `litellm_openai_transform_request` and
+`litellm_openai_async_transform_request`, plus outbound HTTP boundary lines
+named `httpx_outbound_chat_completions` and
+`httpx_async_outbound_chat_completions` when those paths are exercised.
+`_REASONING_TRACE_LITELLM_DEBUG_ENABLED` additionally undoes Onyx's LiteLLM
+debug suppression and calls LiteLLM's debug hook; only use it during controlled
+local validation because LiteLLM debug logs can include full request/response
+details.
 
 ### Upstream merge request shape
 

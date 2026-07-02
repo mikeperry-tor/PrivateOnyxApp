@@ -7,6 +7,7 @@ adjust hardcoded limits without rebuilding images.
 from __future__ import annotations
 
 import functools
+import hashlib
 import inspect
 import json
 import os
@@ -17,6 +18,14 @@ from typing import Any
 # We cannot remove truncation logic entirely without editing upstream code, so
 # for "unlimited" we use a very large budget that won't be hit in practice.
 EFFECTIVE_UNLIMITED_CHARS = 2_000_000_000
+
+# Internal developer diagnostics. Keep these false in normal operation. Flip
+# them locally while validating Onyx/LiteLLM reasoning preservation during
+# upgrades. The Onyx-side logs are metadata-only; LiteLLM debug logging is
+# intentionally separate because it can include full request/response details.
+_REASONING_TRACE_ENABLED = False
+_REASONING_TRACE_LITELLM_DEBUG_ENABLED = False
+_REASONING_TRACE_SEQ = 0
 
 
 def _strict_mode() -> bool:
@@ -150,6 +159,197 @@ def _env_flag_default_true(var_name: str) -> bool:
     )
 
 
+def _reasoning_digest(value: Any) -> tuple[int, str | None]:
+    if not isinstance(value, str) or not value:
+        return 0, None
+    digest = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12]
+    return len(value), digest
+
+
+def _trace_reasoning(event: str, **fields: Any) -> None:
+    if not _REASONING_TRACE_ENABLED:
+        return
+
+    global _REASONING_TRACE_SEQ
+    _REASONING_TRACE_SEQ += 1
+    rendered = " ".join(
+        f"{key}={json.dumps(value, sort_keys=True)}"
+        for key, value in sorted(fields.items())
+    )
+    print(
+        f"sitecustomize: reasoning_trace seq={_REASONING_TRACE_SEQ} "
+        f"event={event} {rendered}",
+        flush=True,
+    )
+
+
+def _message_field(message: Any, name: str) -> Any:
+    if isinstance(message, dict):
+        return message.get(name)
+    return getattr(message, name, None)
+
+
+def _message_has_field(message: Any, name: str) -> bool:
+    if isinstance(message, dict):
+        return name in message
+    return hasattr(message, name)
+
+
+def _tool_call_count(tool_calls: Any) -> int:
+    if isinstance(tool_calls, list):
+        return len(tool_calls)
+    if tool_calls:
+        try:
+            return len(tool_calls)
+        except Exception:
+            return 1
+    return 0
+
+
+def _message_role_counts(messages: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for msg in messages:
+        role = msg.get("role")
+        if not isinstance(role, str) or not role:
+            role = "unknown"
+        counts[role] = counts.get(role, 0) + 1
+    return counts
+
+
+def _trace_reasoning_message_census(
+    event: str,
+    messages: Any,
+    **fields: Any,
+) -> None:
+    if not isinstance(messages, list):
+        _trace_reasoning(event, message_count=0, messages_is_list=False, **fields)
+        return
+
+    dict_messages = [msg for msg in messages if isinstance(msg, dict)]
+    assistant_reasoning_content_indexes: list[int] = []
+    assistant_reasoning_indexes: list[int] = []
+    assistant_reasoning_content_lens: list[int] = []
+    assistant_reasoning_lens: list[int] = []
+    assistant_reasoning_content_hashes: list[str | None] = []
+    assistant_reasoning_hashes: list[str | None] = []
+    assistant_provider_specific_reasoning_indexes: list[int] = []
+
+    for idx, msg in enumerate(dict_messages):
+        if msg.get("role") != "assistant":
+            continue
+
+        reasoning_content = _first_non_empty_string(msg.get("reasoning_content"))
+        reasoning = _first_non_empty_string(msg.get("reasoning"))
+        if reasoning_content:
+            reasoning_len, reasoning_sha = _reasoning_digest(reasoning_content)
+            assistant_reasoning_content_indexes.append(idx)
+            assistant_reasoning_content_lens.append(reasoning_len)
+            assistant_reasoning_content_hashes.append(reasoning_sha)
+        if reasoning:
+            reasoning_len, reasoning_sha = _reasoning_digest(reasoning)
+            assistant_reasoning_indexes.append(idx)
+            assistant_reasoning_lens.append(reasoning_len)
+            assistant_reasoning_hashes.append(reasoning_sha)
+
+        provider_specific_fields = msg.get("provider_specific_fields")
+        if (
+            isinstance(provider_specific_fields, dict)
+            and provider_specific_fields.get("reasoning_content")
+        ):
+            assistant_provider_specific_reasoning_indexes.append(idx)
+
+    _trace_reasoning(
+        event,
+        message_count=len(dict_messages),
+        messages_is_list=True,
+        role_counts=_message_role_counts(dict_messages),
+        role_sequence=[msg.get("role") for msg in dict_messages],
+        user_messages=sum(1 for msg in dict_messages if msg.get("role") == "user"),
+        assistant_with_tool_calls=sum(
+            1
+            for msg in dict_messages
+            if msg.get("role") == "assistant" and msg.get("tool_calls")
+        ),
+        assistant_with_reasoning_content=len(assistant_reasoning_content_indexes),
+        assistant_reasoning_content_indexes=assistant_reasoning_content_indexes,
+        assistant_reasoning_content_lens=assistant_reasoning_content_lens,
+        assistant_reasoning_content_sha256=assistant_reasoning_content_hashes,
+        assistant_with_reasoning=len(assistant_reasoning_indexes),
+        assistant_reasoning_indexes=assistant_reasoning_indexes,
+        assistant_reasoning_lens=assistant_reasoning_lens,
+        assistant_reasoning_sha256=assistant_reasoning_hashes,
+        assistant_provider_specific_reasoning_indexes=(
+            assistant_provider_specific_reasoning_indexes
+        ),
+        **fields,
+    )
+
+
+def _trace_reasoning_request_body(
+    event: str,
+    body: bytes | None,
+    **fields: Any,
+) -> None:
+    if not body:
+        _trace_reasoning(event, body_available=False, **fields)
+        return
+
+    body_sha = hashlib.sha256(body).hexdigest()[:12]
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception as e:
+        _trace_reasoning(
+            event,
+            body_available=True,
+            body_sha256=body_sha,
+            json_parse_error=repr(e),
+            **fields,
+        )
+        return
+
+    if not isinstance(payload, dict):
+        _trace_reasoning(
+            event,
+            body_available=True,
+            body_sha256=body_sha,
+            payload_type=type(payload).__name__,
+            **fields,
+        )
+        return
+
+    _trace_reasoning_message_census(
+        event,
+        payload.get("messages"),
+        body_available=True,
+        body_sha256=body_sha,
+        has_stream=bool(payload.get("stream")),
+        model=payload.get("model"),
+        **fields,
+    )
+
+
+def _enable_litellm_reasoning_trace_debug() -> None:
+    if not _REASONING_TRACE_ENABLED:
+        return
+    if not _REASONING_TRACE_LITELLM_DEBUG_ENABLED:
+        _trace_reasoning("litellm_debug_skipped")
+        return
+
+    try:
+        from onyx.llm.litellm_singleton import litellm
+
+        litellm.suppress_debug_info = False
+        turn_on_debug = getattr(litellm, "_turn_on_debug", None)
+        if callable(turn_on_debug):
+            turn_on_debug()
+        _trace_reasoning(
+            "litellm_debug_enabled",
+            suppress_debug_info=getattr(litellm, "suppress_debug_info", None),
+        )
+    except Exception as e:  # pragma: no cover
+        _trace_reasoning("litellm_debug_enable_failed", error=repr(e))
+
+
 def _first_non_empty_string(*values: Any) -> str | None:
     for value in values:
         if isinstance(value, str) and value:
@@ -167,9 +367,26 @@ def _set_extra_attr(obj: Any, name: str, value: Any) -> None:
             obj.__dict__[name] = value
 
 
-def _attach_reasoning_fields(message: Any, reasoning: str | None) -> None:
+def _attach_reasoning_fields(
+    message: Any,
+    reasoning: str | None,
+    *,
+    source: str = "unknown",
+) -> None:
     """Carry prior reasoning across Onyx's internal message model boundary."""
     reasoning_content = _first_non_empty_string(reasoning)
+    reasoning_len, reasoning_sha = _reasoning_digest(reasoning_content)
+    _trace_reasoning(
+        "attach_reasoning_fields",
+        source=source,
+        target_type=type(message).__name__,
+        incoming_reasoning=bool(reasoning_content),
+        reasoning_len=reasoning_len,
+        reasoning_sha256=reasoning_sha,
+        had_reasoning_content=_message_has_field(message, "reasoning_content"),
+        role=_message_field(message, "role"),
+        tool_calls=_tool_call_count(_message_field(message, "tool_calls")),
+    )
     if not reasoning_content:
         return
 
@@ -184,7 +401,11 @@ def _attach_reasoning_fields(message: Any, reasoning: str | None) -> None:
     _set_extra_attr(message, "provider_specific_fields", provider_specific_fields)
 
 
-def _dump_message_with_reasoning_fields(message: Any) -> dict[str, Any]:
+def _dump_message_with_reasoning_fields(
+    message: Any,
+    *,
+    idx: int | None = None,
+) -> dict[str, Any]:
     if hasattr(message, "model_dump"):
         dumped = message.model_dump(exclude_none=True)
     else:
@@ -198,17 +419,56 @@ def _dump_message_with_reasoning_fields(message: Any) -> dict[str, Any]:
         getattr(message, "reasoning_content", None),
     )
     if not reasoning_content:
+        _trace_reasoning(
+            "dump_assistant_message",
+            idx=idx,
+            role=dumped.get("role"),
+            tool_calls=_tool_call_count(dumped.get("tool_calls")),
+            reasoning_content=False,
+            provider_specific_reasoning=False,
+        )
         return dumped
 
     dumped["reasoning_content"] = reasoning_content
+    dumped.setdefault("reasoning", reasoning_content)
 
     provider_specific_fields = dumped.get("provider_specific_fields")
     if isinstance(provider_specific_fields, dict):
         provider_specific_fields = dict(provider_specific_fields)
     else:
         provider_specific_fields = {}
-    provider_specific_fields.setdefault("reasoning_content", reasoning_content)
-    dumped["provider_specific_fields"] = provider_specific_fields
+    provider_specific_reasoning = _first_non_empty_string(
+        provider_specific_fields.get("reasoning_content")
+    )
+    provider_reasoning_matches = (
+        provider_specific_reasoning == reasoning_content
+        if provider_specific_reasoning
+        else None
+    )
+    provider_specific_fields.pop("reasoning_content", None)
+    if provider_specific_fields:
+        dumped["provider_specific_fields"] = provider_specific_fields
+    else:
+        dumped.pop("provider_specific_fields", None)
+    reasoning_len, reasoning_sha = _reasoning_digest(reasoning_content)
+    provider_reasoning_len, provider_reasoning_sha = _reasoning_digest(
+        provider_specific_reasoning
+    )
+    _trace_reasoning(
+        "dump_assistant_message",
+        idx=idx,
+        role=dumped.get("role"),
+        tool_calls=_tool_call_count(dumped.get("tool_calls")),
+        reasoning=bool(dumped.get("reasoning")),
+        reasoning_content=True,
+        provider_specific_reasoning=bool(provider_specific_reasoning),
+        provider_specific_reasoning_removed=bool(provider_specific_reasoning),
+        provider_specific_reasoning_matches=provider_reasoning_matches,
+        provider_specific_reasoning_len=provider_reasoning_len,
+        provider_specific_reasoning_sha256=provider_reasoning_sha,
+        reasoning_len=reasoning_len,
+        reasoning_sha256=reasoning_sha,
+    )
 
     return dumped
 
@@ -280,6 +540,7 @@ def apply_reasoning_content_preservation_patch() -> None:
 
     try:
         from onyx.chat import chat_utils
+        from onyx.chat import chat_state
         from onyx.configs.constants import MessageType
         from onyx.llm import multi_llm
         from onyx.chat import llm_step
@@ -317,6 +578,94 @@ def apply_reasoning_content_preservation_patch() -> None:
         llm_step._build_structured_assistant_message
     )
     original_convert_chat_history = chat_utils.convert_chat_history
+    original_set_reasoning_tokens = chat_state.ChatStateContainer.set_reasoning_tokens
+
+    try:
+        import httpx
+        from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+        original_litellm_transform_request = OpenAIGPTConfig.transform_request
+        original_litellm_async_transform_request = (
+            OpenAIGPTConfig.async_transform_request
+        )
+        original_httpx_client_send = httpx.Client.send
+        original_httpx_async_client_send = httpx.AsyncClient.send
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(f"could not import LiteLLM/httpx trace targets: {e}")
+        return
+
+    @functools.wraps(original_set_reasoning_tokens)
+    def _reasoning_set_reasoning_tokens(self, reasoning):  # noqa: ANN001
+        reasoning_len, reasoning_sha = _reasoning_digest(reasoning)
+        _trace_reasoning(
+            "state_set_reasoning_tokens",
+            reasoning=bool(reasoning),
+            reasoning_len=reasoning_len,
+            reasoning_sha256=reasoning_sha,
+        )
+        return original_set_reasoning_tokens(self, reasoning)
+
+    @functools.wraps(original_litellm_transform_request)
+    def _reasoning_litellm_transform_request(self, *args, **kwargs):
+        data = original_litellm_transform_request(self, *args, **kwargs)
+        _trace_reasoning_message_census(
+            "litellm_openai_transform_request",
+            data.get("messages") if isinstance(data, dict) else None,
+            has_stream=bool(data.get("stream")) if isinstance(data, dict) else False,
+        )
+        return data
+
+    @functools.wraps(original_litellm_async_transform_request)
+    async def _reasoning_litellm_async_transform_request(self, *args, **kwargs):
+        data = await original_litellm_async_transform_request(self, *args, **kwargs)
+        _trace_reasoning_message_census(
+            "litellm_openai_async_transform_request",
+            data.get("messages") if isinstance(data, dict) else None,
+            has_stream=bool(data.get("stream")) if isinstance(data, dict) else False,
+        )
+        return data
+
+    def _httpx_request_body(request):  # noqa: ANN001
+        try:
+            return request.content
+        except Exception:
+            return None
+
+    def _should_trace_httpx_chat_request(request):  # noqa: ANN001
+        try:
+            return (
+                request.method == "POST"
+                and request.url.path.endswith("/chat/completions")
+            )
+        except Exception:
+            return False
+
+    @functools.wraps(original_httpx_client_send)
+    def _reasoning_httpx_client_send(self, request, *args, **kwargs):  # noqa: ANN001
+        if _should_trace_httpx_chat_request(request):
+            _trace_reasoning_request_body(
+                "httpx_outbound_chat_completions",
+                _httpx_request_body(request),
+                host=getattr(request.url, "host", None),
+                path=getattr(request.url, "path", None),
+            )
+        return original_httpx_client_send(self, request, *args, **kwargs)
+
+    @functools.wraps(original_httpx_async_client_send)
+    async def _reasoning_httpx_async_client_send(
+        self,
+        request,
+        *args,
+        **kwargs,
+    ):  # noqa: ANN001
+        if _should_trace_httpx_chat_request(request):
+            _trace_reasoning_request_body(
+                "httpx_async_outbound_chat_completions",
+                _httpx_request_body(request),
+                host=getattr(request.url, "host", None),
+                path=getattr(request.url, "path", None),
+            )
+        return await original_httpx_async_client_send(self, request, *args, **kwargs)
 
     @functools.wraps(original_build_structured_assistant_message)
     def _reasoning_structured_assistant_message(*args, **kwargs):
@@ -328,7 +677,11 @@ def apply_reasoning_content_preservation_patch() -> None:
             getattr(msg, "reasoning_content", None) if msg is not None else None,
             getattr(msg, "reasoning", None) if msg is not None else None,
         )
-        _attach_reasoning_fields(assistant_message, reasoning_content)
+        _attach_reasoning_fields(
+            assistant_message,
+            reasoning_content,
+            source="structured_assistant_message",
+        )
         return assistant_message
 
     @functools.wraps(original_convert_chat_history)
@@ -374,15 +727,57 @@ def apply_reasoning_content_preservation_patch() -> None:
         reasoning_iter = iter(assistant_reasoning)
         for simple_message in result.simple_messages:
             if simple_message.message_type == MessageType.ASSISTANT:
-                _attach_reasoning_fields(simple_message, next(reasoning_iter, None))
+                _attach_reasoning_fields(
+                    simple_message,
+                    next(reasoning_iter, None),
+                    source="convert_chat_history",
+                )
 
         return result
 
     def _reasoning_prompt_to_dicts(prompt):
+        _enable_litellm_reasoning_trace_debug()
         if isinstance(prompt, list):
-            return [_dump_message_with_reasoning_fields(msg) for msg in prompt]
-        return [_dump_message_with_reasoning_fields(prompt)]
+            messages = [
+                _dump_message_with_reasoning_fields(msg, idx=idx)
+                for idx, msg in enumerate(prompt)
+            ]
+        else:
+            messages = [_dump_message_with_reasoning_fields(prompt, idx=0)]
+        _trace_reasoning(
+            "litellm_prompt_to_dicts",
+            message_count=len(messages),
+            role_counts=_message_role_counts(messages),
+            role_sequence=[msg.get("role") for msg in messages],
+            user_messages=sum(1 for msg in messages if msg.get("role") == "user"),
+            assistant_with_reasoning=sum(
+                1
+                for msg in messages
+                if msg.get("role") == "assistant" and msg.get("reasoning_content")
+            ),
+            assistant_reasoning_indexes=[
+                idx
+                for idx, msg in enumerate(messages)
+                if msg.get("role") == "assistant" and msg.get("reasoning_content")
+            ],
+            assistant_with_reasoning_alias=sum(
+                1
+                for msg in messages
+                if msg.get("role") == "assistant" and msg.get("reasoning")
+            ),
+            assistant_with_tool_calls=sum(
+                1
+                for msg in messages
+                if msg.get("role") == "assistant" and msg.get("tool_calls")
+            ),
+        )
+        return messages
 
+    chat_state.ChatStateContainer.set_reasoning_tokens = _reasoning_set_reasoning_tokens
+    OpenAIGPTConfig.transform_request = _reasoning_litellm_transform_request
+    OpenAIGPTConfig.async_transform_request = _reasoning_litellm_async_transform_request
+    httpx.Client.send = _reasoning_httpx_client_send
+    httpx.AsyncClient.send = _reasoning_httpx_async_client_send
     llm_step._build_structured_assistant_message = (
         _reasoning_structured_assistant_message
     )
@@ -400,7 +795,9 @@ def apply_reasoning_content_preservation_patch() -> None:
             replacements={
                 "                simple_chat_history.append(assistant_with_tools)\n": (
                     "                _wrapper_attach_reasoning_fields(\n"
-                    "                    assistant_with_tools, llm_step_result.reasoning\n"
+                    "                    assistant_with_tools,\n"
+                    "                    llm_step_result.reasoning,\n"
+                    "                    source=\"run_llm_loop\",\n"
                     "                )\n"
                     "                simple_chat_history.append(assistant_with_tools)\n"
                 )
@@ -419,6 +816,7 @@ def apply_reasoning_content_preservation_patch() -> None:
                 "                    _wrapper_attach_reasoning_fields(\n"
                 "                        assistant_with_tools,\n"
                 "                        llm_step_result.reasoning or most_recent_reasoning,\n"
+                "                        source=\"deep_research_llm_loop\",\n"
                 "                    )\n"
                 "                    simple_chat_history.append(assistant_with_tools)\n"
             ),
@@ -431,6 +829,7 @@ def apply_reasoning_content_preservation_patch() -> None:
                 "                        _wrapper_attach_reasoning_fields(\n"
                 "                            assistant_with_tools,\n"
                 "                            llm_step_result.reasoning or most_recent_reasoning,\n"
+                "                            source=\"research_agent_call\",\n"
                 "                        )\n"
                 "                        msg_history.append(assistant_with_tools)\n"
             ),
@@ -443,6 +842,7 @@ def apply_reasoning_content_preservation_patch() -> None:
                 "                    _wrapper_attach_reasoning_fields(\n"
                 "                        assistant_with_tools,\n"
                 "                        llm_step_result.reasoning or most_recent_reasoning,\n"
+                "                        source=\"coding_agent_call\",\n"
                 "                    )\n"
                 "                    msg_history.append(assistant_with_tools)\n"
             ),

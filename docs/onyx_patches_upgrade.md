@@ -132,9 +132,27 @@ Patch behavior:
 - Adds current-loop reasoning to assistant tool-call messages in normal chat,
   deep research, research-agent, and coding-agent loops before tool responses
   are sent back to the model.
-- Adds `reasoning_content` and
-  `provider_specific_fields.reasoning_content` to the LiteLLM request
-  dictionaries for assistant messages carrying preserved reasoning.
+- Adds top-level `reasoning_content` and `reasoning` aliases to the LiteLLM
+  request dictionaries for assistant messages carrying preserved reasoning.
+  The patch can carry reasoning internally in
+  `provider_specific_fields.reasoning_content`, but strips that duplicate
+  nested copy from the final OpenAI-compatible request dictionary when
+  top-level reasoning fields are present.
+- When internal reasoning tracing is enabled, wraps LiteLLM's OpenAI chat
+  request transform to log a metadata-only census of the final transformed
+  message body. Use the `litellm_openai_transform_request` and
+  `litellm_openai_async_transform_request` events to confirm fields survived
+  LiteLLM without enabling raw request/response debug logs.
+- Also wraps outbound `httpx` chat-completions sends and logs
+  `httpx_outbound_chat_completions` or
+  `httpx_async_outbound_chat_completions` with a metadata-only census of the
+  serialized JSON request body leaving the Onyx/LiteLLM process.
+- Contains internal developer switches for reasoning diagnostics. Keep
+  `_REASONING_TRACE_ENABLED` false in normal operation; when temporarily
+  flipped in the patch, it logs metadata-only Onyx reasoning trace events. Keep
+  `_REASONING_TRACE_LITELLM_DEBUG_ENABLED` separate and false unless full
+  LiteLLM request/response debug logging is intentionally needed for boundary
+  confirmation. Do not expose these as wrapper env preferences.
 
 Onyx service: `api_server`.
 
@@ -163,8 +181,19 @@ Upgrade notes:
   signed blocks into plain `reasoning_content`; preserve provider-native
   fields only for providers that accept them.
 - Re-test at least one teep OpenAI-compatible GLM-5.2 or Kimi/Kimi-K2.6
-  tool-using conversation. Inspect the request payload or LiteLLM debug logs
-  for assistant `reasoning_content` immediately before tool responses.
+  tool-using conversation. Inspect the metadata trace, request payload, or
+  LiteLLM debug logs for assistant `reasoning_content` and `reasoning`
+  immediately before tool responses.
+- If a model still behaves as if reasoning was stripped, temporarily flip
+  `_REASONING_TRACE_ENABLED` in the patch and compare the
+  `state_set_reasoning_tokens`, `attach_reasoning_fields`,
+  `dump_assistant_message`, `litellm_prompt_to_dicts`, and
+  `litellm_openai_transform_request` trace events, then compare them against
+  the `httpx_*_outbound_chat_completions` events. The prompt, LiteLLM
+  transform, and outbound HTTP traces include role counts, role ordering,
+  assistant reasoning indexes, reasoning lengths, and short hashes so
+  multi-user-turn tool conversations can be checked without logging message
+  text.
 
 ### Previous tool-result preservation
 

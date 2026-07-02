@@ -258,7 +258,7 @@ The node polls the on-chain channel balance and will reflect the transfer once t
 
 ## Onyx UI Configuration
 
-Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). Select the **OpenAI-Compatible** provider type for teep. This is important for GLM-5.2 and Kimi-K2.6 reasoning models: the wrapper's Onyx patches preserve prior assistant reasoning as LiteLLM/OpenAI-compatible `reasoning_content` fields, and the OpenAI-Compatible provider keeps teep's raw model IDs on that request path. The BiFrost provider is also compatible, but OpenAI-Compatible is the recommended teep selection. The URL depends on your `TEEP_ROUTE_THROUGH_MYST_VPN` setting:
+Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). Select the **OpenAI-Compatible** provider type for teep. This is important for GLM-5.2 and Kimi-K2.6 reasoning models: the wrapper's Onyx patches preserve prior assistant reasoning as OpenAI-compatible `reasoning_content`/`reasoning` fields, and the OpenAI-Compatible provider keeps teep's raw model IDs on that request path. The BiFrost provider is also compatible, but OpenAI-Compatible is the recommended teep selection. The URL depends on your `TEEP_ROUTE_THROUGH_MYST_VPN` setting:
 
 - **Default (`TEEP_ROUTE_THROUGH_MYST_VPN=false`):** Use `http://teep:8337/v1` (Docker DNS resolves the teep service on the default network).
 - **VPN-routed (`TEEP_ROUTE_THROUGH_MYST_VPN=true`):** Use `http://127.0.0.1:8337/v1` (shared loopback in the VPN namespace).
