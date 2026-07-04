@@ -778,6 +778,12 @@ namespace and supported tools use the configured upstream proxy.
 
 For SOCKS proxies, the patch also:
 
+- Injects `HTTP_PROXY` and `HTTPS_PROXY` pointing at
+  `http://127.0.0.1:3128`, the prefetch-blocking-proxy service's HTTP
+  listener. That gives Python `urllib` an ordinary HTTP proxy endpoint while
+  the sidecar adapts upstream egress to SOCKS.
+- Keeps `ALL_PROXY` and `all_proxy` pointed at the configured SOCKS URL for
+  clients that understand SOCKS directly.
 - Creates a Docker volume named `onyx-proxy-libs`.
 - Synchronously installs the hashed `PySocks` and `socksio` lock from
   `onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt`
@@ -786,6 +792,10 @@ For SOCKS proxies, the patch also:
 - Mounts the volume read-only into executor pods at `/tmp/proxy-libs` only if
   setup succeeds.
 - Prepends that directory to `PYTHONPATH` only if setup succeeds.
+
+The proxy listener still blocks configured search-engine hosts, so the
+code-interpreter path should not expect direct access to those search pages
+through the injected proxy variables.
 
 This is intentionally high trust. It removes the upstream executor network
 isolation when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` and lets generated code make

@@ -8,11 +8,13 @@ The main conclusions:
 
 - Obscura and CRW block private/internal targets from the browser and Onyx
   `open_url()` agent tool paths.
-- The prefetch-blocking proxy performs destination validation for `CONNECT`,
-  `HEAD`, and PDF forwarding. It blocks localhost, `host.docker.internal`,
+- The prefetch-blocking proxy performs destination validation for `CONNECT`
+  and HTTP forwarding. It blocks localhost, `host.docker.internal`,
   single-label Docker-style hostnames, non-global IP literals, and DNS names
   that resolve to blocked addresses when no explicit upstream proxy is
-  configured.
+  configured. SOCKS-backed code-interpreter urllib traffic uses the same HTTP
+  listener and therefore keeps the same internal-target and search-engine
+  blocks.
 - Onyx SSRF settings affect only Onyx-managed URL-fetching paths and startup
   defaults for the Admin Security Hardening policy; they are not firewall
   rules for CRW, Obscura, or code-interpreter.
@@ -195,9 +197,7 @@ The wrapper's `crw/prefetch_blocking_proxy.py` exists to shape CRW's HTTP
 prefetch behavior:
 
 - known search-engine hosts receive `403` without an upstream request;
-- non-search plain HTTP URLs receive a real `HEAD` request for PDF detection;
-- non-PDF plain HTTP URLs then receive `403`;
-- PDF responses are forwarded so CRW can extract text;
+- non-search plain HTTP requests are forwarded;
 - non-search `CONNECT` requests are tunneled.
 
 The proxy listens on `0.0.0.0:3128` inside the shared namespace so CRW can use
@@ -219,8 +219,8 @@ validator and rejects blocked targets without opening an upstream connection:
   leakage outside the configured upstream proxy path;
 - blocked destination attempts are logged at warning level with the method,
   host, port, peer, and block reason;
-- blocked direct proxy calls return `403` without opening a tunnel, `HEAD`
-  request, or PDF forwarding path.
+- blocked direct proxy calls return `403` without opening a tunnel or HTTP
+  forwarding path.
 
 This proxy validation aligns with the CRW and Obscura protections:
 
@@ -232,6 +232,13 @@ However, any network-enabled process already running inside the shared
 namespace can call the proxy directly. That includes network-enabled
 code-interpreter executor pods. In that mode the proxy is an additional
 internal-access path, not a boundary.
+
+When `docker-compose.proxy.yml` is active, the code-interpreter patch points
+`HTTP_PROXY` and `HTTPS_PROXY` at `http://127.0.0.1:3128` when
+`ONYX_AGENT_OUTBOUND_PROXY_URL` is a SOCKS URL. That gives Python `urllib` an
+ordinary HTTP proxy endpoint while the sidecar adapts upstream egress to SOCKS.
+The same destination validation applies, and configured search-engine hosts
+still receive `403`.
 
 This proxy should not be treated as the only boundary for a namespace shared
 with untrusted code. If code-interpreter networking is enabled, executor pods
@@ -298,6 +305,9 @@ execution security gap. Generated code can use raw sockets or tools that ignore
 proxy variables.
 Therefore `ONYX_AGENT_OUTBOUND_PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY`,
 `ALL_PROXY`, and `NO_PROXY` are routing hints, not a security boundary.
+The SOCKS-to-HTTP proxy adapter closes a urllib compatibility gap for ordinary
+HTTP/HTTPS clients, but generated code can still bypass those environment
+variables with raw sockets or tools that ignore proxy settings.
 
 The proxy override intentionally sets `NO_PROXY` for internal
 loopback and Docker DNS names so normal stack-internal service calls stay off

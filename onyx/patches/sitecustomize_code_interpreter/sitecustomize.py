@@ -56,6 +56,7 @@ def _raise_if_strict() -> None:
 SOCKS_LIBS_VOLUME = "onyx-proxy-libs"
 SOCKS_LIBS_DIR = "/tmp/proxy-libs"
 SOCKS_LIBS_REQUIREMENTS = Path(__file__).with_name("proxy-libs-requirements.txt")
+DEFAULT_SOCKS_HTTP_PROXY_URL = "http://127.0.0.1:3128"
 
 
 def _proxy_url() -> str:
@@ -70,6 +71,14 @@ def _is_socks_proxy() -> bool:
     )
 
 
+def _socks_http_proxy_url() -> str:
+    """HTTP proxy adapter URL used for urllib when the upstream proxy is SOCKS."""
+    return os.environ.get(
+        "ONYX_AGENT_SOCKS_HTTP_PROXY_URL",
+        DEFAULT_SOCKS_HTTP_PROXY_URL,
+    ).strip()
+
+
 def _install_socks_libs() -> bool:
     """Install PySocks and socksio into SOCKS_LIBS_DIR for SOCKS proxy support.
 
@@ -77,12 +86,11 @@ def _install_socks_libs() -> bool:
     ONYX_AGENT_OUTBOUND_PROXY_URL is a SOCKS proxy. The installed packages are made available to
     executor pods through a Docker named volume mounted at SOCKS_LIBS_DIR.
 
-    PySocks enables SOCKS support in ``requests`` (via ``requests[socks]``).
-    socksio enables SOCKS support in ``httpx`` (via ``httpx[socks]``).
-    Without these, Python's ``urllib``/``requests``/``httpx`` cannot use SOCKS
-    proxies — ``urllib`` treats ``HTTP_PROXY`` as an HTTP CONNECT proxy (which
-    Tor rejects), and ``requests``/``httpx`` need the SOCKS transport libraries
-    to honor ``ALL_PROXY`` for SOCKS URLs.
+    PySocks enables direct SOCKS support in ``requests`` (via
+    ``requests[socks]``). socksio enables direct SOCKS support in ``httpx``
+    (via ``httpx[socks]``). ``urllib`` uses the local HTTP proxy adapter
+    instead and does not need these libraries, but clients that honor
+    ``ALL_PROXY`` for SOCKS URLs still do.
 
     This function blocks until the install succeeds or fails. The startup delay
     is intentional: executor pods should not receive a PYTHONPATH pointing at an
@@ -165,14 +173,13 @@ def _proxy_env_vars(*, socks_libs_available: bool) -> list[str]:
     stays off the proxy. Python's ``urllib``, ``requests``, and ``httpx`` all
     honor these for HTTP CONNECT proxies.
 
-    For **SOCKS proxies** (socks4://, socks5://, socks5h://): injects only
-    ``ALL_PROXY`` / ``all_proxy`` (which ``requests`` and ``httpx`` honor for
-    SOCKS when PySocks/socksio is installed). Does NOT inject ``HTTP_PROXY`` /
-    ``HTTPS_PROXY`` because Python's ``urllib`` treats those as HTTP CONNECT
-    proxies and sends a ``CONNECT`` request to the SOCKS port, which Tor
-    rejects with "501 Tor is not an HTTP Proxy" / "Socks version 67 not
-    recognized". If PySocks is not installed, executor Python clients that
-    require SOCKS transport support may fail.
+    For **SOCKS proxies** (socks4://, socks5://, socks5h://): injects
+    ``HTTP_PROXY`` / ``HTTPS_PROXY`` pointing at the local prefetch-blocking
+    proxy's HTTP listener, and keeps ``ALL_PROXY`` / ``all_proxy``
+    pointing at the configured SOCKS URL. The local listener adapts urllib's
+    HTTP CONNECT behavior to the SOCKS upstream, while requests/httpx and other
+    SOCKS-aware tools can still use ``ALL_PROXY`` when PySocks/socksio is
+    installed.
 
     Lowercase variants (``http_proxy`` etc.) are also injected because some
     tools (notably ``curl`` and ``git``) only honor the lowercase form.
@@ -193,13 +200,19 @@ def _proxy_env_vars(*, socks_libs_available: bool) -> list[str]:
     )
 
     if is_socks:
-        # SOCKS proxies: only set ALL_PROXY (honored by requests/httpx with
-        # PySocks/socksio). Do NOT set HTTP_PROXY/HTTPS_PROXY — urllib
-        # misinterprets them as HTTP CONNECT proxies and fails on SOCKS.
+        # SOCKS proxies: urllib needs an HTTP proxy endpoint. Use the local
+        # prefetch-blocking-proxy HTTP listener as an adapter to the SOCKS
+        # upstream, while keeping ALL_PROXY as the original SOCKS URL for
+        # clients that understand SOCKS directly.
+        socks_http_proxy_url = _socks_http_proxy_url()
         pairs = [
             ("ONYX_AGENT_OUTBOUND_PROXY_URL", proxy_url),
+            ("HTTP_PROXY", socks_http_proxy_url),
+            ("HTTPS_PROXY", socks_http_proxy_url),
             ("ALL_PROXY", proxy_url),
             ("NO_PROXY", no_proxy),
+            ("http_proxy", socks_http_proxy_url),
+            ("https_proxy", socks_http_proxy_url),
             ("all_proxy", proxy_url),
             ("no_proxy", no_proxy),
         ]

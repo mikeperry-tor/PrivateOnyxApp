@@ -248,18 +248,17 @@ CRW's base environment points raw HTTP prefetch traffic at the local
 `HTTPS_PROXY`. It does not point CRW directly at `ONYX_AGENT_OUTBOUND_PROXY_URL`.
 
 The local proxy in `crw/prefetch_blocking_proxy.py` handles CRW's prefetch
-step:
+step on port `3128`:
 
 - known search engine hosts receive an immediate 403 with no upstream request
-- internal/private destinations receive 403 without opening any `CONNECT`,
-  `HEAD`, or PDF forwarding path
-- non-search URLs receive a HEAD request to detect PDFs
-- PDFs are tunneled back to CRW for its PDF extraction path
-- non-PDF pages receive 403 so CRW escalates to obscura/CDP
+- internal/private destinations receive 403 without opening any `CONNECT` or
+  HTTP forwarding path
+- non-search plain HTTP requests are forwarded to the target
+- non-search HTTPS `CONNECT` requests are tunneled to the target
 
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `prefetch-blocking-proxy` uses it for its own HEAD
-requests and PDF tunnels. That keeps any unavoidable non-browser prefetch
-traffic on the same proxy path as obscura.
+When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `prefetch-blocking-proxy` uses it
+for its own upstream connections. That keeps CRW prefetch traffic and
+SOCKS-backed code-interpreter urllib traffic on the same proxy path as obscura.
 
 Destination validation applies to literal IP addresses, localhost,
 `host.docker.internal`, and single-label Docker-style names without opening an
@@ -310,9 +309,10 @@ The patch injects proxy environment variables into every executor pod's
 
 - for HTTP/HTTPS proxies, it injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
   lowercase variants, and `NO_PROXY`
-- for SOCKS proxies, it injects `ALL_PROXY` and lowercase variants, but avoids
-  `HTTP_PROXY`/`HTTPS_PROXY` because Python's `urllib` treats those as HTTP
-  CONNECT proxies
+- for SOCKS proxies, it injects `HTTP_PROXY`/`HTTPS_PROXY` pointing at the
+  local prefetch-blocking-proxy HTTP listener on `http://127.0.0.1:3128`,
+  keeps `ALL_PROXY` and `all_proxy` pointed at the configured SOCKS URL, and
+  injects lowercase variants
 - for SOCKS proxies, it creates the Docker volume `onyx-proxy-libs`, installs
   the hashed `PySocks` and `socksio` lock from
   `onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt`
@@ -325,6 +325,15 @@ alone, executor pods receive proxy environment variables but remain
 network-isolated. With both `ONYX_AGENT_OUTBOUND_PROXY_URL` and
 `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor pods inherit the shared
 namespace and then use the configured upstream proxy for supported tools.
+
+For SOCKS mode, this closes the common Python `urllib` gap for HTTP and HTTPS
+URLs: `urllib` receives an ordinary HTTP proxy URL, while the local sidecar
+adapts upstream egress to SOCKS. The sidecar is not a transparent firewall and
+does not make network-enabled executors safe against raw-socket bypasses. It
+also intentionally blocks configured search-engine hosts, so generated code
+using urllib/curl/git through these proxy variables should not expect direct
+access to Google, Brave Search, DuckDuckGo HTML, Startpage, or Bing search
+pages from the code-interpreter path.
 
 ## VPN Signup and Funding Flows
 

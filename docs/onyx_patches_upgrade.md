@@ -518,6 +518,11 @@ Patch behavior:
   the shared `netns-holder` namespace via
   `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`.
 - When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, injects proxy env vars into every executor pod.
+- For SOCKS proxies, points executor `HTTP_PROXY`/`HTTPS_PROXY` at the
+  prefetch-blocking-proxy service's local HTTP listener on
+  `http://127.0.0.1:3128`, while keeping `ALL_PROXY` pointed at the configured
+  SOCKS URL. This lets urllib use SOCKS-backed egress without treating the
+  SOCKS port as an HTTP CONNECT proxy.
 - For SOCKS proxies, creates a Docker volume named `onyx-proxy-libs`,
   synchronously installs the hashed `PySocks` and `socksio` lock into it using
   `PROXY_LIBS_INSTALL_IMAGE`, and only mounts/prepends `/tmp/proxy-libs` when
@@ -572,9 +577,9 @@ Wrapper compose assumptions:
   `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` plus
   `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`.
 - `docker-compose.proxy.yml` mounts the code-interpreter patch when proxy mode
-  is active and adds `ONYX_AGENT_OUTBOUND_PROXY_URL` / `ALL_PROXY` / `NO_PROXY` to the
-  code-interpreter container. The patch decides which variables to forward to
-  executor pods.
+  is active and adds `ONYX_AGENT_OUTBOUND_PROXY_URL` / `ALL_PROXY` /
+  `NO_PROXY` plus `ONYX_AGENT_SOCKS_HTTP_PROXY_URL` to the code-interpreter
+  container. The patch decides which variables to forward to executor pods.
 
 Security notes:
 
@@ -1264,4 +1269,6 @@ Manual behavior checks:
   with `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`, matching
   the selected `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` setting.
 - Proxy mode shows executor pod commands receiving proxy env vars; SOCKS mode
-  mounts `onyx-proxy-libs`.
+  mounts `onyx-proxy-libs`, points executor `HTTP_PROXY`/`HTTPS_PROXY` at
+  `http://127.0.0.1:3128`, and `urllib.request.urlopen("https://example.com")`
+  succeeds through the configured upstream proxy.

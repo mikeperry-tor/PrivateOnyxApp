@@ -3,7 +3,7 @@
 ## COMPOSE_FILE layering). Threads a single upstream proxy through:
 ##   - obscura (CDP `serve`)        : --proxy ${ONYX_AGENT_OUTBOUND_PROXY_URL}
 ##   - obscura-mcp                  : --proxy ${ONYX_AGENT_OUTBOUND_PROXY_URL}
-##   - prefetch-blocking-proxy      : proxy env for HEAD/PDF tunnel egress
+##   - prefetch-blocking-proxy      : proxy env for HTTP/HTTPS egress
 ##   - searxng-core                 : outgoing.proxies merged into settings.yml
 ##                                     at startup by searxng-proxy-entrypoint.sh
 ##   - code-interpreter             : HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY
@@ -61,7 +61,6 @@ services:
       - "--proxy"
       - "${ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED:-${ONYX_AGENT_OUTBOUND_PROXY_URL}}"
 
-  
   # SearXNG. Its httpx network client builds explicit transport mounts from
   # outgoing.proxies in settings.yml and does NOT honor HTTP_PROXY env vars
   # when an explicit transport is provided. So the proxy must be merged into
@@ -92,6 +91,7 @@ services:
       # and setting them to a SOCKS URL would break any HTTP client that
       # accidentally runs in the container (urllib treats SOCKS as HTTP CONNECT).
       ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL}"
+      ONYX_AGENT_SOCKS_HTTP_PROXY_URL: "http://127.0.0.1:3128"
       PROXY_LIBS_INSTALL_IMAGE: "${PROXY_LIBS_INSTALL_IMAGE:?PROXY_LIBS_INSTALL_IMAGE must be set}"
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"

@@ -16,16 +16,12 @@ This proxy intercepts CRW's HTTP prefetch requests and:
    search engine never sees the bare reqwest request — only obscura's stealth
    navigation.
 
-2. **For all other URLs**: issues a ``HEAD`` request to the real target
-   (through ``ONYX_AGENT_OUTBOUND_PROXY_URL`` if set) to check ``Content-Type``:
-   - ``application/pdf`` → tunnels the original GET request through to the
-     target and returns the full response (with body) so CRW's
-     ``pdf_inspector`` can extract text.
-   - Anything else → returns ``403 Forbidden`` so CRW escalates to CDP.
+2. **For all other URLs**: forwards the request to the target, through
+   ``ONYX_AGENT_OUTBOUND_PROXY_URL`` if set.
 
-Before any CONNECT tunnel, HEAD request, or PDF forwarding, the proxy rejects
-loopback, private/RFC1918, link-local, multicast, reserved, and other
-non-global IP destinations. It also rejects ``localhost``,
+Before any CONNECT tunnel or HTTP forwarding, the proxy rejects loopback,
+private/RFC1918, link-local, multicast, reserved, and other non-global IP
+destinations. It also rejects ``localhost``,
 ``host.docker.internal``, their subdomains, and single-label Docker-style
 hostnames. When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is empty, DNS names are
 resolved locally and all returned addresses are classified. When an upstream
@@ -33,17 +29,17 @@ proxy is set, target DNS resolution is intentionally skipped to avoid leaking
 target DNS outside the configured proxy path.
 
 When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
-routes its own upstream requests (HEAD and tunnel) through that proxy. This
-ensures the HEAD request and the PDF tunnel egress through the same proxy as
-obscura, so the target sees a consistent exit IP.
+routes its own upstream requests through that proxy. This ensures CRW prefetch
+and code-interpreter urllib requests egress through the configured proxy.
 
 Architecture::
 
     CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
                                    │
                                    ├─ Search engine URL → 403 (no fetch)
-                                   ├─ Other URL → HEAD → PDF? → tunnel GET
-                                   │                        └─ 403
+                                   ├─ Internal/private target → 403
+                                   ├─ Other HTTP URL → forward
+                                   ├─ Other HTTPS URL → CONNECT tunnel
                                    │
                                    └── upstream ──> ONYX_AGENT_OUTBOUND_PROXY_URL (Tor/VPN)
                                                     (if set)
@@ -54,6 +50,12 @@ through this proxy while CDP/WebSocket traffic stays direct via ``NO_PROXY``.
 The stack intentionally avoids ``CRW_CRAWLER__PROXY``; the CDP shim still
 strips ``proxyServer`` from ``Target.createBrowserContext`` as a safety net if
 that path is enabled later.
+
+Code-interpreter executor pods also use this listener for
+``HTTP_PROXY``/``HTTPS_PROXY`` when ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is a
+SOCKS proxy. This closes the common Python ``urllib`` gap without pointing
+urllib directly at a SOCKS port. The proxy still blocks configured
+search-engine hosts and internal/private destinations.
 
 See ``docs/request_handling.md`` §1.6 for the full wait strategy and §1.7
 for the prefetch-blocking proxy design.
@@ -77,7 +79,7 @@ LISTEN_HOST = os.environ.get("PREFETCH_PROXY_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("PREFETCH_PROXY_PORT", "3128"))
 
 # Upstream proxy (ONYX_AGENT_OUTBOUND_PROXY_URL from .env.wrapper). When set,
-# the proxy routes its own HEAD and tunnel requests through this upstream. Supports:
+# the proxy routes its own requests through this upstream. Supports:
 # http://, https://, socks5://, socks5h://
 # When empty, requests go direct (through the VPN namespace).
 UPSTREAM_PROXY = os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
@@ -93,17 +95,11 @@ SEARCH_ENGINE_HOSTS = frozenset(
     if h.strip()
 )
 
-# Timeout for upstream HEAD requests (seconds).
-HEAD_TIMEOUT = int(os.environ.get("PREFETCH_HEAD_TIMEOUT", "10"))
-
 # Timeout for establishing a tunnel connection (seconds).
 TUNNEL_CONNECT_TIMEOUT = int(os.environ.get("PREFETCH_TUNNEL_TIMEOUT", "15"))
 
 # Buffer size for tunneling.
 TUNNEL_BUFFER = 65536
-
-# Max response body size for PDF tunneling (50 MB, matching CRW's limit).
-MAX_PDF_BYTES = int(os.environ.get("PREFETCH_MAX_PDF_BYTES", str(50 * 1024 * 1024)))
 
 # Hostnames that should never be proxied, even when an upstream proxy is
 # configured and arbitrary DNS resolution is intentionally avoided.
@@ -493,88 +489,17 @@ async def _connect_via_http_connect(
     return reader, writer
 
 
-# ── HEAD request for content-type detection ─────────────────────────────
-
-
-async def _check_content_type(target_host: str, target_port: int, use_tls: bool, path: str) -> str | None:
-    """Issue a HEAD request to the target and return the Content-Type, or None on error.
-
-    For HTTPS targets, establishes a TLS connection through the upstream proxy
-    (CONNECT tunnel + TLS handshake). For HTTP targets, connects directly.
-    """
-    try:
-        if use_tls:
-            if not UPSTREAM_PROXY:
-                # Direct TLS connection
-                ssl_ctx = ssl.create_default_context()
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(
-                        target_host, target_port, ssl=ssl_ctx, server_hostname=target_host
-                    ),
-                    timeout=TUNNEL_CONNECT_TIMEOUT,
-                )
-            else:
-                # Connect through the upstream proxy, then upgrade to TLS.
-                reader, writer = await _connect_via_upstream(target_host, target_port)
-                loop = asyncio.get_event_loop()
-                transport = writer.transport
-                ssl_ctx = ssl.create_default_context()
-                new_transport = await loop.start_tls(
-                    transport,
-                    transport.get_extra_info("socket"),
-                    ssl_ctx,
-                    server_hostname=target_host,
-                )
-                writer = asyncio.StreamWriter(
-                    new_transport,
-                    asyncio.StreamReaderProtocol(asyncio.StreamReader()),
-                    reader,
-                    loop,
-                )
-        else:
-            # Plain HTTP
-            reader, writer = await _connect_via_upstream(target_host, target_port)
-
-        request = (
-            f"HEAD {path} HTTP/1.1\r\n"
-            f"Host: {target_host}\r\n"
-            f"User-Agent: prefetch-proxy/1.0\r\n"
-            f"Accept: */*\r\n"
-            f"Connection: close\r\n"
-            f"\r\n"
-        )
-        writer.write(request.encode("utf-8"))
-        await writer.drain()
-
-        # Read response status line
-        status_line = await asyncio.wait_for(reader.readline(), timeout=HEAD_TIMEOUT)
-        if not status_line:
-            writer.close()
-            return None
-
-        # Read headers
-        content_type = None
-        while True:
-            line = await asyncio.wait_for(reader.readline(), timeout=HEAD_TIMEOUT)
-            if not line or line == b"\r\n":
-                break
-            try:
-                header_name, header_value = line.decode("utf-8", errors="replace").split(":", 1)
-                if header_name.strip().lower() == "content-type":
-                    content_type = header_value.strip().split(";")[0].strip().lower()
-            except ValueError:
-                pass
-
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except Exception:
-            pass
-
-        return content_type
-    except Exception as e:
-        logger.debug("HEAD request to %s:%d failed: %s", target_host, target_port, e)
-        return None
+async def _open_origin_connection(
+    target_host: str,
+    target_port: int,
+    use_tls: bool,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Open a connection to an origin, optionally upgrading through TLS."""
+    reader, writer = await _connect_via_upstream(target_host, target_port)
+    if use_tls:
+        ssl_ctx = ssl.create_default_context()
+        await writer.start_tls(ssl_ctx, server_hostname=target_host)
+    return reader, writer
 
 
 # ── Proxy server ─────────────────────────────────────────────────────────
@@ -611,7 +536,7 @@ async def handle_request(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> None:
-    """Handle a single proxy request (CONNECT or GET/HEAD)."""
+    """Handle a single proxy request."""
     peer = "?"
     try:
         peer = writer.get_extra_info("peername")
@@ -633,7 +558,7 @@ async def handle_request(
             await writer.drain()
             return
 
-        method, target, _version = parts[0], parts[1], parts[2]
+        method, target, _version = parts[0].upper(), parts[1], parts[2]
 
         # Read headers
         headers: dict[str, str] = {}
@@ -649,8 +574,16 @@ async def handle_request(
 
         if method == "CONNECT":
             await _handle_connect(target, reader, writer, peer)
-        elif method in ("GET", "HEAD"):
-            await _handle_get(method, target, headers, reader, writer, peer)
+        elif method in (
+            "GET",
+            "HEAD",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "OPTIONS",
+        ):
+            await _handle_forward_http(method, target, headers, reader, writer, peer)
         else:
             writer.write(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")
             await writer.drain()
@@ -685,14 +618,7 @@ async def _handle_connect(
     eliminating the double-hit where the search engine sees a bare reqwest
     GET with non-browser TLS followed by obscura's stealth navigation.
 
-    Non-search-engine hosts: tunnel through to the target. This accepts the
-    double-hit for open_url URLs because:
-    - PDFs over HTTPS require the tunnel (can't detect content-type without
-      TLS interception/MITM, which would break reqwest's end-to-end TLS)
-    - open_url URLs are one-off requests, not parallel fan-out, so they're
-      less likely to trigger 429s
-    - The OnyxWebCrawler path (Option A, direct HTTP) handles PDFs natively
-      and is the default for open_url
+    Non-search-engine hosts: tunnel through to the target.
     """
     # Parse target (host:port)
     try:
@@ -718,7 +644,7 @@ async def _handle_connect(
     ):
         return
 
-    # Non-search-engine: tunnel through (accepts double-hit for open_url)
+    # Non-search-engine: tunnel through.
     try:
         upstream_reader, upstream_writer = await _connect_via_upstream(
             target_host, target_port
@@ -750,8 +676,7 @@ async def _handle_connect(
         _pipe(upstream_reader, client_writer),
     )
 
-
-async def _handle_get(
+async def _handle_forward_http(
     method: str,
     target: str,
     headers: dict[str, str],
@@ -759,12 +684,12 @@ async def _handle_get(
     client_writer: asyncio.StreamWriter,
     peer: Any,
 ) -> None:
-    """Handle a plain HTTP GET/HEAD request (non-CONNECT).
+    """Handle plain HTTP proxy requests for general executor egress.
 
-    For search engine hosts: return 403 immediately.
-    For other hosts: do a HEAD check. If PDF, forward the GET. If not, 403.
+    HTTPS clients normally use CONNECT and are handled by _handle_connect().
+    Plain HTTP requests are forwarded after destination validation.
+    Search-engine targets are still denied locally.
     """
-    # Parse the target URL
     if target.startswith("http://") or target.startswith("https://"):
         parsed = urlparse(target)
         target_host = parsed.hostname or ""
@@ -774,7 +699,6 @@ async def _handle_get(
         if parsed.query:
             path += "?" + parsed.query
     else:
-        # Relative URL — use Host header
         host_header = headers.get("host", "")
         try:
             target_host, target_port = _parse_authority(host_header, 80)
@@ -783,12 +707,11 @@ async def _handle_get(
             await client_writer.drain()
             return
         use_tls = False
-        path = target
+        path = target or "/"
 
-    # Search engine short-circuit
     if _is_search_engine(target_host):
         logger.info(
-            "BLOCKED %s %s:%d%s (search engine) → 403",
+            "BLOCKED FORWARD %s %s:%d%s (search engine) → 403",
             method,
             target_host,
             target_port,
@@ -799,68 +722,59 @@ async def _handle_get(
         return
 
     if await _reject_blocked_destination(
-        method, target_host, target_port, client_writer, peer
+        f"FORWARD {method}", target_host, target_port, client_writer, peer
     ):
         return
 
-    # For non-search-engine hosts, check content-type via HEAD
-    content_type = await _check_content_type(target_host, target_port, use_tls, path)
-
-    if content_type == "application/pdf":
-        # Forward the original GET request through the tunnel
-        logger.info(
-            "TUNNEL %s %s:%d%s (PDF, forwarding) → tunnel",
-            method,
-            target_host,
-            target_port,
-            path,
+    try:
+        upstream_reader, upstream_writer = await _open_origin_connection(
+            target_host, target_port, use_tls
         )
-        try:
-            upstream_reader, upstream_writer = await _connect_via_upstream(
-                target_host, target_port
-            )
 
-            # Rebuild the request
-            request = f"{method} {path} HTTP/1.1\r\n"
-            for name, value in headers.items():
-                request += f"{name}: {value}\r\n"
-            request += "\r\n"
-            upstream_writer.write(request.encode("utf-8"))
+        request = f"{method} {path} HTTP/1.1\r\n"
+        saw_host = False
+        for name, value in headers.items():
+            if name.lower() in ("connection", "proxy-connection"):
+                continue
+            if name.lower() == "host":
+                saw_host = True
+            request += f"{name}: {value}\r\n"
+        if not saw_host:
+            request += f"host: {target_host}\r\n"
+        request += "connection: close\r\n"
+        request += "\r\n"
+
+        upstream_writer.write(request.encode("utf-8"))
+        await upstream_writer.drain()
+
+        content_length = int(headers.get("content-length", "0"))
+        if content_length > 0:
+            body = await client_reader.readexactly(content_length)
+            upstream_writer.write(body)
             await upstream_writer.drain()
 
-            # Read any request body and forward
-            content_length = int(headers.get("content-length", "0"))
-            if content_length > 0:
-                body = await client_reader.readexactly(content_length)
-                upstream_writer.write(body)
-                await upstream_writer.drain()
-
-            # Pipe the response back to the client
-            await _pipe(upstream_reader, client_writer)
-            upstream_writer.close()
-        except Exception as e:
-            logger.warning(
-                "TUNNEL %s %s:%d%s failed: %s",
-                method,
-                target_host,
-                target_port,
-                path,
-                e,
-            )
-            client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-            await client_writer.drain()
-    else:
-        # Not a PDF — return 403 to force CDP escalation
-        logger.info(
-            "BLOCKED %s %s:%d%s (content-type: %s) → 403",
+        logger.debug(
+            "FORWARD %s %s:%d%s through %s listener",
             method,
             target_host,
             target_port,
             path,
-            content_type or "unknown",
+            "TLS" if use_tls else "plain HTTP",
         )
-        client_writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+        await _pipe(upstream_reader, client_writer)
+        upstream_writer.close()
+    except Exception as e:
+        logger.warning(
+            "FORWARD %s %s:%d%s failed: %s",
+            method,
+            target_host,
+            target_port,
+            path,
+            e,
+        )
+        client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
         await client_writer.drain()
+        return
 
 
 # ── Server ────────────────────────────────────────────────────────────────

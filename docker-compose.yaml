@@ -334,7 +334,8 @@ services:
   #
   # This proxy intercepts CRW's HTTP prefetch requests:
   #  - Search engine URLs → 403 immediately (no network request)
-  #  - Other URLs → HEAD check → PDF? tunnel GET : 403
+  #  - Internal/private targets → 403 immediately
+  #  - Other HTTP/HTTPS URLs → forward/tunnel through the configured egress path
   #
   # CRW is configured with HTTP_PROXY/HTTPS_PROXY pointing at this proxy. We
   # intentionally do not set CRW_CRAWLER__PROXY; if that path is used later,
@@ -342,11 +343,10 @@ services:
   # obscura uses its own --proxy flag, not this proxy.
   #
   # When ONYX_AGENT_OUTBOUND_PROXY_URL is set (e.g., Tor SOCKS proxy), this
-  # proxy routes its own upstream requests through that proxy, ensuring the HEAD
-  # request and PDF tunnel egress through the same proxy as obscura.
-  # It also blocks internal/private destinations without opening CONNECT, HEAD,
-  # or PDF forwarding paths; target DNS resolution checks are performed only
-  # when no explicit upstream proxy is configured.
+  # proxy routes its own upstream requests through that proxy. It also blocks
+  # internal/private destinations without opening CONNECT or HTTP forwarding
+  # paths; target DNS resolution checks are performed only when no explicit
+  # upstream proxy is configured.
   #
   # See crw/prefetch_blocking_proxy.py for the implementation and
   # docs/request_handling.md §1.7 for the design.
@@ -359,7 +359,7 @@ services:
       PREFETCH_PROXY_PORT: "3128"
       PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
       # Upstream proxy (ONYX_AGENT_OUTBOUND_PROXY_URL from .env.wrapper). When set, the proxy
-      # routes its own HEAD and tunnel requests through this upstream.
+      # routes its own upstream requests through this upstream.
       # Supports http://, https://, socks5://, socks5h://
       ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
       # Comma-separated list of search engine hostnames to block immediately
@@ -408,9 +408,9 @@ services:
       # then escalates to the CDP renderer (obscura) when the prefetch returns
       # an error or a 403/blocked status. The prefetch-blocking proxy
       # (prefetch-blocking-proxy service on port 3128) intercepts the HTTP
-      # prefetch and returns 403 for all non-PDF URLs, forcing CRW to escalate
-      # to obscura for every page. PDFs are detected by the proxy and returned
-      # to CRW for pdf_inspector processing.
+      # prefetch and returns 403 for search-engine URLs, forcing CRW to escalate
+      # to obscura for those pages. Non-search URLs are forwarded through the
+      # configured egress path.
       #
       # We do NOT set render_js_default=true because that mode runs the HTTP
       # prefetch unconditionally and does NOT escalate to CDP on prefetch
@@ -435,9 +435,8 @@ services:
       # REQUEST_PROXY, so the CDP path uses the no-proxy fetcher (no
       # proxyServer in createBrowserContext, no 2s timeout).
       #
-      # The proxy returns 403 for search engine URLs and non-PDF URLs,
-      # forcing CRW to escalate to the CDP renderer (obscura). PDFs are
-      # detected by the proxy and returned for CRW's pdf_inspector.
+      # The proxy returns 403 for search engine URLs, forcing CRW to escalate
+      # to the CDP renderer (obscura). Other HTTP/HTTPS URLs are forwarded.
       HTTPS_PROXY: "http://127.0.0.1:3128"
       HTTP_PROXY: "http://127.0.0.1:3128"
       # Exclude loopback from the proxy so CRW's CDP WebSocket connection
@@ -455,8 +454,7 @@ services:
       CRW_RENDERER__CHROME_TIMEOUT_MS: "${CRW_RENDERER__CHROME_TIMEOUT_MS:-50000}"
       # HTTP prefetch timeout. CRW always runs an HTTP prefetch before the
       # CDP renderer (even with RENDER_JS_DEFAULT=true) to check Content-Type
-      # — PDFs (application/pdf) bypass obscura entirely and are handled by
-      # CRW's pdf_inspector. On the happy path the prefetch completes in 1-3s;
+      # and content type. On the happy path the prefetch completes in 1-3s;
       # this is a ceiling, not a delay. Increasing it from the default 30s to
       # 60s raises CRW's effective per-request deadline (ladder_min) from
       # ~108s to ~138s, giving queued requests in the per-host rate limiter
