@@ -16,7 +16,8 @@ Related implementation docs:
   `doc-drop-web` connector path, local embedding shim, optional MLX embedding
   server, and RAG-specific diagnostics.
 - [Request handling](request_handling.md) describes how web search and
-  `open_url` requests flow through SearXNG, CRW, the CDP shim, and obscura.
+  `open_url` requests flow through SearXNG, CRW, the prefetch proxy, and the
+  conditional CDP shim / Obscura browser path.
 - [VPN routing and proxies](vpn_routing_and_proxies.md) describes the
   Compose-level VPN namespace, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and optional teep, Tailscale, and
   code-interpreter routing modes.
@@ -488,6 +489,13 @@ The wrapper can route scraping through CRW, Obscura, and a browser readiness
 path outside Onyx. In that setup, a fixed Firecrawl `waitFor` delay is a poor
 fit: it can waste time on pages that are ready quickly and still fail on pages
 that need adaptive browser handling.
+
+This patch does not force every `open_url` page through Obscura. It preserves
+the payload shape sent to CRW. CRW still performs its normal HTTP prefetch
+first, returns usable non-search HTTP results directly, and escalates to
+CDP/Obscura only for configured search-engine hosts, blocked/thin responses,
+or pages it classifies as JS-required. The request-path details and known
+limitations are tracked in [Request handling](request_handling.md#known-limitations).
 
 Onyx v4.1.7 already sends only `url` and `formats` for the scrape payload, so
 this patch is mostly defensive for this release. It preserves the wrapper's

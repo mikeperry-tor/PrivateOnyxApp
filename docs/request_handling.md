@@ -4,9 +4,14 @@ This document describes the full request chains for the two primary web-facing
 tool paths in the Onyx agent: the **web search** tool (`web_search`) and the
 **open URL** tool (`open_url`). In the recommended README configuration,
 `web_search` uses SearXNG plus CRW, and `open_url` uses Onyx's Firecrawl
-content provider pointed at the local CRW endpoint. If the Firecrawl content
-provider is not configured in Onyx Admin, upstream Onyx falls back to its
-built-in `OnyxWebCrawler`; that fallback is documented separately below.
+content provider pointed at the local CRW endpoint. Search-engine pages are
+forced onto the Obscura browser path by the prefetch-blocking proxy. Ordinary
+non-search `open_url` pages are different: CRW may satisfy them from its
+initial HTTP prefetch when that response is usable, and only escalates to
+CDP/Obscura when the HTTP response is blocked, thin, or JS-required. If the
+Firecrawl content provider is not configured in Onyx Admin, upstream Onyx
+falls back to its built-in `OnyxWebCrawler`; that fallback is documented
+separately below.
 
 Version scope for this document, based on clean local checkouts under
 `reference_repos/`:
@@ -287,16 +292,16 @@ signal to escalate to the CDP renderer. The flow is:
 
 5. **Navigation + render**: The shim injects `waitUntil: "networkidle2"`
    into the `Page.navigate` call for search engine URLs (SERPs), or
-   `waitUntil: "load"` for other URLs. Obscura navigates to the URL and
-   adaptively waits for the specified lifecycle event before returning the
-   nav response, bounded by `OBSCURA_NAV_TIMEOUT_MS` (default 45s). For
-   SERPs, network idle (≤2 active connections for 500ms) ensures the
-   results have loaded. For web pages, `load` (all subresources finished)
-   is sufficient and avoids waiting for long-polling connections. No
-   `waitFor` fixed sleep is used — see §1.6 for why. Obscura renders the
-   page with its stealth browser (browser-consistent TLS/HTTP fingerprinting,
-   tracker blocking, and JS fingerprint spoofing via bootstrap.js) and returns
-   the rendered HTML.
+   `waitUntil: "load"` for other URLs that reach CDP. Obscura navigates to the
+   URL and adaptively waits for the specified lifecycle event before returning
+   the nav response, bounded by `OBSCURA_NAV_TIMEOUT_MS` (default 45s). For
+   SERPs, network idle (≤2 active connections for 500ms) ensures the results
+   have loaded. For web pages that CRW escalates to CDP, `load` (all
+   subresources finished) is sufficient and avoids waiting for long-polling
+   connections. No `waitFor` fixed sleep is used — see §1.6 for why. Obscura
+   renders the page with its stealth browser (browser-consistent TLS/HTTP
+   fingerprinting, tracker blocking, and JS fingerprint spoofing via
+   bootstrap.js) and returns the rendered HTML.
 
 6. **Target close + disconnect**: CRW calls `Target.closeTarget` and closes
    the WebSocket. In the normal wrapper path CRW does not set
@@ -338,6 +343,8 @@ The compose default routes CRW's HTTP prefetch through the prefetch-blocking
 proxy, so search-engine prefetches receive a local 403 and never reach the
 upstream search engine. The search engine sees only the obscura browser
 navigation rather than a bare reqwest prefetch followed by a browser visit.
+This search-specific guarantee does not apply to arbitrary non-search
+`open_url` targets; see [Known Limitations](#known-limitations).
 
 When a search engine returns 429:
 1. Obscura renders the 429 page (or the anti-bot challenge page).
@@ -406,9 +413,9 @@ or waste time on fast ones.
 2. The shim injects `waitUntil` into the navigate params based on the URL:
    - **Search engine URLs** (SERPs): `networkidle2` (≤2 active connections
      for 500ms) — SERPs are JS-heavy SPAs that load results via XHR
-   - **Other URLs** (open_url web pages): `load` (all subresources finished)
-     — content is ready at load; many modern sites keep long-polling
-     connections that prevent network idle
+   - **Other URLs that reach CDP** (`open_url` web pages): `load` (all
+     subresources finished) — content is ready at load; many modern sites keep
+     long-polling connections that prevent network idle
 3. Obscura navigates to the URL and **adaptively waits** for the specified
    lifecycle event before returning the nav response, bounded by
    `OBSCURA_NAV_TIMEOUT_MS` (default 45s). For `networkidle2`, the
@@ -488,10 +495,10 @@ The compose default routes CRW's reqwest traffic through
 search-engine prefetches with `403 Forbidden` without opening an upstream
 connection. CRW auto mode sees that blocked HTTP result and escalates to the
 chrome/obscura CDP renderer. Non-search requests are forwarded through the
-configured egress path. This prevents search engines from seeing a bare reqwest
-request before the browser navigation while keeping one HTTP proxy behavior for
-CRW and SOCKS-backed code-interpreter urllib clients. See §1.7 for the proxy
-details.
+configured egress path and can be returned directly by CRW when the response is
+usable. This prevents search engines from seeing a bare reqwest request before
+the browser navigation while keeping one HTTP proxy behavior for CRW and
+SOCKS-backed code-interpreter urllib clients. See §1.7 for the proxy details.
 
 **Approaches that do NOT work:**
 
@@ -606,8 +613,8 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
                                │
                                ├─ Search engine URL → 403 (no network request)
                                ├─ Internal/private target → 403 (logged)
-                               ├─ Other HTTP URL → forwarded
-                               ├─ Other HTTPS URL → CONNECT tunnel
+                               ├─ Other HTTP URL → forwarded HTTP prefetch
+                               ├─ Other HTTPS URL → CONNECT prefetch tunnel
                                │
                                └── upstream ──> ONYX_AGENT_OUTBOUND_PROXY_URL (Tor/VPN)
                                                 (if set)
@@ -635,11 +642,13 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
      blocked address. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, this DNS
      resolution check is skipped to avoid leaking target DNS outside the
      configured upstream proxy path. Blocked attempts are logged.
-   - **Other plain HTTP URLs**: forwards the request to the target through
-     `ONYX_AGENT_OUTBOUND_PROXY_URL` if set.
+   - **Other plain HTTP URLs**: forwards the HTTP prefetch request to the
+     target through `ONYX_AGENT_OUTBOUND_PROXY_URL` if set. If the response is
+     usable, CRW may return it without visiting the page in Obscura.
    - **Other HTTPS URLs**: accepts the CONNECT tunnel and connects through
      `ONYX_AGENT_OUTBOUND_PROXY_URL` if set. If the HTTP result is
-     blocked/thin/JS-required, CRW may then escalate to CDP.
+     usable, CRW may return it without visiting the page in Obscura. If the
+     result is blocked, thin, or JS-required, CRW may then escalate to CDP.
 4. The CDP shim strips `proxyServer` from `Target.createBrowserContext` as a
    safety net. In the compose default, CRW uses `HTTP_PROXY`/`HTTPS_PROXY`
    rather than `CRW_CRAWLER__PROXY`, so `REQUEST_PROXY` is not set and CRW
@@ -685,9 +694,10 @@ CONNECT tunneling. The proxy handles CONNECT requests as follows:
   callers cannot use the proxy as a generic internal TCP tunnel or blind
   internal `HEAD` primitive.
 - **Non-search-engine hosts**: establishes the tunnel through `ONYX_AGENT_OUTBOUND_PROXY_URL`
-  and pipes bidirectionally. If CRW later escalates to CDP, this can
-  produce both a reqwest fetch and an obscura navigation for that non-search
-  URL. The stack accepts that tradeoff because:
+  and pipes bidirectionally. For usable HTTP results, CRW can return the
+  prefetch result directly. If CRW later escalates to CDP, this can produce
+  both a reqwest fetch and an obscura navigation for that non-search URL. The
+  stack accepts that tradeoff because:
   - `open_url` URLs are one-off requests, not parallel fan-out, so they're
     less likely to trigger 429s
   - the search-engine anti-bot double-hit is the high-risk path this proxy is
@@ -695,7 +705,8 @@ CONNECT tunneling. The proxy handles CONNECT requests as follows:
 
 For plain HTTP URLs, the proxy applies the same search-engine and
 internal/private destination blocks, then forwards the request through
-`ONYX_AGENT_OUTBOUND_PROXY_URL` if set.
+`ONYX_AGENT_OUTBOUND_PROXY_URL` if set. As with HTTPS, a usable HTTP result can
+be returned by CRW without Obscura.
 
 **Keeping search-engine host lists aligned:**
 
@@ -769,7 +780,7 @@ Self-hosted CRW runs open by default unless auth keys are configured. Upstream
 Onyx falls back to `OnyxWebCrawler` if no content provider is configured,
 but that is not the recommended wrapper setup.
 
-**Option A: FirecrawlClient (recommended — CRW → CDP shim → obscura)**
+**Option A: FirecrawlClient (recommended — CRW, CDP/Obscura when needed)**
 
 ```
 ┌──────────────────────┐
@@ -786,11 +797,11 @@ but that is not the recommended wrapper setup.
 │  ├─ HTTP prefetch via prefetch-blocking-proxy :3128   │
 │  ├─ Search → 403 → CDP                                │
 │  ├─ Non-search HTTP/HTTPS → prefetch/tunnel           │
-│  │  (CDP if needed)                                   │
+│  │  (return HTTP result, or CDP if needed)            │
 │  ├─ CDP client → ws://127.0.0.1:9224                  │
 │  └─ Returns {success, data: {markdown}} envelope      │
 └─────────┬────────────────────────────────────────────┘
-          │ CDP WebSocket
+          │ CDP WebSocket only after CRW escalates
           ▼
 ┌──────────────────────────────────────────────────────┐
 │  CDP Shim :9224 (crw/cdp_shim.py)                    │
@@ -810,7 +821,8 @@ but that is not the recommended wrapper setup.
           ▼
 ┌──────────────────────────────────────────────────────┐
 │  Target website (arbitrary URL)                      │
-│  (HTML pages, APIs, etc.; PDFs bypass obscura)       │
+│  (search pages and escalated pages use obscura;       │
+│   PDFs and usable non-search HTTP bypass obscura)    │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -847,15 +859,18 @@ but that is not the recommended wrapper setup.
 - Does **not** involve the SearXNG container — goes directly from Onyx to the
   content provider
 - Two provider options with different capabilities:
-  - **FirecrawlClient (recommended)**: Through CRW/shim/obscura for HTML;
-    PDFs handled natively by CRW's `pdf_inspector` (bypasses obscura entirely)
+  - **FirecrawlClient (recommended)**: Through CRW. Search pages and pages
+    that CRW classifies as blocked, thin, or JS-required go through
+    CDP/shim/Obscura; usable non-search HTTP/HTTPS responses can be returned
+    from CRW's HTTP prefetch without Obscura. PDFs are handled natively by
+    CRW's `pdf_inspector` and bypass Obscura entirely.
   - **OnyxWebCrawler (fallback if no provider is configured)**: Direct HTTP via
     `ssrf_safe_get`, handles PDFs natively (PyPDF2), optional Playwright
     fallback for Cloudflare/bot-challenge 403s; no stealth on the initial HTTP
     request
 - CRW's per-host rate limiter applies to the Firecrawl path (same as search)
 - The CDP shim's STEALTH_JS stripping, `waitUntil` injection, and periodic
-  cookie clearing apply to the Firecrawl path
+  cookie clearing apply only when the Firecrawl path escalates to CDP/Obscura
 - PDF handling differs significantly between the two paths (see §2.2 and §2.3
   below)
 
@@ -871,8 +886,10 @@ selected at configuration time:
 - **FirecrawlClient**: Sends URLs to the configured scrape endpoint (default
   upstream constant: `https://api.firecrawl.dev/v2/scrape`; README
   recommendation for this deployment: `http://localhost:3010/v1/scrape`).
-  Goes through CRW → CDP shim → obscura for HTML. This is the recommended
-  wrapper configuration.
+  Goes through CRW. Search-engine targets and pages that need browser rendering
+  go through CDP shim → Obscura; ordinary non-search pages may be returned from
+  CRW's HTTP prefetch without Obscura. This is the recommended wrapper
+  configuration.
 - **OnyxWebCrawler**: Direct HTTP fetch via `ssrf_safe_get` (SSRF-validated
   `requests`). Handles HTML and PDF natively. Has an optional Playwright
   headless-browser fallback for Cloudflare/bot-challenge 403 responses. Does
@@ -931,7 +948,7 @@ complete patch inventory and upstreaming notes.
 - Lite mode additionally mounts `onyx/patches/sitecustomize`, which patches
   `OpenURLTool.is_available()` to return `True`.
 
-### 2.2 FirecrawlClient Path (recommended: CRW → CDP shim → obscura)
+### 2.2 FirecrawlClient Path (recommended: CRW, CDP/Obscura when needed)
 
 When Firecrawl is configured as the content provider:
 
@@ -943,8 +960,9 @@ Onyx open_url → FirecrawlClient.contents(urls)
   → CRW scrape endpoint
     ├─ HTTP prefetch through prefetch-blocking proxy
     │   ├─ search URL → local 403 → auto-escalate to CDP
-    │   ├─ plain HTTP non-search URL → forwarded
-    │   ├─ HTTPS non-search URL → CONNECT tunnel; CDP if blocked/thin/JS-needed
+    │   ├─ plain HTTP non-search URL → forwarded; may return HTTP result
+    │   ├─ HTTPS non-search URL → CONNECT tunnel; may return HTTP result
+    │   │   or CDP if blocked/thin/JS-needed
     │   ├─ application/pdf → raw bytes extracted, PDF pipeline runs
     │   │   → pdf_inspector extracts text → markdown
     │   │   → obscura/CDP shim BYPASSED entirely
@@ -959,14 +977,14 @@ The `FirecrawlClient` sends each URL to the configured scrape endpoint with
 sitecustomize patch replaces `FirecrawlClient._get_webpage_content` at startup
 and preserves that payload shape with **no** `waitFor` field, even if a future
 upstream Onyx release adds one. In lite mode, Onyx v4.1.7 already sends the
-same no-`waitFor` payload. This keeps page-load waiting in the CDP
-shim/obscura `waitUntil` path and CRW's post-navigation heuristics, instead of
-adding a blind fixed sleep.
+same no-`waitFor` payload. When CRW escalates to CDP, this keeps page-load
+waiting in the shim/obscura `waitUntil` path and CRW's post-navigation
+heuristics instead of adding a blind fixed sleep.
 
 CRW's `FallbackRenderer` performs an HTTP prefetch first to check the content
 type ([`lib.rs:801-862`](../reference_repos/crw/crates/crw-renderer/src/lib.rs:801)).
 This prefetch is a full HTTP `GET`, not a `HEAD` request; see
-[Known Limitations: CRW MIME Probe Uses GET](#known-limitations-crw-mime-probe-uses-get).
+[CRW MIME Probe Uses GET](#crw-mime-probe-uses-get).
 In this deployment the prefetch goes through the prefetch-blocking proxy:
 
 - **Search pages**: CRW uses auto mode (`RENDER_JS_DEFAULT` unset). The proxy
@@ -977,7 +995,11 @@ In this deployment the prefetch goes through the prefetch-blocking proxy:
 
 - **Other HTTP/HTTPS pages**: The proxy forwards the prefetch. If CRW decides
   the response is blocked, thin, or JS-required, it escalates to the CDP
-  renderer.
+  renderer. If the response is usable, CRW can return it directly without
+  Obscura. For HTTPS non-search URLs this was already true when the
+  prefetch-blocking proxy allowed CONNECT tunnels for PDF/content detection;
+  the current proxy behavior also allows plain HTTP non-search prefetches.
+  See [Known Limitations](#known-limitations).
 
 - **PDF documents**: When the HTTP prefetch returns `Content-Type:
   application/pdf`, CRW **bypasses obscura entirely**
@@ -1076,11 +1098,12 @@ CRW exposes Firecrawl-compatible scrape endpoints. This stack uses:
 Both go through the same CRW `FallbackRenderer` pipeline. The HTTP prefetch
 runs first for both; PDFs are handled natively by `pdf_inspector` without
 reaching the CDP layer. For HTML, the requested format controls the output:
-`rawHtml` is the full rendered DOM (used by SearXNG engines for XPath
-parsing); `markdown` is readability-extracted and converted to markdown
-(used by Onyx's `FirecrawlClient` for LLM consumption). Both paths benefit
-from the CDP shim's `waitUntil` injection (see §1.6 for the full wait
-strategy).
+`rawHtml` is the full HTML body used by SearXNG engines for XPath parsing;
+`markdown` is readability-extracted and converted to markdown for Onyx's
+`FirecrawlClient`. Search-engine scrapes are forced to CDP/Obscura by the
+prefetch-blocking proxy. `open_url` scrapes benefit from the CDP shim's
+`waitUntil` injection only when CRW escalates to browser rendering; usable
+non-search HTTP-prefetch results can return without reaching CDP.
 
 ---
 
@@ -1204,19 +1227,19 @@ browsing/search data.
   without escalating to CDP.
 - Check that the prefetch-blocking proxy is running (`docker compose ps
   prefetch-blocking-proxy`). If it's down, CRW's HTTP prefetch goes direct
-  and may succeed for normal HTML pages, returning raw HTTP without obscura.
+  and search-engine prefetches will no longer be locally forced to CDP.
 - Check that the CRW container has `HTTPS_PROXY=http://127.0.0.1:3128` and
   `HTTP_PROXY=http://127.0.0.1:3128` from `docker-compose.yaml`. Without
-  those env vars, CRW's HTTP prefetch doesn't go through the blocking proxy and
-  may succeed for normal HTML pages.
+  those env vars, CRW's HTTP prefetch doesn't go through the blocking proxy.
 - Also verify that the Onyx content provider is actually configured as
   Firecrawl (README: API Base URL `http://localhost:3010/v1/scrape`, any
   non-empty API key placeholder) in Onyx Admin → Web Search. If no content
   provider is configured, `open_url` uses `OnyxWebCrawler` (direct HTTP) and
   never touches CRW at all.
-- Symptom: "JS did not run on the page" — this confirms CRW returned the raw
-  HTTP HTML without obscura rendering. The fix is ensuring the prefetch-
-  blocking proxy is running and CRW's `HTTP_PROXY`/`HTTPS_PROXY` point at it.
+- Symptom: "JS did not run on the page" — for a non-search URL, this can be
+  expected. It means CRW returned usable HTTP-prefetch content without Obscura.
+  For configured search-engine URLs, it indicates the host list, proxy env, or
+  prefetch-blocking proxy is not aligned with the target.
 
 **CDP errors from obscura**:
 - Look for `"CDP error response"` warnings — these indicate obscura rejected
@@ -1230,8 +1253,10 @@ browsing/search data.
   `load`).
 - Look for `"Injected waitUntil="` log lines at DEBUG level
   (`CDP_SHIM_LOG_LEVEL=debug`).
-- Search engine URLs should show `waitUntil=networkidle2`; other URLs
-  should show `waitUntil=load`.
+- Search engine URLs that reach CDP should show `waitUntil=networkidle2`;
+  other URLs that reach CDP should show `waitUntil=load`. Non-search
+  `open_url` pages that CRW returns from HTTP prefetch will not have
+  `waitUntil` logs.
 - If pages return too early (empty SERP, SPA shell), obscura
   may be timing out before network idle is reached. Check
   `OBSCURA_NAV_TIMEOUT_MS` — if it's too low for your proxy path, increase
@@ -1302,13 +1327,13 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CRW_RENDERER__MODE` | `chrome` | Selects which JS renderers are in the ladder (chrome only, not lightpanda). |
-| `CRW_RENDERER__RENDER_JS_DEFAULT` | (unset) | Auto mode: HTTP prefetch first, escalate to CDP on failure/403. The prefetch-blocking proxy returns 403 for configured search-engine hosts, forcing CRW to escalate to obscura for SERPs. Do not set this to `true`; forced render-js mode propagates prefetch failures instead of using the auto-mode escalation path. |
+| `CRW_RENDERER__RENDER_JS_DEFAULT` | (unset) | Auto mode: HTTP prefetch first, escalate to CDP on failure/403, blocked/thin content, or JS-required detection. The prefetch-blocking proxy returns 403 for configured search-engine hosts, forcing CRW to escalate to obscura for SERPs. Non-search pages may return from the HTTP prefetch when usable. Do not set this to `true`; forced render-js mode propagates prefetch failures instead of using the auto-mode escalation path. |
 | `HTTPS_PROXY` / `HTTP_PROXY` | `http://127.0.0.1:3128` | Routes CRW's reqwest HTTP prefetch through the prefetch-blocking proxy without setting CRW's `REQUEST_PROXY` task-local. This avoids per-request `Target.createBrowserContext {proxyServer}` and its hardcoded 2s timeout. |
 | `NO_PROXY` | `127.0.0.1,localhost,::1` | Keeps CRW loopback traffic, including the CDP shim WebSocket and health checks, direct. |
 | `CRW_CRAWLER__PROXY` | (unset) | Intentionally not used for the prefetch-blocking proxy. Setting it would make CRW include `proxyServer` in `Target.createBrowserContext`; the shim can strip this as a safety net, but the compose default avoids that path entirely. |
 | `CRW_RENDERER__CHROME__WS_URL` | `ws://127.0.0.1:9224/devtools/browser` | CDP shim endpoint (not obscura directly) |
 | `CRW_RENDERER__CHROME_TIMEOUT_MS` | `50000` | Per-page navigation timeout for the chrome (obscura) renderer tier. Must be ≥ `OBSCURA_NAV_TIMEOUT_MS` so CRW's deadline doesn't fire before obscura's nav timeout. |
-| `CRW_RENDERER__HTTP_TIMEOUT_MS` | `60000` | HTTP prefetch timeout. CRW always runs an HTTP prefetch before the CDP renderer (even with `RENDER_JS_DEFAULT=true`) to check Content-Type — PDFs bypass obscura. Ceiling, not delay — completes in 1-3s on happy path. Contributes to `ladder_min`. No happy-path impact. |
+| `CRW_RENDERER__HTTP_TIMEOUT_MS` | `60000` | HTTP prefetch timeout. CRW always runs an HTTP prefetch before the CDP renderer (even with `RENDER_JS_DEFAULT=true`) to check Content-Type. PDFs and usable non-search HTTP results can bypass obscura. Ceiling, not delay — completes in 1-3s on happy path. Contributes to `ladder_min`. No happy-path impact. |
 | `CRW_RENDERER__CHROME_NAV_BUDGET_MS` | `48000` | Post-navigate budget for the chrome renderer tier. This races CRW's post-navigation work after `Page.loadEventFired`: SPA selector poll, content stability, challenge retry, and DOM extraction. |
 | `CRW_REQUEST__DEADLINE_MS_DEFAULT` | `300000` | Baseline per-request deadline (ms). With `auto_extend_deadline_for_ladder=true` (default), effective deadline is `max(this, ladder_min=~138s)` = 300s. Accommodates multi-request scenarios (multiple search query strings, `SEARXNG_ROUND_ROBIN=false` parallel fan-out, GitHub URL crawling) by giving queued requests in the per-host rate limiter enough budget to complete while serializing per-host to avoid 429s. No happy-path impact. See §1.6.1. |
 | `CRW_CRAWLER__REQUESTS_PER_SECOND` | `0.33` | Per-host rate limit (~3s interval). The rate-limit sleep is deducted from the request's deadline budget before navigation begins. See §1.6.1 for the compounding interaction with queued same-host requests. |
@@ -1324,7 +1349,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `OBSCURA_CDP_URL` | `ws://127.0.0.1:9222/devtools/browser` | Obscura CDP endpoint |
 | `CDP_SHIM_STRIP_STEALTH_JS` | `1` | Strip CRW's STEALTH_JS (1=yes, 0=no) |
 | `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` | `networkidle2` | `waitUntil` for search engine URLs (SERPs). SERPs are JS-heavy SPAs that load results via XHR — network idle ensures results have loaded. Options: `domcontentloaded`, `load`, `networkidle0`, `networkidle2`. |
-| `OBSCURA_BROWSER_WAIT_UNTIL_WEB` | `load` | `waitUntil` for all other URLs (open_url web pages). Content is ready at `load`; many modern sites keep long-polling connections that prevent network idle. |
+| `OBSCURA_BROWSER_WAIT_UNTIL_WEB` | `load` | `waitUntil` for non-search URLs that CRW escalates to CDP (`open_url` web pages). Content is ready at `load`; many modern sites keep long-polling connections that prevent network idle. |
 | `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames for per-URL `waitUntil` selection. |
 | `CDP_SHIM_STRIP_PROXY_SERVER` | `1` | Strip `proxyServer` from `Target.createBrowserContext` (safety net — not needed with `HTTPS_PROXY` env vars since `REQUEST_PROXY` is not set). See §1.7. |
 | `CDP_SHIM_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
@@ -1397,7 +1422,50 @@ repeated in the overlay:
 
 ---
 
-## Known Limitations: CRW MIME Probe Uses GET
+## Known Limitations
+
+### Non-Search `open_url` Pages May Bypass Obscura
+
+The wrapper guarantees the Obscura browser path for configured search-engine
+targets by returning a local `403` from the prefetch-blocking proxy before
+CRW's raw HTTP prefetch reaches those hosts. That guarantee is intentionally
+scoped to search providers listed in `PREFETCH_BLOCK_HOSTS`.
+
+For arbitrary non-search `open_url` URLs, CRW's first step is still a normal
+HTTP prefetch through reqwest. The prefetch-blocking proxy forwards those
+requests after destination validation:
+
+- plain HTTP non-search URLs are forwarded as HTTP requests;
+- HTTPS non-search URLs are allowed as CONNECT tunnels;
+- if `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, those forwarded requests use that
+  upstream proxy;
+- if `MYST_VPN_ENABLED=true` and no explicit proxy is set, they leave through
+  the Mysterium namespace;
+- if `MYST_VPN_ENABLED=false` and no explicit proxy is set, they leave through
+  the Docker bridge.
+
+When the HTTP-prefetch response is usable, CRW may return that response
+directly and never call CDP/Obscura. CRW only escalates to Obscura when it
+detects a blocked response, a thin/SPA shell, a JS-required page, or a local
+403/error from the prefetch proxy. This means Obscura's browser-like TLS/HTTP
+fingerprint, JavaScript environment, cookies, and `waitUntil` handling do not
+apply to every `open_url` HTML page.
+
+This is not a new HTTPS behavior. Non-search HTTPS URLs have long used HTTP
+CONNECT through the prefetch proxy so CRW can perform its end-to-end TLS
+prefetch and detect PDFs/content type without MITM. The current simplified
+proxy behavior extends the same "usable prefetch can be final" property to
+plain HTTP non-search URLs as well. The search-engine path is still different:
+configured search-engine hosts receive local `403` responses and therefore
+escalate to Obscura without a raw prefetch reaching the search provider.
+
+Do not describe the Firecrawl `open_url` path as "all HTML goes through
+Obscura." The accurate statement is: `open_url` goes through CRW; configured
+search pages and pages CRW decides need browser rendering go through
+CDP/Obscura; usable non-search HTTP/HTTPS responses and PDFs can bypass
+Obscura.
+
+### CRW MIME Probe Uses GET
 
 CRW's `FallbackRenderer` currently performs a full HTTP `GET` before the CDP
 renderer to determine whether the response is a PDF or another content type.
@@ -1415,8 +1483,9 @@ though, the same MIME probe can create a real double-hit:
 The prefetch-blocking proxy removes this double-hit for configured search
 engine hosts by returning a local `403` before the reqwest fetch leaves the
 stack. It does not remove the behavior for normal non-search HTTP/HTTPS pages.
-Those pages may still receive the preliminary reqwest `GET` and, if CRW then
-escalates, a second browser navigation.
+Those pages may receive only the preliminary reqwest `GET` when CRW considers
+the result usable, or may receive both the reqwest `GET` and a browser
+navigation if CRW escalates afterward.
 
 The correct fix belongs upstream in CRW: when it only needs MIME/PDF
 detection, it should prefer a bounded `HEAD` request where the server supports
@@ -1433,7 +1502,7 @@ the browser renderer.
 Until CRW changes that behavior, this wrapper accepts the limitation for
 non-search pages and only blocks the high-risk search-engine prefetch path.
 
-## Known Limitations: Plain Text URLs Through CRW Markdown
+### Plain Text URLs Through CRW Markdown
 
 The README-recommended `open_url` path asks CRW for `formats: ["markdown"]`.
 That works well for normal HTML pages, but it is lossy for raw plaintext files
@@ -1480,9 +1549,9 @@ Fixes would need to happen either in CRW (for example, special-case
 GitHub URLs before HTML-to-Markdown conversion) or in the Onyx/Firecrawl shim
 by requesting and preferring `rawHtml` for raw-file URLs.
 
-## Known Limitations: Fingerprint Stability
+### Fingerprint Stability
 
-### Stability Limit
+#### Stability Limit
 
 Obscura `v0.1.9` selects a realistic browser profile from a built-in pool for
 each `BrowserContext`, and the default is a single stable profile rather than
@@ -1503,7 +1572,7 @@ That seed influences values such as screen dimensions, `hardwareConcurrency`,
 strings, so the stack should not promise perfectly stable cross-navigation
 device identity.
 
-### Cookie interaction
+#### Cookie interaction
 
 In the normal wrapper path CRW creates pages on obscura's default CDP context,
 so cookies can remain in the in-process cookie jar across WebSocket
@@ -1512,7 +1581,7 @@ CRW's `REQUEST_PROXY` / `Target.createBrowserContext` path because Obscura
 clears the default cookie jar on context create/dispose, which weakens session
 continuity.
 
-### What is stable by default
+#### What is stable by default
 
 | Signal | Stable? | Source |
 |--------|---------|--------|
@@ -1524,7 +1593,7 @@ continuity.
 | Cookies | Usually | Default CDP context jar, cleared periodically by the shim |
 | Screen / canvas / hardware values | Not fully | Re-seeded during page initialization |
 
-### What does not reliably persist
+#### What does not reliably persist
 
 | Storage vector | Persists across navigations? | Why |
 |---|---|---|
@@ -1536,7 +1605,7 @@ continuity.
 | Service Workers | Stub only | `register()` returns empty promise |
 | HTTP cache | Not implemented | No ETag/304 handling |
 
-### Mitigation
+#### Mitigation
 
 The `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL` setting (default: 3600s = 60 minutes)
 periodically clears cookies to limit the tracking surface.

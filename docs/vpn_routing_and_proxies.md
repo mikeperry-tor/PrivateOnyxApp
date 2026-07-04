@@ -232,8 +232,10 @@ and Docker DNS names such as `myst-client`, `api_server`, `nginx`,
 ```
 
 This applies the upstream proxy to the stealth browser traffic used by CRW's
-CDP renderer. The request-chain details for the search and `open_url` paths
-are covered in [Request handling](request_handling.md).
+CDP renderer. CRW uses that renderer for configured search-engine pages and for
+`open_url` pages that it escalates after the HTTP prefetch. Usable non-search
+`open_url` prefetches can return without Obscura; the request-chain details are
+covered in [Request handling](request_handling.md).
 
 ### Obscura MCP
 
@@ -255,6 +257,12 @@ step on port `3128`:
   HTTP forwarding path
 - non-search plain HTTP requests are forwarded to the target
 - non-search HTTPS `CONNECT` requests are tunneled to the target
+
+Forwarded non-search prefetches can be the final CRW result when CRW considers
+the HTTP response usable. In those cases `open_url` does not reach the CDP shim
+or Obscura. Search-engine hosts remain different: their prefetches are blocked
+locally so CRW escalates to the browser renderer without the search provider
+seeing the raw reqwest request.
 
 When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `prefetch-blocking-proxy` uses it
 for its own upstream connections. That keeps CRW prefetch traffic and

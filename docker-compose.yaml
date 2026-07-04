@@ -268,9 +268,10 @@ services:
       # Per-URL waitUntil injection into Page.navigate calls.
       # Search engine URLs (SERPs) use networkidle2 (≤2 active connections
       # for 500ms) — SERPs are JS-heavy SPAs that load results via XHR.
-      # All other URLs (open_url web pages) use "load" (all subresources
-      # finished) — content is ready at load, and many modern sites keep
-      # long-polling connections that prevent network idle.
+      # All other URLs that CRW escalates to CDP (open_url web pages) use
+      # "load" (all subresources finished) — content is ready at load, and
+      # many modern sites keep long-polling connections that prevent network
+      # idle. Usable non-search HTTP-prefetch results can return before CDP.
       #
       # Obscura lifecycle event firing order (each implies the previous):
       #   1. domcontentloaded  — DOM parsed + scripts executed
