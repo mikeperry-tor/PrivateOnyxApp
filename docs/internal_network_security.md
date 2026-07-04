@@ -305,8 +305,9 @@ execution security gap. Generated code can use raw sockets or tools that ignore
 proxy variables.
 Therefore `ONYX_AGENT_OUTBOUND_PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY`,
 `ALL_PROXY`, and `NO_PROXY` are routing hints, not a security boundary.
-The SOCKS-to-HTTP proxy adapter closes a urllib compatibility gap for ordinary
-HTTP/HTTPS clients, but generated code can still bypass those environment
+The local HTTP proxy adapter closes the urllib/SOCKS compatibility gap for
+ordinary HTTP/HTTPS clients and gives the executor path a single proxy URL for
+all upstream proxy schemes. Generated code can still bypass those environment
 variables with raw sockets or tools that ignore proxy settings.
 
 The proxy override intentionally sets `NO_PROXY` for internal
@@ -348,6 +349,14 @@ The proxy/gateway should:
 
 This is the cleanest model because it gives untrusted executor pods exactly one
 network capability: talk to the controlled egress proxy.
+
+The current proxy simplification is a useful prerequisite for this model:
+executor tools no longer need direct SOCKS support or per-client transport
+libraries. They can all be pointed at one ordinary HTTP proxy URL. To make that
+a security boundary, however, executor pods must stop using
+`container:onyx-netns-holder-1`; the proxy endpoint must be reachable from the
+dedicated executor network, and other stack services must not be reachable from
+that network.
 
 ### Option 2: Dedicated Executor VPN Namespace With Firewall Deny Rules
 

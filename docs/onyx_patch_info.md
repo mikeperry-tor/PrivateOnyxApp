@@ -762,7 +762,7 @@ namespace. The code-interpreter container also loads a `sitecustomize` patch
 that:
 
 - Patches `DockerExecutor._build_run_command`.
-- Injects proxy env vars and optional SOCKS support into executor pod commands.
+- Injects proxy env vars into executor pod commands.
 
 The wrapper compose already runs code-interpreter in the shared
 `netns-holder` namespace. Inheriting that namespace gives executor pods the
@@ -776,22 +776,12 @@ network-isolated. With both `ONYX_AGENT_OUTBOUND_PROXY_URL` and
 `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor pods inherit the shared
 namespace and supported tools use the configured upstream proxy.
 
-For SOCKS proxies, the patch also:
-
-- Injects `HTTP_PROXY` and `HTTPS_PROXY` pointing at
-  `http://127.0.0.1:3128`, the prefetch-blocking-proxy service's HTTP
-  listener. That gives Python `urllib` an ordinary HTTP proxy endpoint while
-  the sidecar adapts upstream egress to SOCKS.
-- Keeps `ALL_PROXY` and `all_proxy` pointed at the configured SOCKS URL for
-  clients that understand SOCKS directly.
-- Creates a Docker volume named `onyx-proxy-libs`.
-- Synchronously installs the hashed `PySocks` and `socksio` lock from
-  `onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt`
-  into that volume using `PROXY_LIBS_INSTALL_IMAGE` during code-interpreter
-  startup.
-- Mounts the volume read-only into executor pods at `/tmp/proxy-libs` only if
-  setup succeeds.
-- Prepends that directory to `PYTHONPATH` only if setup succeeds.
+The patch always injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and their
+lowercase variants pointing at `http://127.0.0.1:3128`, the
+prefetch-blocking-proxy service's HTTP listener. That gives Python `urllib`,
+`requests`, `httpx`, curl, git, and similar clients an ordinary HTTP proxy
+endpoint while the sidecar adapts upstream egress to the configured
+`ONYX_AGENT_OUTBOUND_PROXY_URL` scheme, including SOCKS.
 
 The proxy listener still blocks configured search-engine hosts, so the
 code-interpreter path should not expect direct access to those search pages

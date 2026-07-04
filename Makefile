@@ -175,8 +175,6 @@ EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 CDP_SHIM_REQUIREMENTS_IN := crw/cdp-shim-requirements.in
 CDP_SHIM_REQUIREMENTS := crw/cdp-shim-requirements.txt
-PROXY_LIBS_REQUIREMENTS_IN := onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.in
-PROXY_LIBS_REQUIREMENTS := onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
@@ -239,8 +237,7 @@ upgrade-python-deps:
 		exit 1; \
 	fi; \
 	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(EMBEDSERV_REQUIREMENTS_IN)" -o "$(EMBEDSERV_REQUIREMENTS)"; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(CDP_SHIM_REQUIREMENTS_IN)" -o "$(CDP_SHIM_REQUIREMENTS)"; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(PROXY_LIBS_REQUIREMENTS_IN)" -o "$(PROXY_LIBS_REQUIREMENTS)"
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(CDP_SHIM_REQUIREMENTS_IN)" -o "$(CDP_SHIM_REQUIREMENTS)"
 
 tailscale-image-ready:
 	@echo "Pulling Tailscale image: $(TAILSCALE_IMAGE)"; \

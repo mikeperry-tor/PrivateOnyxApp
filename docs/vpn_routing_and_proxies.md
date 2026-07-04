@@ -307,18 +307,10 @@ When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `docker-compose.proxy.yml` mounts t
 The patch injects proxy environment variables into every executor pod's
 `docker run` command:
 
-- for HTTP/HTTPS proxies, it injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
-  lowercase variants, and `NO_PROXY`
-- for SOCKS proxies, it injects `HTTP_PROXY`/`HTTPS_PROXY` pointing at the
-  local prefetch-blocking-proxy HTTP listener on `http://127.0.0.1:3128`,
-  keeps `ALL_PROXY` and `all_proxy` pointed at the configured SOCKS URL, and
-  injects lowercase variants
-- for SOCKS proxies, it creates the Docker volume `onyx-proxy-libs`, installs
-  the hashed `PySocks` and `socksio` lock from
-  `onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt`
-  into it using `PROXY_LIBS_INSTALL_IMAGE`, mounts it into executor pods at
-  `/tmp/proxy-libs`, and injects `PYTHONPATH` so `requests` and `httpx` can use
-  SOCKS transports
+- `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and lowercase variants point at
+  the local prefetch-blocking-proxy HTTP listener on `http://127.0.0.1:3128`
+- `NO_PROXY` is injected so ordinary stack-internal service names stay off the
+  proxy
 
 Proxy injection and VPN routing are separate code paths. With `ONYX_AGENT_OUTBOUND_PROXY_URL`
 alone, executor pods receive proxy environment variables but remain
@@ -326,14 +318,15 @@ network-isolated. With both `ONYX_AGENT_OUTBOUND_PROXY_URL` and
 `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor pods inherit the shared
 namespace and then use the configured upstream proxy for supported tools.
 
-For SOCKS mode, this closes the common Python `urllib` gap for HTTP and HTTPS
-URLs: `urllib` receives an ordinary HTTP proxy URL, while the local sidecar
-adapts upstream egress to SOCKS. The sidecar is not a transparent firewall and
-does not make network-enabled executors safe against raw-socket bypasses. It
-also intentionally blocks configured search-engine hosts, so generated code
-using urllib/curl/git through these proxy variables should not expect direct
-access to Google, Brave Search, DuckDuckGo HTML, Startpage, or Bing search
-pages from the code-interpreter path.
+For every upstream proxy scheme, executor pods receive an ordinary HTTP proxy
+URL. The local sidecar adapts upstream egress to HTTP, HTTPS, SOCKS5, or
+SOCKS5h as configured, so executor pods do not need Python SOCKS transport
+libraries. The sidecar is not a transparent firewall and does not make
+network-enabled executors safe against raw-socket bypasses. It also
+intentionally blocks configured search-engine hosts, so generated code using
+urllib/curl/git through these proxy variables should not expect direct access
+to Google, Brave Search, DuckDuckGo HTML, Startpage, or Bing search pages from
+the code-interpreter path.
 
 ## VPN Signup and Funding Flows
 

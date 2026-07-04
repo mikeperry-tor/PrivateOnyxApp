@@ -669,7 +669,7 @@ generation and code-interpreter executor pod caveats, is documented in
 | **CRW HTTP prefetch** | prefetch-blocking proxy | `HTTPS_PROXY` / `HTTP_PROXY` env vars on the CRW container |
 | **CRW CDP (obscura)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
 | **SearXNG** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `outgoing.proxies` in settings.yml |
-| **Code-interpreter urllib in SOCKS mode** | prefetch-blocking proxy | `HTTP_PROXY` / `HTTPS_PROXY=http://127.0.0.1:3128` in executor pods; search-engine hosts are blocked |
+| **Code-interpreter HTTP clients** | prefetch-blocking proxy | `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY=http://127.0.0.1:3128` in executor pods; search-engine hosts are blocked |
 | **OnyxWebCrawler** | shared namespace direct egress | Does not go through CRW or explicit `ONYX_AGENT_OUTBOUND_PROXY_URL`; traffic uses the Mysterium VPN when `MYST_VPN_ENABLED=true`, otherwise the Docker bridge |
 
 **CONNECT handling:**

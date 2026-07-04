@@ -85,17 +85,16 @@ services:
   code-interpreter:
     environment:
       # ONYX_AGENT_OUTBOUND_PROXY_URL is read by the sitecustomize patch, which
-      # detects SOCKS vs HTTP and injects appropriate env vars into executor pods. We do
+      # injects the local HTTP proxy adapter into executor pods. We do
       # NOT set HTTP_PROXY/HTTPS_PROXY here because the code-interpreter
       # container itself doesn't make HTTP requests (it spawns executor pods),
       # and setting them to a SOCKS URL would break any HTTP client that
       # accidentally runs in the container (urllib treats SOCKS as HTTP CONNECT).
       ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL}"
-      ONYX_AGENT_SOCKS_HTTP_PROXY_URL: "http://127.0.0.1:3128"
-      PROXY_LIBS_INSTALL_IMAGE: "${PROXY_LIBS_INSTALL_IMAGE:?PROXY_LIBS_INSTALL_IMAGE must be set}"
+      ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL: "http://127.0.0.1:3128"
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"
-      ALL_PROXY: "${ONYX_AGENT_OUTBOUND_PROXY_URL}"
+      ALL_PROXY: "http://127.0.0.1:3128"
       NO_PROXY: "${NO_PROXY_INTERNAL:-127.0.0.1,localhost,::1,myst-client,api_server,web_server,background,nginx,code-interpreter,obscura,crw,searxng-core,searxng-valkey,netns-holder,host-web-proxy,host-searxng-proxy}"
     volumes:
       - ./onyx/patches/sitecustomize_code_interpreter:/app/wrapper-patches:ro

@@ -518,15 +518,10 @@ Patch behavior:
   the shared `netns-holder` namespace via
   `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`.
 - When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, injects proxy env vars into every executor pod.
-- For SOCKS proxies, points executor `HTTP_PROXY`/`HTTPS_PROXY` at the
+- Executor `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` point at the
   prefetch-blocking-proxy service's local HTTP listener on
-  `http://127.0.0.1:3128`, while keeping `ALL_PROXY` pointed at the configured
-  SOCKS URL. This lets urllib use SOCKS-backed egress without treating the
-  SOCKS port as an HTTP CONNECT proxy.
-- For SOCKS proxies, creates a Docker volume named `onyx-proxy-libs`,
-  synchronously installs the hashed `PySocks` and `socksio` lock into it using
-  `PROXY_LIBS_INSTALL_IMAGE`, and only mounts/prepends `/tmp/proxy-libs` when
-  setup succeeds.
+  `http://127.0.0.1:3128` for every upstream proxy scheme. The sidecar adapts
+  egress to `ONYX_AGENT_OUTBOUND_PROXY_URL`, including SOCKS URLs.
 
 Onyx service: `code-interpreter`, plus its transient executor pods.
 
@@ -578,7 +573,7 @@ Wrapper compose assumptions:
   `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`.
 - `docker-compose.proxy.yml` mounts the code-interpreter patch when proxy mode
   is active and adds `ONYX_AGENT_OUTBOUND_PROXY_URL` / `ALL_PROXY` /
-  `NO_PROXY` plus `ONYX_AGENT_SOCKS_HTTP_PROXY_URL` to the code-interpreter
+  `NO_PROXY` plus `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL` to the code-interpreter
   container. The patch decides which variables to forward to executor pods.
 
 Security notes:
@@ -592,8 +587,10 @@ Upgrade notes:
 - If upstream changes command construction, proxy injection can fail open or
   fail closed. Verify logs contain the startup patch status and proxy injection
   messages when `ONYX_AGENT_OUTBOUND_PROXY_URL` is set.
-- If the code-interpreter image changes Python version, revisit
-  `PROXY_LIBS_INSTALL_IMAGE` in `stack.versions.env`.
+- If the executor network model changes away from `container:onyx-netns-holder-1`,
+  revisit `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL`. The current default
+  `http://127.0.0.1:3128` works only because executor pods share the namespace
+  where `prefetch-blocking-proxy` listens.
 
 ## Local embedding shim
 
@@ -1157,9 +1154,8 @@ Behavior:
 - `embedserv-*` targets install, verify, and serve the local MLX embedding
   server that `onyx/local_embedding_shim.py` calls.
 - `upgrade-python-deps` upgrades the hashed Python lock files for
-  `embedserv/requirements.txt`, `crw/cdp-shim-requirements.txt`, and
-  `onyx/patches/sitecustomize_code_interpreter/proxy-libs-requirements.txt`
-  from their corresponding `requirements.in` files.
+  `embedserv/requirements.txt` and `crw/cdp-shim-requirements.txt` from their
+  corresponding `requirements.in` files.
 
 Upgrade notes:
 
@@ -1268,7 +1264,8 @@ Manual behavior checks:
 - Code-interpreter executor pods either remain network-isolated or are created
   with `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`, matching
   the selected `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` setting.
-- Proxy mode shows executor pod commands receiving proxy env vars; SOCKS mode
-  mounts `onyx-proxy-libs`, points executor `HTTP_PROXY`/`HTTPS_PROXY` at
-  `http://127.0.0.1:3128`, and `urllib.request.urlopen("https://example.com")`
-  succeeds through the configured upstream proxy.
+- Proxy mode shows executor pod commands receiving proxy env vars. For SOCKS
+  upstreams, executor `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` all point at
+  `http://127.0.0.1:3128`, and
+  `urllib.request.urlopen("https://example.com")` succeeds through the
+  configured upstream proxy.
