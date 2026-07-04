@@ -965,6 +965,8 @@ adding a blind fixed sleep.
 
 CRW's `FallbackRenderer` performs an HTTP prefetch first to check the content
 type ([`lib.rs:801-862`](../reference_repos/crw/crates/crw-renderer/src/lib.rs:801)).
+This prefetch is a full HTTP `GET`, not a `HEAD` request; see
+[Known Limitations: CRW MIME Probe Uses GET](#known-limitations-crw-mime-probe-uses-get).
 In this deployment the prefetch goes through the prefetch-blocking proxy:
 
 - **Search pages**: CRW uses auto mode (`RENDER_JS_DEFAULT` unset). The proxy
@@ -1394,6 +1396,42 @@ repeated in the overlay:
 `SEARXNG_METHOD`, and `SEARXNG_VALKEY_URL`.
 
 ---
+
+## Known Limitations: CRW MIME Probe Uses GET
+
+CRW's `FallbackRenderer` currently performs a full HTTP `GET` before the CDP
+renderer to determine whether the response is a PDF or another content type.
+That probe is not a `HEAD` request. For PDFs this lets CRW short-circuit into
+its native PDF parser. This non-browser PDF path is currently necessary because
+Obscura has no PDF-to-markdown conversion support and cannot act as the PDF
+download transport for CRW's markdown extraction path. For ordinary web pages,
+though, the same MIME probe can create a real double-hit:
+
+```text
+1. reqwest GET for MIME/content sniffing
+2. browser/CDP navigation if CRW decides rendering is needed
+```
+
+The prefetch-blocking proxy removes this double-hit for configured search
+engine hosts by returning a local `403` before the reqwest fetch leaves the
+stack. It does not remove the behavior for normal non-search HTTP/HTTPS pages.
+Those pages may still receive the preliminary reqwest `GET` and, if CRW then
+escalates, a second browser navigation.
+
+The correct fix belongs upstream in CRW: when it only needs MIME/PDF
+detection, it should prefer a bounded `HEAD` request where the server supports
+it, falling back to a small ranged or capped `GET` only when necessary. That
+would preserve PDF detection while avoiding the extra full-body `GET` before a
+browser render.
+
+An alternate upstream fix would be for Obscura to download PDF URLs in a form
+CRW can hand to its PDF-to-markdown converter. If the browser path could
+reliably transport PDFs back to CRW for markdown extraction, CRW would no
+longer need a separate MIME-probe `HEAD`/`GET` before deciding whether to use
+the browser renderer.
+
+Until CRW changes that behavior, this wrapper accepts the limitation for
+non-search pages and only blocks the high-risk search-engine prefetch path.
 
 ## Known Limitations: Plain Text URLs Through CRW Markdown
 
