@@ -455,7 +455,7 @@ embedserv-install:
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
 	mkdir -p "$(EMBEDSERV_DIR)" "$$(dirname "$$model_dir")"; \
 	if [ ! -x "$$venv_python" ]; then \
-		uv venv --python 3.12 "$(EMBEDSERV_VENV)"; \
+		uv venv --python 3.13 "$(EMBEDSERV_VENV)"; \
 	fi; \
 	uv pip install --python "$$venv_python" --require-hashes -r "$(EMBEDSERV_REQUIREMENTS)"; \
 	echo "Downloading MLX embedding model: $$model_repo"; \
