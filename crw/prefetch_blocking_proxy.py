@@ -16,8 +16,13 @@ This proxy intercepts CRW's HTTP prefetch requests and:
    search engine never sees the bare reqwest request — only obscura's stealth
    navigation.
 
-2. **For all other URLs**: forwards the request to the target, through
-   ``ONYX_AGENT_OUTBOUND_PROXY_URL`` if set.
+2. **For plain HTTP URLs**: returns ``403 Forbidden`` by default with a clear
+   message telling callers to use ``https://`` instead. Set
+   ``ONYX_AGENT_ALLOW_HTTP_URLS=true`` only when cleartext HTTP fetches are
+   intentionally needed.
+
+3. **For HTTPS URLs, and explicitly allowed plain HTTP URLs**: forwards the
+   request to the target, through ``ONYX_AGENT_OUTBOUND_PROXY_URL`` if set.
 
 Before any CONNECT tunnel or HTTP forwarding, the proxy rejects loopback,
 private/RFC1918, link-local, multicast, reserved, and other non-global IP
@@ -38,7 +43,7 @@ Architecture::
                                    │
                                    ├─ Search engine URL → 403 (no fetch)
                                    ├─ Internal/private target → 403
-                                   ├─ Other HTTP URL → forward
+                                   ├─ Other HTTP URL → 403 unless explicitly allowed
                                    ├─ Other HTTPS URL → CONNECT tunnel
                                    │
                                    └── upstream ──> ONYX_AGENT_OUTBOUND_PROXY_URL (Tor/VPN)
@@ -83,6 +88,21 @@ LISTEN_PORT = int(os.environ.get("PREFETCH_PROXY_PORT", "3128"))
 # http://, https://, socks5://, socks5h://
 # When empty, requests go direct (through the VPN namespace).
 UPSTREAM_PROXY = os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
+
+# Plain HTTP URLs are blocked by default. This is intentionally separate from
+# destination validation: even public HTTP hosts leak path/query contents in
+# cleartext and should not be fetched by an LLM web tool unless the operator
+# explicitly opts in.
+ALLOW_HTTP_URLS = os.environ.get("ONYX_AGENT_ALLOW_HTTP_URLS", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+HTTP_URL_BLOCK_MESSAGE = (
+    "HTTP URLs are disabled by ONYX_AGENT_ALLOW_HTTP_URLS=false. "
+    "Use an https:// URL instead."
+)
 
 # Search engine hostnames that should get an immediate 403 without any
 # network request. These are the hostnames/eTLD+1s of the SearXNG stub engines.
@@ -282,6 +302,25 @@ async def _reject_blocked_destination(
     return True
 
 
+async def _write_text_response(
+    writer: asyncio.StreamWriter,
+    status_code: int,
+    reason: str,
+    body: str,
+) -> None:
+    """Write a small text/plain HTTP response and close the connection."""
+    body_bytes = (body.rstrip() + "\n").encode("utf-8")
+    response = (
+        f"HTTP/1.1 {status_code} {reason}\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        f"Content-Length: {len(body_bytes)}\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode("utf-8") + body_bytes
+    writer.write(response)
+    await writer.drain()
+
+
 # ── Upstream proxy connection helpers ────────────────────────────────────
 
 
@@ -349,9 +388,8 @@ async def _connect_via_socks5(
     scheme: str,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Establish a SOCKS5/SOCKS5h tunnel to the target."""
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(proxy_host, proxy_port),
-        timeout=TUNNEL_CONNECT_TIMEOUT,
+    reader, writer = await _open_http_proxy_connection(
+        proxy_host, proxy_port, scheme
     )
 
     # SOCKS5 greeting: version 5, auth methods
@@ -446,9 +484,8 @@ async def _connect_via_http_connect(
     scheme: str,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Establish an HTTP CONNECT tunnel to the target."""
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(proxy_host, proxy_port),
-        timeout=TUNNEL_CONNECT_TIMEOUT,
+    reader, writer = await _open_http_proxy_connection(
+        proxy_host, proxy_port, scheme
     )
 
     connect_request = (
@@ -487,6 +524,75 @@ async def _connect_via_http_connect(
             break
 
     return reader, writer
+
+
+async def _open_http_proxy_connection(
+    proxy_host: str,
+    proxy_port: int,
+    scheme: str,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Open a connection to an HTTP/HTTPS upstream proxy."""
+    ssl_ctx = ssl.create_default_context() if scheme == "https" else None
+    return await asyncio.wait_for(
+        asyncio.open_connection(proxy_host, proxy_port, ssl=ssl_ctx),
+        timeout=TUNNEL_CONNECT_TIMEOUT,
+    )
+
+
+async def _open_plain_http_forward_connection(
+    target_host: str,
+    target_port: int,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, bool]:
+    """Open the connection used to forward a plain HTTP origin request.
+
+    Returns ``(reader, writer, use_absolute_uri)``. HTTP/HTTPS upstream proxies
+    expect absolute-form request targets for plain HTTP forwarding; direct and
+    SOCKS paths expect origin-form.
+    """
+    if not UPSTREAM_PROXY:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(target_host, target_port),
+            timeout=TUNNEL_CONNECT_TIMEOUT,
+        )
+        return reader, writer, False
+
+    scheme, proxy_host, proxy_port, proxy_user, proxy_pass = _parse_proxy_url(
+        UPSTREAM_PROXY
+    )
+    if scheme in ("http", "https"):
+        reader, writer = await _open_http_proxy_connection(
+            proxy_host, proxy_port, scheme
+        )
+        return reader, writer, True
+    if scheme in ("socks5", "socks5h"):
+        reader, writer = await _connect_via_socks5(
+            proxy_host,
+            proxy_port,
+            target_host,
+            target_port,
+            proxy_user,
+            proxy_pass,
+            scheme,
+        )
+        return reader, writer, False
+    raise ValueError(f"Unsupported proxy scheme: {scheme}")
+
+
+def _proxy_authorization_header() -> str | None:
+    """Return Proxy-Authorization for HTTP upstream proxy forwarding."""
+    if not UPSTREAM_PROXY:
+        return None
+    scheme, _proxy_host, _proxy_port, username, password = _parse_proxy_url(
+        UPSTREAM_PROXY
+    )
+    if scheme not in ("http", "https") or not (username and password):
+        return None
+    import base64
+
+    credentials = base64.b64encode(
+        f"{username}:{password}".encode("utf-8")
+    ).decode("ascii")
+    return f"Basic {credentials}"
 
 
 async def _open_origin_connection(
@@ -554,8 +660,12 @@ async def handle_request(
 
         parts = request_str.split()
         if len(parts) < 3:
-            writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-            await writer.drain()
+            await _write_text_response(
+                writer,
+                400,
+                "Bad Request",
+                "Bad proxy request.",
+            )
             return
 
         method, target, _version = parts[0].upper(), parts[1], parts[2]
@@ -585,8 +695,12 @@ async def handle_request(
         ):
             await _handle_forward_http(method, target, headers, reader, writer, peer)
         else:
-            writer.write(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")
-            await writer.drain()
+            await _write_text_response(
+                writer,
+                405,
+                "Method Not Allowed",
+                "HTTP proxy method is not allowed by this wrapper.",
+            )
 
     except asyncio.TimeoutError:
         logger.debug("Request from %s timed out reading request line", peer)
@@ -624,8 +738,12 @@ async def _handle_connect(
     try:
         target_host, target_port = _parse_authority(target, 443)
     except ValueError:
-        client_writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-        await client_writer.drain()
+        await _write_text_response(
+            client_writer,
+            400,
+            "Bad Request",
+            "Invalid CONNECT target.",
+        )
         return
 
     # Search engine short-circuit: return 403 immediately
@@ -635,8 +753,12 @@ async def _handle_connect(
             target_host,
             target_port,
         )
-        client_writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
-        await client_writer.drain()
+        await _write_text_response(
+            client_writer,
+            403,
+            "Forbidden",
+            "Search-engine prefetches are blocked locally so CRW uses the Obscura browser path.",
+        )
         return
 
     if await _reject_blocked_destination(
@@ -656,8 +778,12 @@ async def _handle_connect(
             target_port,
             e,
         )
-        client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-        await client_writer.drain()
+        await _write_text_response(
+            client_writer,
+            502,
+            "Bad Gateway",
+            f"Failed to establish upstream tunnel: {e}",
+        )
         return
 
     # Tell the client the tunnel is established
@@ -687,8 +813,9 @@ async def _handle_forward_http(
     """Handle plain HTTP proxy requests for general executor egress.
 
     HTTPS clients normally use CONNECT and are handled by _handle_connect().
-    Plain HTTP requests are forwarded after destination validation.
-    Search-engine targets are still denied locally.
+    Plain HTTP requests are denied by default before upstream egress. If
+    ONYX_AGENT_ALLOW_HTTP_URLS=true, they are forwarded after destination
+    validation. Search-engine targets are still denied locally.
     """
     if target.startswith("http://") or target.startswith("https://"):
         parsed = urlparse(target)
@@ -703,11 +830,31 @@ async def _handle_forward_http(
         try:
             target_host, target_port = _parse_authority(host_header, 80)
         except ValueError:
-            client_writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-            await client_writer.drain()
+            await _write_text_response(
+                client_writer,
+                400,
+                "Bad Request",
+                "Invalid HTTP proxy target.",
+            )
             return
         use_tls = False
         path = target or "/"
+
+    if not use_tls and not ALLOW_HTTP_URLS:
+        logger.info(
+            "BLOCKED FORWARD %s http://%s:%d%s (HTTP URLs disabled) -> 403",
+            method,
+            target_host,
+            target_port,
+            path,
+        )
+        await _write_text_response(
+            client_writer,
+            403,
+            "Forbidden",
+            HTTP_URL_BLOCK_MESSAGE,
+        )
+        return
 
     if _is_search_engine(target_host):
         logger.info(
@@ -717,8 +864,12 @@ async def _handle_forward_http(
             target_port,
             path,
         )
-        client_writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
-        await client_writer.drain()
+        await _write_text_response(
+            client_writer,
+            403,
+            "Forbidden",
+            "Search-engine prefetches are blocked locally so CRW uses the Obscura browser path.",
+        )
         return
 
     if await _reject_blocked_destination(
@@ -727,20 +878,40 @@ async def _handle_forward_http(
         return
 
     try:
-        upstream_reader, upstream_writer = await _open_origin_connection(
-            target_host, target_port, use_tls
-        )
+        if use_tls:
+            upstream_reader, upstream_writer = await _open_origin_connection(
+                target_host, target_port, use_tls
+            )
+            request_target = path
+            proxy_authorization = None
+        else:
+            (
+                upstream_reader,
+                upstream_writer,
+                use_absolute_uri,
+            ) = await _open_plain_http_forward_connection(target_host, target_port)
+            request_target = (
+                f"http://{target_host}:{target_port}{path}"
+                if use_absolute_uri
+                else path
+            )
+            proxy_authorization = (
+                _proxy_authorization_header() if use_absolute_uri else None
+            )
 
-        request = f"{method} {path} HTTP/1.1\r\n"
+        request = f"{method} {request_target} HTTP/1.1\r\n"
         saw_host = False
         for name, value in headers.items():
-            if name.lower() in ("connection", "proxy-connection"):
+            lower_name = name.lower()
+            if lower_name in ("connection", "proxy-connection", "proxy-authorization"):
                 continue
-            if name.lower() == "host":
+            if lower_name == "host":
                 saw_host = True
             request += f"{name}: {value}\r\n"
         if not saw_host:
             request += f"host: {target_host}\r\n"
+        if proxy_authorization:
+            request += f"proxy-authorization: {proxy_authorization}\r\n"
         request += "connection: close\r\n"
         request += "\r\n"
 
@@ -772,8 +943,12 @@ async def _handle_forward_http(
             path,
             e,
         )
-        client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-        await client_writer.drain()
+        await _write_text_response(
+            client_writer,
+            502,
+            "Bad Gateway",
+            f"HTTP proxy forwarding failed: {e}",
+        )
         return
 
 
@@ -782,10 +957,11 @@ async def _handle_forward_http(
 
 async def main() -> None:
     logger.info(
-        "Prefetch-blocking proxy starting on %s:%d (upstream: %s, block_hosts: %s, block_internal_hosts: %s, dns_internal_check: %s)",
+        "Prefetch-blocking proxy starting on %s:%d (upstream: %s, allow_http_urls: %s, block_hosts: %s, block_internal_hosts: %s, dns_internal_check: %s)",
         LISTEN_HOST,
         LISTEN_PORT,
         UPSTREAM_PROXY or "(direct)",
+        ALLOW_HTTP_URLS,
         ", ".join(sorted(SEARCH_ENGINE_HOSTS)),
         ", ".join(sorted(BLOCKED_HOSTNAMES)),
         "disabled (upstream proxy set)" if UPSTREAM_PROXY else "enabled",

@@ -494,11 +494,12 @@ The compose default routes CRW's reqwest traffic through
 `HTTP_PROXY=http://127.0.0.1:3128`. The local prefetch-blocking proxy rejects
 search-engine prefetches with `403 Forbidden` without opening an upstream
 connection. CRW auto mode sees that blocked HTTP result and escalates to the
-chrome/obscura CDP renderer. Non-search requests are forwarded through the
-configured egress path and can be returned directly by CRW when the response is
-usable. This prevents search engines from seeing a bare reqwest request before
-the browser navigation while keeping one HTTP proxy behavior for CRW and
-SOCKS-backed code-interpreter urllib clients. See §1.7 for the proxy details.
+chrome/obscura CDP renderer. Non-search HTTPS requests are forwarded through
+the configured egress path and can be returned directly by CRW when the
+response is usable. Plain HTTP URLs are blocked by default with a clear
+message telling the caller to use HTTPS; set `ONYX_AGENT_ALLOW_HTTP_URLS=true`
+only when cleartext HTTP fetches are intentionally needed. See §1.7 for the
+proxy details.
 
 **Approaches that do NOT work:**
 
@@ -613,7 +614,7 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
                                │
                                ├─ Search engine URL → 403 (no network request)
                                ├─ Internal/private target → 403 (logged)
-                               ├─ Other HTTP URL → forwarded HTTP prefetch
+                               ├─ Other HTTP URL → 403 unless explicitly allowed
                                ├─ Other HTTPS URL → CONNECT prefetch tunnel
                                │
                                └── upstream ──> ONYX_AGENT_OUTBOUND_PROXY_URL (Tor/VPN)
@@ -642,9 +643,15 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
      blocked address. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, this DNS
      resolution check is skipped to avoid leaking target DNS outside the
      configured upstream proxy path. Blocked attempts are logged.
-   - **Other plain HTTP URLs**: forwards the HTTP prefetch request to the
-     target through `ONYX_AGENT_OUTBOUND_PROXY_URL` if set. If the response is
-     usable, CRW may return it without visiting the page in Obscura.
+   - **Other plain HTTP URLs**: returns `403 Forbidden` by default with the
+     message `HTTP URLs are disabled by ONYX_AGENT_ALLOW_HTTP_URLS=false. Use
+     an https:// URL instead.` Set `ONYX_AGENT_ALLOW_HTTP_URLS=true` to allow
+     cleartext HTTP fetches. When allowed, the proxy forwards the HTTP request
+     to the target through `ONYX_AGENT_OUTBOUND_PROXY_URL` if set. If the
+     response is usable, CRW may return it without visiting the page in
+     Obscura. For HTTP/HTTPS upstream proxies, allowed HTTP origin requests are
+     forwarded with an absolute-form request target rather than a CONNECT
+     tunnel.
    - **Other HTTPS URLs**: accepts the CONNECT tunnel and connects through
      `ONYX_AGENT_OUTBOUND_PROXY_URL` if set. If the HTTP result is
      usable, CRW may return it without visiting the page in Obscura. If the
@@ -704,9 +711,11 @@ CONNECT tunneling. The proxy handles CONNECT requests as follows:
     designed to remove
 
 For plain HTTP URLs, the proxy applies the same search-engine and
-internal/private destination blocks, then forwards the request through
-`ONYX_AGENT_OUTBOUND_PROXY_URL` if set. As with HTTPS, a usable HTTP result can
-be returned by CRW without Obscura.
+internal/private destination blocks, then blocks the request unless
+`ONYX_AGENT_ALLOW_HTTP_URLS=true`. When HTTP is explicitly allowed, direct and
+SOCKS paths use normal origin-form forwarding, while HTTP/HTTPS upstream
+proxies receive absolute-form HTTP requests. As with HTTPS, an explicitly
+allowed usable HTTP result can be returned by CRW without Obscura.
 
 **Keeping search-engine host lists aligned:**
 
@@ -760,6 +769,7 @@ This is critical for two reasons:
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://` |
+| `ONYX_AGENT_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs. When false, the prefetch proxy returns a text/plain 403 telling the agent to use HTTPS, and the CDP shim rejects HTTP browser navigations too. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_BLOCK_INTERNAL_HOSTS` | `localhost,host.docker.internal` | Comma-separated internal hostnames to block by name without opening an upstream request. Subdomains are blocked too; single-label Docker-style hostnames are always blocked. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
@@ -796,8 +806,9 @@ but that is not the recommended wrapper setup.
 │  CRW :3010                                            │
 │  ├─ HTTP prefetch via prefetch-blocking-proxy :3128   │
 │  ├─ Search → 403 → CDP                                │
-│  ├─ Non-search HTTP/HTTPS → prefetch/tunnel           │
-│  │  (return HTTP result, or CDP if needed)            │
+│  ├─ Non-search HTTPS → prefetch tunnel                │
+│  │  (return prefetch result, or CDP if needed)        │
+│  ├─ Non-search HTTP → 403 unless explicitly allowed   │
 │  ├─ CDP client → ws://127.0.0.1:9224                  │
 │  └─ Returns {success, data: {markdown}} envelope      │
 └─────────┬────────────────────────────────────────────┘
@@ -822,7 +833,8 @@ but that is not the recommended wrapper setup.
 ┌──────────────────────────────────────────────────────┐
 │  Target website (arbitrary URL)                      │
 │  (search pages and escalated pages use obscura;       │
-│   PDFs and usable non-search HTTP bypass obscura)    │
+│   PDFs and usable non-search HTTPS bypass obscura;   │
+│   HTTP URLs blocked unless explicitly allowed)       │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -861,9 +873,10 @@ but that is not the recommended wrapper setup.
 - Two provider options with different capabilities:
   - **FirecrawlClient (recommended)**: Through CRW. Search pages and pages
     that CRW classifies as blocked, thin, or JS-required go through
-    CDP/shim/Obscura; usable non-search HTTP/HTTPS responses can be returned
-    from CRW's HTTP prefetch without Obscura. PDFs are handled natively by
-    CRW's `pdf_inspector` and bypass Obscura entirely.
+    CDP/shim/Obscura; usable non-search HTTPS responses can be returned from
+    CRW's HTTP prefetch without Obscura. Plain HTTP URLs are blocked by
+    default unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`. PDFs are handled
+    natively by CRW's `pdf_inspector` and bypass Obscura entirely.
   - **OnyxWebCrawler (fallback if no provider is configured)**: Direct HTTP via
     `ssrf_safe_get`, handles PDFs natively (PyPDF2), optional Playwright
     fallback for Cloudflare/bot-challenge 403s; no stealth on the initial HTTP
@@ -960,7 +973,7 @@ Onyx open_url → FirecrawlClient.contents(urls)
   → CRW scrape endpoint
     ├─ HTTP prefetch through prefetch-blocking proxy
     │   ├─ search URL → local 403 → auto-escalate to CDP
-    │   ├─ plain HTTP non-search URL → forwarded; may return HTTP result
+    │   ├─ plain HTTP non-search URL → 403 unless explicitly allowed
     │   ├─ HTTPS non-search URL → CONNECT tunnel; may return HTTP result
     │   │   or CDP if blocked/thin/JS-needed
     │   ├─ application/pdf → raw bytes extracted, PDF pipeline runs
@@ -993,13 +1006,17 @@ In this deployment the prefetch goes through the prefetch-blocking proxy:
   markdown via CRW's readability + markdown pipeline. See §1.7 for the
   prefetch-blocking proxy design.
 
-- **Other HTTP/HTTPS pages**: The proxy forwards the prefetch. If CRW decides
-  the response is blocked, thin, or JS-required, it escalates to the CDP
-  renderer. If the response is usable, CRW can return it directly without
-  Obscura. For HTTPS non-search URLs this was already true when the
-  prefetch-blocking proxy allowed CONNECT tunnels for PDF/content detection;
-  the current proxy behavior also allows plain HTTP non-search prefetches.
-  See [Known Limitations](#known-limitations).
+- **Other HTTPS pages**: The proxy forwards the prefetch through a CONNECT
+  tunnel. If CRW decides the response is blocked, thin, or JS-required, it
+  escalates to the CDP renderer. If the response is usable, CRW can return it
+  directly without Obscura. For HTTPS non-search URLs this was already true
+  when the prefetch-blocking proxy allowed CONNECT tunnels for PDF/content
+  detection. See [Known Limitations](#known-limitations).
+
+- **Other plain HTTP pages**: Blocked by default before any upstream request is
+  opened. The response body tells the agent to use an `https://` URL instead.
+  If `ONYX_AGENT_ALLOW_HTTP_URLS=true`, the proxy forwards the request and the
+  same "usable HTTP result can bypass Obscura" limitation applies.
 
 - **PDF documents**: When the HTTP prefetch returns `Content-Type:
   application/pdf`, CRW **bypasses obscura entirely**
@@ -1103,7 +1120,8 @@ reaching the CDP layer. For HTML, the requested format controls the output:
 `FirecrawlClient`. Search-engine scrapes are forced to CDP/Obscura by the
 prefetch-blocking proxy. `open_url` scrapes benefit from the CDP shim's
 `waitUntil` injection only when CRW escalates to browser rendering; usable
-non-search HTTP-prefetch results can return without reaching CDP.
+non-search HTTPS-prefetch results can return without reaching CDP. Explicitly
+allowed plain HTTP prefetches behave the same way.
 
 ---
 
@@ -1327,13 +1345,13 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CRW_RENDERER__MODE` | `chrome` | Selects which JS renderers are in the ladder (chrome only, not lightpanda). |
-| `CRW_RENDERER__RENDER_JS_DEFAULT` | (unset) | Auto mode: HTTP prefetch first, escalate to CDP on failure/403, blocked/thin content, or JS-required detection. The prefetch-blocking proxy returns 403 for configured search-engine hosts, forcing CRW to escalate to obscura for SERPs. Non-search pages may return from the HTTP prefetch when usable. Do not set this to `true`; forced render-js mode propagates prefetch failures instead of using the auto-mode escalation path. |
+| `CRW_RENDERER__RENDER_JS_DEFAULT` | (unset) | Auto mode: HTTP prefetch first, escalate to CDP on failure/403, blocked/thin content, or JS-required detection. The prefetch-blocking proxy returns 403 for configured search-engine hosts, forcing CRW to escalate to obscura for SERPs. Non-search HTTPS pages may return from the HTTP prefetch when usable; plain HTTP pages are blocked unless explicitly allowed. Do not set this to `true`; forced render-js mode propagates prefetch failures instead of using the auto-mode escalation path. |
 | `HTTPS_PROXY` / `HTTP_PROXY` | `http://127.0.0.1:3128` | Routes CRW's reqwest HTTP prefetch through the prefetch-blocking proxy without setting CRW's `REQUEST_PROXY` task-local. This avoids per-request `Target.createBrowserContext {proxyServer}` and its hardcoded 2s timeout. |
 | `NO_PROXY` | `127.0.0.1,localhost,::1` | Keeps CRW loopback traffic, including the CDP shim WebSocket and health checks, direct. |
 | `CRW_CRAWLER__PROXY` | (unset) | Intentionally not used for the prefetch-blocking proxy. Setting it would make CRW include `proxyServer` in `Target.createBrowserContext`; the shim can strip this as a safety net, but the compose default avoids that path entirely. |
 | `CRW_RENDERER__CHROME__WS_URL` | `ws://127.0.0.1:9224/devtools/browser` | CDP shim endpoint (not obscura directly) |
 | `CRW_RENDERER__CHROME_TIMEOUT_MS` | `50000` | Per-page navigation timeout for the chrome (obscura) renderer tier. Must be ≥ `OBSCURA_NAV_TIMEOUT_MS` so CRW's deadline doesn't fire before obscura's nav timeout. |
-| `CRW_RENDERER__HTTP_TIMEOUT_MS` | `60000` | HTTP prefetch timeout. CRW always runs an HTTP prefetch before the CDP renderer (even with `RENDER_JS_DEFAULT=true`) to check Content-Type. PDFs and usable non-search HTTP results can bypass obscura. Ceiling, not delay — completes in 1-3s on happy path. Contributes to `ladder_min`. No happy-path impact. |
+| `CRW_RENDERER__HTTP_TIMEOUT_MS` | `60000` | HTTP prefetch timeout. CRW always runs an HTTP prefetch before the CDP renderer (even with `RENDER_JS_DEFAULT=true`) to check Content-Type. PDFs and usable non-search HTTPS results can bypass obscura; plain HTTP results can only do so if `ONYX_AGENT_ALLOW_HTTP_URLS=true`. Ceiling, not delay — completes in 1-3s on happy path. Contributes to `ladder_min`. No happy-path impact. |
 | `CRW_RENDERER__CHROME_NAV_BUDGET_MS` | `48000` | Post-navigate budget for the chrome renderer tier. This races CRW's post-navigation work after `Page.loadEventFired`: SPA selector poll, content stability, challenge retry, and DOM extraction. |
 | `CRW_REQUEST__DEADLINE_MS_DEFAULT` | `300000` | Baseline per-request deadline (ms). With `auto_extend_deadline_for_ladder=true` (default), effective deadline is `max(this, ladder_min=~138s)` = 300s. Accommodates multi-request scenarios (multiple search query strings, `SEARXNG_ROUND_ROBIN=false` parallel fan-out, GitHub URL crawling) by giving queued requests in the per-host rate limiter enough budget to complete while serializing per-host to avoid 429s. No happy-path impact. See §1.6.1. |
 | `CRW_CRAWLER__REQUESTS_PER_SECOND` | `0.33` | Per-host rate limit (~3s interval). The rate-limit sleep is deducted from the request's deadline budget before navigation begins. See §1.6.1 for the compounding interaction with queued same-host requests. |
@@ -1366,6 +1384,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
+| `ONYX_AGENT_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs in the prefetch proxy and CDP shim. When false, HTTP fetches fail closed with a message telling the agent to use HTTPS. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_BLOCK_INTERNAL_HOSTS` | `localhost,host.docker.internal` | Comma-separated internal hostnames to block by name without opening an upstream request. Subdomains are blocked too; single-label Docker-style hostnames are always blocked. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
@@ -1432,13 +1451,14 @@ CRW's raw HTTP prefetch reaches those hosts. That guarantee is intentionally
 scoped to search providers listed in `PREFETCH_BLOCK_HOSTS`.
 
 For arbitrary non-search `open_url` URLs, CRW's first step is still a normal
-HTTP prefetch through reqwest. The prefetch-blocking proxy forwards those
+HTTP prefetch through reqwest. The prefetch-blocking proxy handles those
 requests after destination validation:
 
-- plain HTTP non-search URLs are forwarded as HTTP requests;
+- plain HTTP non-search URLs are blocked by default unless
+  `ONYX_AGENT_ALLOW_HTTP_URLS=true`;
 - HTTPS non-search URLs are allowed as CONNECT tunnels;
-- if `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, those forwarded requests use that
-  upstream proxy;
+- if `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, forwarded HTTPS requests and
+  explicitly allowed HTTP requests use that upstream proxy;
 - if `MYST_VPN_ENABLED=true` and no explicit proxy is set, they leave through
   the Mysterium namespace;
 - if `MYST_VPN_ENABLED=false` and no explicit proxy is set, they leave through
@@ -1453,17 +1473,19 @@ apply to every `open_url` HTML page.
 
 This is not a new HTTPS behavior. Non-search HTTPS URLs have long used HTTP
 CONNECT through the prefetch proxy so CRW can perform its end-to-end TLS
-prefetch and detect PDFs/content type without MITM. The current simplified
-proxy behavior extends the same "usable prefetch can be final" property to
-plain HTTP non-search URLs as well. The search-engine path is still different:
-configured search-engine hosts receive local `403` responses and therefore
-escalate to Obscura without a raw prefetch reaching the search provider.
+prefetch and detect PDFs/content type without MITM. Plain HTTP URLs are now
+blocked by default before this limitation can apply; if an operator sets
+`ONYX_AGENT_ALLOW_HTTP_URLS=true`, the same "usable prefetch can be final"
+property applies to those HTTP URLs too. The search-engine path is still
+different: configured search-engine hosts receive local `403` responses and
+therefore escalate to Obscura without a raw prefetch reaching the search
+provider.
 
 Do not describe the Firecrawl `open_url` path as "all HTML goes through
 Obscura." The accurate statement is: `open_url` goes through CRW; configured
 search pages and pages CRW decides need browser rendering go through
-CDP/Obscura; usable non-search HTTP/HTTPS responses and PDFs can bypass
-Obscura.
+CDP/Obscura; usable non-search HTTPS responses, explicitly allowed HTTP
+responses, and PDFs can bypass Obscura.
 
 ### CRW MIME Probe Uses GET
 
@@ -1482,10 +1504,11 @@ though, the same MIME probe can create a real double-hit:
 
 The prefetch-blocking proxy removes this double-hit for configured search
 engine hosts by returning a local `403` before the reqwest fetch leaves the
-stack. It does not remove the behavior for normal non-search HTTP/HTTPS pages.
-Those pages may receive only the preliminary reqwest `GET` when CRW considers
-the result usable, or may receive both the reqwest `GET` and a browser
-navigation if CRW escalates afterward.
+stack. It does not remove the behavior for normal non-search HTTPS pages, or
+for plain HTTP pages when `ONYX_AGENT_ALLOW_HTTP_URLS=true`. Those pages may
+receive only the preliminary reqwest `GET` when CRW considers the result
+usable, or may receive both the reqwest `GET` and a browser navigation if CRW
+escalates afterward.
 
 The correct fix belongs upstream in CRW: when it only needs MIME/PDF
 detection, it should prefer a bounded `HEAD` request where the server supports

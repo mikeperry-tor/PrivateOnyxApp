@@ -197,7 +197,8 @@ The wrapper's `crw/prefetch_blocking_proxy.py` exists to shape CRW's HTTP
 prefetch behavior:
 
 - known search-engine hosts receive `403` without an upstream request;
-- non-search plain HTTP requests are forwarded;
+- non-search plain HTTP requests receive `403` by default with a message
+  telling the caller to use HTTPS, unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`;
 - non-search `CONNECT` requests are tunneled.
 
 The proxy listens on `0.0.0.0:3128` inside the shared namespace so CRW can use
@@ -227,6 +228,9 @@ This proxy validation aligns with the CRW and Obscura protections:
 - CRW rejects internal `open_url` scrape targets at target validation.
 - Obscura's private-network block prevents rendered pages from reaching
   `myst-client:3128` by default.
+- The CDP shim applies the same `ONYX_AGENT_ALLOW_HTTP_URLS=false` default to
+  `Page.navigate` and `Target.createTarget`, so cleartext HTTP browser
+  navigations are also rejected before reaching Obscura.
 
 However, any network-enabled process already running inside the shared
 namespace can call the proxy directly. That includes network-enabled
@@ -238,7 +242,8 @@ When `docker-compose.proxy.yml` is active, the code-interpreter patch points
 `ONYX_AGENT_OUTBOUND_PROXY_URL` is a SOCKS URL. That gives Python `urllib` an
 ordinary HTTP proxy endpoint while the sidecar adapts upstream egress to SOCKS.
 The same destination validation applies, and configured search-engine hosts
-still receive `403`.
+still receive `403`. Plain HTTP URLs still receive the HTTPS guidance error
+unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`.
 
 This proxy should not be treated as the only boundary for a namespace shared
 with untrusted code. If code-interpreter networking is enabled, executor pods

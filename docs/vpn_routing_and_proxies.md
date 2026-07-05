@@ -255,18 +255,22 @@ step on port `3128`:
 - known search engine hosts receive an immediate 403 with no upstream request
 - internal/private destinations receive 403 without opening any `CONNECT` or
   HTTP forwarding path
-- non-search plain HTTP requests are forwarded to the target
+- non-search plain HTTP requests receive 403 by default with a message telling
+  the caller to use HTTPS, unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`
 - non-search HTTPS `CONNECT` requests are tunneled to the target
 
-Forwarded non-search prefetches can be the final CRW result when CRW considers
-the HTTP response usable. In those cases `open_url` does not reach the CDP shim
-or Obscura. Search-engine hosts remain different: their prefetches are blocked
-locally so CRW escalates to the browser renderer without the search provider
-seeing the raw reqwest request.
+Forwarded non-search HTTPS prefetches, and explicitly allowed plain HTTP
+prefetches, can be the final CRW result when CRW considers the HTTP response
+usable. In those cases `open_url` does not reach the CDP shim or Obscura.
+Search-engine hosts remain different: their prefetches are blocked locally so
+CRW escalates to the browser renderer without the search provider seeing the
+raw reqwest request.
 
 When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `prefetch-blocking-proxy` uses it
 for its own upstream connections. That keeps CRW prefetch traffic and
 SOCKS-backed code-interpreter urllib traffic on the same proxy path as obscura.
+Allowed plain HTTP origin requests use absolute-form request targets when the
+upstream is an HTTP or HTTPS proxy; HTTPS requests continue to use CONNECT.
 
 Destination validation applies to literal IP addresses, localhost,
 `host.docker.internal`, and single-label Docker-style names without opening an
@@ -280,7 +284,10 @@ upstream proxy path.
 The CDP shim in `crw/cdp_shim.py` sits between CRW and obscura. Among its
 runtime behaviors, it strips CRW's `proxyServer` field from
 `Target.createBrowserContext`, so the CDP path uses obscura's own `--proxy`
-setting instead of CRW attempting to configure a per-context proxy.
+setting instead of CRW attempting to configure a per-context proxy. It also
+enforces the same `ONYX_AGENT_ALLOW_HTTP_URLS=false` default for CDP browser
+navigations, so an HTTP URL cannot bypass the prefetch-proxy block by
+escalating to Obscura.
 
 ### SearXNG
 

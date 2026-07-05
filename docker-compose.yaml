@@ -281,6 +281,9 @@ services:
       OBSCURA_BROWSER_WAIT_UNTIL_SEARCH: "${OBSCURA_BROWSER_WAIT_UNTIL_SEARCH:-networkidle2}"
       OBSCURA_BROWSER_WAIT_UNTIL_WEB: "${OBSCURA_BROWSER_WAIT_UNTIL_WEB:-load}"
       OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS: "google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com"
+      # Fail closed for cleartext HTTP browser navigations. The prefetch proxy
+      # enforces the same setting before CRW can fetch http:// URLs directly.
+      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
       # Interval for periodic cookie clearing on obscura (seconds). In the
       # normal wrapper path CRW uses Target.createTarget on obscura's default
       # context, so cookies can persist between CDP WebSocket connections.
@@ -336,7 +339,8 @@ services:
   # This proxy intercepts CRW's HTTP prefetch requests:
   #  - Search engine URLs → 403 immediately (no network request)
   #  - Internal/private targets → 403 immediately
-  #  - Other HTTP/HTTPS URLs → forward/tunnel through the configured egress path
+  #  - Other plain HTTP URLs → 403 unless ONYX_AGENT_ALLOW_HTTP_URLS=true
+  #  - Other HTTPS URLs → CONNECT tunnel through the configured egress path
   #
   # CRW is configured with HTTP_PROXY/HTTPS_PROXY pointing at this proxy. We
   # intentionally do not set CRW_CRAWLER__PROXY; if that path is used later,
@@ -363,6 +367,9 @@ services:
       # routes its own upstream requests through this upstream.
       # Supports http://, https://, socks5://, socks5h://
       ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      # Cleartext http:// URL policy. The CDP shim enforces the same setting
+      # for browser navigations after CRW escalates to Obscura.
+      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
       # Comma-separated list of search engine hostnames to block immediately
       # (return 403 without any network request).
       PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
@@ -410,8 +417,9 @@ services:
       # an error or a 403/blocked status. The prefetch-blocking proxy
       # (prefetch-blocking-proxy service on port 3128) intercepts the HTTP
       # prefetch and returns 403 for search-engine URLs, forcing CRW to escalate
-      # to obscura for those pages. Non-search URLs are forwarded through the
-      # configured egress path.
+      # to obscura for those pages. Non-search HTTPS URLs are tunneled through
+      # the configured egress path; plain HTTP URLs are blocked unless
+      # ONYX_AGENT_ALLOW_HTTP_URLS=true.
       #
       # We do NOT set render_js_default=true because that mode runs the HTTP
       # prefetch unconditionally and does NOT escalate to CDP on prefetch
@@ -437,7 +445,8 @@ services:
       # proxyServer in createBrowserContext, no 2s timeout).
       #
       # The proxy returns 403 for search engine URLs, forcing CRW to escalate
-      # to the CDP renderer (obscura). Other HTTP/HTTPS URLs are forwarded.
+      # to the CDP renderer (obscura). Other HTTPS URLs are tunneled. Plain
+      # HTTP URLs are blocked unless ONYX_AGENT_ALLOW_HTTP_URLS=true.
       HTTPS_PROXY: "http://127.0.0.1:3128"
       HTTP_PROXY: "http://127.0.0.1:3128"
       # Exclude loopback from the proxy so CRW's CDP WebSocket connection

@@ -36,7 +36,13 @@ headless browser) to provide:
    prevent stale cookies from interfering with searches and to limit
    cross-query tracking surface.
 
-4. **Unsupported method error suppression** — Obscura doesn't implement
+4. **Plain HTTP navigation blocking** — By default,
+   ``ONYX_AGENT_ALLOW_HTTP_URLS=false`` makes the shim reject CDP
+   ``Page.navigate`` and ``Target.createTarget`` calls whose target URL is
+   ``http://``. This mirrors the prefetch-blocking proxy policy so a CRW
+   escalation cannot silently fetch cleartext HTTP in the browser path.
+
+5. **Unsupported method error suppression** — Obscura doesn't implement
    some CDP methods (e.g. ``Page.stopLoading``). The shim downgrades these
    non-fatal errors from WARNING to DEBUG to reduce log noise.
 
@@ -47,7 +53,7 @@ Architecture::
 CRW's ``CRW_RENDERER__CHROME__WS_URL`` points at ``ws://127.0.0.1:9224``
 instead of ``ws://127.0.0.1:9222``.
 
-All other CDP traffic is forwarded transparently in both directions.
+Other CDP traffic is forwarded transparently in both directions.
 All unexpected behavior is logged — no exceptions are silently swallowed.
 """
 
@@ -116,6 +122,19 @@ WAIT_UNTIL_SEARCH_HOSTS = frozenset(
         "google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com",
     ).split(",")
     if h.strip()
+)
+# Plain HTTP URLs are blocked by default. This mirrors the prefetch-blocking
+# proxy policy so a CRW fallback from prefetch to CDP cannot silently fetch
+# http:// pages in the browser path.
+ALLOW_HTTP_URLS = os.environ.get("ONYX_AGENT_ALLOW_HTTP_URLS", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+HTTP_URL_BLOCK_MESSAGE = (
+    "HTTP URLs are disabled by ONYX_AGENT_ALLOW_HTTP_URLS=false. "
+    "Use an https:// URL instead."
 )
 # Interval for periodic cookie clearing (seconds). 0 = disabled.
 # In the normal wrapper path, CRW creates targets on obscura's default CDP
@@ -271,6 +290,41 @@ class CdpProxy:
         self.upstream_ws: Any = None
         self.pending_commands: dict[int, dict[str, Any]] = {}
 
+    async def _send_cdp_error(
+        self,
+        msg_id: Any,
+        message: str,
+        *,
+        code: int = -32000,
+    ) -> None:
+        """Send a CDP error response directly to CRW."""
+        if msg_id is None:
+            logger.warning("Cannot send CDP error without command id: %s", message)
+            return
+        await self.crw_ws.send(
+            json.dumps(
+                {
+                    "id": msg_id,
+                    "error": {
+                        "code": code,
+                        "message": message,
+                    },
+                }
+            )
+        )
+
+    def _blocked_http_url_message(self, url: Any) -> str | None:
+        """Return a policy error for blocked http:// URLs, else None."""
+        if ALLOW_HTTP_URLS or not isinstance(url, str):
+            return None
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return None
+        if parsed.scheme.lower() != "http":
+            return None
+        return f"{HTTP_URL_BLOCK_MESSAGE} Blocked URL: {_redact_url(url)}"
+
     async def run(self) -> None:
         """Connect to obscura and run bidirectional proxy loops."""
         last_error: Exception | None = None
@@ -405,6 +459,20 @@ class CdpProxy:
         if not method:
             await self.upstream_ws.send(raw_msg)
             return
+
+        if method in {"Page.navigate", "Target.createTarget"} and isinstance(
+            params, dict
+        ):
+            blocked_message = self._blocked_http_url_message(params.get("url"))
+            if blocked_message:
+                logger.info(
+                    "Blocked %s id=%s url=%s (HTTP URLs disabled)",
+                    method,
+                    msg_id,
+                    _redact_url(params.get("url")),
+                )
+                await self._send_cdp_error(msg_id, blocked_message)
+                return
 
         if TRACE_CDP and isinstance(msg_id, int):
             trace_url = params.get("url") if isinstance(params, dict) else None
@@ -794,10 +862,11 @@ async def main() -> None:
     )
     logger.info(
         "Config: strip_stealth=%s, wait_until_search=%s, wait_until_web=%s, "
-        "strip_proxy=%s, clear_state_interval=%ds, trace=%s",
+        "allow_http_urls=%s, strip_proxy=%s, clear_state_interval=%ds, trace=%s",
         STRIP_STEALTH_JS,
         WAIT_UNTIL_SEARCH or "(disabled)",
         WAIT_UNTIL_WEB or "(disabled)",
+        ALLOW_HTTP_URLS,
         STRIP_PROXY_SERVER,
         CLEAR_STATE_INTERVAL_SECONDS,
         TRACE_CDP,
