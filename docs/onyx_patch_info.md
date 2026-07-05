@@ -1249,9 +1249,11 @@ The Makefile orchestrates upgrade and runtime flow:
 - `upgrade-python-deps` upgrades the hashed runtime Python locks for
   `embedserv`, `cdp-shim`, and code-interpreter SOCKS proxy support from their
   `requirements.in` files. Most package inputs are unconstrained so this target
-  can move them forward; `embedserv/requirements.in` keeps `typer==0.20.0`
-  pinned because newer Typer releases trigger a `sys.exit()` handler traceback
-  in the local embedserv CLI path.
+  can move them forward; `embedserv/requirements.in` keeps
+  `transformers<5.13` because transformers 5.13 breaks `mlx-lm` 0.31.3's
+  tokenizer registration during embedserv handler startup, and keeps
+  `typer==0.20.0` because newer Typer releases trigger a `sys.exit()` handler
+  traceback in the local embedserv CLI path.
 
 `install-with-container-bin.sh` wraps the upstream install script so it can run
 through the selected container engine instead of assuming `docker`. The local

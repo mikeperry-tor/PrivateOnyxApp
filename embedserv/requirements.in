@@ -1,6 +1,9 @@
 mlx-openai-server
 mlx-embeddings
 huggingface_hub
+# Compatibility pin: transformers 5.13 changed AutoTokenizer.register()
+# handling in a way that breaks mlx-lm 0.31.3's NewlineTokenizer registration.
+transformers<5.13
 # Compatibility pin: newer Typer releases trigger a sys.exit() handler
 # traceback in the local embedserv CLI path. Re-test before unpinning.
 typer==0.20.0

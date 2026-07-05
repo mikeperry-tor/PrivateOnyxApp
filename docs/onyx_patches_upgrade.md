@@ -1231,6 +1231,8 @@ Upgrade notes:
 - `make upgrade` includes `upgrade-python-deps`, so normal stack upgrades also
   refresh the Python locks. Most runtime Python inputs are unconstrained to
   allow upgrades; `embedserv/requirements.in` intentionally pins
+  `transformers<5.13` because transformers 5.13 breaks `mlx-lm` 0.31.3's
+  tokenizer registration during embedserv handler startup, and pins
   `typer==0.20.0` because newer Typer releases trigger a `sys.exit()` handler
   traceback in the local embedserv CLI path.
 - If a runtime Python dependency input changes, run `make upgrade-python-deps`

@@ -3248,10 +3248,11 @@ tqdm==4.68.3 \
     #   openai
     #   outlines
     #   transformers
-transformers==5.13.0 \
-    --hash=sha256:8adbc1d20bd5463cd6876b2eb7cb31971e1065788e7dc6bc12bab597a7c504b7 \
-    --hash=sha256:940c1428e42a4238f9ccf0cd41e63c590701aa63c19fd2ce3d7d602222d68495
+transformers==5.12.1 \
+    --hash=sha256:2a5e109d2021265df7098ffbb738295acaf5ad256f12cbc586db2ea4dcbb1a8a \
+    --hash=sha256:679ee731c8225347889ad4fb3b2c926a62e9da3b7d284e9d12c791da7272466b
     # via
+    #   -r embedserv/requirements.in
     #   mflux
     #   mlx-embeddings
     #   mlx-lm

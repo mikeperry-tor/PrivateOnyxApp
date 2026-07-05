@@ -333,9 +333,11 @@ make embedserv-serve
 `--require-hashes`. To upgrade package versions during a stack upgrade, edit
 `embedserv/requirements.in` if needed and run `make upgrade-python-deps`.
 Most embedserv requirements are intentionally unconstrained so that target can
-float them forward. `typer==0.20.0` is a compatibility pin: newer Typer
-releases currently trigger a `sys.exit()` handler traceback in the local
-embedserv CLI path, so re-test that behavior before unpinning.
+float them forward. Two inputs are compatibility pins. `transformers<5.13`
+avoids a `mlx-lm` tokenizer-registration failure during handler startup:
+`'str' object has no attribute '__module__'`. `typer==0.20.0` avoids a
+`sys.exit()` handler traceback in the local embedserv CLI path. Re-test the
+matching behavior before unpinning either dependency.
 
 The default model is:
 
