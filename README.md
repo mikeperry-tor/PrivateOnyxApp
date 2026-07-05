@@ -370,8 +370,11 @@ Set `ONYX_AGENT_OUTBOUND_PROXY_URL` in `.env.wrapper` to route internet egress f
 Accepts any scheme:
 
 ```bash
-# HTTP / HTTPS proxy
+# HTTP proxy
 ONYX_AGENT_OUTBOUND_PROXY_URL="http://user:pass@proxy.example.com:8080"
+
+# HTTPS proxy
+ONYX_AGENT_OUTBOUND_PROXY_URL="https://user:pass@proxy.example.com:8443"
 
 # SOCKS5 proxy
 ONYX_AGENT_OUTBOUND_PROXY_URL="socks5://proxy.example.com:1080"

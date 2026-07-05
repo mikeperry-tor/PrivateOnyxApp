@@ -243,7 +243,9 @@ When `docker-compose.proxy.yml` is active, the code-interpreter patch points
 ordinary HTTP proxy endpoint while the sidecar adapts upstream egress to SOCKS.
 The same destination validation applies, and configured search-engine hosts
 still receive `403`. Plain HTTP URLs still receive the HTTPS guidance error
-unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`.
+unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`. If the configured upstream is an
+`https://` proxy, this adapter verifies the proxy certificate, uses SNI, and
+requires TLS 1.3 by default when the Python/OpenSSL runtime supports it.
 
 This proxy should not be treated as the only boundary for a namespace shared
 with untrusted code. If code-interpreter networking is enabled, executor pods

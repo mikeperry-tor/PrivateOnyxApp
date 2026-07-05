@@ -202,6 +202,7 @@ It accepts HTTP, HTTPS, SOCKS5, and SOCKS5h URLs, for example:
 
 ```text
 ONYX_AGENT_OUTBOUND_PROXY_URL="http://user:pass@proxy.example.com:8080"
+ONYX_AGENT_OUTBOUND_PROXY_URL="https://user:pass@proxy.example.com:8443"
 ONYX_AGENT_OUTBOUND_PROXY_URL="socks5://proxy.example.com:1080"
 ONYX_AGENT_OUTBOUND_PROXY_URL="socks5h://host.docker.internal:9150"
 ```
@@ -210,6 +211,13 @@ When `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, `docker-compose.proxy.yml` is not
 is non-empty, the override threads the proxy through services that perform
 external fetches. If those services are also in the Mysterium namespace, their
 connection to the upstream proxy leaves through the VPN tunnel.
+
+For the local `prefetch-blocking-proxy` adapter, `https://` upstream proxies
+are contacted with certificate verification and explicit SNI. The adapter
+requires TLS 1.3 on that proxy leg by default when the Python/OpenSSL runtime
+supports TLS 1.3. Obscura and SearXNG use their own native proxy stacks; those
+stacks generally negotiate the highest TLS version supported by their runtime
+and the upstream proxy.
 
 The Makefile also derives `ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED`. If `ONYX_AGENT_OUTBOUND_PROXY_URL` contains
 `host.docker.internal`, the Makefile resolves it to an IP address and passes
@@ -271,6 +279,9 @@ for its own upstream connections. That keeps CRW prefetch traffic and
 SOCKS-backed code-interpreter urllib traffic on the same proxy path as obscura.
 Allowed plain HTTP origin requests use absolute-form request targets when the
 upstream is an HTTP or HTTPS proxy; HTTPS requests continue to use CONNECT.
+For an `https://` upstream proxy, the proxy first establishes the verified TLS
+connection to the upstream proxy, then sends either the absolute-form HTTP
+request or the HTTPS `CONNECT` request inside that TLS connection.
 
 Destination validation applies to literal IP addresses, localhost,
 `host.docker.internal`, and single-label Docker-style names without opening an

@@ -651,11 +651,14 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
      response is usable, CRW may return it without visiting the page in
      Obscura. For HTTP/HTTPS upstream proxies, allowed HTTP origin requests are
      forwarded with an absolute-form request target rather than a CONNECT
-     tunnel.
+     tunnel. For an `https://` upstream proxy, that absolute-form request is
+     sent inside the verified TLS connection to the proxy.
    - **Other HTTPS URLs**: accepts the CONNECT tunnel and connects through
-     `ONYX_AGENT_OUTBOUND_PROXY_URL` if set. If the HTTP result is
-     usable, CRW may return it without visiting the page in Obscura. If the
-     result is blocked, thin, or JS-required, CRW may then escalate to CDP.
+     `ONYX_AGENT_OUTBOUND_PROXY_URL` if set. For an `https://` upstream proxy,
+     the CONNECT request is sent inside the verified TLS connection to the
+     proxy. If the HTTP result is usable, CRW may return it without visiting
+     the page in Obscura. If the result is blocked, thin, or JS-required, CRW
+     may then escalate to CDP.
 4. The CDP shim strips `proxyServer` from `Target.createBrowserContext` as a
    safety net. In the compose default, CRW uses `HTTP_PROXY`/`HTTPS_PROXY`
    rather than `CRW_CRAWLER__PROXY`, so `REQUEST_PROXY` is not set and CRW
@@ -673,6 +676,10 @@ When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set (e.g., Tor SOCKS proxy), the prefetc
 routes its own upstream requests through `ONYX_AGENT_OUTBOUND_PROXY_URL`. This
 keeps CRW prefetch and code-interpreter urllib traffic on the same proxy path
 as obscura.
+
+For `https://` upstream proxies, the prefetch-blocking proxy verifies the
+proxy certificate, sends SNI for the proxy host, and requires TLS 1.3 by
+default when the Python/OpenSSL runtime supports it.
 
 The full service-by-service `ONYX_AGENT_OUTBOUND_PROXY_URL` behavior, including SearXNG settings
 generation and code-interpreter executor pod caveats, is documented in
@@ -714,8 +721,9 @@ For plain HTTP URLs, the proxy applies the same search-engine and
 internal/private destination blocks, then blocks the request unless
 `ONYX_AGENT_ALLOW_HTTP_URLS=true`. When HTTP is explicitly allowed, direct and
 SOCKS paths use normal origin-form forwarding, while HTTP/HTTPS upstream
-proxies receive absolute-form HTTP requests. As with HTTPS, an explicitly
-allowed usable HTTP result can be returned by CRW without Obscura.
+proxies receive absolute-form HTTP requests. HTTPS upstream proxies receive
+that request inside the verified TLS connection to the proxy. As with HTTPS, an
+explicitly allowed usable HTTP result can be returned by CRW without Obscura.
 
 **Keeping search-engine host lists aligned:**
 

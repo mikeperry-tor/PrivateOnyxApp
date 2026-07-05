@@ -89,6 +89,16 @@ LISTEN_PORT = int(os.environ.get("PREFETCH_PROXY_PORT", "3128"))
 # When empty, requests go direct (through the VPN namespace).
 UPSTREAM_PROXY = os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
 
+# HTTPS upstream proxies use normal certificate verification and explicit SNI.
+# When the runtime supports TLS 1.3, require it for the proxy leg so
+# "https://" proxy credentials and CONNECT metadata are not sent over older
+# TLS versions. Runtimes without TLS 1.3 support fall back to the default
+# verified context rather than failing at import time.
+HTTPS_PROXY_REQUIRE_TLS13 = (
+    os.environ.get("ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13", "true").lower()
+    in ("1", "true", "yes", "on")
+)
+
 # Plain HTTP URLs are blocked by default. This is intentionally separate from
 # destination validation: even public HTTP hosts leak path/query contents in
 # cleartext and should not be fetched by an LLM web tool unless the operator
@@ -335,6 +345,20 @@ def _parse_proxy_url(proxy_url: str) -> tuple[str, str, int, str | None, str | N
     return scheme, host, port, username, password
 
 
+def _https_proxy_ssl_context() -> ssl.SSLContext:
+    """Build a verified TLS context for HTTPS upstream proxy connections."""
+    ssl_ctx = ssl.create_default_context()
+    if HTTPS_PROXY_REQUIRE_TLS13:
+        try:
+            ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+        except (AttributeError, ValueError):
+            logger.warning(
+                "Python/OpenSSL runtime does not expose TLS 1.3 controls; "
+                "using the default verified TLS context for HTTPS upstream proxy"
+            )
+    return ssl_ctx
+
+
 async def _connect_via_upstream(
     target_host: str, target_port: int
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
@@ -532,11 +556,25 @@ async def _open_http_proxy_connection(
     scheme: str,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Open a connection to an HTTP/HTTPS upstream proxy."""
-    ssl_ctx = ssl.create_default_context() if scheme == "https" else None
-    return await asyncio.wait_for(
-        asyncio.open_connection(proxy_host, proxy_port, ssl=ssl_ctx),
+    ssl_ctx = _https_proxy_ssl_context() if scheme == "https" else None
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_connection(
+            proxy_host,
+            proxy_port,
+            ssl=ssl_ctx,
+            server_hostname=proxy_host if ssl_ctx else None,
+        ),
         timeout=TUNNEL_CONNECT_TIMEOUT,
     )
+    if ssl_ctx:
+        ssl_object = writer.get_extra_info("ssl_object")
+        logger.debug(
+            "Connected to HTTPS upstream proxy %s:%d with %s",
+            proxy_host,
+            proxy_port,
+            ssl_object.version() if ssl_object else "unknown TLS version",
+        )
+    return reader, writer
 
 
 async def _open_plain_http_forward_connection(
