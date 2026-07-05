@@ -44,6 +44,9 @@ configuration:
   across all prior turns.
 - Keep Onyx's per-call user reminder from trailing after assistant/tool history
   when reasoning fields must remain visible to provider chat templates.
+- Keep coding-agent final answer synthesis compatible with OpenAI-compatible
+  providers by flattening completed tool history before the final no-tool LLM
+  call.
 - Optionally preserve prior tool-call outputs across chat turns for research
   workflows that prefer recall over prompt compactness.
 - Keep internal-search result count and content budgets small enough for local
@@ -79,6 +82,7 @@ settings.
 | LLM context window override env | `api_server` | Compose maps `ONYX_AGENT_LLM_MAX_TOKENS` to upstream `GEN_AI_MAX_TOKENS`; `sitecustomize` makes it win before DB/provider limits | First-class wrapper/admin override for model context window |
 | Assistant reasoning preservation | `api_server` | `sitecustomize` carries active-turn saved/live assistant reasoning into LiteLLM `reasoning_content` fields by default; optional all-history mode preserves older turns too | Native chat-history support for provider reasoning fields |
 | Chat reminder placement for reasoning preservation | `api_server` | `sitecustomize` keeps Onyx's user-role reminder adjacent to the latest user request instead of trailing after assistant/tool history | Reminder placement that does not invalidate provider reasoning templates |
+| Coding-agent final answer synthesis | `api_server` | `sitecustomize` flattens structured tool history before the no-tool final-answer call and returns recent tool output if finalization still fails | Final-answer path that does not send tool-call protocol messages to non-tool calls |
 | Prior tool-result preservation | `api_server` | `sitecustomize` optionally replaces Onyx's previous-tool-response placeholder with saved tool responses | Per-agent/admin setting for how much previous tool output to keep |
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
 | Internal search content caps | `api_server` | `sitecustomize` optionally wraps result formatting; full compose passes wrapper env aliases | Admin/env settings for per-result and aggregate tool-response budgets |
@@ -235,6 +239,9 @@ boundary lines named `litellm_openai_transform_request` and
 `litellm_openai_async_transform_request`, plus outbound HTTP boundary lines
 named `httpx_outbound_chat_completions` and
 `httpx_async_outbound_chat_completions` when those paths are exercised.
+`_CODING_AGENT_FINAL_TRACE_ENABLED` emits one metadata-only line for the
+flattened coding-agent final-answer request shape, including role sequence,
+tool-argument omission, character counts, and a short transcript hash.
 `_REASONING_TRACE_LITELLM_DEBUG_ENABLED` additionally undoes Onyx's LiteLLM
 debug suppression and calls LiteLLM's debug hook; only use it during controlled
 local validation because LiteLLM debug logs can include full request/response
@@ -246,14 +253,10 @@ Local files:
 
 - `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
 - `onyx/patches/sitecustomize_base/sitecustomize.py`
-- `onyx/patches/sitecustomize/sitecustomize.py`
-- `docker-compose.yaml`
-- `.env.wrapper.example`
 
 Onyx source areas:
 
 - `backend/onyx/chat/llm_loop.py`
-- `backend/onyx/chat/llm_step.py`
 
 ### Why this is needed
 
@@ -271,13 +274,12 @@ removes them before model execution.
 
 ### How it modifies Onyx
 
-This change is always applied by the base API-server `sitecustomize` patch. It
-is intentionally independent of `ONYX_AGENT_PRESERVE_TURN_REASONING` and
-`ONYX_AGENT_PRESERVE_ALL_REASONING`, because the trailing user-role reminder is
-an ordering/template-compatibility problem even when reasoning fields are not
-being preserved.
+This change is applied by default by the base API-server `sitecustomize` patch.
+The implementation still has an internal developer switch,
+`_REASONING_REMINDER_REORDER_ENABLED`, so upgrade debugging can compare against
+upstream ordering, but the wrapper default is `true`.
 
-The patch rewrites
+When enabled, the patch rewrites
 `llm_loop.construct_message_history()` so any `USER_REMINDER` is appended
 immediately after the most recent real user message and before
 `messages_after_last_user` assistant/tool history. The reminder remains a
@@ -584,12 +586,46 @@ the coding-agent prompt constants by value. If the order is reversed, startup
 logs can claim that `CODING_AGENT_PROMPT` was rewritten while the imported
 coding-agent module still tells the LLM that the sandbox is network-isolated.
 
-The wrapper also patches the coding-agent final-answer step. Upstream catches
-any exception in `run_coding_agent_call()` and returns `None`, including cases
-where bash commands succeeded but the final no-tool LLM summarization call
-failed. The wrapper wraps `_generate_final_answer()` so finalization failures
-return the recent collected tool output with a clear diagnostic instead of
-dropping the entire coding-agent result.
+The wrapper also patches the coding-agent final-answer step. Upstream passes the
+completed coding-agent transcript, including historical assistant `tool_calls`
+and `TOOL_CALL_RESPONSE` messages, into a final `ToolChoiceOptions.NONE` LLM
+call. Some OpenAI-compatible upstreams accept that structure during the active
+tool loop but reject it when the request no longer declares tools.
+
+The wrapper wraps `_generate_final_answer()` so that, before the no-tool final
+summarizer runs, completed tool-call history is converted into a single
+plain-text user-role transcript message. For this flattened path, the wrapper
+also builds the final two-message request directly instead of calling
+`construct_message_history()`: the transcript and
+`USER_FINAL_ANSWER_QUERY` reminder are merged into one user message after the
+coding-agent final-answer system prompt. It calls the LLM stream interface
+directly with no `tools` argument and with reasoning effort disabled, because
+some OpenAI-compatible GLM/Tinfoil paths reject a no-tool finalizer request that
+still carries an empty `tools: []` member plus no-tool/tool-choice metadata.
+Bash command requests and bash outputs remain visible to the final model, but
+no `role="tool"` messages, assistant `tool_calls`, repeated assistant-only
+transcript messages, trailing separate user-role reminder, preserved reasoning
+fields, or empty tool-definition arrays are sent for that synthesis call.
+
+During Onyx upgrades, re-check whether this is still necessary by inspecting
+`backend/onyx/tools/fake_tools/coding_agent.py`. If `_generate_final_answer()`
+still builds `final_history` from structured coding-agent history and then calls
+`run_llm_step_pkt_generator()` with `tool_definitions=[]` and
+`ToolChoiceOptions.NONE`, the flattening patch is still relevant for
+OpenAI-compatible providers that reject tool protocol messages or empty
+tool-definition arrays in a no-tools request. Confirm the upstream function
+still contains the exact `"LLM failed to produce a final answer"` guard used by
+the wrapper's startup validation, and confirm the wrapper still patches before
+code-agent execution. Also confirm the final flattened request has exactly one
+system message and one user message, no `tools` member, and no `tool_choice`
+member.
+
+Upstream also catches any exception in `run_coding_agent_call()` and returns
+`None`, including cases where bash commands succeeded but the final no-tool LLM
+summarization call failed. The wrapper keeps a fallback around
+`_generate_final_answer()` so finalization failures return the recent collected
+tool output with a clear diagnostic instead of dropping the entire coding-agent
+result.
 
 ### Upstream merge request shape
 

@@ -158,11 +158,16 @@ Patch behavior:
   `httpx_async_outbound_chat_completions` with a metadata-only census of the
   serialized JSON request body leaving the Onyx/LiteLLM process.
 - Contains internal developer switches for reasoning diagnostics. Keep
+  `_REASONING_REMINDER_REORDER_ENABLED` true by default; only flip it during
+  controlled upgrade debugging when comparing wrapper ordering with upstream
+  `construct_message_history()` behavior. Keep
   `_REASONING_TRACE_ENABLED` false in normal operation; when temporarily
   flipped in the patch, it logs metadata-only Onyx reasoning trace events. Keep
   `_REASONING_TRACE_LITELLM_DEBUG_ENABLED` separate and false unless full
   LiteLLM request/response debug logging is intentionally needed for boundary
-  confirmation. Do not expose these as wrapper env preferences.
+  confirmation. Keep `_CODING_AGENT_FINAL_TRACE_ENABLED` false unless
+  validating the flattened coding-agent final-answer request shape. Do not
+  expose these as wrapper env preferences.
 
 Onyx service: `api_server`.
 
@@ -228,6 +233,66 @@ Upgrade notes:
   messages. The next fallback should be merging the reminder into the latest
   user message under `<system-reminder>` tags, not removing reminder content
   unless Onyx has replaced it with an upstream-safe mechanism.
+
+### Coding-agent final answer synthesis
+
+Patch behavior:
+
+- Wraps `onyx.tools.fake_tools.coding_agent._generate_final_answer()`.
+- Before the final no-tool summarizer runs, converts completed coding-agent
+  tool-call history into a single plain-text user-role transcript message. Bash
+  command requests and bash outputs remain visible to the final model, but the
+  final request should not contain `role="tool"` messages, assistant
+  `tool_calls`, repeated assistant-only transcript messages, or preserved
+  assistant reasoning fields from the tool loop.
+- For flattened history, bypasses upstream `construct_message_history()` and
+  merges `USER_FINAL_ANSWER_QUERY` into the same user message as the transcript,
+  so the request is exactly `[system, user]` rather than `[system, user,
+  user-reminder]`.
+- For the flattened finalizer only, calls `llm.stream()` directly without a
+  `tools` argument and with reasoning effort disabled. Do not route this path
+  through `run_llm_step_pkt_generator()` with `tool_definitions=[]`: some
+  OpenAI-compatible GLM/Tinfoil paths reject no-tool requests that still carry
+  an empty `tools: []` member plus tool-choice metadata.
+- Keeps a fallback around `_generate_final_answer()` so successful bash output
+  is returned with a clear diagnostic if the final summarizer LLM call still
+  fails.
+- Startup validation checks the upstream function source still contains
+  `"LLM failed to produce a final answer"` before installing the wrapper.
+
+Onyx service: `api_server`.
+
+Upstream v4.1.7 assumptions to re-check:
+
+- `backend/onyx/tools/fake_tools/coding_agent.py:156` defines
+  `_generate_final_answer()`.
+- `_generate_final_answer()` builds `final_history` from the coding-agent
+  `history` via `construct_message_history()`.
+- `_generate_final_answer()` calls `run_llm_step_pkt_generator()` with
+  `tool_definitions=[]` and `tool_choice=ToolChoiceOptions.NONE`.
+- The coding-agent loop still appends assistant messages with `tool_calls` and
+  `TOOL_CALL_RESPONSE` messages to the same in-memory `msg_history` that is
+  passed to `_generate_final_answer()`.
+- `run_coding_agent_call()` still catches broad exceptions and returns `None`,
+  which would otherwise hide successful bash output if only final answer
+  synthesis failed.
+
+Upgrade notes:
+
+- If upstream flattens or summarizes coding-agent tool history before the final
+  no-tools LLM call, remove this wrapper flattening and keep only any needed
+  fallback behavior.
+- If upstream starts passing tool definitions into the final synthesis call,
+  inspect whether the final request is intentionally a tool-capable request
+  before preserving the flattening patch.
+- Re-test a coding-agent run against the teep OpenAI-compatible GLM/Kimi path.
+  With `_CODING_AGENT_FINAL_TRACE_ENABLED` temporarily enabled, metadata trace
+  for the final summarizer should show a final role sequence of
+  `["system", "user"]` and `tools_arg=none`. Teep debug metadata should show
+  `tools_present=false` / `tools_count=0`, and raw request inspection, if
+  enabled, should show no `tools` or `tool_choice` member at all. The active
+  tool loop before final synthesis may still contain structured tool calls and
+  tool responses.
 
 ### Previous tool-result preservation
 

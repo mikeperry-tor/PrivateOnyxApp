@@ -26,6 +26,8 @@ EFFECTIVE_UNLIMITED_CHARS = 2_000_000_000
 _REASONING_TRACE_ENABLED = False
 _REASONING_TRACE_LITELLM_DEBUG_ENABLED = False
 _REASONING_TRACE_SEQ = 0
+_REASONING_REMINDER_REORDER_ENABLED = True
+_CODING_AGENT_FINAL_TRACE_ENABLED = False
 
 
 def _strict_mode() -> bool:
@@ -549,6 +551,119 @@ def _is_tool_call_response_message(message: Any) -> bool:
     return str(message_type).endswith("TOOL_CALL_RESPONSE")
 
 
+def _is_assistant_message(message: Any) -> bool:
+    message_type = getattr(message, "message_type", None)
+    if getattr(message_type, "name", None) == "ASSISTANT":
+        return True
+    return str(message_type).endswith("ASSISTANT")
+
+
+def _is_user_message(message: Any) -> bool:
+    message_type = getattr(message, "message_type", None)
+    if getattr(message_type, "name", None) == "USER":
+        return True
+    return str(message_type).endswith("USER")
+
+
+def _summarize_tool_call_for_final_answer(tool_call: Any) -> str:
+    tool_name = getattr(tool_call, "tool_name", None) or "tool"
+    tool_call_id = getattr(tool_call, "tool_call_id", None)
+    arguments = getattr(tool_call, "tool_arguments", None)
+    try:
+        arguments_text = json.dumps(arguments, sort_keys=True)
+    except Exception:
+        arguments_text = str(arguments)
+
+    label = f"{tool_name}"
+    if tool_call_id:
+        label += f" ({tool_call_id})"
+    return f"- {label}: {arguments_text}"
+
+
+def _flatten_coding_agent_final_answer_history(
+    history: Any,
+    token_counter: Any,
+) -> Any:
+    """Convert structured tool history into plain text for no-tool synthesis."""
+
+    if not isinstance(history, list):
+        return history
+
+    try:
+        from onyx.chat.models import ChatMessageSimple
+        from onyx.configs.constants import MessageType
+    except Exception:
+        return history
+
+    transcript_parts: list[str] = []
+    saw_tool_history = False
+
+    for index, message in enumerate(history, start=1):
+        message_text = getattr(message, "message", "")
+
+        if _is_tool_call_response_message(message):
+            tool_call_id = getattr(message, "tool_call_id", None)
+            label = "Bash tool output"
+            if tool_call_id:
+                label += f" ({tool_call_id})"
+            transcript_parts.append(f"## {label}\n\n{message_text}")
+            saw_tool_history = True
+            continue
+
+        tool_calls = getattr(message, "tool_calls", None)
+        if _is_assistant_message(message) and tool_calls:
+            tool_call_lines = [
+                _summarize_tool_call_for_final_answer(tool_call)
+                for tool_call in tool_calls
+            ]
+            transcript_part = (
+                "## Coding agent tool requests\n\n"
+                + ("\n\n".join([str(message_text), ""]) if message_text else "")
+                + "\n".join(tool_call_lines)
+            )
+            transcript_parts.append(transcript_part)
+            saw_tool_history = True
+            continue
+
+        if _is_user_message(message):
+            transcript_parts.append(f"## User message {index}\n\n{message_text}")
+            continue
+
+        if _is_assistant_message(message):
+            if message_text:
+                transcript_parts.append(
+                    f"## Coding agent assistant message {index}\n\n{message_text}"
+                )
+            continue
+
+        if message_text:
+            transcript_parts.append(f"## Coding agent message {index}\n\n{message_text}")
+
+    if not saw_tool_history:
+        return history
+
+    transcript = (
+        "The following is a plain-text transcript of the coding agent's completed "
+        "tool investigation. Use it as evidence for the final answer; do not treat "
+        "it as an active tool-call protocol.\n\n"
+        + "\n\n".join(transcript_parts)
+    )
+    flattened = [
+        ChatMessageSimple(
+            message=transcript,
+            token_count=token_counter(transcript),
+            message_type=MessageType.USER,
+        )
+    ]
+    _trace_reasoning(
+        "coding_agent_final_answer_history_flattened",
+        original_messages=len(history),
+        flattened_messages=len(flattened),
+    )
+
+    return flattened
+
+
 def _coding_agent_final_answer_fallback(history: Any, error: BaseException) -> str:
     tool_outputs: list[tuple[str | None, str]] = []
     if isinstance(history, list):
@@ -586,6 +701,80 @@ def _coding_agent_final_answer_fallback(history: Any, error: BaseException) -> s
         remaining_chars = max(0, remaining_chars - len(chunk))
 
     return header + "\n\n" + "\n\n".join(chunks)
+
+
+def _coding_agent_flattened_final_answer(
+    coding_agent: Any,
+    *,
+    query: str,
+    repo: str,
+    history: list[Any],
+    llm: Any,
+    token_counter: Any,
+    user_identity: Any,
+    emitter: Any,
+    placement: Any,
+) -> str:
+    """Run code-agent final synthesis without tool-protocol history."""
+
+    llm_messages = [
+        {
+            "role": "system",
+            "content": coding_agent.CODING_AGENT_FINAL_ANSWER_PROMPT,
+        }
+    ]
+    reminder_str = coding_agent.USER_FINAL_ANSWER_QUERY.format(query=query, repo=repo)
+    transcript = history[0].message if history else ""
+    user_message = (
+        f"{transcript}\n\n"
+        "## Final answer request\n\n"
+        f"{reminder_str}"
+    )
+    llm_messages.append({"role": "user", "content": user_message})
+    if _CODING_AGENT_FINAL_TRACE_ENABLED:
+        try:
+            json.dumps({"messages": llm_messages})
+            json_ok = True
+        except Exception:
+            json_ok = False
+        user_control_chars = sum(
+            1
+            for ch in user_message
+            if ord(ch) < 32 and ch not in "\n\r\t"
+        )
+        print(
+            "sitecustomize: coding-agent flattened final request shape "
+            "roles=[\"system\",\"user\"] "
+            "reasoning_effort=off "
+            "tools_arg=none "
+            f"message_count=2 user_chars={len(user_message)} "
+            f"user_newlines={user_message.count(chr(10))} "
+            f"user_backslashes={user_message.count(chr(92))} "
+            f"user_quotes={user_message.count(chr(34))} "
+            f"user_control_chars={user_control_chars} "
+            f"user_sha256={hashlib.sha256(user_message.encode()).hexdigest()[:12]} "
+            f"json_encoding_ok={json_ok}",
+            flush=True,
+        )
+
+    with coding_agent.function_span("generate_coding_agent_answer") as span:
+        span.span_data.input = f"history_length={len(history)} flattened=true"
+        final_answer_chunks: list[str] = []
+        for packet in llm.stream(
+            prompt=llm_messages,
+            max_tokens=coding_agent.MAX_FINAL_ANSWER_TOKENS,
+            reasoning_effort=coding_agent.ReasoningEffort.OFF,
+            user_identity=user_identity,
+        ):
+            delta = packet.choice.delta
+            if delta.content:
+                final_answer_chunks.append(delta.content)
+
+        final_answer = "".join(final_answer_chunks).strip()
+        if not final_answer:
+            raise ValueError("LLM failed to produce a final answer")
+        span.span_data.output = final_answer
+        return final_answer
 
 
 def apply_coding_agent_final_answer_fallback_patch() -> None:
@@ -628,20 +817,58 @@ def apply_coding_agent_final_answer_fallback_patch() -> None:
 
     @functools.wraps(original)
     def _generate_final_answer_with_fallback(*args, **kwargs):
+        original_history = None
+        flattened_history = None
+        try:
+            bound = signature.bind(*args, **kwargs)
+            history = bound.arguments.get("history")
+            original_history = history
+            token_counter = bound.arguments.get("token_counter")
+            if token_counter is not None:
+                flattened_history = _flatten_coding_agent_final_answer_history(
+                    history,
+                    token_counter,
+                )
+                if flattened_history is not history:
+                    return _coding_agent_flattened_final_answer(
+                        coding_agent,
+                        query=bound.arguments["query"],
+                        repo=bound.arguments["repo"],
+                        history=flattened_history,
+                        llm=bound.arguments["llm"],
+                        token_counter=token_counter,
+                        user_identity=bound.arguments["user_identity"],
+                        emitter=bound.arguments["emitter"],
+                        placement=bound.arguments["placement"],
+                    )
+        except Exception as e:
+            if flattened_history is None:
+                print(
+                    "sitecustomize: failed to flatten coding-agent final answer "
+                    f"history; using original structured history ({type(e).__name__})",
+                    flush=True,
+                )
+            else:
+                print(
+                    "sitecustomize: flattened coding-agent final answer "
+                    f"generation failed ({type(e).__name__})",
+                    flush=True,
+                )
+                return _coding_agent_final_answer_fallback(original_history, e)
+
         try:
             return original(*args, **kwargs)
         except Exception as e:
             try:
                 bound = signature.bind(*args, **kwargs)
-                history = bound.arguments.get("history")
+                history = original_history or bound.arguments.get("history")
             except Exception:
-                history = kwargs.get("history")
+                history = original_history or kwargs.get("history")
 
-            error_text = _sanitize_fallback_text(str(e), 1000)
             print(
                 "sitecustomize: coding-agent final answer generation failed; "
                 "returning tool-output fallback "
-                f"({type(e).__name__}: {error_text})",
+                f"({type(e).__name__})",
                 flush=True,
             )
             return _coding_agent_final_answer_fallback(history, e)
@@ -665,43 +892,47 @@ def apply_reasoning_content_preservation_patch() -> None:
     beside assistant tool-call messages when a tool response follows.
     """
 
-    try:
-        from onyx.chat import llm_loop
+    if _REASONING_REMINDER_REORDER_ENABLED:
+        try:
+            from onyx.chat import llm_loop
 
-        _patch_function_source(
-            module=llm_loop,
-            function_name="construct_message_history",
-            patch_name="chat reminder placement for reasoning preservation",
-            replacements={
-                (
-                    "    # 5. Add last user message (with context images attached)\n"
-                    "    result.append(last_user_message)\n"
-                    "\n"
-                    "    # 6. Add messages after last user message (tool calls, responses, etc.)\n"
-                    "    result.extend(messages_after_last_user)\n"
-                    "\n"
-                    "    # 7. Add reminder message at the very end\n"
-                    "    if reminder_message:\n"
-                    "        result.append(reminder_message)\n"
-                ): (
-                    "    # 5. Add last user message (with context images attached)\n"
-                    "    result.append(last_user_message)\n"
-                    "\n"
-                    "    # 6. Keep reminders adjacent to the user request instead of\n"
-                    "    # trailing after assistant/tool messages. Some reasoning model\n"
-                    "    # templates discard prior assistant reasoning fields when a tool\n"
-                    "    # turn is followed by a final user-role reminder.\n"
-                    "    if reminder_message:\n"
-                    "        result.append(reminder_message)\n"
-                    "\n"
-                    "    # 7. Add messages after last user message (tool calls, responses, etc.)\n"
-                    "    result.extend(messages_after_last_user)\n"
-                )
-            },
-        )
-    except Exception as e:  # pragma: no cover
-        print(f"sitecustomize: failed to patch chat reminder placement: {e}", flush=True)
-        _raise_if_strict()
+            _patch_function_source(
+                module=llm_loop,
+                function_name="construct_message_history",
+                patch_name="chat reminder placement for reasoning preservation",
+                replacements={
+                    (
+                        "    # 5. Add last user message (with context images attached)\n"
+                        "    result.append(last_user_message)\n"
+                        "\n"
+                        "    # 6. Add messages after last user message (tool calls, responses, etc.)\n"
+                        "    result.extend(messages_after_last_user)\n"
+                        "\n"
+                        "    # 7. Add reminder message at the very end\n"
+                        "    if reminder_message:\n"
+                        "        result.append(reminder_message)\n"
+                    ): (
+                        "    # 5. Add last user message (with context images attached)\n"
+                        "    result.append(last_user_message)\n"
+                        "\n"
+                        "    # 6. Keep reminders adjacent to the user request instead of\n"
+                        "    # trailing after assistant/tool messages. Some reasoning model\n"
+                        "    # templates discard prior assistant reasoning fields when a tool\n"
+                        "    # turn is followed by a final user-role reminder.\n"
+                        "    if reminder_message:\n"
+                        "        result.append(reminder_message)\n"
+                        "\n"
+                        "    # 7. Add messages after last user message (tool calls, responses, etc.)\n"
+                        "    result.extend(messages_after_last_user)\n"
+                    )
+                },
+            )
+        except Exception as e:  # pragma: no cover
+            print(
+                f"sitecustomize: failed to patch chat reminder placement: {e}",
+                flush=True,
+            )
+            _raise_if_strict()
 
     preserve_turn_reasoning = _env_flag_default_true(
         "ONYX_AGENT_PRESERVE_TURN_REASONING"
