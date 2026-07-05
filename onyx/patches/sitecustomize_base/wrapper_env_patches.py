@@ -524,6 +524,136 @@ def _truncate_text_with_notice(text: str, max_chars: int) -> str:
     return text[:keep] + suffix
 
 
+def _sanitize_fallback_text(value: Any, max_chars: int) -> str:
+    if not isinstance(value, str):
+        value = str(value)
+
+    sanitized = "".join(
+        ch if ch in "\n\r\t" or ch.isprintable() else "?"
+        for ch in value
+    )
+    if len(sanitized) <= max_chars:
+        return sanitized
+
+    omitted = len(sanitized) - max_chars
+    return (
+        sanitized[:max_chars]
+        + f"\n... [coding-agent output truncated, {omitted} characters omitted]"
+    )
+
+
+def _is_tool_call_response_message(message: Any) -> bool:
+    message_type = getattr(message, "message_type", None)
+    if getattr(message_type, "name", None) == "TOOL_CALL_RESPONSE":
+        return True
+    return str(message_type).endswith("TOOL_CALL_RESPONSE")
+
+
+def _coding_agent_final_answer_fallback(history: Any, error: BaseException) -> str:
+    tool_outputs: list[tuple[str | None, str]] = []
+    if isinstance(history, list):
+        for message in history:
+            if not _is_tool_call_response_message(message):
+                continue
+            output = getattr(message, "message", None)
+            if not output:
+                continue
+            tool_call_id = getattr(message, "tool_call_id", None)
+            tool_outputs.append(
+                (str(tool_call_id) if tool_call_id else None, str(output))
+            )
+
+    header = (
+        "The coding agent executed its tool steps, but the final answer LLM "
+        "call failed before it could summarize them. Returning the collected "
+        f"tool output instead. Finalization error: {type(error).__name__}."
+    )
+    if not tool_outputs:
+        return header + "\n\nNo bash tool output was available in the agent history."
+
+    recent_outputs = tool_outputs[-6:]
+    remaining_chars = 16000
+    chunks: list[str] = []
+    for index, (tool_call_id, output) in enumerate(recent_outputs, start=1):
+        remaining_slots = len(recent_outputs) - index + 1
+        max_output_chars = max(1000, remaining_chars // remaining_slots)
+        sanitized = _sanitize_fallback_text(output, max_output_chars)
+        label = f"Tool output {index}"
+        if tool_call_id:
+            label += f" ({tool_call_id})"
+        chunk = f"{label}:\n```text\n{sanitized}\n```"
+        chunks.append(chunk)
+        remaining_chars = max(0, remaining_chars - len(chunk))
+
+    return header + "\n\n" + "\n\n".join(chunks)
+
+
+def apply_coding_agent_final_answer_fallback_patch() -> None:
+    """Return gathered code-agent tool output if final answer synthesis fails.
+
+    Upstream catches every coding-agent exception and returns ``None`` to the
+    outer tool wrapper. That loses successful bash output when only the final
+    no-tool summarization LLM call fails. Keep setup/session failures as hard
+    errors, but make finalization failures user-visible.
+    """
+
+    try:
+        from onyx.tools.fake_tools import coding_agent
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing coding-agent final-answer module: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    original = coding_agent._generate_final_answer
+    if getattr(original, "_wrapper_final_answer_fallback", False):
+        return
+
+    try:
+        source = inspect.getsource(original)
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(f"could not inspect coding-agent final answer function: {e}")
+        return
+
+    if "LLM failed to produce a final answer" not in source:
+        _warn_or_raise(
+            "coding-agent final answer fallback patch did not match expected "
+            "upstream text"
+        )
+        return
+
+    signature = inspect.signature(original)
+
+    @functools.wraps(original)
+    def _generate_final_answer_with_fallback(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except Exception as e:
+            try:
+                bound = signature.bind(*args, **kwargs)
+                history = bound.arguments.get("history")
+            except Exception:
+                history = kwargs.get("history")
+
+            error_text = _sanitize_fallback_text(str(e), 1000)
+            print(
+                "sitecustomize: coding-agent final answer generation failed; "
+                "returning tool-output fallback "
+                f"({type(e).__name__}: {error_text})",
+                flush=True,
+            )
+            return _coding_agent_final_answer_fallback(history, e)
+
+    _generate_final_answer_with_fallback._wrapper_final_answer_fallback = True
+    coding_agent._generate_final_answer = _generate_final_answer_with_fallback
+    print(
+        "sitecustomize: patched coding-agent final answer fallback",
+        flush=True,
+    )
+
+
 def apply_reasoning_content_preservation_patch() -> None:
     """Preserve assistant reasoning fields when Onyx rebuilds LLM history.
 

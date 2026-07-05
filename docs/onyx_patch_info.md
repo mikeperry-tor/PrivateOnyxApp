@@ -578,6 +578,19 @@ wrapper runs these patches in strict mode, so missing expected strings or
 changed helper signatures fail startup instead of silently leaving stale tool
 text in place.
 
+The network-description patch must run before the reasoning-preservation patch:
+reasoning preservation imports `onyx.tools.fake_tools.coding_agent`, which binds
+the coding-agent prompt constants by value. If the order is reversed, startup
+logs can claim that `CODING_AGENT_PROMPT` was rewritten while the imported
+coding-agent module still tells the LLM that the sandbox is network-isolated.
+
+The wrapper also patches the coding-agent final-answer step. Upstream catches
+any exception in `run_coding_agent_call()` and returns `None`, including cases
+where bash commands succeeded but the final no-tool LLM summarization call
+failed. The wrapper wraps `_generate_final_answer()` so finalization failures
+return the recent collected tool output with a clear diagnostic instead of
+dropping the entire coding-agent result.
+
 ### Upstream merge request shape
 
 Onyx should generate tool descriptions from a capability model rather than
