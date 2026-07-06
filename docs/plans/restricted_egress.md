@@ -186,10 +186,10 @@ At minimum the stack needs these policy modes:
 
 | Policy | Search hosts | Internal/private targets | Plain HTTP | Intended users |
 | --- | --- | --- | --- | --- |
-| `prefetch` | blocked | blocked | blocked unless explicitly allowed | CRW HTTP prefetch |
-| `executor` | blocked | blocked | blocked unless explicitly allowed | code-interpreter executors |
-| `browser` | allowed | blocked | blocked unless explicitly allowed | Obscura browser |
-| `searxng-external` | allowed or allowlisted | blocked | blocked unless explicitly allowed | optional non-CRW SearXNG features |
+| `prefetch` | blocked | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` | CRW HTTP prefetch |
+| `executor` | blocked | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` | code-interpreter executors |
+| `browser` | allowed | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` | Obscura browser |
+| `searxng-external` | allowed or allowlisted | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` | optional non-CRW SearXNG features |
 
 The existing `prefetch-blocking-proxy` already implements most of the
 `prefetch` and `executor` policy. Prefer extending that implementation with
@@ -200,6 +200,64 @@ to attach them to restricted networks. Compose services using `network_mode`
 cannot also declare ordinary `networks:` attachments, and moving the proxy out
 would blur the final-hop routing boundary. Keep final-hop proxies in the
 routing namespace and expose them through narrow bridges.
+
+## Policy Preference Surface
+
+The restricted-egress implementation must preserve the current user-facing
+preference surface from `.env.wrapper.example`, `docs/request_handling.md`, and
+`docs/vpn_routing_and_proxies.md`. Do not replace these values with hardcoded
+per-mode defaults or new names unless the documentation and example env file
+are updated in the same change.
+
+Policy-enforcement preferences:
+
+- `ONYX_AGENT_ALLOW_HTTP_URLS=false` is the stack-wide cleartext target URL
+  default. When false, plain `http://` target URLs fail closed in the final-hop
+  proxy policies and in the CDP shim's browser navigation path. When true,
+  non-search plain HTTP targets may be forwarded through the selected
+  final-hop policy after the same internal/private destination validation.
+- `PREFETCH_BLOCK_HOSTS` is the configured search-host block list for the
+  prefetch and executor policies. The browser policy must not use this list as
+  a block list; it should use the corresponding host set only for search-aware
+  browser behavior such as wait selection.
+- `PREFETCH_BLOCK_INTERNAL_HOSTS` remains part of destination validation for
+  final-hop proxy policies. It complements, rather than replaces, IP literal,
+  single-label hostname, localhost, host-gateway, private-range, link-local,
+  reserved, and non-global address checks.
+- `ONYX_AGENT_OUTBOUND_PROXY_URL` controls only upstream final-hop proxying.
+  Restricted components and executor pods should receive local bridge/proxy
+  URLs, not this upstream URL directly.
+- `ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13` continues to apply to `https://`
+  upstream proxy legs for proxy implementations that support it.
+
+Executor-specific preferences:
+
+- `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` remains the user-visible switch that
+  enables executor network access.
+- `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL` and
+  `ONYX_AGENT_EXECUTOR_NO_PROXY` are the executor injection inputs when
+  executor networking is enabled. They must describe the restricted bridge
+  endpoint and executor-local bypasses, not trusted stack service bypasses.
+
+Browser-path preferences that must survive the network split:
+
+- `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH`,
+  `OBSCURA_BROWSER_WAIT_UNTIL_WEB`, and
+  `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS` remain CDP shim controls for
+  Obscura navigation timing. Do not bury them inside proxy policy.
+- `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL` remains the cookie retention
+  control for the browser path.
+
+SearXNG and Onyx application preferences remain separate from final-hop
+destination policy:
+
+- `SEARXNG_ROUND_ROBIN` controls CRW-backed provider scheduling, not network
+  egress policy.
+- `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL`,
+  `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK`, and
+  `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK` seed Onyx's Admin security posture. They
+  are not firewall rules for CRW, Obscura, SearXNG, executor pods, or the
+  final-hop proxy policies.
 
 ## Routing Matrix
 
@@ -440,6 +498,12 @@ The browser mode is not a weaker accidental variant of prefetch mode; it exists
 because Obscura must render search-engine pages while still blocking
 internal/private targets.
 
+In the real implementation, `allow_http` should be derived from
+`ONYX_AGENT_ALLOW_HTTP_URLS` for every mode above. The default remains false,
+but the existing explicit opt-in must continue to apply to both the proxy
+policy and the CDP shim so HTTP browser navigations cannot bypass the
+prefetch/executor block.
+
 ### CRW
 
 CRW accepts untrusted target URLs, performs HTTP prefetch, controls the browser
@@ -609,6 +673,13 @@ long-term user-facing options.
 - Use `docker-compose.code-interpreter-network.yml` for executor networking.
 - `ONYX_AGENT_OUTBOUND_PROXY_URL` configures final-hop upstream proxying; it
   does not trigger executor proxy injection.
+- `ONYX_AGENT_ALLOW_HTTP_URLS` remains the single cleartext target URL
+  preference for proxy policy modes and CDP navigation blocking.
+- Preserve the documented policy preference surface; do not silently drop
+  `PREFETCH_BLOCK_HOSTS`, `PREFETCH_BLOCK_INTERNAL_HOSTS`,
+  `ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13`, executor proxy injection variables,
+  Obscura navigation/cookie variables, SearXNG scheduling, or Onyx SSRF seed
+  variables when moving components onto restricted networks.
 - Untrusted executors receive only the dedicated executor `NO_PROXY`, not
   trusted-service `NO_PROXY_INTERNAL`.
 - Prompt text advertises only reachable restricted-network capabilities.
@@ -631,10 +702,14 @@ long-term user-facing options.
    - `executor`;
    - `browser`;
    - optional `searxng-external`.
-2. Keep destination validation strict and fail closed.
-3. Add a minimal bridge service pattern that can expose one restricted-network
+2. Wire policy modes to the existing preference names, including
+   `ONYX_AGENT_ALLOW_HTTP_URLS`, `PREFETCH_BLOCK_HOSTS`,
+   `PREFETCH_BLOCK_INTERNAL_HOSTS`, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and
+   `ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13`.
+3. Keep destination validation strict and fail closed.
+4. Add a minimal bridge service pattern that can expose one restricted-network
    port to one final-hop proxy port without host publishing.
-4. Add compose naming conventions and Makefile suffix names for restricted
+5. Add compose naming conventions and Makefile suffix names for restricted
    egress.
 
 ### Phase 2: Code-Interpreter Executors
@@ -652,12 +727,15 @@ long-term user-facing options.
 ### Phase 3: Obscura
 
 1. Add a browser final-hop proxy policy that allows search hosts but blocks
-   internal/private targets and plain HTTP by default.
+   internal/private targets and plain HTTP by default unless
+   `ONYX_AGENT_ALLOW_HTTP_URLS=true`.
 2. Move Obscura onto browser-control and browser-egress networks.
 3. Retarget CDP shim to Obscura by DNS name on the control network.
 4. Point Obscura at the browser egress bridge through `--proxy` or
    `OBSCURA_PROXY`.
-5. Verify every custom SearXNG engine can still render SERPs through CRW.
+5. Preserve CDP shim preferences for waitUntil selection, cookie clearing,
+   trace redaction, proxy-server stripping, and HTTP URL blocking.
+6. Verify every custom SearXNG engine can still render SERPs through CRW.
 
 ### Phase 4: SearXNG
 
@@ -697,7 +775,8 @@ Update docs in the same implementation phase as the related behavior.
 
 - `.env.wrapper.example`: describe the new meaning of
   `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` and any restricted request-path
-  toggles.
+  toggles. Keep `ONYX_AGENT_ALLOW_HTTP_URLS` documented as the cleartext URL
+  control for CRW prefetch, executor proxy use, and Obscura/CDP navigation.
 - `README.md`: update user-facing code-interpreter networking, upstream proxy,
   host Tor, and caveat sections.
 - `.env.wrapper.example` and `README.md`: continue to tell host-Tor users that
@@ -778,12 +857,21 @@ Compose shape checks:
    - No restricted component has a route to broad default-network peers,
      host gateway aliases, or `netns-holder` service aliases except through
      the intended bridge.
+   - Proxy policy services and the CDP shim receive
+     `ONYX_AGENT_ALLOW_HTTP_URLS`; the default false value is visible in the
+     effective compose model.
 
 Runtime checks when safe:
 
 - from an executor pod, `curl --noproxy '*' https://example.com` fails;
 - from an executor pod, `curl https://example.com` succeeds through the proxy
   when egress is available;
+- with `ONYX_AGENT_ALLOW_HTTP_URLS=false`, proxied executor and CRW prefetch
+  requests for `http://example.com` return the documented proxy `403`, and CDP
+  HTTP navigations are rejected by the shim;
+- with `ONYX_AGENT_ALLOW_HTTP_URLS=true`, non-search `http://example.com`
+  requests are allowed only through the selected final-hop policy and still
+  block internal/private targets;
 - executor route table and Docker network attachments show only the executor
   internal network;
 - non-executor containers cannot use the executor bridge listener;
