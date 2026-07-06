@@ -52,6 +52,24 @@ reachability risks live in
 behavior lives in [Onyx patch information](../onyx_patch_info.md), and upgrade
 checks live in [Onyx wrapper patches](../onyx_patches_upgrade.md).
 
+## Version Scope
+
+This plan is current for the committed pins in
+[`stack.versions.env`](../../stack.versions.env). Re-check the assumptions in
+this file when any of these pins or their equivalent local overrides change.
+
+| Component | Current pin | Why it matters for this plan |
+| --- | --- | --- |
+| Onyx application | `ONYX_IMAGE_TAG=v4.1.7` | Owns API/background/web service shape, tool prompts, SSRF settings, Firecrawl/Open URL wiring, and Compose references. |
+| Code interpreter | `CODE_INTERPRETER_IMAGE_TAG=0.4.4` | Owns executor pod creation, Docker network selection, and proxy env injection points. |
+| SearXNG | `SEARXNG_IMAGE_TAG=2026.6.26-f8ffbf36f` | Owns custom engine loading, outgoing proxy settings, and search app network needs. |
+| CRW | `CRW_IMAGE=ghcr.io/us/crw:0.18.3` | Owns scrape/search endpoints, HTTP prefetch behavior, CDP renderer settings, and peer assumptions. |
+| Obscura | `OBSCURA_IMAGE=h4ckf0r0day/obscura:0.1.9` | Owns browser rendering, `--proxy` behavior, private-target blocking, and CDP browser egress. |
+| Teep | `TEEP_REF=6413fe0547b449e67f7296986fe8b8ffbc9bbcd2` | Out of scope for restricted egress unless provider routing or namespace placement changes. |
+| Mysterium | `MYST_IMAGE=mysteriumnetwork/myst:docker_host_fixes_with_logs` | Owns the shared routing namespace, VPN connection, and kill-switch behavior behind final-hop policy. |
+| Network/support images | `NETNS_HOLDER_IMAGE=alpine:3.20`, `PYTHON_SLIM_IMAGE=python:3.12-slim-bookworm`, `PYTHON_ALPINE_IMAGE=python:3.12-alpine`, `SOCAT_IMAGE=alpine/socat:1.8.0.3`, `TAILSCALE_IMAGE=tailscale/tailscale:stable`, `AUTOHEAL_IMAGE=willfarrell/autoheal:latest` | Shape namespace ownership, bridge/proxy implementation choices, host diagnostic bridges, optional Tailscale routing, and health behavior. |
+| Full-mode data/search support | `MINIO_IMAGE=minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1`, `VALKEY_IMAGE=docker.io/valkey/valkey:9-alpine` | Relevant when validating full-mode data services, SearXNG cache reachability, or local document RAG placement. |
+
 ## Non-Goals
 
 - Do not add a transparent firewall or general-purpose network sandbox in this

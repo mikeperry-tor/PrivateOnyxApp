@@ -24,6 +24,9 @@ SearXNG/CRW/Obscura request path and live parser assumptions, see
 security findings to re-check when changing CRW, Obscura, code-interpreter,
 proxy, or shim behavior, see
 [`docs/internal_network_security.md`](internal_network_security.md).
+For the planned restricted-egress architecture, component version scope, and
+network-placement assumptions to keep synchronized during upgrades, see
+[`docs/plans/restricted_egress.md`](plans/restricted_egress.md).
 
 ## Fast upgrade checklist
 
@@ -50,6 +53,11 @@ proxy, or shim behavior, see
    [Internal network security](internal_network_security.md) when changes touch
    CRW, Obscura, the prefetch proxy, CDP shim, code-interpreter executor
    networking, or shared-namespace service placement.
+10. Update the version scope and affected component assumptions in
+    [Restricted egress network plan](plans/restricted_egress.md) when changing
+    Onyx, code-interpreter, SearXNG, CRW, Obscura, Mysterium, routing/support
+    images, proxy behavior, CDP/prefetch shims, executor networking, or
+    full-mode RAG placement.
 
 ## Service map
 
@@ -576,6 +584,11 @@ Local files:
 - `docker-compose.proxy.yml`
 - `docker-compose.yaml`
 
+Related plan:
+
+- [Restricted egress network plan](plans/restricted_egress.md), especially the
+  code-interpreter executor target model and policy preference surface.
+
 Patch behavior:
 
 - Pins the code-interpreter image with `CODE_INTERPRETER_IMAGE_TAG=0.4.4`.
@@ -649,6 +662,10 @@ Security notes:
 
 Upgrade notes:
 
+- Update [Restricted egress network plan](plans/restricted_egress.md) if the
+  code-interpreter image tag, executor Docker network setting, proxy injection
+  behavior, executor prompt/capability text, or
+  `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` semantics change.
 - If upstream changes command construction, proxy injection can fail open or
   fail closed. Verify logs contain the startup patch status and proxy injection
   messages when `ONYX_AGENT_OUTBOUND_PROXY_URL` is set.
@@ -747,6 +764,9 @@ Upstream v4.1.7 assumptions to re-check:
 
 Upgrade notes:
 
+- Update [Restricted egress network plan](plans/restricted_egress.md) if the
+  local embedding shim, doc-drop, Web connector, or full-mode model-server
+  placement changes the networks or local peers used by full-mode RAG.
 - When upgrading Onyx, verify that `internal_search` still uses the same
   query-embedding path and still depends on `MODEL_SERVER_HOST` /
   `MODEL_SERVER_PORT`. If Onyx adds a distinct internal-search embedding
@@ -793,6 +813,12 @@ Upstream SearXNG references:
 - Stock engine modules for `google`, `brave`, `duckduckgo`, `startpage`, and
   `bing`
 
+Related plan:
+
+- [Restricted egress network plan](plans/restricted_egress.md), especially the
+  CRW, SearXNG, Obscura browser, final-hop proxy, and policy preference
+  sections.
+
 ### Custom CRW-backed engines
 
 Behavior:
@@ -827,6 +853,10 @@ Behavior:
 
 Upgrade notes:
 
+- Update [Restricted egress network plan](plans/restricted_egress.md) if a
+  SearXNG, CRW, or Obscura version change alters custom engine transport,
+  CRW scrape URL assumptions, HTTP prefetch behavior, CDP rendering, search
+  host blocking, or browser egress policy.
 - Re-test each custom engine with a real query after every SearXNG, CRW,
   Obscura, or target-search-engine change. Import checks are not enough because
   the fragile contract is the rendered SERP DOM.
@@ -904,6 +934,10 @@ Behavior:
 
 Upgrade notes:
 
+- Update [Restricted egress network plan](plans/restricted_egress.md) if
+  `SEARXNG_ROUND_ROBIN`, last-resort scoring, provider suspension behavior, or
+  custom-provider selection changes the search fan-out or network egress
+  expectations for SearXNG.
 - Re-check `reference_repos/searxng/searx/search/__init__.py` for the stock
   `Search._get_requests()` flow. Confirm SearXNG still builds a request list
   by iterating `self.search_query.engineref_list`, skips suspended processors
@@ -991,6 +1025,9 @@ Upgrade procedure:
 
 - Keep `settings.yml` as an overlay. Do not copy the full upstream
   `searx/settings.yml` into `searxng/core-config/`.
+- Update [Restricted egress network plan](plans/restricted_egress.md) if
+  SearXNG outgoing proxy semantics, per-engine `network`, custom-engine
+  `enable_http`, or CRW-loopback/direct-network assumptions change.
 - Check `reference_repos/searxng/searx/settings_loader.py` for
   `use_default_settings` merge behavior. The wrapper relies on mapping
   deep-merge, engine removal by name, and appending unknown custom engine
@@ -1030,6 +1067,12 @@ Primary upstream reference:
 
 - `reference_repos/onyx/deployment/docker_compose/docker-compose.yml`
 
+Related plan:
+
+- [Restricted egress network plan](plans/restricted_egress.md), especially
+  Compose layering, routing matrix, component bridges, final-hop proxy policy,
+  and validation plan.
+
 ### Base wrapper (`docker-compose.yaml`)
 
 Patched Onyx services:
@@ -1058,6 +1101,10 @@ Additional wrapper services:
 
 Upgrade notes:
 
+- Update [Restricted egress network plan](plans/restricted_egress.md) if base
+  service placement, shared-namespace membership, host bridge services,
+  `netns-holder`, `myst-client`, `prefetch-blocking-proxy`, `cdp-shim`, CRW,
+  Obscura, SearXNG, or code-interpreter topology changes.
 - Compare upstream service names and `depends_on` shape. Compose `extends`
   depends on stable service names: `api_server`, `web_server`, `nginx`,
   `code-interpreter`, and `relational_db`.
@@ -1104,6 +1151,9 @@ Wrapper additions:
 
 Upgrade notes:
 
+- Update [Restricted egress network plan](plans/restricted_egress.md) if
+  full-mode service placement changes doc-drop, embedding-shim, model-server,
+  MinIO, Valkey, or local document RAG reachability.
 - Confirm upstream `background` still accepts `MODEL_SERVER_HOST`,
   `MODEL_SERVER_PORT`, `INDEXING_MODEL_SERVER_HOST`, and
   `INDEXING_MODEL_SERVER_PORT`.
@@ -1172,6 +1222,10 @@ Behavior:
 
 Upgrade notes:
 
+- Update [Restricted egress network plan](plans/restricted_egress.md) if
+  proxy-mode service coverage, `ONYX_AGENT_OUTBOUND_PROXY_URL`,
+  `ONYX_AGENT_ALLOW_HTTP_URLS`, SearXNG proxy mutation, Obscura `--proxy`, or
+  executor proxy propagation changes.
 - Main Onyx source references are mostly indirect here: `api_server` prompt text
   must match executor network/proxy reality, and code-interpreter service wiring
   must still allow `PYTHONPATH` injection.
@@ -1224,6 +1278,10 @@ Behavior:
 
 Upgrade notes:
 
+- When changing `stack.versions.env`, update the version scope in
+  [Restricted egress network plan](plans/restricted_egress.md) for any pin
+  that affects Onyx, code-interpreter, SearXNG, CRW, Obscura, Mysterium,
+  routing/support images, or full-mode data/search support.
 - If upstream moves deployment files out of `deployment/docker_compose`, update
   `upgrade-onyx`.
 - If upstream env vars change names, update `sync-onyx-env` and the wrapper
