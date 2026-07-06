@@ -46,8 +46,9 @@ The immediate implementation target is code-interpreter executor isolation:
 - `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` gives generated Python and shell
   code a single network capability: connect to a local HTTP proxy service.
 - The executor proxy service blocks search engine URLs and internal/private
-  targets, then forwards allowed HTTP and HTTPS requests through the same
-  final-hop contract as the other egress-capable components.
+  target forms, with the DNS-classification caveat documented below for
+  upstream-proxy mode, then forwards allowed HTTP and HTTPS requests through
+  the same final-hop contract as the other egress-capable components.
 
 This document also compares follow-on options for isolating Obscura, CRW, and
 SearXNG into restricted containers that can reach only their configured
@@ -157,8 +158,16 @@ example:
 ```yaml
 networks:
   code-interpreter-executor:
+    name: onyx-code-interpreter-executor
     internal: true
 ```
+
+The network should use an explicit Docker network `name:` because executor
+containers are spawned by the code-interpreter service through the Docker
+socket, not by Compose. `PYTHON_EXECUTOR_DOCKER_NETWORK` must therefore point
+at the concrete Docker network name, for example
+`onyx-code-interpreter-executor`, rather than relying on Compose's
+project-prefixed internal service name.
 
 The code-interpreter patch should set executor proxy variables to a service DNS
 name on that network, for example:
@@ -268,6 +277,10 @@ proxy listens inside the shared namespace on port `3128`.
 Security hardening for the bridge service:
 
 - no host port publishing;
+- bind the listener only on the executor-network interface/address, or enforce
+  equivalent source-network filtering, so default-network peers cannot use the
+  bridge listener even though the bridge is also attached to the default network
+  for its upstream connection;
 - no Docker socket mount;
 - no writable host mounts;
 - `read_only: true` where practical;
@@ -598,11 +611,13 @@ Required policy:
 - only the final-hop egress shim that owns `ONYX_AGENT_OUTBOUND_PROXY_URL`
   may connect to the configured upstream proxy endpoint when that endpoint is
   on the Docker host or LAN;
-- this host-proxy allowance should be endpoint-scoped to the resolved upstream
-  proxy host and port, not a general exemption for arbitrary host/LAN targets;
+- the desired end state is an endpoint-scoped host-proxy allowance for the
+  resolved upstream proxy host and port, not a general exemption for arbitrary
+  host/LAN targets;
 - if the final-hop shim remains in `netns-holder`, the current
-  `MYST_VPN_ALLOW_LAN_BYPASS=true` requirement is acceptable and should be
-  documented as still required for host Tor;
+  `MYST_VPN_ALLOW_LAN_BYPASS=true` requirement is acceptable for this phase, but
+  it remains a broader route exemption than the desired endpoint-scoped policy
+  because it adds RFC 1918 LAN CIDRs to Mysterium route exemptions;
 - if future browser, CRW, SearXNG, or executor shims perform the final
   upstream dial outside `netns-holder`, they need an equivalent shim-scoped
   host-proxy bypass such as an explicit allowlist for the configured upstream
@@ -617,6 +632,20 @@ main isolation goal: components can reach only their local shim ports, and
 host access is limited to the shim's final-hop connection to the configured
 upstream proxy.
 
+Documentation updates for this risk scenario:
+
+- `.env.wrapper.example` and `README.md` should continue to tell host-Tor users
+  that `MYST_VPN_ALLOW_LAN_BYPASS=true` is required for
+  `socks5h://host.docker.internal:9150`, but they should also say that this is
+  a broad LAN route exemption in the current implementation.
+- `docs/vpn_routing_and_proxies.md` should distinguish the desired
+  endpoint-scoped host-proxy policy from the current
+  `MYST_VPN_ALLOW_LAN_BYPASS=true` mechanism.
+- `docs/internal_network_security.md` should list host-proxy LAN bypass as a
+  residual risk for host-resident upstream proxy configurations, while noting
+  that executor/application components still must not receive direct host or
+  LAN reachability.
+
 ### DNS Classification
 
 The final-hop proxy's current DNS behavior should remain:
@@ -626,10 +655,34 @@ The final-hop proxy's current DNS behavior should remain:
 - with an upstream proxy, it avoids target DNS resolution to prevent leaking
   target DNS outside the configured proxy path.
 
+This creates a deliberate residual risk in upstream-proxy mode: the local
+final-hop proxy can still block IP literals, localhost names,
+`host.docker.internal`, single-label Docker-style names, and other syntactic
+private-target forms without opening an upstream connection, but it cannot
+locally prove that an arbitrary public-looking hostname will not resolve to a
+private or otherwise non-global address at the upstream proxy. Eliminating that
+risk without leaking target DNS requires an upstream-proxy-side policy, a
+trusted DNS-over-proxy classification mechanism, or an explicit allowlist. Those
+are out of scope for the first executor-isolation implementation unless chosen
+as a separate design.
+
 TCP forwarder bridges should not perform target DNS resolution. If an optional
 component-facing proxy instance is ever added for a distinct policy or logging
 reason, configure it so the final-hop proxy remains the destination
 classification point for target DNS.
+
+Documentation updates for this risk scenario:
+
+- `docs/request_handling.md` and `docs/internal_network_security.md` should
+  describe the difference between no-upstream-proxy DNS classification and
+  upstream-proxy mode, including the residual hostname-to-private-IP risk.
+- `docs/vpn_routing_and_proxies.md` should explain that
+  `ONYX_AGENT_OUTBOUND_PROXY_URL` moves target DNS resolution to the upstream
+  proxy path by design, and that local DNS-based private-target blocking is
+  therefore intentionally reduced to avoid DNS leakage.
+- `.env.wrapper.example` and `README.md` should mention this caveat near the
+  upstream proxy examples so operators do not read `ONYX_AGENT_OUTBOUND_PROXY_URL`
+  as a complete SSRF/private-network enforcement layer.
 
 ## Search Engine Blocking
 
@@ -1149,8 +1202,17 @@ Remaining risks:
   spawn executor pods; that trusted service remains part of the control plane;
 - if the executor-only network is not truly internal or the wrong network name
   is injected, generated code could regain broader egress;
+- if the dual-homed bridge accepts clients on its default-network interface,
+  trusted stack services could accidentally gain an undocumented proxy path;
 - with TCP forwarder bridges, all destination policy depends on the final-hop
   proxy policy being correct for that component;
+- in `ONYX_AGENT_OUTBOUND_PROXY_URL` mode, target DNS classification is moved
+  to the upstream proxy path to avoid DNS leakage, leaving a residual
+  hostname-to-private-IP risk unless an upstream-side or allowlisted policy is
+  added;
+- host-resident upstream proxies currently rely on
+  `MYST_VPN_ALLOW_LAN_BYPASS=true`, which is broader than endpoint-scoped host
+  proxy access and should be documented as such until replaced;
 - optional second proxy instances add value only when they have a distinct
   policy, log, rate-limit, or accounting role;
 - environment variables are not a boundary. The boundary is the executor-only
@@ -1184,14 +1246,22 @@ Remaining risks:
    - `.env.wrapper.example`: describe the new meaning of
      `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`.
    - `docs/vpn_routing_and_proxies.md`: replace shared-namespace executor
-     routing text with proxy-only routing.
+     routing text with proxy-only routing, document the concrete upstream-proxy
+     DNS-classification caveat, and distinguish desired endpoint-scoped
+     host-proxy access from the current `MYST_VPN_ALLOW_LAN_BYPASS=true`
+     route exemption.
    - `docs/internal_network_security.md`: move the shared-namespace gap from
      current behavior to historical/background context, then document the new
-     remaining risks.
+     remaining risks, including upstream-proxy hostname-to-private-IP behavior,
+     bridge binding/source-filtering expectations, and host-proxy LAN bypass.
    - `docs/request_handling.md`: describe the executor proxy path and search
-     engine blocking behavior.
+     engine blocking behavior, including the difference between direct
+     final-hop DNS classification and upstream-proxy mode.
    - `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`: update the
      code-interpreter patch mechanics and upgrade checklist.
+   - `README.md`: update the user-facing code-interpreter networking and
+     upstream proxy sections so host Tor and upstream-proxy caveats are visible
+     to operators.
 
 6. Remove obsolete wording and names.
    - Replace "code-interpreter-vpn" wording where it no longer matches.
@@ -1247,9 +1317,13 @@ Inspect effective compose output for these permutations:
 
 3. Network enabled, upstream proxy empty, `MYST_VPN_ENABLED=true`.
    - Executor-only internal network exists.
+   - Executor-only network has an explicit concrete Docker network name, and
+     `PYTHON_EXECUTOR_DOCKER_NETWORK` points at that concrete name.
    - Bridge service exists.
    - Executor network is the executor-only network.
    - Executor proxy URL points at the bridge.
+   - Bridge listener is not exposed on host ports and is configured to accept
+     executor-network clients only, not arbitrary default-network clients.
    - Shared proxy has no upstream proxy and remains in `netns-holder`.
 
 4. Network enabled, upstream proxy set, `MYST_VPN_ENABLED=true`.
@@ -1274,11 +1348,19 @@ With a running stack and network-enabled code-interpreter:
 - from an executor pod, `curl --noproxy '*' https://example.com` should fail;
 - from an executor pod, `curl https://example.com` should succeed through the
   proxy if egress is available;
+- inspect the executor pod's route table and Docker network attachments to
+  confirm it is attached only to the named executor-only internal network;
+- from a non-executor default-network container, connecting to
+  `code-interpreter-egress-proxy:3128` should fail or be rejected by
+  source-network filtering;
 - from an executor pod, direct requests to `http://api_server:8080/health`,
   `http://myst-client:9101/health`, `http://crw:3010/health`, and
   `http://host.docker.internal:*` should fail;
 - from an executor pod, proxied requests to internal/private targets should
   return proxy `403`;
+- in upstream-proxy mode, include a documented test or manual review note for
+  hostname-to-private-IP behavior, because local DNS classification is
+  intentionally skipped to avoid target DNS leakage;
 - from an executor pod, proxied requests to configured search engines should
   return proxy `403`;
 - proxy logs should identify executor traffic distinctly if using the second
