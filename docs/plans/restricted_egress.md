@@ -2,730 +2,307 @@
 
 ## Goal
 
-Move egress-capable stack components from broad shared-namespace or
-Docker-bridge reachability to narrow, component-specific network placement.
-Each component should be able to reach only the local proxy shim ports and
-explicit peer-service ports required for its job. Those proxy shims should
-enforce destination policy and preserve the operator's selected final outbound
-path.
+Implement one restricted-egress model for every stack component that can give
+the Onyx agent external or internal network access. The model should replace
+broad shared-namespace reachability with narrow component networks and explicit
+egress/service gateways.
+
+This plan covers code-interpreter executors, Obscura, CRW, and SearXNG
+together. Code-interpreter executors are the highest-risk first delivery
+target because they run LLM-generated code, but the restricted-egress
+architecture is stack-wide.
 
 The intended end state:
 
-- Every egress-capable component has an explicit final-hop contract:
-  - `MYST_VPN_ENABLED=true` and no `ONYX_AGENT_OUTBOUND_PROXY_URL`: allowed
-    external requests leave through the Mysterium namespace.
-  - `MYST_VPN_ENABLED=true` and `ONYX_AGENT_OUTBOUND_PROXY_URL` set: allowed
-    external requests connect to the configured upstream proxy from inside the
-    Mysterium namespace.
-  - `MYST_VPN_ENABLED=false` and no `ONYX_AGENT_OUTBOUND_PROXY_URL`: allowed
-    external requests leave directly through Docker bridge egress by explicit
-    no-VPN choice.
-  - `MYST_VPN_ENABLED=false` and `ONYX_AGENT_OUTBOUND_PROXY_URL` set: allowed
-    external requests connect to the configured upstream proxy directly,
-    without the Mysterium hop.
-- Every egress-capable component is unable to reach stack-internal API
-  surfaces, host gateway addresses, `host.docker.internal`, LAN/private
-  addresses, link-local metadata addresses, or other host-network targets
-  except through a local proxy shim that applies the component's destination
-  policy.
-- Host-resident upstream proxies, especially Tor Browser at
-  `socks5h://host.docker.internal:9150`, remain supported as an explicit
-  `ONYX_AGENT_OUTBOUND_PROXY_URL` option. This is a final-hop exception for the
-  proxy shim that dials the configured upstream proxy, not general host access
-  for egress-capable application components.
-- `ONYX_AGENT_OUTBOUND_PROXY_URL` continues to mean "optional upstream proxy
-  for internet egress" rather than "executor network isolation."
+- agent-controlled or attacker-influenced components do not share the broad
+  `netns-holder` namespace;
+- each component can reach only the local ports required for its job;
+- all internet egress goes through an explicit final-hop proxy policy;
+- the final-hop proxy policy preserves the operator's selected routing mode;
+- `ONYX_AGENT_OUTBOUND_PROXY_URL` remains an optional upstream proxy for
+  internet egress, not a sandbox switch;
 - `MYST_VPN_ENABLED=true` and `MYST_VPN_ENABLED=false` keep their current
-  explicit meanings for the final outbound hop.
+  explicit final-hop meanings;
+- host-resident upstream proxies, such as
+  `socks5h://host.docker.internal:9150`, remain supported only as a
+  final-hop-proxy exception, not as general host access for application
+  components.
 
-The immediate implementation target is code-interpreter executor isolation:
+## Planning Scope
 
-- `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=false` remains easy to audit: executor
-  pods use upstream `network none`, no executor egress bridge is started, and
-  no proxy environment is injected into executors.
-- `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` gives generated Python and shell
-  code a single network capability: connect to a local HTTP proxy service.
-- The executor proxy service blocks search engine URLs and internal/private
-  target forms, with the DNS-classification caveat documented below for
-  upstream-proxy mode, then forwards allowed HTTP and HTTPS requests through
-  the same final-hop contract as the other egress-capable components.
+Implement the stack-wide egress model as one architecture, even when runtime
+implementation is staged. Every component should answer the same questions:
 
-This document also compares follow-on options for isolating Obscura, CRW, and
-SearXNG into restricted containers that can reach only their configured
-proxies or explicitly allowed peer services.
+- what network is this component allowed to attach to?
+- which local gateway port may it use for internet egress?
+- which final-hop proxy policy handles destination validation?
+- which peer service ports, if any, are reachable directly?
+- how does the selected VPN/proxy/no-VPN routing matrix remain intact?
+
+This does not require one giant patch. It requires one architecture, one naming
+scheme, one proxy-policy vocabulary, and staged compose work that is easy to
+validate independently.
 
 ## Non-Goals
 
 - Do not add a transparent firewall or general-purpose network sandbox in this
-  phase. The boundary should be Docker network placement plus a proxy-only
-  reachable service.
-- Do not preserve the old shared-namespace executor behavior as an implicit
-  compatibility mode. If that behavior is ever needed for trusted debugging, it
-  should require a separate explicit opt-in variable.
-- Do not make `ONYX_AGENT_OUTBOUND_PROXY_URL` required. Network-enabled
-  executors should use the local proxy endpoint whether or not a remote
-  upstream proxy is configured.
-- Do not give executor pods access to the shared `netns-holder` namespace,
-  stack service aliases, Docker socket, host gateway, or Docker bridge by
-  relying on `NO_PROXY` values. Proxy environment variables are only routing
-  hints; network placement must be the boundary.
+  phase. The primary boundary is Docker network placement plus narrow gateways.
+- Do not preserve broad shared-namespace executor networking as an implicit
+  compatibility mode. If needed for trusted debugging, add a separate explicit
+  opt-in with clear warnings.
+- Do not make `ONYX_AGENT_OUTBOUND_PROXY_URL` required.
+- Do not rely on `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY` as a
+  security boundary. They are routing hints.
+- Do not expose direct CDP, Obscura MCP, data stores, Docker socket access, or
+  host gateway access to generated code through the restricted networks.
+- Do not weaken the existing request-path properties: search-engine prefetch
+  blocking, private-target blocking, anti-bot visibility, rate limiting,
+  explicit no-VPN mode, and fail-closed behavior must remain intact.
 
 ## Current State
 
 The base stack has a stable shared namespace owned by `netns-holder`.
-VPN-routed services join that namespace with:
+VPN-routed services join it with:
 
 ```yaml
 network_mode: "service:netns-holder"
 ```
 
-`prefetch-blocking-proxy` also runs in that namespace. It listens on
-`127.0.0.1:3128` from the point of view of CRW and other shared-namespace
-services. CRW's HTTP prefetch path uses:
+In that namespace, many useful internal listeners share loopback and Docker
+service aliases: Onyx API/Web, CRW, SearXNG, Obscura CDP/MCP, CDP shim,
+doc-drop, embedding shim, code-interpreter, and Mysterium control surfaces.
 
-```env
-HTTP_PROXY=http://127.0.0.1:3128
-HTTPS_PROXY=http://127.0.0.1:3128
-NO_PROXY=127.0.0.1,localhost,::1
-```
+The current web request path is intentionally routed through wrapper shims:
 
-The proxy blocks search-engine prefetches and internal/private targets, then
-forwards allowed HTTP requests and HTTPS `CONNECT` tunnels either directly from
-the shared namespace or through `ONYX_AGENT_OUTBOUND_PROXY_URL`.
+- SearXNG custom engines POST to CRW instead of fetching search engines
+  directly.
+- CRW sends raw HTTP prefetch through `prefetch-blocking-proxy` on
+  `127.0.0.1:3128`.
+- `prefetch-blocking-proxy` blocks search-engine prefetches, private/internal
+  targets, and plain HTTP unless explicitly allowed.
+- CRW escalates search-engine pages to CDP/Obscura.
+- Obscura blocks private-network targets by default.
 
-Today, when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, the Makefile layers
-`docker-compose.code-interpreter-vpn.yml`. That override sets:
+The largest current gap is code-interpreter network enablement. When
+`ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, the Makefile layers
+`docker-compose.code-interpreter-vpn.yml`, which sets:
 
-```env
+```text
 PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1
 ```
 
-Executor pods then inherit the entire shared namespace. Generated code can use
-raw sockets, ignore proxy variables, and reach internal services directly. That
-is the security gap this plan closes.
+Executor pods then inherit the entire shared namespace. Generated code can
+use raw sockets, ignore proxy variables, and reach internal services directly.
 
-## Target Architecture
+The broader request-path components also have unnecessary reachability today:
+Obscura, CRW, and SearXNG all run in the shared namespace even though each
+needs only a small set of peers and egress paths.
 
-Introduce a dedicated executor-only Docker network and a small egress proxy
-bridge.
+## Target Model
 
-```text
-executor pod
-  |
-  | HTTP_PROXY / HTTPS_PROXY / ALL_PROXY
-  v
-code-interpreter-egress-proxy
-  |     attached to executor-only internal network
-  |     attached to normal stack default network
-  v
-prefetch-blocking-proxy at myst-client:3128
-  |
-  | direct from netns-holder, or via ONYX_AGENT_OUTBOUND_PROXY_URL
-  v
-internet
-```
+Separate three roles and keep them named consistently.
 
-Executor egress routing goal:
+### Restricted Component
 
-- Executor pods should not have direct internet egress.
-- Their only internet-capable peer should be the local executor proxy shim,
-  for example `http://code-interpreter-egress-proxy:3128`.
-- The executor proxy shim should be a simple TCP forwarder to the shared
-  `prefetch-blocking-proxy` at `myst-client:3128`.
-- The shared proxy remains responsible for final egress through Mysterium,
-  through `ONYX_AGENT_OUTBOUND_PROXY_URL`, through both, or through neither
-  when no-VPN/no-proxy mode is explicitly selected.
-- If `ONYX_AGENT_OUTBOUND_PROXY_URL` points at a host Docker proxy such as
-  Tor Browser, executor pods still reach only the local executor proxy shim;
-  the host-proxy connection is made by the final-hop shared proxy under the
-  explicit host-proxy bypass policy.
+A component that can be influenced by the agent, generated code, untrusted web
+content, or URL inputs.
 
-Executor internal-access goal:
+In scope:
 
-- Executor pods should attach only to the executor-only internal network.
-- The executor-only network should expose only the executor proxy shim port.
-- Executor pods should not be able to resolve or route to `api_server`, CRW,
-  SearXNG, Obscura, Obscura MCP, CDP shim, `myst-client`, data stores,
-  host-facing bridges, Docker bridge peers, host gateway addresses,
-  `host.docker.internal`, LAN/private ranges, or link-local metadata
-  addresses.
-- Executor `NO_PROXY` should remain limited to loopback inside the executor
-  pod itself, not stack service names.
+- code-interpreter executor pods;
+- Obscura browser renderer;
+- CRW scraper/API;
+- SearXNG search app.
 
-The executor pods should be attached only to a new internal network, for
-example:
+Out of scope for this plan unless they become agent-facing network paths:
 
-```yaml
-networks:
-  code-interpreter-executor:
-    name: onyx-code-interpreter-executor
-    internal: true
-```
+- Teep provider routing;
+- Tailscale Funnel;
+- Mysterium signup/funding flows;
+- data stores and trusted control-plane services.
 
-The network should use an explicit Docker network `name:` because executor
-containers are spawned by the code-interpreter service through the Docker
-socket, not by Compose. `PYTHON_EXECUTOR_DOCKER_NETWORK` must therefore point
-at the concrete Docker network name, for example
-`onyx-code-interpreter-executor`, rather than relying on Compose's
-project-prefixed internal service name.
+### Component Bridge
 
-The code-interpreter patch should set executor proxy variables to a service DNS
-name on that network, for example:
+A small gateway on a restricted component network. It exposes one allowed local
+port to one restricted component or component class.
 
-```env
-HTTP_PROXY=http://code-interpreter-egress-proxy:3128
-HTTPS_PROXY=http://code-interpreter-egress-proxy:3128
-ALL_PROXY=http://code-interpreter-egress-proxy:3128
-NO_PROXY=127.0.0.1,localhost,::1
-```
-
-The executor `NO_PROXY` value should be intentionally small. It must not reuse
-the trusted-service `NO_PROXY_INTERNAL` list that includes `api_server`,
-`myst-client`, `obscura`, `crw`, `searxng-core`, host proxy aliases, or other
-stack-internal names.
-
-## Recommended Implementation Shape
-
-### 1. Replace the Shared-Namespace Executor Overlay
-
-Replace the current meaning of `docker-compose.code-interpreter-vpn.yml`, or
-introduce a renamed overlay such as:
-
-```text
-docker-compose.code-interpreter-network.yml
-```
-
-The existing filename is misleading once executor pods no longer join the VPN
-namespace. A rename is clearer, but it should be handled carefully because the
-Makefile and docs currently refer to the old name.
-
-The new overlay should:
-
-- keep `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` on `code-interpreter`;
-- keep the `sitecustomize_code_interpreter` patch mounted;
-- keep `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` on `api_server` so tool
-  descriptions say network access is available;
-- set `PYTHON_EXECUTOR_DOCKER_NETWORK` to the executor-only network name, not
-  `container:onyx-netns-holder-1`;
-- add the executor-only internal network;
-- add the bridge service;
-- set `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL` to the bridge URL.
-
-The Makefile suffix should change from a VPN-specific variable name to a
-network-specific one:
-
-```make
-CODE_INTERPRETER_NETWORK_SUFFIX :=
-ifneq ($(filter true,$(ONYX_CODE_INTERPRETER_ENABLE_NETWORK)),)
-CODE_INTERPRETER_NETWORK_SUFFIX :=:docker-compose.code-interpreter-network.yml
-endif
-```
-
-### 2. Keep the No-Network Case Visibly Simple
-
-The easiest state to audit is:
-
-- no code-interpreter network overlay;
-- no executor-only network;
-- no bridge service;
-- no executor proxy variables;
-- upstream executor `--network none` remains intact.
-
-To preserve that simplicity, proxy injection should be tied to
-`ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, not merely to
-`ONYX_AGENT_OUTBOUND_PROXY_URL` being non-empty.
-
-This means moving code-interpreter executor proxy settings out of
-`docker-compose.proxy.yml` and into the code-interpreter network overlay, or
-making the `sitecustomize_code_interpreter` patch no-op for executor proxy
-injection unless `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`.
-
-The stronger and clearer version is to split the concerns:
-
-- `docker-compose.proxy.yml` configures trusted services such as obscura,
-  SearXNG, and the shared-namespace `prefetch-blocking-proxy` for the optional
-  upstream proxy.
-- the code-interpreter network overlay configures executor network placement
-  and executor proxy injection.
-
-With that split, `ONYX_AGENT_OUTBOUND_PROXY_URL` alone never changes the
-executor sandbox.
-
-### 3. Add a Bridge Service
-
-Add a service such as:
-
-```yaml
-code-interpreter-egress-proxy:
-  ...
-  networks:
-    - default
-    - code-interpreter-executor
-```
-
-It must not publish host ports. It should listen only for executor-network
-clients and forward to the existing shared-namespace proxy at:
-
-```text
-http://myst-client:3128
-```
-
-`myst-client` is a default-network alias for the `netns-holder` namespace owner.
-Connecting to `myst-client:3128` reaches `prefetch-blocking-proxy`, because that
-proxy listens inside the shared namespace on port `3128`.
-
-Security hardening for the bridge service:
-
-- no host port publishing;
-- bind the listener only on the executor-network interface/address, or enforce
-  equivalent source-network filtering, so default-network peers cannot use the
-  bridge listener even though the bridge is also attached to the default network
-  for its upstream connection;
-- no Docker socket mount;
-- no writable host mounts;
-- `read_only: true` where practical;
-- `security_opt: ["no-new-privileges:true"]`;
-- minimal image;
-- clear healthcheck that verifies only local listen/readiness, not external
-  internet reachability;
-- fail closed if the upstream `myst-client:3128` proxy is unavailable.
-
-## Bridge Strategy For Restricted Components
-
-Separate two roles:
-
-- **final-hop proxy shims** enforce destination policy and own the real
-  outbound connection from the correct routing namespace;
-- **bridge services** expose one final-hop proxy port to one restricted
-  component network.
-
-The preferred bridge service is a minimal raw TCP forwarder. It should not
-parse HTTP, resolve target DNS, classify destinations, add proxy policy, or
-rewrite requests. Its job is only:
+Default bridge behavior should be boring:
 
 ```text
 restricted component network :3128 -> selected final-hop proxy :3128
 ```
 
-This works because the security boundary is the component's Docker network
-placement plus the final-hop proxy's destination policy. Duplicating the same
-proxy implementation in front of the final-hop proxy mostly adds configuration
-and failure modes. It is useful only if the first proxy instance has a
-different policy, materially better per-component audit logs, or a separate
-rate-limit/accounting function.
+A bridge should not parse URLs, resolve target DNS, duplicate destination
+classification, or implement proxy policy unless a component genuinely needs
+component-specific logs, rate limits, path allowlists, or a distinct policy
+failure domain.
 
-### Why Not Move A Final-Hop Proxy To Both Networks?
+Bridge hardening:
 
-Moving an existing final-hop proxy into restricted component networks is not
-recommended.
+- no host port publishing;
+- no Docker socket;
+- no writable host mounts;
+- `read_only: true` where practical;
+- `security_opt: ["no-new-privileges:true"]`;
+- source-network filtering or interface binding so unrelated networks cannot
+  use the listener;
+- healthchecks that verify local readiness, not external internet reachability;
+- fail closed if the upstream final-hop proxy is unavailable.
 
-The current `prefetch-blocking-proxy` service uses:
+### Final-Hop Proxy Policy
 
-```yaml
-network_mode: "service:netns-holder"
-```
+A proxy inside the routing namespace that validates destinations and performs
+the real outbound connection. This is where final egress routing belongs.
 
-Compose services using `network_mode` cannot also declare ordinary
-`networks:` attachments. So the existing service cannot simply stay inside the
-shared namespace and also attach to an executor-only network.
+At minimum the stack needs these policy modes:
 
-Moving it out of `network_mode: service:netns-holder` would have broader
-effects:
+| Policy | Search hosts | Internal/private targets | Plain HTTP | Intended users |
+| --- | --- | --- | --- | --- |
+| `prefetch` | blocked | blocked | blocked unless explicitly allowed | CRW HTTP prefetch |
+| `executor` | blocked | blocked | blocked unless explicitly allowed | code-interpreter executors |
+| `browser` | allowed | blocked | blocked unless explicitly allowed | Obscura browser |
+| `searxng-external` | allowed or allowlisted | blocked | blocked unless explicitly allowed | optional non-CRW SearXNG features |
 
-- CRW currently talks to the proxy through shared-namespace loopback
-  `127.0.0.1:3128`; that would need to become a service DNS hop.
-- The proxy's own direct egress would leave through its Docker network rather
-  than from inside the Mysterium-controlled namespace unless an additional
-  upstream hop back into `netns-holder` is added.
-- The CRW prefetch path, executor egress path, and optional upstream proxy path
-  would become coupled to a dual-homed service with more privilege and more
-  reachability.
-- The no-VPN and VPN fail-closed reasoning would become harder because the
-  same service would be both a shared request-path component and an executor
-  boundary component.
+The existing `prefetch-blocking-proxy` already implements most of the
+`prefetch` and `executor` policy. Prefer extending that implementation with
+explicit modes over copying similar proxy code into separate files.
 
-This option complicates compose layering and weakens the security story by
-making one existing request-path service straddle trust boundaries.
+Do not move final-hop proxies out of `network_mode: service:netns-holder` just
+to attach them to restricted networks. Compose services using `network_mode`
+cannot also declare ordinary `networks:` attachments, and moving the proxy out
+would blur the final-hop routing boundary. Keep final-hop proxies in the
+routing namespace and expose them through narrow bridges.
 
-### Simple TCP Forwarder
+## Routing Matrix
 
-Use one TCP forwarder per restricted component egress network and final-hop
-proxy target. It should not publish host ports.
+All policies must preserve the same four final-hop outcomes.
 
-Benefits:
-
-- very small compose surface;
-- no duplicate proxy configuration;
-- all URL and destination policy lives in the final-hop proxy;
-- fewer moving parts to reason about.
-
-Costs:
-
-- no component-specific URL validation or logs before the final-hop proxy;
-- any bug or misconfiguration in the final-hop proxy is the application-level
-  policy gate;
-- the bridge is a generic tunnel to the proxy port, so its security relies on
-  Docker network isolation and the final-hop proxy.
-
-Those costs are acceptable for the default design. The forwarder itself is
-deliberately boring; the meaningful review surface is the final-hop proxy
-policy and the Compose network graph.
-
-### Component Applicability
-
-The simple TCP-forwarder approach can work for all restricted components, with
-two important caveats:
-
-| Component | Forwarder target | Special case |
+| `MYST_VPN_ENABLED` | `ONYX_AGENT_OUTBOUND_PROXY_URL` | Final outbound behavior |
 | --- | --- | --- |
-| Code-interpreter executors | search-blocking `prefetch-blocking-proxy` | Works directly. Search-engine URLs should remain blocked so generated code uses the controlled SearXNG/CRW/Obscura search path. |
-| CRW HTTP prefetch | search-blocking `prefetch-blocking-proxy` | Works directly. Search-engine prefetches must be blocked to force browser escalation and avoid raw HTTP SERP double-hits. |
-| Obscura browser | search-allowed browser final-hop proxy | Cannot use the existing search-blocking prefetch proxy, because Obscura must render search-engine pages. It can still use a raw TCP forwarder, but the target proxy policy must allow configured search-engine hosts while blocking internal/private targets. |
-| SearXNG default CRW engines | no internet egress forwarder | Even simpler: with only CRW-backed engines, SearXNG only needs CRW and Valkey networks. |
-| SearXNG external engines | search-allowed or engine-policy final-hop proxy | Only needed if non-CRW engines, favicons, autocomplete, or similar external features are intentionally enabled. |
+| `true` | empty | allowed requests leave from the Mysterium namespace |
+| `true` | set | final-hop proxy connects to the upstream proxy through Mysterium |
+| `false` | empty | allowed requests leave directly through Docker bridge egress by explicit no-VPN choice |
+| `false` | set | final-hop proxy connects to the upstream proxy directly, without Mysterium |
 
-The final-hop proxy policy, not the bridge implementation, is what differs by
-component. At minimum the stack needs two final-hop proxy policies:
+Restricted components should not know this matrix directly. They should always
+talk to their local bridge URL. The final-hop proxy decides whether its own
+upstream connection goes through Mysterium, through `ONYX_AGENT_OUTBOUND_PROXY_URL`,
+through both, or through neither.
 
-- **prefetch/executor policy**: block internal/private targets, block
-  configured search-engine hosts, and block plain HTTP unless explicitly
-  allowed.
-- **browser/search-allowed policy**: block internal/private targets and block
-  plain HTTP unless explicitly allowed, but allow configured search-engine
-  hosts.
+## Host-Resident Upstream Proxies
 
-A future SearXNG external-engine policy may be the same as browser/search
-allowed, or it may become engine-allowlisted if the enabled engine set is small
-enough to justify that extra configuration.
-
-### When To Use A Second Proxy Instance
-
-A second proxy instance is optional, not the default recommendation. Use it
-only when it provides something the TCP forwarder cannot:
-
-- different destination policy from the final-hop proxy;
-- per-component request logs that are worth the extra service and config;
-- per-component rate limits or counters;
-- an intentionally separate policy failure domain.
-
-Do not run the same proxy code twice with the same policy only to call it
-defense in depth. That increases the amount of code and configuration that can
-drift without creating an independent boundary.
-
-### Recommendation
-
-Do not move existing final-hop proxies out of `network_mode:
-service:netns-holder`, and do not dual-home them into restricted component
-networks.
-
-Use simple TCP forwarders from restricted component networks to the appropriate
-final-hop proxy port:
-
-- executor and CRW prefetch traffic forward to the search-blocking prefetch
-  proxy;
-- Obscura browser traffic forwards to a search-allowed browser proxy;
-- SearXNG uses no egress forwarder in the default CRW-backed configuration;
-- optional SearXNG external egress forwards to a search-allowed or
-  engine-policy proxy.
-
-This keeps the bridge layer generic and makes the policy differences visible
-where they belong: in the final-hop proxy configuration.
-
-## Sitecustomize Patch Changes
-
-The `onyx/patches/sitecustomize_code_interpreter/sitecustomize.py` patch should
-be adjusted so it models three independent decisions:
-
-1. whether executor network access is enabled;
-2. which Docker network executor pods join;
-3. which proxy environment variables executor pods receive.
-
-Recommended behavior:
-
-- if `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` is not `"true"`, do not change the
-  executor network and do not inject executor proxy variables;
-- if enabled, require `PYTHON_EXECUTOR_DOCKER_NETWORK` to be non-empty and not
-  `container:onyx-netns-holder-1`;
-- inject `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and lowercase variants from
-  `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL`;
-- inject `NO_PROXY` from a dedicated `ONYX_AGENT_EXECUTOR_NO_PROXY`, defaulting
-  to `127.0.0.1,localhost,::1`;
-- continue to pass `ONYX_AGENT_OUTBOUND_PROXY_URL` only as diagnostic/context
-  if needed, not as the executor's direct proxy URL;
-- fail closed in strict mode if proxy injection is expected but no executor
-  proxy URL is configured.
-
-The patch should not propagate trusted-service `NO_PROXY_INTERNAL` into
-executor pods.
-
-## Compose Layering Review
-
-### Base `docker-compose.yaml`
-
-No executor egress bridge should live in the base file. Base behavior should
-remain the safest and easiest to inspect:
-
-- code-interpreter service exists;
-- executor pods default to upstream network isolation;
-- `prefetch-blocking-proxy` serves CRW prefetch inside `netns-holder`;
-- no executor-only network exists.
-
-### `docker-compose.proxy.yml`
-
-This overlay should continue to mean:
-
-- route obscura browser egress through `ONYX_AGENT_OUTBOUND_PROXY_URL`;
-- merge SearXNG outgoing proxy settings;
-- configure the shared-namespace `prefetch-blocking-proxy` to use the upstream
-  proxy.
-
-It should stop being responsible for executor pod proxy injection. Otherwise,
-`ONYX_AGENT_OUTBOUND_PROXY_URL` changes executor launch behavior even when
-`ONYX_CODE_INTERPRETER_ENABLE_NETWORK=false`, which makes the no-network case
-harder to audit.
-
-### Code-Interpreter Network Overlay
-
-This overlay should own all executor networking:
-
-- executor-only network creation;
-- bridge service creation;
-- executor Docker network selection;
-- executor proxy URL and executor `NO_PROXY`;
-- code-interpreter patch mount;
-- api_server prompt/tool-description enablement.
-
-This makes the meaning of `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`
-concentrated in one place.
-
-### VPN Routing Overlays
-
-`docker-compose.teep-vpn.yml` and `docker-compose.tailscale-vpn.yml` should be
-unaffected. They move trusted services into the shared namespace. They should
-not attach to the executor-only network.
-
-### Podman Overlay
-
-`docker-compose.podman.yml` currently disables code-interpreter by default.
-The first implementation can keep restricted executor networking unsupported
-under Podman unless it is explicitly validated.
-
-If Podman support is later added, validation must confirm:
-
-- the code-interpreter image can still spawn executor containers/pods with the
-  selected network;
-- the executor-only network is actually internal;
-- the bridge service is the only reachable peer;
-- no host gateway or stack aliases are reachable from generated code.
-
-## `MYST_VPN_ENABLED` Complexity Review
-
-### `MYST_VPN_ENABLED=true`
-
-This is the normal private egress mode.
-
-The final outbound hop should still occur from the shared namespace:
-
-```text
-executor -> bridge -> myst-client:3128 -> internet
-```
-
-`myst-client:3128` is the shared-namespace `prefetch-blocking-proxy`. When it
-connects directly to allowed destinations, the connection is made from the
-Mysterium-routed namespace and is subject to the existing kill-switch behavior.
-
-If `ONYX_AGENT_OUTBOUND_PROXY_URL` is also set, the shared proxy connects to
-that upstream proxy through the Mysterium tunnel. The remote site then sees the
-upstream proxy's egress, while the upstream proxy provider sees a connection
-from the Mysterium exit.
-
-### `MYST_VPN_ENABLED=false`
-
-This remains an explicit no-VPN mode. `myst-client` idles without arming the
-VPN kill-switch or connecting the tunnel.
-
-The executor isolation boundary should still hold:
-
-```text
-executor -> bridge -> myst-client:3128 -> Docker bridge/direct egress
-```
-
-Generated code can still only reach the bridge service, but allowed internet
-requests leave directly unless `ONYX_AGENT_OUTBOUND_PROXY_URL` is configured.
-
-This preserves the current no-VPN semantics: routing privacy is reduced by
-explicit user choice, but executor pods still do not receive broad access to
-the shared namespace.
-
-## `ONYX_AGENT_OUTBOUND_PROXY_URL` Complexity Review
-
-### Empty Upstream Proxy
-
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty:
-
-- `docker-compose.proxy.yml` is not applied;
-- obscura and SearXNG keep their non-upstream-proxy behavior;
-- the shared `prefetch-blocking-proxy` forwards allowed requests directly from
-  the shared namespace;
-- the code-interpreter network overlay, if enabled, still starts the executor
-  bridge and points executors at it.
-
-The bridge must therefore not depend on `docker-compose.proxy.yml`.
-
-### Configured HTTP/HTTPS/SOCKS Upstream Proxy
-
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is non-empty:
-
-- trusted web/search services use the existing proxy override behavior;
-- the shared `prefetch-blocking-proxy` uses the configured upstream proxy for
-  allowed HTTP and HTTPS traffic;
-- executor pods still point only at the local bridge URL, not at the upstream
-  proxy URL;
-- executor clients do not need PySocks, socksio, or scheme-specific transport
-  support because they always see an ordinary HTTP proxy endpoint.
-
-This keeps the SOCKS compatibility fix while avoiding executor access to the
-shared namespace.
-
-### Host Docker Proxy / Tor Upstream
-
-Host-resident proxy endpoints must remain a supported upstream proxy shape,
-because they make Tor Browser easy to use from the wrapper:
+Host proxy examples such as Tor Browser must remain supported:
 
 ```env
 ONYX_AGENT_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:9150
 MYST_VPN_ALLOW_LAN_BYPASS=true
 ```
 
-The existing stack relies on `MYST_VPN_ALLOW_LAN_BYPASS=true` so the
-shared-namespace proxy client can reach `host.docker.internal:9150` while other
-egress remains controlled by the Mysterium namespace and proxy configuration.
-Restricted component networks must preserve this capability without widening
-application-component access to the host.
+Required distinction:
 
-Required policy:
-
-- application components and executor pods must not be able to connect to
+- restricted components must not be able to connect to
   `host.docker.internal`, host gateway IPs, LAN/private ranges, or link-local
   metadata addresses directly;
-- only the final-hop egress shim that owns `ONYX_AGENT_OUTBOUND_PROXY_URL`
-  may connect to the configured upstream proxy endpoint when that endpoint is
-  on the Docker host or LAN;
-- the desired end state is an endpoint-scoped host-proxy allowance for the
-  resolved upstream proxy host and port, not a general exemption for arbitrary
-  host/LAN targets;
-- if the final-hop shim remains in `netns-holder`, the current
-  `MYST_VPN_ALLOW_LAN_BYPASS=true` requirement is acceptable for this phase, but
-  it remains a broader route exemption than the desired endpoint-scoped policy
-  because it adds RFC 1918 LAN CIDRs to Mysterium route exemptions;
-- if future browser, CRW, SearXNG, or executor shims perform the final
-  upstream dial outside `netns-holder`, they need an equivalent shim-scoped
-  host-proxy bypass such as an explicit allowlist for the configured upstream
-  proxy endpoint;
-- destination validation for target URLs remains unchanged. A request for
-  `http://host.docker.internal:*` or a private/LAN target is still blocked;
-  only the proxy shim's connection to the configured upstream proxy can use
-  the host/LAN bypass.
+- only the final-hop proxy that owns `ONYX_AGENT_OUTBOUND_PROXY_URL` may
+  connect to the configured upstream proxy endpoint;
+- target URL validation is unchanged: requests for host, LAN, private, or
+  link-local targets are blocked;
+- the current `MYST_VPN_ALLOW_LAN_BYPASS=true` mechanism is broader than the
+  desired endpoint-scoped host-proxy allowance and should remain documented as
+  a residual risk until replaced.
 
-This distinction keeps the user-facing Tor flow simple while preserving the
-main isolation goal: components can reach only their local shim ports, and
-host access is limited to the shim's final-hop connection to the configured
-upstream proxy.
+## DNS Classification
 
-Documentation updates for this risk scenario:
+Final-hop proxy destination classification should keep the current behavior:
 
-- `.env.wrapper.example` and `README.md` should continue to tell host-Tor users
-  that `MYST_VPN_ALLOW_LAN_BYPASS=true` is required for
-  `socks5h://host.docker.internal:9150`, but they should also say that this is
-  a broad LAN route exemption in the current implementation.
-- `docs/vpn_routing_and_proxies.md` should distinguish the desired
-  endpoint-scoped host-proxy policy from the current
-  `MYST_VPN_ALLOW_LAN_BYPASS=true` mechanism.
-- `docs/internal_network_security.md` should list host-proxy LAN bypass as a
-  residual risk for host-resident upstream proxy configurations, while noting
-  that executor/application components still must not receive direct host or
-  LAN reachability.
+- with no upstream proxy, resolve target hostnames locally and block any name
+  that resolves to loopback, private/RFC1918, link-local, reserved, or other
+  non-global addresses;
+- with an upstream proxy, avoid local target DNS resolution so target DNS does
+  not leak outside the configured proxy path.
 
-### DNS Classification
-
-The final-hop proxy's current DNS behavior should remain:
-
-- with no upstream proxy, it resolves targets itself and blocks names that
-  resolve to non-global/internal addresses;
-- with an upstream proxy, it avoids target DNS resolution to prevent leaking
-  target DNS outside the configured proxy path.
-
-This creates a deliberate residual risk in upstream-proxy mode: the local
-final-hop proxy can still block IP literals, localhost names,
+That creates a deliberate residual risk in upstream-proxy mode: a
+public-looking hostname might resolve to a private address at the upstream
+proxy. The local final-hop proxy can still block IP literals, localhost names,
 `host.docker.internal`, single-label Docker-style names, and other syntactic
-private-target forms without opening an upstream connection, but it cannot
-locally prove that an arbitrary public-looking hostname will not resolve to a
-private or otherwise non-global address at the upstream proxy. Eliminating that
-risk without leaking target DNS requires an upstream-proxy-side policy, a
-trusted DNS-over-proxy classification mechanism, or an explicit allowlist. Those
-are out of scope for the first executor-isolation implementation unless chosen
-as a separate design.
+private-target forms without opening a connection. Eliminating the remaining
+risk requires upstream-proxy-side policy, DNS-over-proxy classification, or
+explicit allowlists, and is out of scope for the first implementation.
 
-TCP forwarder bridges should not perform target DNS resolution. If an optional
-component-facing proxy instance is ever added for a distinct policy or logging
-reason, configure it so the final-hop proxy remains the destination
-classification point for target DNS.
+Component bridges should not perform target DNS classification. Keep that
+logic centralized in the final-hop proxy policy.
 
-Documentation updates for this risk scenario:
+## Component Targets
 
-- `docs/request_handling.md` and `docs/internal_network_security.md` should
-  describe the difference between no-upstream-proxy DNS classification and
-  upstream-proxy mode, including the residual hostname-to-private-IP risk.
-- `docs/vpn_routing_and_proxies.md` should explain that
-  `ONYX_AGENT_OUTBOUND_PROXY_URL` moves target DNS resolution to the upstream
-  proxy path by design, and that local DNS-based private-target blocking is
-  therefore intentionally reduced to avoid DNS leakage.
-- `.env.wrapper.example` and `README.md` should mention this caveat near the
-  upstream proxy examples so operators do not read `ONYX_AGENT_OUTBOUND_PROXY_URL`
-  as a complete SSRF/private-network enforcement layer.
+### Code-Interpreter Executors
 
-## Search Engine Blocking
+Default disabled behavior should stay visibly simple:
 
-The executor proxy path should keep blocking search engine URLs.
+- no executor network overlay;
+- no executor-only network;
+- no executor bridge;
+- no executor proxy injection;
+- upstream executor network isolation remains intact.
 
-This is acceptable and desirable for code-interpreter because search should
-remain on the SearXNG/CRW/obscura path, where rate limits, anti-bot behavior,
-and private-target validation are documented and controlled.
+When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, generated Python and shell
+code should get one network capability: connect to a local HTTP/HTTPS proxy
+on the executor-only network.
 
-Document the user-visible consequence:
+Target shape:
 
-- generated code using `urllib`, `requests`, `curl`, `git`, or similar tools
-  through the executor proxy should not expect direct access to Google, Brave
-  Search, DuckDuckGo HTML, Startpage, or Bing search result pages;
-- non-search HTTP and HTTPS URLs are allowed only after internal/private target
-  validation.
+```text
+executor pod
+  |
+  | HTTP_PROXY / HTTPS_PROXY / ALL_PROXY
+  v
+executor-egress-bridge
+  |
+  v
+executor/prefetch final-hop proxy in netns-holder
+  |
+  v
+internet via selected routing matrix
+```
 
-## Agent-Facing Prompt And Tool Description Patches
+Executor requirements:
 
-There is already an API-server-side patch gated by
-`ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`. It lives in
-`onyx/patches/sitecustomize_base/wrapper_env_patches.py` and rewrites:
+- executor pods attach only to a named internal Docker network, for example
+  `onyx-code-interpreter-executor`;
+- `PYTHON_EXECUTOR_DOCKER_NETWORK` points at that concrete network name, never
+  `container:onyx-netns-holder-1`;
+- executor proxy variables point at the bridge URL, not at
+  `ONYX_AGENT_OUTBOUND_PROXY_URL`;
+- executor `NO_PROXY` is limited to loopback inside the executor pod, for
+  example `127.0.0.1,localhost,::1`;
+- generated code cannot resolve or route to `api_server`, CRW, SearXNG,
+  Obscura, Obscura MCP, CDP shim, `myst-client`, host bridges, data stores,
+  host gateway addresses, `host.docker.internal`, LAN/private ranges, or
+  link-local metadata addresses;
+- search-engine URLs stay blocked so generated code uses the controlled
+  SearXNG/CRW/Obscura path instead of direct SERP scraping.
 
-- `PythonTool.DESCRIPTION`;
-- `PYTHON_TOOL_GUIDANCE`;
-- `BashTool.DESCRIPTION`;
-- coding-agent bash tool metadata;
-- coding-agent system prompts.
+The code-interpreter `sitecustomize` patch should model three independent
+decisions:
 
-Today that replacement text says executor pods have VPN-routed internet access.
-It also advertises shared-namespace local services:
+1. whether executor network access is enabled;
+2. which Docker network executor pods join;
+3. which proxy variables executor pods receive.
 
-- Python tool text mentions CRW's Firecrawl-compatible API at
-  `http://127.0.0.1:3010`, including `/v1/scrape`, `/v1/crawl`, `/v1/map`, and
-  `/v1/search`.
-- Coding-agent text mentions the same CRW API and direct CDP browser access at
-  `ws://127.0.0.1:9222/devtools/browser`.
-- It does not advertise SearXNG directly. Search is exposed indirectly through
-  CRW's `/v1/search`, which is configured to call the bundled SearXNG sidecar.
+Recommended patch behavior:
 
-That text must change with the restricted executor network. In the new model,
-executor pods should not be told they share a namespace or can reach loopback
-stack services. The baseline restricted-mode text should say:
+- if `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` is not `true`, do not change the
+  executor network and do not inject executor proxy variables;
+- if enabled, require `PYTHON_EXECUTOR_DOCKER_NETWORK` and reject
+  `container:onyx-netns-holder-1`;
+- require `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL`;
+- inject `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and lowercase variants from
+  `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL`;
+- inject `NO_PROXY` from `ONYX_AGENT_EXECUTOR_NO_PROXY`, defaulting to
+  `127.0.0.1,localhost,::1`;
+- never propagate trusted-service `NO_PROXY_INTERNAL` into executor pods.
+
+Prompt/tool-description patches should stop advertising shared-namespace local
+services. Use wording closer to:
 
 ```text
 Network access is available through a restricted HTTP/HTTPS proxy. Direct
@@ -734,124 +311,17 @@ blocked. Internal/private network targets and direct search-engine URLs are
 blocked by the proxy.
 ```
 
-If we expose additional local web/search services to code-agent, the prompt
-patch should advertise only the gateway endpoints that are actually reachable
-from the executor-only network, not the shared-namespace loopback addresses.
+Optional local CRW search/scrape access for the code agent should be a separate
+opt-in profile, not part of baseline network enablement. If added, expose only
+a reviewed CRW gateway URL on the executor network. Do not expose direct CDP or
+Obscura MCP.
 
-## Optional Code-Agent Access To Search/Scrape Services
+### Obscura Browser
 
-The strictest restricted-network design gives executor pods access only to the
-egress proxy. That is the cleanest interpretation of "proxy service only" and
-should be the default.
-
-It is still possible to provide selected local search/scrape capabilities to
-the code agent without returning executors to the shared namespace. Treat this
-as a separate opt-in service-access profile, not as part of baseline network
-enablement.
-
-The safest version is:
-
-- expose CRW's Firecrawl-compatible API through the executor bridge at a new
-  executor-network hostname/port;
-- prefer CRW `/v1/search` over exposing SearXNG directly, so the code-agent gets
-  the existing wrapper search path without learning stack-internal SearXNG
-  topology;
-- rely on CRW's existing target validation and Obscura's private-network block
-  for scrape targets;
-- do not expose direct CDP or Obscura MCP in restricted mode.
-
-Direct CDP access is a much larger capability than HTTP search/scrape. It gives
-generated code browser automation control over a long-lived internal browser
-service and bypasses the CRW API's narrower request model. Even though Obscura
-blocks private-network navigation by default, exposing CDP would make the
-executor bridge a browser-control bridge rather than a narrow egress/search
-bridge.
-
-### Using Option C For Local Service Access
-
-The raw TCP forwarder option can be extended from one listener:
-
-```text
-executor :3128 -> myst-client:3128
-```
-
-to a small explicit allowlist:
-
-```text
-executor :3128 -> myst-client:3128   # HTTP/HTTPS proxy
-executor :3010 -> myst-client:3010   # CRW Firecrawl-compatible API
-```
-
-Optionally, it could also expose:
-
-```text
-executor :8888 -> myst-client:8888   # SearXNG JSON API/UI
-```
-
-However, exposing SearXNG directly adds another application surface and may
-make prompts and debugging less clear. Prefer exposing CRW `/v1/search` first.
-
-If we use raw forwarding for CRW, the bridge has no HTTP path-level policy; it
-exposes whatever CRW exposes on that port. That is simple and auditable at the
-network layer, but all application policy then belongs to CRW. If we want a
-path-level allowlist, the bridge needs to become a tiny HTTP gateway rather
-than a pure TCP forwarder.
-
-Recommended staged approach:
-
-1. Implement proxy-only executor networking first.
-2. Update prompt/tool text to describe only restricted proxy access.
-3. Add an explicit opt-in such as
-   `ONYX_CODE_INTERPRETER_ALLOW_LOCAL_WEB_SERVICES=true` only if code-agent
-   workflows need local CRW search/scrape access.
-4. If that opt-in is enabled, expose CRW through the bridge and advertise the
-   bridge URL in code-agent prompts.
-5. Keep CDP and Obscura MCP unexposed unless there is a separate, reviewed
-   design for browser-control access.
-
-## Restricted Request-Path Components
-
-The code-interpreter executor is the highest-risk untrusted-code boundary, but
-the same proxy-only network pattern can also be applied to the web request
-path. The useful question is different for each component:
-
-- Obscura runs untrusted page JavaScript and should ideally have no direct
-  egress except a browser egress proxy.
-- CRW accepts URLs from Onyx and SearXNG, makes HTTP prefetch decisions, and
-  controls the browser through CDP. It should ideally reach only its configured
-  prefetch proxy, CDP endpoint, search backend, and callers.
-- SearXNG should ideally reach only CRW and Valkey in the default wrapper
-  configuration, because the enabled web engines are CRW-backed stubs rather
-  than direct external engines.
-
-The reference checkouts under `reference_repos/` support this direction:
-Obscura exposes explicit `--proxy` / `OBSCURA_PROXY` controls and does not
-honor `HTTP_PROXY` / `HTTPS_PROXY` as a routing boundary; CRW has explicit
-proxy and CDP configuration surfaces but can also use environment proxy
-variables for its reqwest HTTP prefetch; SearXNG uses `outgoing.proxies` and
-per-engine `network` settings rather than relying on process-level proxy
-environment variables.
-
-The common implementation principle should remain the same as for
-code-interpreter executors: proxy settings are routing hints, while container
-network placement is the boundary.
-
-Each restricted component section below must answer two questions:
-
-1. Which local shim port is the component allowed to use for internet egress,
-   and how does that shim preserve the selected VPN/proxy/no-VPN final hop?
-2. Which Docker networks prevent the component from reaching internal APIs,
-   host gateway addresses, `host.docker.internal`, LAN/private ranges, and
-   link-local metadata addresses directly?
-
-### Obscura Browser Restricted Container
-
-Obscura is the best candidate for additional isolation because it renders
-attacker-controlled web pages. Obscura already blocks private-network targets
-by default, and the wrapper does not pass `--allow-private-network`, but it
-still currently runs in the shared namespace. If Obscura has a bug in target
-validation, JS fetch handling, URL rewriting, or proxy threading, the shared
-namespace gives that bug nearby internal listeners to probe.
+Obscura renders attacker-controlled pages and should not live in the broad
+shared namespace. Its egress is different from CRW prefetch and executor
+egress because the browser must be allowed to visit configured search-engine
+hosts.
 
 Target shape:
 
@@ -860,119 +330,42 @@ cdp-shim
   |
   | CDP WebSocket
   v
-obscura on an obscura-control network
+obscura on a browser-control network
   |
-  | --proxy http://obscura-egress-proxy:3128
+  | --proxy http://obscura-egress-bridge:3128
   v
-obscura-egress bridge/proxy
-  |
-  v
-search-allowed egress proxy inside netns-holder
+obscura-egress-bridge
   |
   v
-internet through Mysterium or ONYX_AGENT_OUTBOUND_PROXY_URL
+browser final-hop proxy in netns-holder
+  |
+  v
+internet via selected routing matrix
 ```
 
-Egress routing goal:
+Obscura requirements:
 
-- Obscura should not have direct Docker-bridge or shared-namespace egress.
-- Its only internet-capable outbound path should be
-  `http://obscura-egress-proxy:3128`, passed via `--proxy` or
-  `OBSCURA_PROXY`.
-- `obscura-egress-proxy` should forward only to a search-allowed proxy shim in
-  `netns-holder`, so the final outbound hop follows the same four-state
-  `MYST_VPN_ENABLED` / `ONYX_AGENT_OUTBOUND_PROXY_URL` matrix as the rest of
-  the stack.
-- If `ONYX_AGENT_OUTBOUND_PROXY_URL` points at a host Docker proxy, Obscura
-  still reaches only `obscura-egress-proxy`; the search-allowed final-hop shim
-  is the only piece that may use the host-proxy bypass.
-- The Obscura container should not receive `HTTP_PROXY`, `HTTPS_PROXY`, or
-  broad `NO_PROXY` values as the enforcement mechanism; Obscura's own proxy
-  flag is the routing input, and the isolated network is the boundary.
+- Obscura attaches only to a browser-control network and a browser-egress
+  network;
+- the browser-control network contains only CDP shim and Obscura's CDP
+  listener;
+- the browser-egress network exposes only the proxy bridge;
+- Obscura receives routing through `--proxy` or `OBSCURA_PROXY`, not broad
+  process-wide proxy env as the enforcement mechanism;
+- the browser final-hop policy blocks internal/private targets, host gateway
+  addresses, `host.docker.internal`, single-label service names, and
+  link-local metadata ranges;
+- the browser final-hop policy allows configured search-engine hosts.
 
-Internal-access goal:
+Do not point Obscura at the existing search-blocking
+`prefetch-blocking-proxy`. That would break the intentional SERP rendering
+path.
 
-- Obscura should be attached only to an Obscura control network and an
-  Obscura egress network.
-- The control network should contain only the CDP shim and the Obscura CDP
-  listener needed for browser control; it must not include `api_server`, CRW,
-  SearXNG, `myst-client`, host-facing bridges, or data services.
-- The egress network should contain only Obscura and the
-  `obscura-egress-proxy` listener on port `3128`.
-- The browser egress proxy must block internal/private targets,
-  `host.docker.internal`, single-label Docker service names, host gateway
-  addresses, and link-local metadata ranges. Search-engine hosts are the
-  intentional exception for this mode.
+### CRW
 
-The important wrinkle is search engines. Obscura must be allowed to navigate
-to Google, Brave Search, DuckDuckGo HTML, Startpage, and Bing because the
-whole search path intentionally escalates SERPs to the browser renderer. It
-therefore cannot use the existing `prefetch-blocking-proxy` as its final
-upstream in the default configuration: that proxy deliberately returns `403`
-for search-engine hosts to prevent CRW's raw HTTP prefetch from double-hitting
-SERPs. This is the chicken-and-egg problem. If the Obscura browser egress path
-forwards to `myst-client:3128`, the browser renderer would also be blocked
-from the search engines it is supposed to render.
-
-Viable options:
-
-1. Add a search-allowed browser egress proxy in the shared namespace.
-   - Reuse the same proxy implementation type as `prefetch-blocking-proxy`,
-     but run it with search-host blocking disabled and internal/private-target
-     blocking enabled.
-   - It must perform the final outbound hop from `netns-holder`, or through
-     `ONYX_AGENT_OUTBOUND_PROXY_URL` from that namespace.
-   - Obscura cannot attach directly to a service that uses
-     `network_mode: service:netns-holder`, so an internal-network bridge or
-     dual-proxy shape is still needed.
-
-2. Put Obscura on an internal network with a tiny TCP bridge to a
-   search-allowed proxy listener in `netns-holder`.
-   - The bridge exposes only the proxy port to Obscura.
-   - The search-allowed proxy listener enforces destination policy and final
-     routing.
-   - This preserves the current VPN/no-VPN semantics because final egress
-     still originates in the shared namespace.
-
-3. Use a firewall-restricted browser namespace instead of proxy-only egress.
-   - This would allow Obscura to keep ordinary browser networking while rules
-     deny internal/private destinations and permit only the proxy/VPN path.
-   - It is less attractive in Compose because Docker subnet allocation, DNS,
-     IPv6, and host-gateway behavior all need continuous validation.
-
-A unified proxy implementation would simplify this if it supports explicit
-modes, for example:
-
-```text
-mode=prefetch   block_search=true   block_internal=true   allow_http=false
-mode=browser    block_search=false  block_internal=true   allow_http=false
-mode=executor   block_search=true   block_internal=true   allow_http=false
-mode=searxng    block_search=false  block_internal=true   allow_http=false
-```
-
-The implementation can stay one code path, but the mode names make intent
-visible in Compose and logs. The browser mode is not a weaker version of the
-prefetch mode; it exists because search-engine access is required for the
-Obscura renderer.
-
-Cost/benefit:
-
-- Benefit: high. It creates a network backstop behind Obscura's private-target
-  block for the highest-risk renderer process.
-- Complexity: high. It requires changing CDP addressing, adding a
-  search-allowed egress path, preserving VPN final-hop behavior, and validating
-  browser search success.
-- Recommended priority: high, after code-interpreter executor isolation. Do
-  not attempt it by pointing Obscura at the current search-blocking
-  `prefetch-blocking-proxy`.
-
-### CRW Restricted Container
-
-CRW is the orchestration point between Onyx/SearXNG, the HTTP prefetch proxy,
-the CDP shim, and SearXNG-backed `/v1/search`. It is less directly exposed to
-hostile browser JavaScript than Obscura, but it accepts untrusted target URLs
-and contains the logic that decides whether to satisfy a request from HTTP
-prefetch or escalate to CDP.
+CRW accepts untrusted target URLs, performs HTTP prefetch, controls the browser
+through CDP, and optionally calls SearXNG for `/v1/search`. It should have
+only those explicit peers.
 
 Target shape:
 
@@ -984,115 +377,47 @@ crw on a crw-api network
   |
   | HTTP_PROXY / HTTPS_PROXY
   v
-prefetch egress bridge/proxy
+crw-prefetch-bridge
   |
   v
-prefetch-blocking-proxy inside netns-holder
+prefetch final-hop proxy in netns-holder
 
-crw
-  |
-  | WebSocket
-  v
-cdp-shim on a crw-cdp network
-
-crw
-  |
-  | /v1/search only
-  v
-SearXNG on a search-internal network
+crw -> cdp-shim on a crw-cdp network
+crw -> searxng on a search network, if CRW /v1/search remains enabled
 ```
 
-Egress routing goal:
+CRW requirements:
 
-- CRW should not have direct internet egress.
-- Its HTTP prefetch path should reach only a local prefetch proxy shim port,
-  for example `http://crw-prefetch-egress-proxy:3128`.
-- That CRW-side shim should be a simple TCP forwarder whose only upstream is
-  the shared `prefetch-blocking-proxy` in `netns-holder` at
-  `myst-client:3128`.
-- The shared `prefetch-blocking-proxy` remains responsible for the final
-  outbound hop: through Mysterium, through `ONYX_AGENT_OUTBOUND_PROXY_URL`,
-  through both, or through neither when no-VPN/no-proxy mode is explicitly
-  selected.
-- If `ONYX_AGENT_OUTBOUND_PROXY_URL` points at a host Docker proxy, CRW still
-  reaches only its prefetch proxy shim; the shared final-hop proxy is the only
-  piece that may use the host-proxy bypass.
-- CRW should not be configured with a broad `NO_PROXY`; the only direct peers
-  should be the CDP shim, SearXNG search endpoint, and caller-facing API
-  networks described below.
+- no direct internet egress;
+- no broad `NO_PROXY` list;
+- HTTP prefetch reaches only the CRW prefetch bridge;
+- the prefetch final-hop policy keeps search-engine blocking so CRW escalates
+  SERPs to Obscura without raw HTTP double-hits;
+- CDP access goes only to the CDP shim endpoint;
+- SearXNG access goes only to the intended search endpoint;
+- caller access to CRW's Firecrawl-compatible API uses an explicit API
+  network or host diagnostic bridge;
+- CRW has no route to Onyx internals, Obscura CDP/MCP directly, Mysterium
+  admin ports, data stores, host gateway addresses, `host.docker.internal`,
+  LAN/private ranges, or link-local metadata addresses.
 
-Internal-access goal:
+This requires replacing current loopback assumptions:
 
-- CRW should be split onto narrow internal networks instead of the shared
-  namespace or general default network.
-- The CRW prefetch-egress network should expose only the proxy shim port.
-- The CRW CDP network should expose only the CDP shim WebSocket endpoint.
-- The CRW search network should expose only SearXNG's search API endpoint if
-  CRW `/v1/search` remains enabled.
-- The CRW API network should expose only CRW's Firecrawl-compatible API to
-  Onyx, SearXNG custom engines, or an explicit host diagnostic bridge.
-- CRW should have no route to `api_server` health endpoints, Obscura CDP/MCP
-  directly, `myst-client` administrative ports, data stores, host gateway
-  addresses, `host.docker.internal`, LAN/private ranges, or link-local
-  metadata addresses except through the prefetch proxy shim's destination
-  policy.
+- `CRW_RENDERER__CHROME__WS_URL` must become a DNS name on the CDP network;
+- `CRW_SEARCH__SEARXNG_URL` must become a DNS name on the search network;
+- SearXNG custom engines need configurable `CRW_SCRAPE_URL` instead of
+  assuming `http://127.0.0.1:3010`;
+- healthchecks must stop assuming CRW can use shared loopback for all peers.
 
-The strict version gives CRW no default-network attachment and no shared
-namespace. It can only reach:
+### SearXNG
 
-- the prefetch proxy URL in `HTTP_PROXY` / `HTTPS_PROXY`;
-- the CDP shim URL in `CRW_RENDERER__CHROME__WS_URL`;
-- SearXNG for `CRW_SEARCH__SEARXNG_URL`, if `/v1/search` is enabled;
-- callers that need the Firecrawl-compatible API.
+In the default wrapper configuration, SearXNG's enabled web engines are
+CRW-backed stubs. It does not need general internet egress for web search.
 
-That requires replacing all current loopback assumptions:
-
-- `CRW_RENDERER__CHROME__WS_URL` changes from
-  `ws://127.0.0.1:9224/devtools/browser` to a DNS name on the CDP network;
-- `CRW_SEARCH__SEARXNG_URL` changes from `http://127.0.0.1:8888` to a DNS name
-  on a search network;
-- SearXNG's CRW-backed engines change `CRW_SCRAPE_URL` from loopback to a
-  service DNS name, preferably via a wrapper env var rather than a hardcoded
-  constant;
-- the healthcheck stops assuming CRW can scrape its own loopback health URL
-  through the same namespace shape.
-
-The prefetch egress path can reuse the code-interpreter bridge design: a raw
-TCP forwarder from a CRW-only internal network to `myst-client:3128`.
-
-Unlike Obscura, CRW's prefetch path should keep search-engine blocking.
-Search-engine URLs should still receive local `403` at prefetch time so CRW
-escalates to Obscura without sending the raw reqwest request to the provider.
-
-Cost/benefit:
-
-- Benefit: medium to high. It protects against CRW bugs that attempt direct
-  internal access outside the documented proxy/CDP/search channels.
-- Complexity: high. It touches the most loopback assumptions and spans Onyx,
-  SearXNG, CDP shim, healthchecks, and host-facing bridges.
-- Recommended priority: medium. It is valuable isolation work, but doing it
-  before Obscura isolation risks spending complexity on plumbing while leaving
-  the renderer in the broadest namespace.
-
-### SearXNG Restricted Container
-
-SearXNG is the easiest component to reason about in the default wrapper
-configuration. The stock direct search engines are removed, and the enabled
-web engines are `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2`;
-those custom engines POST to CRW rather than fetching search providers
-directly. In that mode SearXNG does not need general internet egress for web
-search. It needs:
-
-- inbound HTTP from Onyx and optional host diagnostics;
-- outbound HTTP to CRW's `/v1/scrape`;
-- access to `searxng-valkey`;
-- optional outbound access for any non-CRW engines, autocomplete, favicons, or
-  future features that are explicitly enabled.
-
-Target shape for the default CRW-only engine set:
+Target shape:
 
 ```text
-Onyx / host-searxng-proxy
+Onyx / host diagnostics
   |
   v
 searxng-core on search-api/search-internal networks
@@ -1101,299 +426,298 @@ searxng-core on search-api/search-internal networks
   +--> searxng-valkey
 ```
 
-Egress routing goal:
+SearXNG requirements:
 
-- In the default CRW-backed engine set, SearXNG should have no general
-  internet egress at all.
-- Its only outbound HTTP path for web search should be the CRW scrape endpoint
-  on an internal search/CRW API network.
-- If future non-CRW engines, favicons, autocomplete, or other external
-  features are intentionally enabled, they should use SearXNG's
-  `outgoing.proxies` through a local SearXNG egress proxy shim port, for
-  example `http://searxng-egress-proxy:3128`.
-- That shim should forward to a suitable shared-namespace egress proxy so the
-  final outbound hop follows the selected Mysterium/proxy/no-VPN matrix.
-- If `ONYX_AGENT_OUTBOUND_PROXY_URL` points at a host Docker proxy, SearXNG
-  should still reach only the local SearXNG egress shim; the final-hop shim is
-  the only piece that may use the host-proxy bypass.
+- default CRW-backed engine mode has no internet egress proxy at all;
+- web search outbound HTTP goes only to CRW's scrape endpoint;
+- SearXNG reaches only Valkey for its own cache/state;
+- it does not share a namespace or general network with Onyx internals,
+  Obscura, CDP shim, Mysterium admin ports, data stores, host bridges, or host
+  gateway aliases;
+- accidental direct engines fail closed by network placement.
 
-Internal-access goal:
+If future non-CRW engines, favicons, autocomplete, or other external features
+are intentionally enabled, add a SearXNG egress bridge and configure SearXNG's
+native `outgoing.proxies` / per-engine `network` settings to use it. Do not
+rely on process-level proxy environment variables.
 
-- SearXNG should be attached only to the search API network, the CRW scrape
-  network, and the Valkey network needed for its own cache/state.
-- It should not share a namespace or network with `api_server`, Obscura,
-  Obscura MCP, CDP shim, `myst-client` administrative ports, data stores,
-  host-facing bridges, or host gateway aliases.
-- If an external-engine egress shim is added, the SearXNG egress network
-  should expose only that proxy shim port and should block internal/private
-  targets, `host.docker.internal`, single-label service names, host gateway
-  addresses, and link-local metadata ranges.
+## Compose Layering
 
-If SearXNG remains limited to CRW-backed web engines, it can be placed on an
-internal search network without any internet egress proxy at all. That is the
-cleanest version and would make accidental direct-engine traffic fail closed.
-The `docker-compose.proxy.yml` SearXNG entrypoint would then only be needed if
-non-CRW external engines are intentionally enabled.
+Use network-focused names for restricted-egress overlays.
 
-If future SearXNG features need internet egress, use SearXNG's native
-`outgoing.proxies` and per-engine `network` support rather than environment
-proxy variables. In that model:
+Recommended files and responsibilities:
 
-- the CRW-backed engines use a `direct` SearXNG network that means "direct to
-  local CRW on the search-internal Docker network," not direct internet;
-- external engines use a proxy-backed SearXNG outgoing network;
-- the container network still prevents bypassing those settings with arbitrary
-  direct sockets.
+- `docker-compose.restricted-egress.yml`: common final-hop proxy modes,
+  bridge image/service definitions, and shared restricted-network primitives
+  where Compose permits reuse;
+- `docker-compose.code-interpreter-network.yml`: executor-only network,
+  executor bridge, executor Docker network selection, executor proxy URL,
+  executor `NO_PROXY`, patch mount, and API-server prompt enablement;
+- `docker-compose.browser-network.yml`: Obscura/CDP restricted networks and
+  browser egress bridge;
+- `docker-compose.search-network.yml`: SearXNG/Valkey/CRW search networks and
+  CRW scrape URL wiring;
+- `docker-compose.crw-network.yml`: CRW API/CDP/search/prefetch network
+  placement.
 
-Cost/benefit:
+If separate files become too noisy, combine the request-path components into
+one `docker-compose.request-egress.yml`. Executor networking should live in
+`docker-compose.code-interpreter-network.yml`, because executors attach to a
+restricted executor network rather than to the VPN namespace.
 
-- Benefit: medium. It narrows a Python web app and plugin surface, and it
-  makes future accidental direct engines obvious.
-- Complexity: low to medium if done before CRW isolation, medium if combined
-  with CRW because both sides need DNS-name rewiring.
-- Recommended priority: medium to high. This is likely the cheapest isolation
-  win, especially if we first make `CRW_SCRAPE_URL` configurable in the custom
-  engines.
+`docker-compose.proxy.yml` should keep its narrow meaning:
 
-### Cross-Component Cost/Benefit Decision Matrix
+- configure final-hop proxies to use `ONYX_AGENT_OUTBOUND_PROXY_URL`;
+- configure trusted-service upstream proxy behavior for services that remain
+  trusted shared-namespace components;
+- configure SearXNG external proxy settings only when external SearXNG egress
+  is intentionally enabled.
 
-| Component | Main risk reduced | Isolation value | Complexity | Recommended order |
-| --- | --- | --- | --- | --- |
-| Code-interpreter executors | LLM-generated code bypassing proxy variables and reaching internal services | Very high | Medium to high | 1 |
-| Obscura browser | Untrusted page JS or browser/proxy bugs reaching internal services or bypassing configured egress | High | High | 2 |
-| SearXNG | Accidental direct engines or plugin/network features bypassing CRW | Medium | Low to medium | 3 |
-| CRW | Scraper orchestration bugs or direct fetch paths bypassing configured proxy/CDP/search channels | Medium to high | High | 4 |
+It should not inject executor proxy variables. `ONYX_AGENT_OUTBOUND_PROXY_URL`
+alone must never change the executor sandbox.
 
-This order is not purely by security value. It also accounts for implementation
-sequencing:
+The Makefile should use network-specific suffix names, for example:
 
-- executor isolation removes the largest already-documented arbitrary-code
-  gap;
-- Obscura isolation adds a backstop behind the untrusted browser renderer;
-- SearXNG isolation is comparatively cheap once CRW's URL is configurable;
-- CRW isolation is worthwhile, but it benefits from having the Obscura and
-  SearXNG endpoints already moved off loopback and onto explicit internal
-  networks.
+```make
+CODE_INTERPRETER_NETWORK_SUFFIX :=
+ifneq ($(filter true,$(ONYX_CODE_INTERPRETER_ENABLE_NETWORK)),)
+CODE_INTERPRETER_NETWORK_SUFFIX :=:docker-compose.code-interpreter-network.yml
+endif
+```
 
-The decision point for each component should be whether the extra network
-surface remains smaller and clearer than the shared namespace it replaces. If
-an isolation design requires a broad dual-homed gateway that can reach many
-stack services, it has probably lost the benefit. Prefer several narrow,
-named bridges over one general internal router.
+Add separate opt-in variables only when needed, for example:
 
-## Security Properties After Executor Implementation
+```env
+ONYX_RESTRICT_OBSCURA_NETWORK=true
+ONYX_RESTRICT_SEARXNG_NETWORK=true
+ONYX_RESTRICT_CRW_NETWORK=true
+ONYX_CODE_INTERPRETER_ALLOW_LOCAL_WEB_SERVICES=false
+```
 
-Expected improvements:
+Prefer enabling the full restricted request path as a single documented mode
+after validation, rather than leaving many half-overlapping profiles as
+long-term user-facing options.
 
-- executor pods no longer share loopback with `api_server`, `crw`, obscura,
-  SearXNG, `myst-client`, or other shared-namespace services;
-- executor pods cannot reach stack service DNS aliases through normal Docker
-  networking;
-- executor pods cannot bypass the proxy with raw sockets unless Docker network
-  isolation is misconfigured;
-- executor `NO_PROXY` no longer carves out stack-internal names;
-- the existing prefetch/search path stays unchanged;
-- `ONYX_AGENT_OUTBOUND_PROXY_URL` remains optional and no longer implies any
-  executor sandbox changes by itself.
+## Design Rules
 
-Remaining risks:
+- Use `docker-compose.code-interpreter-network.yml` for executor networking.
+- `ONYX_AGENT_OUTBOUND_PROXY_URL` configures final-hop upstream proxying; it
+  does not trigger executor proxy injection.
+- Untrusted executors receive only the dedicated executor `NO_PROXY`, not
+  trusted-service `NO_PROXY_INTERNAL`.
+- Prompt text advertises only reachable restricted-network capabilities.
+- Destination policy lives in one proxy implementation with explicit modes.
+- Raw TCP bridges are the default bridge type when no distinct policy,
+  logging, rate-limit, or accounting role is needed.
+- SearXNG custom engines use a configurable CRW endpoint.
+- Runtime topology uses named API, CDP, search, prefetch, browser-egress, and
+  executor-egress networks instead of broad shared-namespace assumptions.
+- Host-proxy LAN bypass and upstream-proxy DNS classification are documented
+  residual risks for the relevant routing modes.
 
-- the code-interpreter container still has Docker socket access in order to
-  spawn executor pods; that trusted service remains part of the control plane;
-- if the executor-only network is not truly internal or the wrong network name
-  is injected, generated code could regain broader egress;
-- if the dual-homed bridge accepts clients on its default-network interface,
-  trusted stack services could accidentally gain an undocumented proxy path;
-- with TCP forwarder bridges, all destination policy depends on the final-hop
-  proxy policy being correct for that component;
-- in `ONYX_AGENT_OUTBOUND_PROXY_URL` mode, target DNS classification is moved
-  to the upstream proxy path to avoid DNS leakage, leaving a residual
-  hostname-to-private-IP risk unless an upstream-side or allowlisted policy is
-  added;
-- host-resident upstream proxies currently rely on
-  `MYST_VPN_ALLOW_LAN_BYPASS=true`, which is broader than endpoint-scoped host
-  proxy access and should be documented as such until replaced;
-- optional second proxy instances add value only when they have a distinct
-  policy, log, rate-limit, or accounting role;
-- environment variables are not a boundary. The boundary is the executor-only
-  Docker network plus the absence of any reachable peer except the bridge.
+## Implementation Phases
 
-## Executor Implementation Steps
+### Phase 1: Shared Primitives
 
-1. Rename or replace `docker-compose.code-interpreter-vpn.yml`.
-   - New recommended name: `docker-compose.code-interpreter-network.yml`.
-   - Update Makefile suffix naming and docs references.
+1. Add explicit proxy policy modes to the existing prefetch proxy
+   implementation or an adjacent shared module:
+   - `prefetch`;
+   - `executor`;
+   - `browser`;
+   - optional `searxng-external`.
+2. Keep destination validation strict and fail closed.
+3. Add a minimal bridge service pattern that can expose one restricted-network
+   port to one final-hop proxy port without host publishing.
+4. Add compose naming conventions and Makefile suffix names for restricted
+   egress.
 
-2. Add the executor-only network and bridge service.
-   - Prefer a simple TCP forwarder to the shared `prefetch-blocking-proxy`.
-   - Keep the existing `prefetch-blocking-proxy` unchanged inside
-     `netns-holder`.
-   - Do not publish bridge ports to the host.
+### Phase 2: Code-Interpreter Executors
 
-3. Move executor proxy injection out of `docker-compose.proxy.yml`.
-   - Keep trusted-service proxy routing in `docker-compose.proxy.yml`.
-   - Put executor proxy URL and executor `NO_PROXY` in the code-interpreter
-     network overlay.
+1. Add `docker-compose.code-interpreter-network.yml` for executor networking.
+2. Add the executor-only internal network with an explicit Docker network
+   name.
+3. Add the executor egress bridge to the executor network and the required
+   upstream side.
+4. Set `PYTHON_EXECUTOR_DOCKER_NETWORK` to the concrete executor network name.
+5. Keep executor proxy injection in the code-interpreter network overlay only.
+6. Tighten `sitecustomize_code_interpreter` as described above.
+7. Update API-server prompt/tool-description patches.
 
-4. Tighten `sitecustomize_code_interpreter`.
-   - No-op when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` is not true.
-   - Fail closed if network-enabled mode lacks an executor network or proxy
-     URL.
-   - Reject or warn loudly on `container:onyx-netns-holder-1`.
-   - Inject only the dedicated executor proxy and narrow executor `NO_PROXY`.
+### Phase 3: Obscura
 
-5. Update docs.
-   - `.env.wrapper.example`: describe the new meaning of
-     `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`.
-   - `docs/vpn_routing_and_proxies.md`: replace shared-namespace executor
-     routing text with proxy-only routing, document the concrete upstream-proxy
-     DNS-classification caveat, and distinguish desired endpoint-scoped
-     host-proxy access from the current `MYST_VPN_ALLOW_LAN_BYPASS=true`
-     route exemption.
-   - `docs/internal_network_security.md`: move the shared-namespace gap from
-     current behavior to historical/background context, then document the new
-     remaining risks, including upstream-proxy hostname-to-private-IP behavior,
-     bridge binding/source-filtering expectations, and host-proxy LAN bypass.
-   - `docs/request_handling.md`: describe the executor proxy path and search
-     engine blocking behavior, including the difference between direct
-     final-hop DNS classification and upstream-proxy mode.
-   - `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`: update the
-     code-interpreter patch mechanics and upgrade checklist.
-   - `README.md`: update the user-facing code-interpreter networking and
-     upstream proxy sections so host Tor and upstream-proxy caveats are visible
-     to operators.
+1. Add a browser final-hop proxy policy that allows search hosts but blocks
+   internal/private targets and plain HTTP by default.
+2. Move Obscura onto browser-control and browser-egress networks.
+3. Retarget CDP shim to Obscura by DNS name on the control network.
+4. Point Obscura at the browser egress bridge through `--proxy` or
+   `OBSCURA_PROXY`.
+5. Verify every custom SearXNG engine can still render SERPs through CRW.
 
-6. Remove obsolete wording and names.
-   - Replace "code-interpreter-vpn" wording where it no longer matches.
-   - Remove statements saying network-enabled executors can reach internal
-     stack endpoints, except where retained as pre-change threat context.
+### Phase 4: SearXNG
 
-## Follow-On Component Decision Steps
+1. Make the custom engine CRW scrape URL configurable.
+2. Move SearXNG and Valkey onto explicit search networks.
+3. Keep the default CRW-backed engine set without general internet egress.
+4. Keep `docker-compose.proxy.yml` SearXNG proxy mutation only for intentional
+   external-engine modes.
 
-After executor isolation is implemented and validated, decide which request
-path components are worth isolating. Suggested order:
+### Phase 5: CRW
 
-1. Obscura browser.
-   - Design a search-allowed egress proxy mode before moving the container.
-   - Verify SERP rendering still works for every custom SearXNG engine.
+1. Move CRW onto explicit API, CDP, search, and prefetch-egress networks.
+2. Retarget `CRW_RENDERER__CHROME__WS_URL` to the CDP shim DNS endpoint.
+3. Retarget `CRW_SEARCH__SEARXNG_URL` to the SearXNG DNS endpoint if
+   `/v1/search` remains enabled.
+4. Point CRW `HTTP_PROXY` and `HTTPS_PROXY` at the CRW prefetch bridge.
+5. Update healthchecks and host diagnostic bridges.
+6. Re-test `web_search`, `open_url`, CRW `/v1/search`, PDF prefetch behavior,
+   and failure modes.
 
-2. SearXNG.
-   - First make the CRW scrape URL configurable in the custom engines.
-   - Then move SearXNG and Valkey onto explicit search networks with no
-     general internet egress for the default CRW-backed engine set.
+## Documentation Updates
 
-3. CRW.
-   - Move CRW only after its Obscura, SearXNG, caller, and prefetch-proxy
-     dependencies have stable DNS-name endpoints.
-   - Re-test `web_search`, `open_url`, CRW `/v1/search`, PDF prefetch
-     behavior, and healthchecks after the loopback assumptions are removed.
+Update docs in the same implementation phase as the related behavior.
+
+- `.env.wrapper.example`: describe the new meaning of
+  `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` and any restricted request-path
+  toggles.
+- `README.md`: update user-facing code-interpreter networking, upstream proxy,
+  host Tor, and caveat sections.
+- `docs/vpn_routing_and_proxies.md`: replace shared-namespace executor
+  routing text; document the final-hop matrix, upstream-proxy DNS caveat, and
+  host-proxy LAN bypass distinction.
+- `docs/internal_network_security.md`: move the current shared-namespace
+  executor gap to historical/background context after it is fixed; document
+  remaining bridge, DNS, and host-proxy risks.
+- `docs/request_handling.md`: describe restricted CRW, SearXNG, Obscura, and
+  executor paths as they land.
+- `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`: update
+  code-interpreter prompt/proxy patch mechanics and upgrade checks.
 
 ## Validation Plan
 
-Use `ENV_FILE=/dev/null` and explicit environment values so validation does not
-read local private `.env.wrapper`.
+Use `ENV_FILE=/dev/null` and explicit environment values so validation does
+not read local private `.env.wrapper`.
 
-### Static Checks
+Static checks:
 
-- `ENV_FILE=/dev/null make help`
-- `python -m py_compile crw/prefetch_blocking_proxy.py onyx/patches/sitecustomize_code_interpreter/sitecustomize.py`
-- `git diff --check`
+```text
+ENV_FILE=/dev/null make help
+python -m py_compile crw/prefetch_blocking_proxy.py onyx/patches/sitecustomize_code_interpreter/sitecustomize.py
+git diff --check
+```
 
-### Compose Shape Checks
-
-Inspect effective compose output for these permutations:
+Compose shape checks:
 
 1. Network disabled, upstream proxy empty.
    - No executor-only network.
-   - No bridge service.
-   - No executor proxy env injection.
+   - No executor bridge.
+   - No executor proxy injection.
    - Executor network remains upstream `none`.
 
 2. Network disabled, upstream proxy set.
-   - `docker-compose.proxy.yml` applies only to trusted services.
+   - `docker-compose.proxy.yml` applies only to trusted/final-hop proxy
+     behavior.
    - No executor-only network.
-   - No bridge service.
-   - No executor proxy env injection.
+   - No executor bridge.
+   - No executor proxy injection.
 
-3. Network enabled, upstream proxy empty, `MYST_VPN_ENABLED=true`.
-   - Executor-only internal network exists.
-   - Executor-only network has an explicit concrete Docker network name, and
-     `PYTHON_EXECUTOR_DOCKER_NETWORK` points at that concrete name.
-   - Bridge service exists.
-   - Executor network is the executor-only network.
+3. Executor network enabled, upstream proxy empty, `MYST_VPN_ENABLED=true`.
+   - Executor-only internal network exists with explicit concrete name.
+   - `PYTHON_EXECUTOR_DOCKER_NETWORK` points at that concrete name.
+   - Executor bridge exists and has no host-published port.
    - Executor proxy URL points at the bridge.
-   - Bridge listener is not exposed on host ports and is configured to accept
-     executor-network clients only, not arbitrary default-network clients.
-   - Shared proxy has no upstream proxy and remains in `netns-holder`.
+   - Final-hop proxy has no upstream proxy and remains in the routing
+     namespace.
 
-4. Network enabled, upstream proxy set, `MYST_VPN_ENABLED=true`.
-   - Same executor-only network and bridge shape.
-   - Shared proxy receives `ONYX_AGENT_OUTBOUND_PROXY_URL`.
-   - Executor pods still point at the local bridge URL, not the upstream URL.
-   - For `ONYX_AGENT_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:9150`,
-     confirm the final-hop proxy shim can reach the host proxy only when
-     `MYST_VPN_ALLOW_LAN_BYPASS=true` or an equivalent shim-scoped host-proxy
-     allowlist is enabled.
+4. Executor network enabled, upstream proxy set, `MYST_VPN_ENABLED=true`.
+   - Executor shape is unchanged.
+   - Final-hop proxy receives `ONYX_AGENT_OUTBOUND_PROXY_URL`.
+   - Executor pods point at the local bridge, not the upstream proxy URL.
+   - Host proxy configurations require `MYST_VPN_ALLOW_LAN_BYPASS=true` or a
+     future endpoint-scoped equivalent.
 
-5. Network enabled, `MYST_VPN_ENABLED=false`.
-   - Same executor-only network and bridge shape.
+5. Executor network enabled, `MYST_VPN_ENABLED=false`.
+   - Executor isolation still depends on the executor network and bridge, not
+     on Myst.
    - No shared-namespace VPN connection is expected.
-   - Executor isolation still depends on the executor-only network and bridge,
-     not on Myst.
 
-### Runtime Checks When Safe
+6. Restricted request path enabled.
+   - Obscura has only browser-control and browser-egress networks.
+   - CRW has only API, CDP, search, and prefetch-egress networks.
+   - SearXNG has only search API/internal and Valkey networks by default.
+   - No restricted component has a route to broad default-network peers,
+     host gateway aliases, or `netns-holder` service aliases except through
+     the intended bridge.
 
-With a running stack and network-enabled code-interpreter:
+Runtime checks when safe:
 
-- from an executor pod, `curl --noproxy '*' https://example.com` should fail;
-- from an executor pod, `curl https://example.com` should succeed through the
-  proxy if egress is available;
-- inspect the executor pod's route table and Docker network attachments to
-  confirm it is attached only to the named executor-only internal network;
-- from a non-executor default-network container, connecting to
-  `code-interpreter-egress-proxy:3128` should fail or be rejected by
-  source-network filtering;
-- from an executor pod, direct requests to `http://api_server:8080/health`,
-  `http://myst-client:9101/health`, `http://crw:3010/health`, and
-  `http://host.docker.internal:*` should fail;
-- from an executor pod, proxied requests to internal/private targets should
-  return proxy `403`;
-- in upstream-proxy mode, include a documented test or manual review note for
-  hostname-to-private-IP behavior, because local DNS classification is
-  intentionally skipped to avoid target DNS leakage;
-- from an executor pod, proxied requests to configured search engines should
-  return proxy `403`;
-- proxy logs should identify executor traffic distinctly if using the second
-  proxy instance;
-- CRW search and `open_url` behavior should remain unchanged.
+- from an executor pod, `curl --noproxy '*' https://example.com` fails;
+- from an executor pod, `curl https://example.com` succeeds through the proxy
+  when egress is available;
+- executor route table and Docker network attachments show only the executor
+  internal network;
+- non-executor containers cannot use the executor bridge listener;
+- executor direct requests to `api_server`, `myst-client`, CRW, Obscura,
+  SearXNG, `host.docker.internal`, LAN/private ranges, and link-local metadata
+  fail;
+- executor proxied requests to internal/private targets return proxy `403`;
+- executor proxied requests to configured search-engine hosts return proxy
+  `403`;
+- Obscura can still render each configured search provider;
+- CRW still blocks search prefetches and escalates to Obscura;
+- `open_url` still handles non-search HTTPS, PDF, and JS-required pages as
+  documented;
+- SearXNG default CRW-backed engines still work and accidental direct external
+  engine traffic fails closed;
+- upstream-proxy mode includes a documented manual review or test note for the
+  hostname-to-private-IP residual risk.
 
-### Prompt/Capability Checks
+## Security Properties
 
-Confirm the LLM-facing tool descriptions still say network access is available
-only when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, but avoid implying broad
-network access. Preferred wording should be closer to:
+Expected improvements:
 
-```text
-Network access is available through a restricted HTTP/HTTPS proxy. Direct
-socket access and internal/private network targets are blocked.
-```
+- generated code does not share loopback or service aliases with the stack;
+- Obscura has a network backstop behind its private-network block;
+- CRW can reach only its documented prefetch, CDP, search, and caller peers;
+- SearXNG default search has no general internet egress;
+- direct socket bypasses fail because restricted components have no route to
+  the broader stack or internet;
+- `NO_PROXY` lists do not create internal carve-outs for untrusted executors;
+- the existing VPN/proxy/no-VPN final-hop semantics remain visible and
+  centralized.
+
+Remaining risks:
+
+- code-interpreter service still has Docker socket access to spawn executor
+  pods and remains trusted control plane;
+- a wrongly named or non-internal Docker network can reintroduce reachability;
+- a bridge that accepts clients on the wrong interface can create an
+  undocumented proxy path;
+- TCP bridges rely on the selected final-hop proxy policy being correct;
+- upstream-proxy mode intentionally skips local target DNS resolution, leaving
+  the hostname-to-private-IP residual risk described above;
+- host-resident upstream proxies currently rely on
+  `MYST_VPN_ALLOW_LAN_BYPASS=true`, which is broader than endpoint-scoped host
+  proxy access;
+- optional local CRW access for generated code, if enabled, expands the
+  executor capability surface and must be documented as such.
 
 ## Decision Summary
 
-Use restricted component networks and local proxy shim ports, not broad access
-to the shared `netns-holder` namespace.
+This plan covers restricted egress for all agent-relevant network components
+together. The architecture is:
 
-Do not dual-home final-hop proxies into restricted component networks. Keep
-final-hop proxies in the routing namespace where their outbound behavior is
-clear, and expose them to restricted components through simple TCP forwarders.
+```text
+restricted component network
+  -> narrow component bridge
+  -> named final-hop proxy policy in the routing namespace
+  -> selected Mysterium/proxy/no-VPN final hop
+```
 
-Use the search-blocking `prefetch-blocking-proxy` as the final-hop policy for
-code-interpreter executors and CRW HTTP prefetch. Add a separate
-search-allowed browser final-hop proxy for Obscura, because Obscura must render
-search-engine pages. Give SearXNG no internet egress in the default CRW-backed
-engine configuration; add a SearXNG egress forwarder only if external SearXNG
-features are intentionally enabled.
+Use the search-blocking `prefetch`/`executor` policy for code-interpreter
+executors and CRW HTTP prefetch. Add a separate search-allowed `browser`
+policy for Obscura. Give SearXNG no internet egress in the default CRW-backed
+configuration, and add `searxng-external` only for intentional external
+features.
 
-A second proxy instance is not the default bridge. Add one only when it has a
-distinct policy, logging, rate-limit, or accounting role that a TCP forwarder
-cannot provide.
+Implement in phases, but design the names, proxy modes, network boundaries,
+and docs as one comprehensive restricted-egress model from the start.
