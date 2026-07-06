@@ -43,6 +43,15 @@ This does not require one giant patch. It requires one architecture, one naming
 scheme, one proxy-policy vocabulary, and staged compose work that is easy to
 validate independently.
 
+Use this plan with the subsystem docs, not as a replacement for them. The
+request path details live in [Request handling](../request_handling.md), the
+VPN/proxy routing matrix lives in
+[VPN routing and proxies](../vpn_routing_and_proxies.md), current internal
+reachability risks live in
+[Internal network security](../internal_network_security.md), runtime patch
+behavior lives in [Onyx patch information](../onyx_patch_info.md), and upgrade
+checks live in [Onyx wrapper patches](../onyx_patches_upgrade.md).
+
 ## Non-Goals
 
 - Do not add a transparent firewall or general-purpose network sandbox in this
@@ -71,6 +80,10 @@ network_mode: "service:netns-holder"
 In that namespace, many useful internal listeners share loopback and Docker
 service aliases: Onyx API/Web, CRW, SearXNG, Obscura CDP/MCP, CDP shim,
 doc-drop, embedding shim, code-interpreter, and Mysterium control surfaces.
+For the current namespace topology and optional routing layers, see
+[VPN routing and proxies](../vpn_routing_and_proxies.md). For tested
+reachability and the current security gaps, see
+[Internal network security](../internal_network_security.md).
 
 The current web request path is intentionally routed through wrapper shims:
 
@@ -90,6 +103,10 @@ The current web request path is intentionally routed through wrapper shims:
   targets, and plain HTTP unless explicitly allowed.
 - CRW escalates search-engine pages to CDP/Obscura.
 - Obscura blocks private-network targets by default.
+
+The full `web_search` and `open_url` chains, including CRW, SearXNG,
+prefetch-blocking proxy, CDP shim, Obscura, rate limiting, and anti-bot
+behavior, are documented in [Request handling](../request_handling.md).
 
 The largest current gap is code-interpreter network enablement. When
 `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, the Makefile layers
@@ -141,6 +158,11 @@ Out of scope for this plan unless they become agent-facing network paths:
 - Tailscale Funnel;
 - Mysterium signup/funding flows;
 - data stores and trusted control-plane services.
+
+Full-mode local document RAG has its own doc-drop, Web connector, PDF
+freshness, and embedding-shim constraints. If restricted-network work changes
+doc-drop or embedding-shim placement, read
+[Local docs RAG search](../local_docs_rag_search.md) first.
 
 ### Component Bridge
 
@@ -204,10 +226,11 @@ routing namespace and expose them through narrow bridges.
 ## Policy Preference Surface
 
 The restricted-egress implementation must preserve the current user-facing
-preference surface from `.env.wrapper.example`, `docs/request_handling.md`, and
-`docs/vpn_routing_and_proxies.md`. Do not replace these values with hardcoded
-per-mode defaults or new names unless the documentation and example env file
-are updated in the same change.
+preference surface from `.env.wrapper.example`,
+[Request handling](../request_handling.md), and
+[VPN routing and proxies](../vpn_routing_and_proxies.md). Do not replace these
+values with hardcoded per-mode defaults or new names unless the documentation
+and example env file are updated in the same change.
 
 Policy-enforcement preferences:
 
@@ -280,6 +303,10 @@ components and executor pods should still see an ordinary local HTTP proxy
 endpoint, so they do not need PySocks, socksio, or upstream-proxy-scheme
 support.
 
+For the current service-by-service `ONYX_AGENT_OUTBOUND_PROXY_URL` behavior,
+the explicit no-VPN mode, and the optional service routing switches, see
+[VPN routing and proxies](../vpn_routing_and_proxies.md).
+
 ## Host-Resident Upstream Proxies
 
 Host proxy examples such as Tor Browser must remain supported:
@@ -308,6 +335,12 @@ upstream proxy host and port. Until then, docs must make clear that
 host-resident upstream proxies, not general permission for restricted
 components to reach host or LAN targets.
 
+For the current host-proxy and LAN-bypass behavior, see
+[VPN routing and proxies](../vpn_routing_and_proxies.md). For why host,
+private, link-local, and internal targets remain security-sensitive even when
+an upstream proxy is configured, see
+[Internal network security](../internal_network_security.md).
+
 ## DNS Classification
 
 Final-hop proxy destination classification should keep the current behavior:
@@ -328,6 +361,10 @@ explicit allowlists, and is out of scope for the first implementation.
 
 Component bridges should not perform target DNS classification. Keep that
 logic centralized in the final-hop proxy policy.
+
+The current prefetch-proxy DNS behavior and its upstream-proxy residual risk
+are described in [Request handling](../request_handling.md) and
+[Internal network security](../internal_network_security.md).
 
 ## Component Targets
 
@@ -377,6 +414,12 @@ Executor requirements:
   link-local metadata addresses;
 - search-engine URLs stay blocked so generated code uses the controlled
   SearXNG/CRW/Obscura path instead of direct SERP scraping.
+
+For the current executor gap and recommended proxy-only direction, see
+[Internal network security](../internal_network_security.md). For the existing
+runtime patch mechanics and upgrade checks, see
+[Onyx patch information](../onyx_patch_info.md) and
+[Onyx wrapper patches](../onyx_patches_upgrade.md).
 
 The code-interpreter `sitecustomize` patch should model three independent
 decisions:
@@ -504,6 +547,10 @@ but the existing explicit opt-in must continue to apply to both the proxy
 policy and the CDP shim so HTTP browser navigations cannot bypass the
 prefetch/executor block.
 
+For the current CRW-to-CDP-to-Obscura browser chain, wait strategy, cookie
+clearing, and CDP shim behavior, see
+[Request handling](../request_handling.md).
+
 ### CRW
 
 CRW accepts untrusted target URLs, performs HTTP prefetch, controls the browser
@@ -555,6 +602,10 @@ This requires replacing current loopback assumptions:
   assuming `http://127.0.0.1:3010`;
 - healthchecks must stop assuming CRW can use shared loopback for all peers.
 
+For CRW's Firecrawl-compatible scrape path, HTTP prefetch behavior,
+PDF/content-type handling, and `open_url` fallback caveats, see
+[Request handling](../request_handling.md).
+
 ### SearXNG
 
 In the default wrapper configuration, SearXNG's enabled web engines are
@@ -594,6 +645,11 @@ meaning is "direct to local CRW on the internal Docker network," not direct
 internet. External engines should use a separate proxy-backed outgoing
 network, and container placement should still prevent arbitrary direct sockets
 from bypassing those SearXNG settings.
+
+For the current custom CRW-backed engines, provider scheduling, parser
+assumptions, and SearXNG proxy overlay behavior, see
+[Request handling](../request_handling.md) and
+[Onyx patch information](../onyx_patch_info.md).
 
 ## Compose Layering
 
@@ -645,6 +701,11 @@ Additional layering edge cases:
 - If Podman support is added later, confirm spawned executor containers join
   only the intended internal network, the bridge is their only reachable peer,
   and no host gateway or stack aliases are reachable.
+
+For the existing Compose layering and routing overrides, see
+[VPN routing and proxies](../vpn_routing_and_proxies.md). For the upgrade
+checklist that covers Compose, SearXNG, Onyx, and code-interpreter patch
+surfaces, see [Onyx wrapper patches](../onyx_patches_upgrade.md).
 
 The Makefile should use network-specific suffix names, for example:
 
@@ -787,18 +848,22 @@ Update docs in the same implementation phase as the related behavior.
   classification caveat near the upstream proxy examples so operators do not
   read `ONYX_AGENT_OUTBOUND_PROXY_URL` as a complete private-network
   enforcement layer.
-- `docs/vpn_routing_and_proxies.md`: replace shared-namespace executor
-  routing text; document the final-hop matrix, upstream-proxy DNS caveat, and
-  host-proxy LAN bypass distinction.
-- `docs/internal_network_security.md`: move the current shared-namespace
-  executor gap to historical/background context after it is fixed; document
-  remaining bridge, DNS, and host-proxy risks.
-- `docs/request_handling.md`: describe restricted CRW, SearXNG, Obscura, and
-  executor paths as they land, including search-engine blocking and the
-  difference between no-upstream-proxy DNS classification and upstream-proxy
-  mode.
-- `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`: update
-  code-interpreter prompt/proxy patch mechanics and upgrade checks.
+- [VPN routing and proxies](../vpn_routing_and_proxies.md): replace
+  shared-namespace executor routing text; document the final-hop matrix,
+  upstream-proxy DNS caveat, and host-proxy LAN bypass distinction.
+- [Internal network security](../internal_network_security.md): move the
+  current shared-namespace executor gap to historical/background context after
+  it is fixed; document remaining bridge, DNS, and host-proxy risks.
+- [Request handling](../request_handling.md): describe restricted CRW, SearXNG,
+  Obscura, and executor paths as they land, including search-engine blocking
+  and the difference between no-upstream-proxy DNS classification and
+  upstream-proxy mode.
+- [Onyx patch information](../onyx_patch_info.md) and
+  [Onyx wrapper patches](../onyx_patches_upgrade.md): update code-interpreter
+  prompt/proxy patch mechanics and upgrade checks.
+- [Local docs RAG search](../local_docs_rag_search.md): update only if the
+  restricted network work changes doc-drop, Web connector, PDF freshness, or
+  embedding-shim placement.
 
 ## Validation Plan
 
