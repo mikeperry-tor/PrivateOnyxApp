@@ -180,8 +180,14 @@ and sets `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`. The override also sets:
 PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1
 ```
 
-The patch monkey-patches `DockerExecutor._build_run_command` only to propagate
-proxy settings into executor containers.
+The patch monkey-patches `DockerExecutor._build_run_command` to propagate
+executor network policy into executor containers. It injects proxy settings
+when `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, and also routes ordinary executor
+HTTP clients through the local prefetch-blocking proxy when
+`ONYX_AGENT_ALLOW_HTTP_URLS=false`.
+The override waits for the prefetch-blocking proxy healthcheck before starting
+`code-interpreter`, because that proxy is part of the default executor HTTP
+policy path.
 
 Because the code-interpreter container already shares `netns-holder`, executor
 pods inherit the shared namespace. With `MYST_VPN_ENABLED=true`, egress goes
@@ -328,21 +334,27 @@ proxy.
 
 When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `docker-compose.proxy.yml` mounts the same
 `sitecustomize_code_interpreter` patch into `code-interpreter` and sets
-`ONYX_AGENT_OUTBOUND_PROXY_URL`, `ALL_PROXY`, and `NO_PROXY` on the service.
+`ONYX_AGENT_OUTBOUND_PROXY_URL`, `ONYX_AGENT_ALLOW_HTTP_URLS`, `ALL_PROXY`,
+and `NO_PROXY` on the service.
 
 The patch injects proxy environment variables into every executor pod's
-`docker run` command:
+`docker run` command when either `ONYX_AGENT_OUTBOUND_PROXY_URL` is set or
+`ONYX_AGENT_ALLOW_HTTP_URLS=false`:
 
 - `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and lowercase variants point at
   the local prefetch-blocking-proxy HTTP listener on `http://127.0.0.1:3128`
+- `ONYX_AGENT_ALLOW_HTTP_URLS` is passed through for diagnostics and policy
+  visibility
 - `NO_PROXY` is injected so ordinary stack-internal service names stay off the
   proxy
 
 Proxy injection and VPN routing are separate code paths. With `ONYX_AGENT_OUTBOUND_PROXY_URL`
 alone, executor pods receive proxy environment variables but remain
-network-isolated. With both `ONYX_AGENT_OUTBOUND_PROXY_URL` and
-`ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor pods inherit the shared
-namespace and then use the configured upstream proxy for supported tools.
+network-isolated. With `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor
+pods inherit the shared namespace. Supported tools then use the local proxy
+adapter for HTTP/HTTPS when env vars are honored; the adapter connects through
+the configured upstream proxy if present, or directly through the shared
+namespace/VPN path if not.
 
 For every upstream proxy scheme, executor pods receive an ordinary HTTP proxy
 URL. The local sidecar adapts upstream egress to HTTP, HTTPS, SOCKS5, or
@@ -352,7 +364,11 @@ network-enabled executors safe against raw-socket bypasses. It also
 intentionally blocks configured search-engine hosts, so generated code using
 urllib/curl/git through these proxy variables should not expect direct access
 to Google, Brave Search, DuckDuckGo HTML, Startpage, or Bing search pages from
-the code-interpreter path.
+the code-interpreter path. With the default
+`ONYX_AGENT_ALLOW_HTTP_URLS=false`, plain `http://` requests from clients that
+honor these proxy variables receive the same HTTPS guidance error as CRW
+prefetch requests; generated code can still bypass this with raw sockets,
+explicit no-proxy options, or tools that ignore proxy variables.
 
 ## VPN Signup and Funding Flows
 

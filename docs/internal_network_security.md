@@ -12,9 +12,10 @@ The main conclusions:
   and HTTP forwarding. It blocks localhost, `host.docker.internal`,
   single-label Docker-style hostnames, non-global IP literals, and DNS names
   that resolve to blocked addresses when no explicit upstream proxy is
-  configured. SOCKS-backed code-interpreter urllib traffic uses the same HTTP
-  listener and therefore keeps the same internal-target and search-engine
-  blocks.
+  configured. Code-interpreter executor HTTP clients that honor injected proxy
+  variables use the same HTTP listener when an upstream proxy is configured or
+  when `ONYX_AGENT_ALLOW_HTTP_URLS=false`, and therefore keep the same
+  internal-target, search-engine, and cleartext-HTTP blocks.
 - Onyx SSRF settings affect only Onyx-managed URL-fetching paths and startup
   defaults for the Admin Security Hardening policy; they are not firewall
   rules for CRW, Obscura, or code-interpreter.
@@ -237,10 +238,11 @@ namespace can call the proxy directly. That includes network-enabled
 code-interpreter executor pods. In that mode the proxy is an additional
 internal-access path, not a boundary.
 
-When `docker-compose.proxy.yml` is active, the code-interpreter patch points
-`HTTP_PROXY` and `HTTPS_PROXY` at `http://127.0.0.1:3128` when
-`ONYX_AGENT_OUTBOUND_PROXY_URL` is a SOCKS URL. That gives Python `urllib` an
-ordinary HTTP proxy endpoint while the sidecar adapts upstream egress to SOCKS.
+The code-interpreter patch points `HTTP_PROXY` and `HTTPS_PROXY` at
+`http://127.0.0.1:3128` for executor pods when `ONYX_AGENT_OUTBOUND_PROXY_URL`
+is configured, or when `ONYX_AGENT_ALLOW_HTTP_URLS=false`. That gives Python
+`urllib` an ordinary HTTP proxy endpoint while the sidecar adapts upstream
+egress to HTTP, HTTPS, SOCKS5, or SOCKS5h if an upstream proxy is configured.
 The same destination validation applies, and configured search-engine hosts
 still receive `403`. Plain HTTP URLs still receive the HTTPS guidance error
 unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`. If the configured upstream is an
@@ -314,8 +316,11 @@ Therefore `ONYX_AGENT_OUTBOUND_PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY`,
 `ALL_PROXY`, and `NO_PROXY` are routing hints, not a security boundary.
 The local HTTP proxy adapter closes the urllib/SOCKS compatibility gap for
 ordinary HTTP/HTTPS clients and gives the executor path a single proxy URL for
-all upstream proxy schemes. Generated code can still bypass those environment
-variables with raw sockets or tools that ignore proxy settings.
+all upstream proxy schemes. It also applies the default
+`ONYX_AGENT_ALLOW_HTTP_URLS=false` plain-HTTP block to ordinary executor HTTP
+clients that honor proxy variables, even when no upstream proxy is configured.
+Generated code can still bypass those environment variables with raw sockets,
+explicit no-proxy options, or tools that ignore proxy settings.
 
 The proxy override intentionally sets `NO_PROXY` for internal
 loopback and Docker DNS names so normal stack-internal service calls stay off

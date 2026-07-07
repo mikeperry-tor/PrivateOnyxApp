@@ -335,7 +335,14 @@ You can optionally give executor pods outbound network access through the shared
 ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true
 ```
 
-With `MYST_VPN_ENABLED=true`, executor pod egress goes through Mysterium. If `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, proxy env is forwarded into executor pods.
+With `MYST_VPN_ENABLED=true`, executor pod egress goes through Mysterium. If
+`ONYX_AGENT_OUTBOUND_PROXY_URL` is set, proxy env is forwarded into executor
+pods. With the default `ONYX_AGENT_ALLOW_HTTP_URLS=false`, ordinary executor
+HTTP clients that honor proxy variables are also routed through the local
+prefetch-blocking proxy so cleartext `http://` requests receive the same block
+as `open_url()`. This is still not a firewall: generated code can bypass proxy
+env with raw sockets, explicit no-proxy options, or tools that ignore proxy
+settings.
 
 The code tool descriptions and code agent prompts are updated to mention internet access, and include service hints for the in-namespace scraping/browser services that executor pods can reach via localhost (since they inherit the netns-holder namespace).
 

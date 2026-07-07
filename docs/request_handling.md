@@ -664,18 +664,24 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
    rather than `CRW_CRAWLER__PROXY`, so `REQUEST_PROXY` is not set and CRW
    usually does not send `createBrowserContext` at all.
 
-When `docker-compose.proxy.yml` is active and `ONYX_AGENT_OUTBOUND_PROXY_URL`
-is a SOCKS URL, code-interpreter executor pods also receive
-`HTTP_PROXY`/`HTTPS_PROXY=http://127.0.0.1:3128`. Python `urllib` therefore
-sees an ordinary HTTP proxy endpoint, while the sidecar adapts upstream egress
-to SOCKS. The same internal/private and search-engine blocks apply.
+Code-interpreter executor pods receive
+`HTTP_PROXY`/`HTTPS_PROXY=http://127.0.0.1:3128` when
+`ONYX_AGENT_OUTBOUND_PROXY_URL` is configured, or when
+`ONYX_AGENT_ALLOW_HTTP_URLS=false`. Python `urllib` therefore sees an ordinary
+HTTP proxy endpoint, while the sidecar adapts upstream egress to HTTP, HTTPS,
+SOCKS5, or SOCKS5h if an upstream proxy is configured. With the default
+`ONYX_AGENT_ALLOW_HTTP_URLS=false`, ordinary executor HTTP clients that honor
+proxy variables get the same plain-HTTP block as CRW prefetch requests. The
+same internal/private and search-engine blocks apply, but generated code can
+still bypass proxy variables with raw sockets, explicit no-proxy options, or
+tools that ignore proxy settings.
 
 **ONYX_AGENT_OUTBOUND_PROXY_URL usage:**
 
 When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set (e.g., Tor SOCKS proxy), the prefetch-blocking proxy
 routes its own upstream requests through `ONYX_AGENT_OUTBOUND_PROXY_URL`. This
-keeps CRW prefetch and code-interpreter urllib traffic on the same proxy path
-as obscura.
+keeps CRW prefetch and ordinary code-interpreter HTTP-client traffic on the
+same proxy path as obscura.
 
 For `https://` upstream proxies, the prefetch-blocking proxy verifies the
 proxy certificate, sends SNI for the proxy host, and requires TLS 1.3 by

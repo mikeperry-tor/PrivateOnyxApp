@@ -17,10 +17,16 @@
 
 services:
   code-interpreter:
+    depends_on:
+      prefetch-blocking-proxy:
+        condition: service_healthy
     environment:
       # Activates the sitecustomize patch below.
       ONYX_CODE_INTERPRETER_ENABLE_NETWORK: "true"
       PYTHON_EXECUTOR_DOCKER_NETWORK: "container:onyx-netns-holder-1"
+      # Keep ordinary executor HTTP clients on the same cleartext URL policy
+      # as open_url()/CRW for tools that honor proxy environment variables.
+      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
       WRAPPER_PATCH_STRICT: "true"
       # Put the patch directory first on PYTHONPATH so sitecustomize.py is
       # auto-imported by the Python interpreter at startup.

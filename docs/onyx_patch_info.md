@@ -858,22 +858,30 @@ namespace. The code-interpreter container also loads a `sitecustomize` patch
 that:
 
 - Patches `DockerExecutor._build_run_command`.
-- Injects proxy env vars into executor pod commands.
+- Injects executor network env vars into executor pod commands when an
+  upstream proxy is configured or when `ONYX_AGENT_ALLOW_HTTP_URLS=false`.
 
 The wrapper compose already runs code-interpreter in the shared
 `netns-holder` namespace. Inheriting that namespace gives executor pods the
 same egress path: Mysterium when `MYST_VPN_ENABLED=true`, or direct bridge
-egress when VPN is explicitly disabled.
+egress when VPN is explicitly disabled. The network-enabled override waits for
+the prefetch-blocking proxy healthcheck before starting `code-interpreter`,
+because that proxy is part of the default executor HTTP policy path.
 
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, the same patch injects proxy environment variables
-into executor pod commands. This proxy injection is independent from the
-executor network setting: with `ONYX_AGENT_OUTBOUND_PROXY_URL` alone, executor pods remain
-network-isolated. With both `ONYX_AGENT_OUTBOUND_PROXY_URL` and
-`ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor pods inherit the shared
-namespace and supported tools use the configured upstream proxy.
+When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, the same patch injects proxy
+environment variables into executor pod commands. When
+`ONYX_AGENT_ALLOW_HTTP_URLS=false`, which is the default, it also injects the
+local prefetch-blocking proxy even without an upstream proxy so ordinary
+executor HTTP clients receive the same cleartext-HTTP block as CRW prefetch
+and CDP navigation. This injection is independent from the executor network
+setting: with `ONYX_AGENT_OUTBOUND_PROXY_URL` alone, executor pods remain
+network-isolated. With `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor
+pods inherit the shared namespace and supported tools use the local proxy
+adapter, which routes through the configured upstream proxy if present or
+directly through the shared namespace/VPN path if not.
 
-The patch always injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and their
-lowercase variants pointing at `http://127.0.0.1:3128`, the
+When active, the patch injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and
+their lowercase variants pointing at `http://127.0.0.1:3128`, the
 prefetch-blocking-proxy service's HTTP listener. That gives Python `urllib`,
 `requests`, `httpx`, curl, git, and similar clients an ordinary HTTP proxy
 endpoint while the sidecar adapts upstream egress to the configured
@@ -881,7 +889,11 @@ endpoint while the sidecar adapts upstream egress to the configured
 
 The proxy listener still blocks configured search-engine hosts, so the
 code-interpreter path should not expect direct access to those search pages
-through the injected proxy variables.
+through the injected proxy variables. With
+`ONYX_AGENT_ALLOW_HTTP_URLS=false`, it also blocks plain `http://` requests
+from executor clients that honor proxy variables. This is not a transparent
+firewall; generated code can still bypass the proxy with raw sockets,
+explicit no-proxy options, or tools that ignore proxy settings.
 
 This is intentionally high trust. It removes the upstream executor network
 isolation when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` and lets generated code make

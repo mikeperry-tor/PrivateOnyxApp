@@ -8,7 +8,10 @@ so Python/bash executor containers inherit the shared ``netns-holder`` network
 namespace.
 
 This patch forwards proxy settings into executor containers created by
-code-interpreter.
+code-interpreter. It also routes ordinary executor HTTP clients through the
+local prefetch-blocking proxy when cleartext ``http://`` URLs are disabled, so
+the executor path gets the same default HTTP URL policy as ``open_url()`` for
+clients that honor proxy environment variables.
 
 Security note: enabling this removes the code-interpreter's network isolation.
 Executor pods (Python tool + coding agent bash sessions) gain outbound internet
@@ -53,21 +56,29 @@ def _executor_http_proxy_url() -> str:
     ).strip()
 
 
-def _proxy_env_vars() -> list[str]:
-    """Build the ``-e KEY=VALUE`` argument pairs for proxy env vars.
+def _allow_http_urls() -> bool:
+    return _env_enabled("ONYX_AGENT_ALLOW_HTTP_URLS", False)
 
-    Returns an empty list when ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is unset/empty.
+
+def _executor_env_vars() -> list[str]:
+    """Build the ``-e KEY=VALUE`` argument pairs for executor network env vars.
+
+    Returns an empty list only when no upstream proxy is configured and
+    cleartext HTTP URLs are explicitly allowed.
 
     Executor pods always receive an HTTP proxy URL that points at the local
     prefetch-blocking proxy. That sidecar adapts to the configured upstream
     proxy scheme (HTTP, HTTPS, SOCKS5, or SOCKS5h), so executor pods do not need
-    SOCKS transport libraries.
+    SOCKS transport libraries. When no upstream proxy is configured, the local
+    proxy connects directly from the shared namespace/VPN path after applying
+    its destination and HTTP URL policy.
 
     Lowercase variants (``http_proxy`` etc.) are also injected because some
     tools (notably ``curl`` and ``git``) only honor the lowercase form.
     """
     proxy_url = _proxy_url()
-    if not proxy_url:
+    allow_http_urls = _allow_http_urls()
+    if not proxy_url and allow_http_urls:
         return []
 
     no_proxy = os.environ.get(
@@ -79,6 +90,7 @@ def _proxy_env_vars() -> list[str]:
 
     executor_proxy_url = _executor_http_proxy_url()
     pairs = [
+        ("ONYX_AGENT_ALLOW_HTTP_URLS", "true" if allow_http_urls else "false"),
         ("ONYX_AGENT_OUTBOUND_PROXY_URL", proxy_url),
         ("HTTP_PROXY", executor_proxy_url),
         ("HTTPS_PROXY", executor_proxy_url),
@@ -98,9 +110,9 @@ def _proxy_env_vars() -> list[str]:
 
 def _apply_executor_patches() -> None:
     """Monkeypatch DockerExecutor to inject proxy settings into executor pods."""
-    proxy_args = _proxy_env_vars()
+    executor_env_args = _executor_env_vars()
 
-    if not proxy_args:
+    if not executor_env_args:
         return
 
     try:
@@ -114,9 +126,16 @@ def _apply_executor_patches() -> None:
         return
 
     _original_build_run_command = DockerExecutor._build_run_command
+    patch_reason = (
+        "upstream_proxy_configured"
+        if _proxy_url()
+        else "http_urls_disabled"
+    )
     print(
         "sitecustomize: installed DockerExecutor run-command patch "
-        f"(proxy_enabled={bool(proxy_args)}, "
+        f"(proxy_enabled={bool(_proxy_url())}, "
+        f"allow_http_urls={_allow_http_urls()}, "
+        f"reason={patch_reason}, "
         f"executor_http_proxy_url={_executor_http_proxy_url()})",
         flush=True,
     )
@@ -126,29 +145,30 @@ def _apply_executor_patches() -> None:
 
         patched = list(cmd)
 
-        # Inject proxy env vars. Insert them right after the docker binary
+        # Inject proxy/policy env vars. Insert them right after the docker binary
         # and "run" tokens so they apply to the container being created. We
         # find the first "run" token and insert after it (and after any global
         # docker flags that precede the first "run"). A simple, robust approach:
         # insert immediately before the first "--network" token if present,
         # otherwise before the first image name. To keep it simple and safe,
         # insert right after the "run" subcommand token.
-        if proxy_args:
+        if executor_env_args:
             out: list[str] = []
             injected = False
             for tok in patched:
                 out.append(tok)
                 if not injected and tok == "run":
-                    out.extend(proxy_args)
+                    out.extend(executor_env_args)
                     injected = True
             if not injected:
                 # No "run" token found (unexpected); append at the end as a
                 # best-effort so the env vars are at least present in the argv.
-                out.extend(proxy_args)
+                out.extend(executor_env_args)
             patched = out
             print(
-                f"sitecustomize: injected proxy env vars into executor pod "
-                f"command (ONYX_AGENT_OUTBOUND_PROXY_URL set, {len(proxy_args) // 2} vars)",
+                "sitecustomize: injected executor network env vars into "
+                f"executor pod command (reason={patch_reason}, "
+                f"{len(executor_env_args) // 2} vars)",
                 flush=True,
             )
 
