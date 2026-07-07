@@ -22,10 +22,12 @@ def _apply_base_env_patches() -> None:
         from wrapper_env_patches import apply_code_interpreter_network_description_patches
         from wrapper_env_patches import apply_open_url_char_limit_patches
         from wrapper_env_patches import apply_reasoning_content_preservation_patch
+        from wrapper_env_patches import apply_reasoning_mode_trace_patch
 
-        apply_reasoning_content_preservation_patch()
         apply_open_url_char_limit_patches()
         apply_code_interpreter_network_description_patches()
+        apply_reasoning_mode_trace_patch()
+        apply_reasoning_content_preservation_patch()
     except Exception as e:  # pragma: no cover
         # In lite mode this should usually succeed because base patch path is
         # included after this directory. If not, proceed with lite-only patches.

@@ -236,6 +236,17 @@ Upgrade notes:
   assistant reasoning indexes, reasoning lengths, and short hashes so
   multi-user-turn tool conversations can be checked without logging message
   text.
+- `_REASONING_MODE_TRACE` is a private developer switch that defaults to `true`.
+  Its `reasoning_mode_trace` lines should be checked during model/provider
+  upgrade work. Confirm `model_detection` reports the expected
+  `supports_reasoning` value for the configured provider/model, and confirm the
+  Onyx agent, coding agent, deep-research orchestrator, and nested research
+  agent request traces show `think_tool_offered=false` plus no
+  `think_tool_processor_*` events when a native-reasoning model such as the teep
+  OpenAI-compatible GLM/Kimi path is in use. Also inspect `llm_step_result`
+  events for `reasoning_packet_seen`, `result_reasoning`, and reasoning length /
+  hash metadata to confirm reasoning actually appeared without logging the raw
+  reasoning text.
 - If the outbound request keeps reasoning fields but the provider still drops
   them, inspect the provider chat template behavior for adjacent user-role
   messages. The next fallback should be merging the reminder into the latest
@@ -249,10 +260,11 @@ Patch behavior:
 - Wraps `onyx.tools.fake_tools.coding_agent._generate_final_answer()`.
 - Before the final no-tool summarizer runs, converts completed coding-agent
   tool-call history into a single plain-text user-role transcript message. Bash
-  command requests and bash outputs remain visible to the final model, but the
-  final request should not contain `role="tool"` messages, assistant
-  `tool_calls`, repeated assistant-only transcript messages, or preserved
-  assistant reasoning fields from the tool loop.
+  command requests, bash outputs, and preserved assistant reasoning remain
+  visible to the final model, but the final request should not contain
+  `role="tool"` messages, assistant `tool_calls`, repeated assistant-only
+  transcript messages, or structured assistant reasoning fields from the tool
+  loop.
 - For flattened history, bypasses upstream `construct_message_history()` and
   merges `USER_FINAL_ANSWER_QUERY` into the same user message as the transcript,
   so the request is exactly `[system, user]` rather than `[system, user,
@@ -301,6 +313,10 @@ Upgrade notes:
   enabled, should show no `tools` or `tool_choice` member at all. The active
   tool loop before final synthesis may still contain structured tool calls and
   tool responses.
+- Confirm the flattened finalizer transcript places preserved code-agent
+  reasoning before the corresponding tool-request section. This reasoning is
+  plain transcript evidence for the summarizer, not outbound
+  `reasoning_content` / `reasoning` message fields.
 
 ### Previous tool-result preservation
 

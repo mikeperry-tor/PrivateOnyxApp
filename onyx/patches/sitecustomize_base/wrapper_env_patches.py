@@ -11,6 +11,7 @@ import hashlib
 import inspect
 import json
 import os
+import sys
 from types import ModuleType
 from typing import Any
 
@@ -19,14 +20,16 @@ from typing import Any
 # for "unlimited" we use a very large budget that won't be hit in practice.
 EFFECTIVE_UNLIMITED_CHARS = 2_000_000_000
 
-# Internal developer diagnostics. Keep these false in normal operation. Flip
-# them locally while validating Onyx/LiteLLM reasoning preservation during
-# upgrades. The Onyx-side logs are metadata-only; LiteLLM debug logging is
-# intentionally separate because it can include full request/response details.
+# Internal developer diagnostics. Reasoning-mode tracing is metadata-only and
+# enabled by default while validating model/provider routing. The deeper
+# reasoning traces remain opt-in; LiteLLM debug logging is intentionally
+# separate because it can include full request/response details.
 _REASONING_TRACE_ENABLED = False
 _REASONING_TRACE_LITELLM_DEBUG_ENABLED = False
 _REASONING_TRACE_SEQ = 0
 _REASONING_REMINDER_REORDER_ENABLED = True
+_REASONING_MODE_TRACE = True
+_REASONING_MODE_TRACE_SEQ = 0
 _CODING_AGENT_FINAL_TRACE_ENABLED = False
 
 
@@ -183,6 +186,67 @@ def _trace_reasoning(event: str, **fields: Any) -> None:
         f"event={event} {rendered}",
         flush=True,
     )
+
+
+def _trace_reasoning_mode(event: str, **fields: Any) -> None:
+    if not _REASONING_MODE_TRACE:
+        return
+
+    global _REASONING_MODE_TRACE_SEQ
+    _REASONING_MODE_TRACE_SEQ += 1
+    rendered = " ".join(
+        f"{key}={json.dumps(value, sort_keys=True)}"
+        for key, value in sorted(fields.items())
+    )
+    print(
+        f"sitecustomize: reasoning_mode_trace seq={_REASONING_MODE_TRACE_SEQ} "
+        f"event={event} {rendered}",
+        flush=True,
+    )
+
+
+def _caller_context() -> str:
+    try:
+        frame = inspect.currentframe()
+        # current -> _caller_context -> wrapped helper -> wrapped helper caller
+        for _ in range(2):
+            frame = frame.f_back if frame is not None else None
+        module_name = frame.f_globals.get("__name__") if frame is not None else None
+        function_name = frame.f_code.co_name if frame is not None else None
+        if module_name and function_name:
+            return f"{module_name}.{function_name}"
+        if module_name:
+            return str(module_name)
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _tool_names_from_definitions(tool_definitions: Any) -> list[str]:
+    if not isinstance(tool_definitions, list):
+        return []
+
+    names: list[str] = []
+    for tool_definition in tool_definitions:
+        try:
+            function_def = tool_definition.get("function")
+            name = function_def.get("name") if isinstance(function_def, dict) else None
+        except Exception:
+            name = None
+        if isinstance(name, str):
+            names.append(name)
+    return names
+
+
+def _update_bound_module_attr(original: Any, replacement: Any, attr_name: str) -> None:
+    for module in list(sys.modules.values()):
+        if module is None:
+            continue
+        try:
+            if getattr(module, attr_name, None) is original:
+                setattr(module, attr_name, replacement)
+        except Exception:
+            continue
 
 
 def _message_field(message: Any, name: str) -> Any:
@@ -580,6 +644,22 @@ def _summarize_tool_call_for_final_answer(tool_call: Any) -> str:
     return f"- {label}: {arguments_text}"
 
 
+def _message_reasoning_text(message: Any) -> str | None:
+    reasoning = _first_non_empty_string(
+        getattr(message, "reasoning_content", None),
+        getattr(message, "reasoning", None),
+    )
+    if reasoning:
+        return reasoning
+
+    provider_specific_fields = getattr(message, "provider_specific_fields", None)
+    if isinstance(provider_specific_fields, dict):
+        return _first_non_empty_string(
+            provider_specific_fields.get("reasoning_content")
+        )
+    return None
+
+
 def _flatten_coding_agent_final_answer_history(
     history: Any,
     token_counter: Any,
@@ -612,6 +692,12 @@ def _flatten_coding_agent_final_answer_history(
 
         tool_calls = getattr(message, "tool_calls", None)
         if _is_assistant_message(message) and tool_calls:
+            reasoning_text = _message_reasoning_text(message)
+            if reasoning_text:
+                transcript_parts.append(
+                    f"## Coding agent reasoning before tool requests {index}\n\n"
+                    f"{reasoning_text}"
+                )
             tool_call_lines = [
                 _summarize_tool_call_for_final_answer(tool_call)
                 for tool_call in tool_calls
@@ -662,6 +748,280 @@ def _flatten_coding_agent_final_answer_history(
     )
 
     return flattened
+
+
+def apply_reasoning_mode_trace_patch() -> None:
+    """Emit metadata-only traces for native-vs-simulated reasoning decisions."""
+
+    if not _REASONING_MODE_TRACE:
+        return
+
+    try:
+        from onyx.llm import utils as llm_utils
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed importing reasoning-mode utils: {e}", flush=True)
+        _raise_if_strict()
+        return
+
+    original_model_is_reasoning_model = llm_utils.model_is_reasoning_model
+    if not getattr(
+        original_model_is_reasoning_model,
+        "_wrapper_reasoning_mode_trace",
+        False,
+    ):
+
+        @functools.wraps(original_model_is_reasoning_model)
+        def _model_is_reasoning_model_with_trace(model_name, model_provider):  # noqa: ANN001
+            result = original_model_is_reasoning_model(model_name, model_provider)
+            _trace_reasoning_mode(
+                "model_detection",
+                caller=_caller_context(),
+                model=model_name,
+                provider=model_provider,
+                supports_reasoning=bool(result),
+            )
+            return result
+
+        _model_is_reasoning_model_with_trace._wrapper_reasoning_mode_trace = True
+        llm_utils.model_is_reasoning_model = _model_is_reasoning_model_with_trace
+        _update_bound_module_attr(
+            original_model_is_reasoning_model,
+            _model_is_reasoning_model_with_trace,
+            "model_is_reasoning_model",
+        )
+
+    try:
+        from onyx.chat import llm_step
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed importing reasoning-mode llm_step: {e}", flush=True)
+        _raise_if_strict()
+        return
+
+    original_run_llm_step_pkt_generator = llm_step.run_llm_step_pkt_generator
+    if not getattr(
+        original_run_llm_step_pkt_generator,
+        "_wrapper_reasoning_mode_trace",
+        False,
+    ):
+        packet_signature = inspect.signature(original_run_llm_step_pkt_generator)
+
+        @functools.wraps(original_run_llm_step_pkt_generator)
+        def _run_llm_step_pkt_generator_with_trace(*args, **kwargs):
+            bound = packet_signature.bind(*args, **kwargs)
+            bound.apply_defaults()
+            tool_names = _tool_names_from_definitions(
+                bound.arguments.get("tool_definitions")
+            )
+            think_tool_offered = "think_tool" in tool_names
+            custom_token_processor = bool(
+                bound.arguments.get("custom_token_processor")
+            )
+            is_deep_research = bool(bound.arguments.get("is_deep_research"))
+            llm = bound.arguments.get("llm")
+            model_name = getattr(getattr(llm, "config", None), "model_name", None)
+            model_provider = getattr(
+                getattr(llm, "config", None),
+                "model_provider",
+                None,
+            )
+            placement = bound.arguments.get("placement")
+            reasoning_effort = bound.arguments.get("reasoning_effort")
+            _trace_reasoning_mode(
+                "llm_step_request",
+                caller=_caller_context(),
+                model=model_name,
+                provider=model_provider,
+                tool_choice=str(bound.arguments.get("tool_choice")),
+                tools=tool_names,
+                tools_count=len(tool_names),
+                think_tool_offered=think_tool_offered,
+                custom_token_processor=custom_token_processor,
+                is_deep_research=is_deep_research,
+                reasoning_effort=(
+                    getattr(reasoning_effort, "value", None) or str(reasoning_effort)
+                ),
+                turn_index=getattr(placement, "turn_index", None),
+                tab_index=getattr(placement, "tab_index", None),
+                sub_turn_index=getattr(placement, "sub_turn_index", None),
+            )
+            generator = original_run_llm_step_pkt_generator(*args, **kwargs)
+            reasoning_packet_seen = False
+            try:
+                while True:
+                    packet = next(generator)
+                    obj = getattr(packet, "obj", None)
+                    if type(obj).__name__ == "ReasoningDelta":
+                        reasoning_packet_seen = True
+                    yield packet
+            except StopIteration as e:
+                llm_step_result = None
+                has_reasoned = None
+                if isinstance(e.value, tuple) and e.value:
+                    llm_step_result = e.value[0]
+                    if len(e.value) > 1:
+                        has_reasoned = e.value[1]
+                reasoning = getattr(llm_step_result, "reasoning", None)
+                reasoning_len, reasoning_sha = _reasoning_digest(reasoning)
+                tool_calls = getattr(llm_step_result, "tool_calls", None)
+                _trace_reasoning_mode(
+                    "llm_step_result",
+                    caller=_caller_context(),
+                    model=model_name,
+                    provider=model_provider,
+                    reasoning_packet_seen=reasoning_packet_seen,
+                    has_reasoned=bool(has_reasoned),
+                    result_reasoning=bool(reasoning),
+                    reasoning_len=reasoning_len,
+                    reasoning_sha256=reasoning_sha,
+                    result_answer=bool(getattr(llm_step_result, "answer", None)),
+                    result_tool_calls=_tool_call_count(tool_calls),
+                    think_tool_offered=think_tool_offered,
+                    custom_token_processor=custom_token_processor,
+                    is_deep_research=is_deep_research,
+                    native_reasoning_expected=(
+                        not think_tool_offered and not custom_token_processor
+                    ),
+                )
+                return e.value
+
+        _run_llm_step_pkt_generator_with_trace._wrapper_reasoning_mode_trace = True
+        llm_step.run_llm_step_pkt_generator = _run_llm_step_pkt_generator_with_trace
+        _update_bound_module_attr(
+            original_run_llm_step_pkt_generator,
+            _run_llm_step_pkt_generator_with_trace,
+            "run_llm_step_pkt_generator",
+        )
+
+    original_run_llm_step = llm_step.run_llm_step
+    if not getattr(original_run_llm_step, "_wrapper_reasoning_mode_trace", False):
+        step_signature = inspect.signature(original_run_llm_step)
+
+        @functools.wraps(original_run_llm_step)
+        def _run_llm_step_with_trace(*args, **kwargs):
+            bound = step_signature.bind(*args, **kwargs)
+            bound.apply_defaults()
+            tool_names = _tool_names_from_definitions(
+                bound.arguments.get("tool_definitions")
+            )
+            llm = bound.arguments.get("llm")
+            model_name = getattr(getattr(llm, "config", None), "model_name", None)
+            model_provider = getattr(
+                getattr(llm, "config", None),
+                "model_provider",
+                None,
+            )
+            placement = bound.arguments.get("placement")
+            reasoning_effort = bound.arguments.get("reasoning_effort")
+            _trace_reasoning_mode(
+                "llm_step_call",
+                caller=_caller_context(),
+                model=model_name,
+                provider=model_provider,
+                tool_choice=str(bound.arguments.get("tool_choice")),
+                tools=tool_names,
+                tools_count=len(tool_names),
+                think_tool_offered="think_tool" in tool_names,
+                custom_token_processor=bool(
+                    bound.arguments.get("custom_token_processor")
+                ),
+                is_deep_research=bool(bound.arguments.get("is_deep_research")),
+                reasoning_effort=(
+                    getattr(reasoning_effort, "value", None) or str(reasoning_effort)
+                ),
+                turn_index=getattr(placement, "turn_index", None),
+                tab_index=getattr(placement, "tab_index", None),
+                sub_turn_index=getattr(placement, "sub_turn_index", None),
+            )
+            return original_run_llm_step(*args, **kwargs)
+
+        _run_llm_step_with_trace._wrapper_reasoning_mode_trace = True
+        llm_step.run_llm_step = _run_llm_step_with_trace
+        _update_bound_module_attr(
+            original_run_llm_step,
+            _run_llm_step_with_trace,
+            "run_llm_step",
+        )
+
+    try:
+        from onyx.deep_research import utils as dr_utils
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing reasoning-mode deep-research utils: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    original_create_processor = dr_utils.create_think_tool_token_processor
+    if not getattr(original_create_processor, "_wrapper_reasoning_mode_trace", False):
+
+        @functools.wraps(original_create_processor)
+        def _create_think_tool_token_processor_with_trace(*args, **kwargs):
+            _trace_reasoning_mode(
+                "think_tool_processor_created",
+                caller=_caller_context(),
+            )
+            processor = original_create_processor(*args, **kwargs)
+
+            @functools.wraps(processor)
+            def _think_tool_processor_with_trace(delta, state):  # noqa: ANN001
+                if delta is None:
+                    _trace_reasoning_mode(
+                        "think_tool_processor_flush",
+                        caller=_caller_context(),
+                        had_state=state is not None,
+                    )
+                else:
+                    tool_names = []
+                    for tool_call in getattr(delta, "tool_calls", None) or []:
+                        function = getattr(tool_call, "function", None)
+                        name = getattr(function, "name", None)
+                        if name:
+                            tool_names.append(name)
+                    if "think_tool" in tool_names:
+                        _trace_reasoning_mode(
+                            "think_tool_delta_observed",
+                            caller=_caller_context(),
+                            tool_names=tool_names,
+                        )
+
+                modified_delta, new_state = processor(delta, state)
+                if modified_delta is not None:
+                    reasoning_content = getattr(
+                        modified_delta,
+                        "reasoning_content",
+                        None,
+                    )
+                    reasoning_len, reasoning_sha = _reasoning_digest(reasoning_content)
+                    modified_tool_names = []
+                    for tool_call in getattr(modified_delta, "tool_calls", None) or []:
+                        function = getattr(tool_call, "function", None)
+                        name = getattr(function, "name", None)
+                        if name:
+                            modified_tool_names.append(name)
+                    _trace_reasoning_mode(
+                        "think_tool_processor_output",
+                        caller=_caller_context(),
+                        emitted_reasoning=bool(reasoning_content),
+                        reasoning_len=reasoning_len,
+                        reasoning_sha256=reasoning_sha,
+                        emitted_tool_names=modified_tool_names,
+                    )
+                return modified_delta, new_state
+
+            return _think_tool_processor_with_trace
+
+        _create_think_tool_token_processor_with_trace._wrapper_reasoning_mode_trace = True
+        dr_utils.create_think_tool_token_processor = (
+            _create_think_tool_token_processor_with_trace
+        )
+        _update_bound_module_attr(
+            original_create_processor,
+            _create_think_tool_token_processor_with_trace,
+            "create_think_tool_token_processor",
+        )
+
+    print("sitecustomize: patched reasoning mode trace", flush=True)
 
 
 def _coding_agent_final_answer_fallback(history: Any, error: BaseException) -> str:

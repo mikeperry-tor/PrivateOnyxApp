@@ -231,7 +231,18 @@ teep's OpenAI-compatible chat completions endpoint.
 
 For upgrade/debug work, the patch also contains private developer switches in
 `onyx/patches/sitecustomize_base/wrapper_env_patches.py`. They are intentionally
-not exposed through `.env.wrapper.example`. `_REASONING_TRACE_ENABLED` emits
+not exposed through `.env.wrapper.example`. `_REASONING_MODE_TRACE`, which
+defaults to `true`, emits metadata-only `reasoning_mode_trace` lines for
+reasoning-model detection and the resulting request mode. These lines include
+the provider/model pair, caller, `supports_reasoning` result, tool names,
+whether `think_tool` was offered, whether a custom think-tool token processor
+was installed, reasoning effort, placement indexes, and whether the LLM step
+returned reasoning packets/result reasoning. If native reasoning is being used
+by the Onyx agent, code agent, deep-research orchestrator, and nested research
+agent, the corresponding request-mode logs should show `think_tool_offered=false`
+and no `think_tool_processor_*` events; the result logs should show whether
+reasoning was actually observed for that call.
+`_REASONING_TRACE_ENABLED` emits
 metadata-only Onyx trace lines for reasoning receipt, reattachment, structured
 assistant-message conversion, role counts/role ordering, and the final message
 dictionaries passed to LiteLLM. It also emits metadata-only LiteLLM transform
@@ -602,10 +613,14 @@ coding-agent final-answer system prompt. It calls the LLM stream interface
 directly with no `tools` argument and with reasoning effort disabled, because
 some OpenAI-compatible GLM/Tinfoil paths reject a no-tool finalizer request that
 still carries an empty `tools: []` member plus no-tool/tool-choice metadata.
-Bash command requests and bash outputs remain visible to the final model, but
-no `role="tool"` messages, assistant `tool_calls`, repeated assistant-only
-transcript messages, trailing separate user-role reminder, preserved reasoning
-fields, or empty tool-definition arrays are sent for that synthesis call.
+Bash command requests, bash outputs, and preserved assistant reasoning remain
+visible to the final model in chronological plain text. Reasoning is inserted
+immediately before the corresponding tool-request section so the summarizer sees
+the same think-before-act ordering as the active code-agent loop. No
+`role="tool"` messages, assistant `tool_calls`, repeated assistant-only
+transcript messages, trailing separate user-role reminder, structured preserved
+reasoning fields, or empty tool-definition arrays are sent for that synthesis
+call.
 
 During Onyx upgrades, re-check whether this is still necessary by inspecting
 `backend/onyx/tools/fake_tools/coding_agent.py`. If `_generate_final_answer()`
@@ -617,8 +632,9 @@ tool-definition arrays in a no-tools request. Confirm the upstream function
 still contains the exact `"LLM failed to produce a final answer"` guard used by
 the wrapper's startup validation, and confirm the wrapper still patches before
 code-agent execution. Also confirm the final flattened request has exactly one
-system message and one user message, no `tools` member, and no `tool_choice`
-member.
+system message and one user message, no `tools` member, no `tool_choice` member,
+and any preserved assistant reasoning appears only as ordered plain-text
+transcript evidence.
 
 Upstream also catches any exception in `run_coding_agent_call()` and returns
 `None`, including cases where bash commands succeeded but the final no-tool LLM
