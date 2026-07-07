@@ -134,7 +134,10 @@ Patch behavior:
   agents treat the configured OpenAI-compatible chat model as native
   reasoning-capable even if LiteLLM does not recognize the provider/model pair.
   This is intentionally separate from `_REASONING_MODE_TRACE`: the env setting
-  changes behavior, while the private trace only reports decisions.
+  changes behavior, while the private trace only reports decisions. The override
+  logs one startup installation line and one first-use line per provider/model
+  pair from inside the hook so disabled trace mode still confirms the hook is
+  active.
 - Reads `ONYX_AGENT_PRESERVE_TURN_REASONING`, which defaults to `true`, and
   `ONYX_AGENT_PRESERVE_ALL_REASONING`, which defaults to `false`.
 - When both settings are explicitly `false`, the reasoning-field preservation

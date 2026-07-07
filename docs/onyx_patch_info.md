@@ -197,7 +197,10 @@ The base API-server `sitecustomize` patch, also invoked by the lite
   the OpenAI-compatible provider/model pair. This disables the synthetic
   `think_tool` path in the coding agent, deep-research orchestrator, and nested
   research agent, causing those agents to use the native-reasoning prompt/tool
-  mode. Set it to `false` to restore upstream/LiteLLM detection.
+  mode. The patch emits a minimal startup line when installed and a minimal
+  first-use line per provider/model pair when the hook actually returns forced
+  `supports_reasoning=true`, even if `_REASONING_MODE_TRACE` is disabled. Set it
+  to `false` to restore upstream/LiteLLM detection.
 - Reads `ONYX_AGENT_PRESERVE_TURN_REASONING`, which defaults to `true`, and
   `ONYX_AGENT_PRESERVE_ALL_REASONING`, which defaults to `false`. Set both to
   `false` to leave Onyx's upstream reasoning-field preservation behavior

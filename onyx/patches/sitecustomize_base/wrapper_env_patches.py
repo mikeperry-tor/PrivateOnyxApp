@@ -31,7 +31,8 @@ _REASONING_REMINDER_REORDER_ENABLED = True
 _NATIVE_REASONING_DETECTION_OVERRIDE_ENABLED = os.environ.get(
     "ONYX_AGENT_USE_NATIVE_REASONING", "true"
 ).lower() in ("1", "true", "yes", "on")
-_REASONING_MODE_TRACE = True
+_NATIVE_REASONING_DETECTION_OVERRIDE_LOGGED: set[tuple[str, str]] = set()
+_REASONING_MODE_TRACE = False
 _REASONING_MODE_TRACE_SEQ = 0
 _CODING_AGENT_FINAL_TRACE_ENABLED = _REASONING_MODE_TRACE
 
@@ -862,6 +863,16 @@ def apply_native_reasoning_detection_override_patch() -> None:
         model_name,
         model_provider,
     ):
+        key = (str(model_name), str(model_provider))
+        if key not in _NATIVE_REASONING_DETECTION_OVERRIDE_LOGGED:
+            _NATIVE_REASONING_DETECTION_OVERRIDE_LOGGED.add(key)
+            print(
+                "sitecustomize: native reasoning detection override applied "
+                f"model={json.dumps(model_name)} "
+                f"provider={json.dumps(model_provider)} "
+                "supports_reasoning=true",
+                flush=True,
+            )
         return True
 
     _model_is_reasoning_model_native_override._wrapper_native_reasoning_override = True
