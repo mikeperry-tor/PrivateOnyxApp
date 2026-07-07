@@ -80,6 +80,7 @@ settings.
 | Area | Onyx service or component | Local mechanism | Upstream shape |
 | --- | --- | --- | --- |
 | LLM context window override env | `api_server` | Compose maps `ONYX_AGENT_LLM_MAX_TOKENS` to upstream `GEN_AI_MAX_TOKENS`; `sitecustomize` makes it win before DB/provider limits | First-class wrapper/admin override for model context window |
+| Native reasoning detection override | `api_server` | Compose passes `ONYX_AGENT_USE_NATIVE_REASONING`; `sitecustomize` can force Onyx `model_is_reasoning_model()` true for wrapper-managed agents | Provider/model reasoning capability override for OpenAI-compatible deployments |
 | Assistant reasoning preservation | `api_server` | `sitecustomize` carries active-turn saved/live assistant reasoning into LiteLLM `reasoning_content` fields by default; optional all-history mode preserves older turns too | Native chat-history support for provider reasoning fields |
 | Chat reminder placement for reasoning preservation | `api_server` | `sitecustomize` keeps Onyx's user-role reminder adjacent to the latest user request instead of trailing after assistant/tool history | Reminder placement that does not invalidate provider reasoning templates |
 | Coding-agent final answer synthesis | `api_server` | `sitecustomize` flattens structured tool history before the no-tool final-answer call and returns recent tool output if finalization still fails | Final-answer path that does not send tool-call protocol messages to non-tool calls |
@@ -190,6 +191,13 @@ tool-use turns.
 The base API-server `sitecustomize` patch, also invoked by the lite
 `sitecustomize` path:
 
+- Reads `ONYX_AGENT_USE_NATIVE_REASONING`, which defaults to `true`. When true,
+  it narrowly wraps `onyx.llm.utils.model_is_reasoning_model()` so Onyx treats
+  the configured chat model as reasoning-capable even if LiteLLM does not know
+  the OpenAI-compatible provider/model pair. This disables the synthetic
+  `think_tool` path in the coding agent, deep-research orchestrator, and nested
+  research agent, causing those agents to use the native-reasoning prompt/tool
+  mode. Set it to `false` to restore upstream/LiteLLM detection.
 - Reads `ONYX_AGENT_PRESERVE_TURN_REASONING`, which defaults to `true`, and
   `ONYX_AGENT_PRESERVE_ALL_REASONING`, which defaults to `false`. Set both to
   `false` to leave Onyx's upstream reasoning-field preservation behavior
@@ -621,7 +629,11 @@ still carries an empty `tools: []` member plus no-tool/tool-choice metadata.
 Bash command requests, bash outputs, and preserved assistant reasoning remain
 visible to the final model in chronological plain text. Reasoning is inserted
 immediately before the corresponding tool-request section so the summarizer sees
-the same think-before-act ordering as the active code-agent loop. No
+the same think-before-act ordering as the active code-agent loop. If the
+code-agent stops because an LLM step produced no tool calls, that terminal
+assistant answer and reasoning are appended to the in-memory history before the
+summarizer runs, so final no-tool reasoning is represented as an ordered
+plain-text assistant reasoning section instead of being dropped. No
 `role="tool"` messages, assistant `tool_calls`, repeated assistant-only
 transcript messages, trailing separate user-role reminder, structured preserved
 reasoning fields, or empty tool-definition arrays are sent for that synthesis

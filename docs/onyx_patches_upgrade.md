@@ -129,6 +129,12 @@ Upgrade notes:
 
 Patch behavior:
 
+- Reads `ONYX_AGENT_USE_NATIVE_REASONING`, which defaults to `true`. When true,
+  wraps `onyx.llm.utils.model_is_reasoning_model()` so wrapper-managed Onyx
+  agents treat the configured OpenAI-compatible chat model as native
+  reasoning-capable even if LiteLLM does not recognize the provider/model pair.
+  This is intentionally separate from `_REASONING_MODE_TRACE`: the env setting
+  changes behavior, while the private trace only reports decisions.
 - Reads `ONYX_AGENT_PRESERVE_TURN_REASONING`, which defaults to `true`, and
   `ONYX_AGENT_PRESERVE_ALL_REASONING`, which defaults to `false`.
 - When both settings are explicitly `false`, the reasoning-field preservation
@@ -173,9 +179,9 @@ Patch behavior:
   flipped in the patch, it logs metadata-only Onyx reasoning trace events. Keep
   `_REASONING_TRACE_LITELLM_DEBUG_ENABLED` separate and false unless full
   LiteLLM request/response debug logging is intentionally needed for boundary
-  confirmation. Keep `_CODING_AGENT_FINAL_TRACE_ENABLED` false unless
-  validating the flattened coding-agent final-answer request shape. Do not
-  expose these as wrapper env preferences.
+  confirmation. `_CODING_AGENT_FINAL_TRACE_ENABLED` follows
+  `_REASONING_MODE_TRACE`; do not expose these private trace switches as wrapper
+  env preferences.
 
 Onyx service: `api_server`.
 
@@ -239,9 +245,11 @@ Upgrade notes:
 - `_REASONING_MODE_TRACE` is a private developer switch that defaults to `true`.
   Its `reasoning_mode_trace` lines should be checked during model/provider
   upgrade work. Confirm `model_detection` reports the expected
-  `supports_reasoning` value for the configured provider/model, and confirm the
-  Onyx agent, coding agent, deep-research orchestrator, and nested research
-  agent request traces show `think_tool_offered=false` plus no
+  `supports_reasoning` value for the configured provider/model. With
+  `ONYX_AGENT_USE_NATIVE_REASONING=true`, this should be `true` even when
+  LiteLLM would otherwise miss the OpenAI-compatible provider/model pair. Also
+  confirm the Onyx agent, coding agent, deep-research orchestrator, and nested
+  research agent request traces show `think_tool_offered=false` plus no
   `think_tool_processor_*` events when a native-reasoning model such as the teep
   OpenAI-compatible GLM/Kimi path is in use. Also inspect `llm_step_result`
   events for `reasoning_packet_seen`, `result_reasoning`, and reasoning length /
@@ -269,6 +277,10 @@ Patch behavior:
   `role="tool"` messages, assistant `tool_calls`, repeated assistant-only
   transcript messages, or structured assistant reasoning fields from the tool
   loop.
+- If the coding-agent loop stops because the model produced no tool calls,
+  appends that terminal assistant answer/reasoning to the in-memory history
+  before `_generate_final_answer()` runs so the finalizer transcript includes
+  the last reasoning step instead of only earlier tool-request reasoning.
 - For flattened history, bypasses upstream `construct_message_history()` and
   merges `USER_FINAL_ANSWER_QUERY` into the same user message as the transcript,
   so the request is exactly `[system, user]` rather than `[system, user,
@@ -321,6 +333,10 @@ Upgrade notes:
   reasoning before the corresponding tool-request section. This reasoning is
   plain transcript evidence for the summarizer, not outbound
   `reasoning_content` / `reasoning` message fields.
+- Confirm a code-agent run that ends with `Coding agent LLM produced no tool
+  calls; forcing final answer.` includes the terminal no-tool reasoning hash in
+  `coding_agent_final_answer_history_flattened` as an `assistant_reasoning`
+  section.
 
 ### Previous tool-result preservation
 

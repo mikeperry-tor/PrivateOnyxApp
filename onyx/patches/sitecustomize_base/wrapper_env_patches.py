@@ -28,6 +28,9 @@ _REASONING_TRACE_ENABLED = False
 _REASONING_TRACE_LITELLM_DEBUG_ENABLED = False
 _REASONING_TRACE_SEQ = 0
 _REASONING_REMINDER_REORDER_ENABLED = True
+_NATIVE_REASONING_DETECTION_OVERRIDE_ENABLED = os.environ.get(
+    "ONYX_AGENT_USE_NATIVE_REASONING", "true"
+).lower() in ("1", "true", "yes", "on")
 _REASONING_MODE_TRACE = True
 _REASONING_MODE_TRACE_SEQ = 0
 _CODING_AGENT_FINAL_TRACE_ENABLED = _REASONING_MODE_TRACE
@@ -787,7 +790,7 @@ def _flatten_coding_agent_final_answer_history(
             transcript_parts.append(f"## Coding agent message {index}\n\n{message_text}")
             section_order.append("other_message")
 
-    if not saw_tool_history:
+    if not saw_tool_history and not reasoning_digests:
         _trace_reasoning_mode(
             "coding_agent_final_answer_history_not_flattened",
             original_messages=len(history),
@@ -827,6 +830,52 @@ def _flatten_coding_agent_final_answer_history(
     )
 
     return flattened
+
+
+def apply_native_reasoning_detection_override_patch() -> None:
+    """Optionally force Onyx reasoning-model detection on for wrapper models."""
+
+    if not _NATIVE_REASONING_DETECTION_OVERRIDE_ENABLED:
+        print(
+            "sitecustomize: native reasoning detection override disabled "
+            "(ONYX_AGENT_USE_NATIVE_REASONING=false)",
+            flush=True,
+        )
+        return
+
+    try:
+        from onyx.llm import utils as llm_utils
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing reasoning detection utils: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    original = llm_utils.model_is_reasoning_model
+    if getattr(original, "_wrapper_native_reasoning_override", False):
+        return
+
+    @functools.wraps(original)
+    def _model_is_reasoning_model_native_override(  # noqa: ANN001
+        model_name,
+        model_provider,
+    ):
+        return True
+
+    _model_is_reasoning_model_native_override._wrapper_native_reasoning_override = True
+    llm_utils.model_is_reasoning_model = _model_is_reasoning_model_native_override
+    _update_bound_module_attr(
+        original,
+        _model_is_reasoning_model_native_override,
+        "model_is_reasoning_model",
+    )
+    print(
+        "sitecustomize: forcing Onyx reasoning-model detection true "
+        "(ONYX_AGENT_USE_NATIVE_REASONING=true)",
+        flush=True,
+    )
 
 
 def apply_reasoning_mode_trace_patch() -> None:
@@ -1698,45 +1747,78 @@ def apply_reasoning_content_preservation_patch() -> None:
         print(f"sitecustomize: failed to patch chat llm loop reasoning: {e}", flush=True)
         _raise_if_strict()
 
-    for module_name, function_name, old, new in [
+    for module_name, function_name, replacements in [
         (
             "onyx.deep_research.dr_loop",
             "run_deep_research_llm_loop",
-            "                    simple_chat_history.append(assistant_with_tools)\n",
-            (
-                "                    _wrapper_attach_reasoning_fields(\n"
-                "                        assistant_with_tools,\n"
-                "                        llm_step_result.reasoning or most_recent_reasoning,\n"
-                "                        source=\"deep_research_llm_loop\",\n"
-                "                    )\n"
-                "                    simple_chat_history.append(assistant_with_tools)\n"
-            ),
+            {
+                "                    simple_chat_history.append(assistant_with_tools)\n": (
+                    "                    _wrapper_attach_reasoning_fields(\n"
+                    "                        assistant_with_tools,\n"
+                    "                        llm_step_result.reasoning or most_recent_reasoning,\n"
+                    "                        source=\"deep_research_llm_loop\",\n"
+                    "                    )\n"
+                    "                    simple_chat_history.append(assistant_with_tools)\n"
+                )
+            },
         ),
         (
             "onyx.tools.fake_tools.research_agent",
             "run_research_agent_call",
-            "                        msg_history.append(assistant_with_tools)\n",
-            (
-                "                        _wrapper_attach_reasoning_fields(\n"
-                "                            assistant_with_tools,\n"
-                "                            llm_step_result.reasoning or most_recent_reasoning,\n"
-                "                            source=\"research_agent_call\",\n"
-                "                        )\n"
-                "                        msg_history.append(assistant_with_tools)\n"
-            ),
+            {
+                "                        msg_history.append(assistant_with_tools)\n": (
+                    "                        _wrapper_attach_reasoning_fields(\n"
+                    "                            assistant_with_tools,\n"
+                    "                            llm_step_result.reasoning or most_recent_reasoning,\n"
+                    "                            source=\"research_agent_call\",\n"
+                    "                        )\n"
+                    "                        msg_history.append(assistant_with_tools)\n"
+                )
+            },
         ),
         (
             "onyx.tools.fake_tools.coding_agent",
             "run_coding_agent_call",
-            "                    msg_history.append(assistant_with_tools)\n",
-            (
-                "                    _wrapper_attach_reasoning_fields(\n"
-                "                        assistant_with_tools,\n"
-                "                        llm_step_result.reasoning or most_recent_reasoning,\n"
-                "                        source=\"coding_agent_call\",\n"
-                "                    )\n"
-                "                    msg_history.append(assistant_with_tools)\n"
-            ),
+            {
+                "                    msg_history.append(assistant_with_tools)\n": (
+                    "                    _wrapper_attach_reasoning_fields(\n"
+                    "                        assistant_with_tools,\n"
+                    "                        llm_step_result.reasoning or most_recent_reasoning,\n"
+                    "                        source=\"coding_agent_call\",\n"
+                    "                    )\n"
+                    "                    msg_history.append(assistant_with_tools)\n"
+                ),
+                (
+                    "                    if not tool_calls:\n"
+                    "                        logger.warning(\n"
+                    "                            \"Coding agent LLM produced no tool calls; \"\n"
+                    "                            \"forcing final answer.\"\n"
+                    "                        )\n"
+                    "                        break\n"
+                ): (
+                    "                    if not tool_calls:\n"
+                    "                        final_assistant_msg = ChatMessageSimple(\n"
+                    "                            message=llm_step_result.answer or \"\",\n"
+                    "                            token_count=token_counter(\n"
+                    "                                llm_step_result.answer or \"\"\n"
+                    "                            ),\n"
+                    "                            message_type=MessageType.ASSISTANT,\n"
+                    "                            tool_calls=None,\n"
+                    "                            image_files=None,\n"
+                    "                        )\n"
+                    "                        _wrapper_attach_reasoning_fields(\n"
+                    "                            final_assistant_msg,\n"
+                    "                            llm_step_result.reasoning or most_recent_reasoning,\n"
+                    "                            source=\"coding_agent_call_no_tool\",\n"
+                    "                        )\n"
+                    "                        msg_history.append(final_assistant_msg)\n"
+                    "                        logger.warning(\n"
+                    "                            \"Coding agent LLM produced no tool calls; \"\n"
+                    "                            \"forcing final answer.\"\n"
+                    "                        )\n"
+                    "                        break\n"
+                ),
+            },
         ),
     ]:
         try:
@@ -1746,7 +1828,7 @@ def apply_reasoning_content_preservation_patch() -> None:
                 module=module,
                 function_name=function_name,
                 patch_name=f"{module_name}.{function_name} reasoning preservation",
-                replacements={old: new},
+                replacements=replacements,
             )
         except Exception as e:  # pragma: no cover
             print(
