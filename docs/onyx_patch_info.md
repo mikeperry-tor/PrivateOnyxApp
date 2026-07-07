@@ -241,7 +241,12 @@ returned reasoning packets/result reasoning. If native reasoning is being used
 by the Onyx agent, code agent, deep-research orchestrator, and nested research
 agent, the corresponding request-mode logs should show `think_tool_offered=false`
 and no `think_tool_processor_*` events; the result logs should show whether
-reasoning was actually observed for that call.
+reasoning was actually observed for that call. The same switch also emits
+code-agent finalizer metadata showing whether the completed tool transcript was
+flattened, the section order sent to the final summarizer, counts of reasoning,
+tool-request, and bash-output sections, and short hashes for preserved reasoning
+chunks. This is enough to compare an earlier `llm_step_result` reasoning hash
+with the finalizer transcript without logging raw reasoning text.
 `_REASONING_TRACE_ENABLED` emits
 metadata-only Onyx trace lines for reasoning receipt, reattachment, structured
 assistant-message conversion, role counts/role ordering, and the final message
@@ -620,7 +625,10 @@ the same think-before-act ordering as the active code-agent loop. No
 `role="tool"` messages, assistant `tool_calls`, repeated assistant-only
 transcript messages, trailing separate user-role reminder, structured preserved
 reasoning fields, or empty tool-definition arrays are sent for that synthesis
-call.
+call. `_REASONING_MODE_TRACE` emits `coding_agent_final_answer_history_flattened`
+and `coding_agent_final_summarizer_request` events for this path; both events
+include metadata-only section ordering and counts so upgrades can verify that
+reasoning sections precede the matching tool-request sections.
 
 During Onyx upgrades, re-check whether this is still necessary by inspecting
 `backend/onyx/tools/fake_tools/coding_agent.py`. If `_generate_final_answer()`

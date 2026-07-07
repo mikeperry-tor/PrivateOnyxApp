@@ -30,7 +30,7 @@ _REASONING_TRACE_SEQ = 0
 _REASONING_REMINDER_REORDER_ENABLED = True
 _REASONING_MODE_TRACE = True
 _REASONING_MODE_TRACE_SEQ = 0
-_CODING_AGENT_FINAL_TRACE_ENABLED = False
+_CODING_AGENT_FINAL_TRACE_ENABLED = _REASONING_MODE_TRACE
 
 
 def _strict_mode() -> bool:
@@ -660,6 +660,29 @@ def _message_reasoning_text(message: Any) -> str | None:
     return None
 
 
+def _coding_agent_final_section_kind(line: str) -> str | None:
+    if not line.startswith("## "):
+        return None
+    heading = line[3:]
+    if heading.startswith("User message "):
+        return "user_message"
+    if heading.startswith("Coding agent reasoning before tool requests "):
+        return "reasoning_before_tool_requests"
+    if heading.startswith("Coding agent reasoning message "):
+        return "assistant_reasoning"
+    if heading == "Coding agent tool requests":
+        return "tool_requests"
+    if heading.startswith("Bash tool output"):
+        return "bash_output"
+    if heading.startswith("Coding agent assistant message "):
+        return "assistant_message"
+    if heading.startswith("Coding agent message "):
+        return "other_message"
+    if heading == "Final answer request":
+        return "final_answer_request"
+    return "unknown_heading"
+
+
 def _flatten_coding_agent_final_answer_history(
     history: Any,
     token_counter: Any,
@@ -677,6 +700,11 @@ def _flatten_coding_agent_final_answer_history(
 
     transcript_parts: list[str] = []
     saw_tool_history = False
+    section_order: list[str] = []
+    reasoning_digests: list[dict[str, Any]] = []
+    tool_request_sections = 0
+    tool_response_sections = 0
+    assistant_reasoning_sections = 0
 
     for index, message in enumerate(history, start=1):
         message_text = getattr(message, "message", "")
@@ -688,15 +716,27 @@ def _flatten_coding_agent_final_answer_history(
                 label += f" ({tool_call_id})"
             transcript_parts.append(f"## {label}\n\n{message_text}")
             saw_tool_history = True
+            section_order.append("bash_output")
+            tool_response_sections += 1
             continue
 
         tool_calls = getattr(message, "tool_calls", None)
         if _is_assistant_message(message) and tool_calls:
             reasoning_text = _message_reasoning_text(message)
             if reasoning_text:
+                reasoning_len, reasoning_sha = _reasoning_digest(reasoning_text)
                 transcript_parts.append(
                     f"## Coding agent reasoning before tool requests {index}\n\n"
                     f"{reasoning_text}"
+                )
+                section_order.append("reasoning_before_tool_requests")
+                reasoning_digests.append(
+                    {
+                        "index": index,
+                        "kind": "reasoning_before_tool_requests",
+                        "len": reasoning_len,
+                        "sha256": reasoning_sha,
+                    }
                 )
             tool_call_lines = [
                 _summarize_tool_call_for_final_answer(tool_call)
@@ -709,23 +749,53 @@ def _flatten_coding_agent_final_answer_history(
             )
             transcript_parts.append(transcript_part)
             saw_tool_history = True
+            section_order.append("tool_requests")
+            tool_request_sections += 1
             continue
 
         if _is_user_message(message):
             transcript_parts.append(f"## User message {index}\n\n{message_text}")
+            section_order.append("user_message")
             continue
 
         if _is_assistant_message(message):
+            reasoning_text = _message_reasoning_text(message)
+            if reasoning_text:
+                reasoning_len, reasoning_sha = _reasoning_digest(reasoning_text)
+                transcript_parts.append(
+                    f"## Coding agent reasoning message {index}\n\n"
+                    f"{reasoning_text}"
+                )
+                section_order.append("assistant_reasoning")
+                assistant_reasoning_sections += 1
+                reasoning_digests.append(
+                    {
+                        "index": index,
+                        "kind": "assistant_reasoning",
+                        "len": reasoning_len,
+                        "sha256": reasoning_sha,
+                    }
+                )
             if message_text:
                 transcript_parts.append(
                     f"## Coding agent assistant message {index}\n\n{message_text}"
                 )
+                section_order.append("assistant_message")
             continue
 
         if message_text:
             transcript_parts.append(f"## Coding agent message {index}\n\n{message_text}")
+            section_order.append("other_message")
 
     if not saw_tool_history:
+        _trace_reasoning_mode(
+            "coding_agent_final_answer_history_not_flattened",
+            original_messages=len(history),
+            reason="no_tool_history",
+            section_order=section_order,
+            reasoning_sections=len(reasoning_digests),
+            reasoning_digests=reasoning_digests,
+        )
         return history
 
     transcript = (
@@ -741,10 +811,19 @@ def _flatten_coding_agent_final_answer_history(
             message_type=MessageType.USER,
         )
     ]
-    _trace_reasoning(
+    transcript_len, transcript_sha = _reasoning_digest(transcript)
+    _trace_reasoning_mode(
         "coding_agent_final_answer_history_flattened",
         original_messages=len(history),
         flattened_messages=len(flattened),
+        section_order=section_order,
+        reasoning_sections=len(reasoning_digests),
+        assistant_reasoning_sections=assistant_reasoning_sections,
+        reasoning_digests=reasoning_digests,
+        tool_request_sections=tool_request_sections,
+        tool_response_sections=tool_response_sections,
+        transcript_len=transcript_len,
+        transcript_sha256=transcript_sha,
     )
 
     return flattened
@@ -1092,6 +1171,14 @@ def _coding_agent_flattened_final_answer(
     )
     llm_messages.append({"role": "user", "content": user_message})
     if _CODING_AGENT_FINAL_TRACE_ENABLED:
+        section_order = [
+            kind
+            for kind in (
+                _coding_agent_final_section_kind(line)
+                for line in user_message.splitlines()
+            )
+            if kind is not None
+        ]
         try:
             json.dumps({"messages": llm_messages})
             json_ok = True
@@ -1102,19 +1189,26 @@ def _coding_agent_flattened_final_answer(
             for ch in user_message
             if ord(ch) < 32 and ch not in "\n\r\t"
         )
-        print(
-            "sitecustomize: coding-agent flattened final request shape "
-            "roles=[\"system\",\"user\"] "
-            "reasoning_effort=off "
-            "tools_arg=none "
-            f"message_count=2 user_chars={len(user_message)} "
-            f"user_newlines={user_message.count(chr(10))} "
-            f"user_backslashes={user_message.count(chr(92))} "
-            f"user_quotes={user_message.count(chr(34))} "
-            f"user_control_chars={user_control_chars} "
-            f"user_sha256={hashlib.sha256(user_message.encode()).hexdigest()[:12]} "
-            f"json_encoding_ok={json_ok}",
-            flush=True,
+        _trace_reasoning_mode(
+            "coding_agent_final_summarizer_request",
+            roles=["system", "user"],
+            reasoning_effort="off",
+            tools_arg="none",
+            message_count=len(llm_messages),
+            user_chars=len(user_message),
+            user_newlines=user_message.count(chr(10)),
+            user_backslashes=user_message.count(chr(92)),
+            user_quotes=user_message.count(chr(34)),
+            user_control_chars=user_control_chars,
+            user_sha256=hashlib.sha256(user_message.encode()).hexdigest()[:12],
+            json_encoding_ok=json_ok,
+            section_order=section_order,
+            reasoning_sections=section_order.count(
+                "reasoning_before_tool_requests"
+            )
+            + section_order.count("assistant_reasoning"),
+            tool_request_sections=section_order.count("tool_requests"),
+            tool_response_sections=section_order.count("bash_output"),
         )
 
     with coding_agent.function_span("generate_coding_agent_answer") as span:

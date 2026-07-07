@@ -246,7 +246,11 @@ Upgrade notes:
   OpenAI-compatible GLM/Kimi path is in use. Also inspect `llm_step_result`
   events for `reasoning_packet_seen`, `result_reasoning`, and reasoning length /
   hash metadata to confirm reasoning actually appeared without logging the raw
-  reasoning text.
+  reasoning text. For code-agent final synthesis, inspect
+  `coding_agent_final_answer_history_flattened` and
+  `coding_agent_final_summarizer_request`; they should show section ordering,
+  reasoning/tool/bash section counts, and short reasoning hashes for the
+  plain-text transcript sent to the final summarizer.
 - If the outbound request keeps reasoning fields but the provider still drops
   them, inspect the provider chat template behavior for adjacent user-role
   messages. The next fallback should be merging the reminder into the latest
@@ -306,13 +310,13 @@ Upgrade notes:
   inspect whether the final request is intentionally a tool-capable request
   before preserving the flattening patch.
 - Re-test a coding-agent run against the teep OpenAI-compatible GLM/Kimi path.
-  With `_CODING_AGENT_FINAL_TRACE_ENABLED` temporarily enabled, metadata trace
-  for the final summarizer should show a final role sequence of
-  `["system", "user"]` and `tools_arg=none`. Teep debug metadata should show
-  `tools_present=false` / `tools_count=0`, and raw request inspection, if
-  enabled, should show no `tools` or `tool_choice` member at all. The active
-  tool loop before final synthesis may still contain structured tool calls and
-  tool responses.
+  With `_REASONING_MODE_TRACE` enabled, metadata trace for the final summarizer
+  should show a final role sequence of `["system", "user"]`, `tools_arg=none`,
+  section ordering, and reasoning/tool/bash section counts. Teep debug metadata
+  should show `tools_present=false` / `tools_count=0`, and raw request
+  inspection, if enabled, should show no `tools` or `tool_choice` member at all.
+  The active tool loop before final synthesis may still contain structured tool
+  calls and tool responses.
 - Confirm the flattened finalizer transcript places preserved code-agent
   reasoning before the corresponding tool-request section. This reasoning is
   plain transcript evidence for the summarizer, not outbound
