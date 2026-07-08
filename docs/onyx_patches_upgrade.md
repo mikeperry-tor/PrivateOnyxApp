@@ -14,10 +14,12 @@ Reference checkouts:
   `reference_repos/obscura` at `v0.1.9`, and `reference_repos/searxng` at
   `f8ffbf36f903`.
 
-Use this document when moving to a new major Onyx release: inspect the
-referenced upstream code first, then decide whether each wrapper patch is still
-applicable. For why each patch exists and what an upstreamable version might
-look like, see [`docs/onyx_patch_info.md`](onyx_patch_info.md). For
+Use this document when moving to a new major Onyx release or any companion
+component pin: inspect the referenced upstream code first, then decide whether
+each wrapper patch, shim, sidecar, compose override, parser assumption, and
+proxy/routing workaround is still necessary and still correct. For why each
+patch exists and what an upstreamable version might look like, see
+[`docs/onyx_patch_info.md`](onyx_patch_info.md). For
 operator-facing setup and troubleshooting of the local document RAG path, see
 [`docs/local_docs_rag_search.md`](local_docs_rag_search.md). For the
 SearXNG/CRW/Obscura request path and live parser assumptions, see
@@ -31,34 +33,77 @@ network-placement assumptions to keep synchronized during upgrades, see
 
 ## Fast upgrade checklist
 
-1. Refresh the reference checkout to the target Onyx tag and diff every upstream
-   reference named below against v4.1.7.
+1. Refresh the reference checkout for every component being upgraded and diff
+   the upstream references named below against the documented baseline.
 2. Re-run `make upgrade-onyx ONYX_CONFIG_REF=<tag>` to refresh
    `onyx/onyx_data/deployment/*`, then inspect wrapper compose layering with
    `docker compose config`.
-3. Confirm every `sitecustomize` patch still imports its target module and that
+3. Run the obsolescence and interaction audit in
+   [Patch, shim, and workaround obsolescence audit](#patch-shim-and-workaround-obsolescence-audit)
+   before carrying any wrapper behavior forward.
+4. Confirm every `sitecustomize` patch still imports its target module and that
    replaced strings/default parameters still exist.
-4. Refresh `reference_repos/python-sandbox` to the code-interpreter image tag
+5. Refresh `reference_repos/python-sandbox` to the code-interpreter image tag
    that will be deployed and re-check the executor references below.
-5. Confirm `onyx/local_embedding_shim.py` still matches Onyx's model-server
+6. Confirm `onyx/local_embedding_shim.py` still matches Onyx's model-server
    HTTP contract for embeddings, GPU status, rerank, and query analysis.
-6. Confirm `onyx/install.sh` is either intentionally pinned/customized or has
+7. Confirm `onyx/install.sh` is either intentionally pinned/customized or has
    been rebased onto upstream `deployment/docker_compose/install.sh`.
-7. Refresh `reference_repos/searxng` to the target SearXNG commit/tag and
+8. Refresh `reference_repos/searxng` to the target SearXNG commit/tag and
    re-check the wrapper SearXNG engine files, minimal settings overlay, and
    custom engine DOM selectors described in
    [SearXNG companion stack](#searxng-companion-stack).
-8. Update `stack.versions.env` for image/source pins and run
+9. Update `stack.versions.env` for image/source pins and run
    `make upgrade-python-deps` to refresh runtime Python package locks.
-9. Re-run the internal reachability checks summarized in
+10. Re-run the internal reachability checks summarized in
    [Internal network security](internal_network_security.md) when changes touch
    CRW, Obscura, the prefetch proxy, CDP shim, code-interpreter executor
    networking, or shared-namespace service placement.
-10. Update the version scope and affected component assumptions in
+11. Update the version scope and affected component assumptions in
     [Restricted egress network plan](plans/restricted_egress.md) when changing
     Onyx, code-interpreter, SearXNG, CRW, Obscura, Mysterium, routing/support
     images, proxy behavior, CDP/prefetch shims, executor networking, or
     full-mode RAG placement.
+
+## Patch, shim, and workaround obsolescence audit
+
+Run this audit for every Onyx, code-interpreter, SearXNG, CRW, Obscura, Teep,
+Mysterium, proxy/routing, or support-image upgrade, even when the changed
+component is not directly patched by `sitecustomize`.
+
+For each wrapper patch, shim, sidecar, custom engine, compose override, and
+runtime environment setting:
+
+- Check the target component's changelog, release notes, configuration
+  reference, and source diff for first-class upstream behavior that replaces
+  the wrapper mechanism. Prefer removing the local workaround or mapping wrapper
+  env to the upstream setting over preserving a redundant shim.
+- Check adjacent upstream behavior that can change the wrapper's risk profile
+  without deleting the exact patched symbol. Examples include new retry paths,
+  renderer escalation rules, proxy-routing semantics, parser response fields,
+  request deadline behavior, model-server contracts, tool prompt construction,
+  executor networking, and generated compose dependencies.
+- Re-evaluate the privacy and fail-closed invariant the wrapper mechanism was
+  protecting. If upstream now handles the functional case but not the privacy
+  case, keep or redesign the wrapper mechanism instead of removing it.
+- If the wrapper mechanism remains necessary, update this document with the
+  current upstream reason it remains necessary. Do not preserve historical
+  version comparisons in user-facing docs.
+- If upstream behavior supersedes a wrapper mechanism, remove the local code,
+  compose wiring, env surface, docs, and validation notes together. Do not keep
+  backwards compatibility for the removed path.
+- Add or update validation that proves the replacement behavior covers the same
+  runtime path. For request handling, test the actual `web_search` and
+  `open_url` paths, then inspect SearXNG, CRW, prefetch-proxy, CDP shim, and
+  Obscura logs as needed.
+
+For CRW/Obscura/SearXNG upgrades, explicitly check whether upstream changes make
+the prefetch-blocking proxy, CDP shim, CRW-backed SearXNG engines, round-robin
+scheduling, last-resort scoring, anti-bot error mapping, or parser selectors
+unnecessary or unsafe. CRW retry or renderer-escalation improvements only
+replace the prefetch-blocking proxy if they prevent the initial HTTP prefetch
+from reaching configured search-engine hosts while preserving PDF/content-type
+handling and browser-rendered SERP extraction.
 
 ## Service map
 
