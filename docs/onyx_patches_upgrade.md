@@ -1,11 +1,13 @@
 # Onyx wrapper patches
 
-Last updated for Onyx v4.1.7.
+Last updated for Onyx v4.1.9.
 
 Reference checkouts:
 
-- `reference_repos/onyx` at `v4.1.7`
-  (`34fc4c3d1febb8866b980a67d62258288e852343`).
+- `reference_repos/onyx` at `v4.1.9`
+  (`361cce5af7a0efd8775dd83489ca86524aec2b9a`).
+- `reference_repos/litellm` at `v1.89.4`
+  (`7f7796906b29caf03b9d83f6e2562d342e9e6dd3`).
 - `reference_repos/python-sandbox` at `code-interpreter-0.4.4`
   (`8950eadc06567798ec61354f24260e5dc996684b`), remote
   `https://github.com/onyx-dot-app/python-sandbox`.
@@ -150,7 +152,7 @@ Compose behavior:
 
 Onyx service: `api_server`.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/configs/model_configs.py:59` reads `GEN_AI_MAX_TOKENS`.
 - `backend/onyx/llm/utils.py:621` makes `GEN_AI_MAX_TOKENS` override
@@ -234,7 +236,7 @@ Patch behavior:
 
 Onyx service: `api_server`.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/chat/models.py:147` defines `ChatMessageSimple` without
   reasoning fields.
@@ -262,6 +264,17 @@ Upstream v4.1.7 assumptions to re-check:
 - The deep-research, research-agent, and coding-agent loops still append
   assistant tool-call messages through the exact snippets patched by
   `sitecustomize`.
+- The only Onyx source diff in the API-side reasoning/LLM paths from v4.1.7 to
+  v4.1.9 is `backend/onyx/llm/litellm_singleton/monkey_patches.py`. That
+  upstream patch now imports `ResponsesAPIResponse` from LiteLLM and simplifies
+  OpenAI Responses API reasoning-summary concatenation, but it does not add
+  reasoning fields to `ChatMessageSimple`, `AssistantMessage`, or the
+  chat-completions history reconstruction paths.
+- LiteLLM v1.89.4 still recognizes top-level `reasoning_content` and
+  `reasoning` in prompt-template utilities, so the wrapper's OpenAI-compatible
+  chat-completions aliases remain the correct compatibility surface. The
+  wrapper intentionally does not reuse Onyx's Responses API monkey patch for
+  chat-completions history.
 
 Upgrade notes:
 
@@ -291,9 +304,10 @@ Upgrade notes:
   assistant reasoning indexes, reasoning lengths, and short hashes so
   multi-user-turn tool conversations can be checked without logging message
   text.
-- `_REASONING_MODE_TRACE` is a private developer switch that defaults to `true`.
-  Its `reasoning_mode_trace` lines should be checked during model/provider
-  upgrade work. Confirm `model_detection` reports the expected
+- `_REASONING_MODE_TRACE` is a private developer switch that defaults to
+  `false`. Temporarily enable it in the patch during controlled model/provider
+  upgrade work when `reasoning_mode_trace` lines are needed. Confirm
+  `model_detection` reports the expected
   `supports_reasoning` value for the configured provider/model. With
   `ONYX_AGENT_USE_NATIVE_REASONING=true`, this should be `true` even when
   LiteLLM would otherwise miss the OpenAI-compatible provider/model pair. Also
@@ -347,7 +361,7 @@ Patch behavior:
 
 Onyx service: `api_server`.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/tools/fake_tools/coding_agent.py:156` defines
   `_generate_final_answer()`.
@@ -402,7 +416,7 @@ Patch behavior:
 
 Onyx service: `api_server`.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/prompts/chat_prompts.py:95` defines
   `TOOL_CALL_RESPONSE_CROSS_MESSAGE`.
@@ -441,7 +455,7 @@ Patch behavior:
 
 Onyx service: `api_server`.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/tools/tool_implementations/web_search/utils.py:15` defines
   `MAX_CHARS_PER_URL = 15000`.
@@ -473,7 +487,7 @@ Patch behavior:
 
 Onyx service: `api_server` in full mode.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/tools/tool_implementations/search/search_tool.py:975` calls
   `convert_inference_sections_to_llm_string()` with
@@ -506,14 +520,14 @@ Patch behavior:
 
 Onyx service: `api_server`.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/tools/tool_implementations/open_url/firecrawl.py:32` defines
   `FirecrawlClient`.
 - `backend/onyx/tools/tool_implementations/open_url/firecrawl.py:76` defines
   `_get_webpage_content`.
 - `backend/onyx/tools/tool_implementations/open_url/firecrawl.py:77` builds a
-  payload containing only `url` and `formats` in v4.1.7, so this patch is mostly
+  payload containing only `url` and `formats` in v4.1.9, so this patch is mostly
   defensive for this release.
 - `backend/onyx/tools/tool_implementations/open_url/firecrawl.py:124` defines
   `_extract_content_fields`, which the patch still calls.
@@ -539,7 +553,7 @@ Patch behavior:
 
 Onyx service: `api_server`.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/tools/tool_implementations/python/python_tool.py:98` has
   `PythonTool.DESCRIPTION = "Execute Python code in an isolated sandbox environment."`
@@ -551,6 +565,10 @@ Upstream v4.1.7 assumptions to re-check:
   `BASH_TOOL_DESCRIPTION`, including "The session has no network access."
 - `backend/onyx/prompts/coding_agent/coding_agent.py:8` and `:79` define the
   coding-agent prompt constants that describe a network-isolated sandbox.
+- The non-reasoning coding-agent prompt contains an `Avoid:` bullet for
+  network commands, and the reasoning coding-agent prompt contains the
+  sentence `No network.` in the bash tool section; both are patched by exact
+  string replacement when executor networking is enabled.
 - `backend/onyx/tools/fake_tools/coding_agent.py:30` imports those constants by
   name, so startup-time patching still needs to happen before Onyx imports that
   module.
@@ -585,7 +603,7 @@ Why it exists:
 - Upstream `OpenURLTool.is_available` is disabled when vector DB is disabled,
   even though the wrapper wants chat/Web/Research usage in lite mode.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/tools/tool_implementations/open_url/open_url_tool.py:399`
   defines `OpenURLTool`.
@@ -641,7 +659,7 @@ Patch behavior:
 
 Onyx service: `background`.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/onyx/connectors/web/connector.py:346` defines `WebConnector`.
 - `backend/onyx/connectors/web/connector.py:396` defines `_do_scrape`.
@@ -692,7 +710,7 @@ Patch behavior:
 
 Onyx service: `code-interpreter`, plus its transient executor pods.
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - Main Onyx compose defines `code-interpreter` in
   `deployment/docker_compose/docker-compose.yml:534`.
@@ -818,7 +836,7 @@ Compose wiring:
   `make embedserv-serve` install and run `mlx-openai-server` on the host-side
   `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` (default `http://host.docker.internal:1234/v1/embeddings`).
 
-Upstream v4.1.7 assumptions to re-check:
+Upstream v4.1.9 assumptions to re-check:
 
 - `backend/shared_configs/model_server_models.py:10` defines `EmbedRequest`.
 - `backend/shared_configs/model_server_models.py:34` defines `EmbedResponse`.
@@ -868,7 +886,7 @@ Upgrade notes:
 - The shim does not implement reranking or query analysis. It is correct only
   when local rerank/query-analysis are unused or when 501 failures are acceptable
   and visible.
-- Onyx v4.1.7's real `/api/health` lives under `/api/health`; the shim exposes
+- Onyx v4.1.9's real `/api/health` lives under `/api/health`; the shim exposes
   `/health` for its own compose healthcheck and `/api/gpu-status` for Onyx. If
   Onyx starts probing `/api/health` through `MODEL_SERVER_HOST`, add that route.
 - If upstream changes `EmbedRequest` fields, especially `text_type`, prefix
@@ -1416,10 +1434,10 @@ Upgrade notes:
 
 `onyx/install.sh` is a local copy of upstream
 `deployment/docker_compose/install.sh`. As of this doc, it is not identical to
-the v4.1.7 reference. Notable local behavior:
+the v4.1.9 reference. Notable local behavior:
 
 - Forces `craft-edge` when `--include-craft` is used, rather than using the
-  regular backend image tag behavior from v4.1.7.
+  regular backend image tag behavior from v4.1.9.
 - Writes `SANDBOX_BACKEND=docker` directly for Craft instead of upstream's
   version-sensitive `sandbox_backend_for_tag` helper.
 - Does not rely on persisted MinIO/S3 credentials in Onyx's deployment env;

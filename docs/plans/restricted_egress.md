@@ -60,7 +60,7 @@ this file when any of these pins or their equivalent local overrides change.
 
 | Component | Current pin | Why it matters for this plan |
 | --- | --- | --- |
-| Onyx application | `ONYX_IMAGE_TAG=v4.1.7` | Owns API/background/web service shape, tool prompts, SSRF settings, Firecrawl/Open URL wiring, and Compose references. |
+| Onyx application | `ONYX_IMAGE_TAG=v4.1.9` | Owns API/background/web service shape, tool prompts, SSRF settings, Firecrawl/Open URL wiring, and Compose references. |
 | Code interpreter | `CODE_INTERPRETER_IMAGE_TAG=0.4.4` | Owns executor pod creation, Docker network selection, and proxy env injection points. |
 | SearXNG | `SEARXNG_IMAGE_TAG=2026.6.26-f8ffbf36f` | Owns custom engine loading, outgoing proxy settings, and search app network needs. |
 | CRW | `CRW_IMAGE=ghcr.io/us/crw:0.21.1` | Owns scrape/search endpoints, HTTP prefetch behavior, CDP renderer settings, and peer assumptions. |

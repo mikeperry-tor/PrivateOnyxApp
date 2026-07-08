@@ -1,6 +1,6 @@
 # Onyx patch information
 
-Last updated for Onyx v4.1.7.
+Last updated for Onyx v4.1.9.
 
 This document explains why this wrapper carries local Onyx patches, how those
 patches modify Onyx at runtime or install time, and how the same behavior could
@@ -28,14 +28,16 @@ Related implementation docs:
 
 Reference checkouts:
 
-- `reference_repos/onyx` contains the Onyx source used for v4.1.7 review.
+- `reference_repos/onyx` contains the Onyx source used for v4.1.9 review.
+- `reference_repos/litellm` contains the LiteLLM source used for v1.89.4
+  review.
 - `reference_repos/python-sandbox` contains the code-interpreter image source
   used by Onyx's `onyxdotapp/code-interpreter` image.
 
 ## Design goals
 
 The wrapper patches are not meant to fork Onyx behavior broadly. They solve a
-small set of local deployment requirements that Onyx v4.1.7 does not expose as
+small set of local deployment requirements that Onyx v4.1.9 does not expose as
 configuration:
 
 - Let a private deployment tune tool limits without rebuilding Onyx images.
@@ -173,7 +175,7 @@ Onyx source areas:
 
 ### Why this is needed
 
-Onyx v4.1.7 parses LiteLLM `reasoning_content` responses and saves reasoning
+Onyx v4.1.9 parses LiteLLM `reasoning_content` responses and saves reasoning
 text as `reasoning_tokens` on assistant messages and tool-call rows. However,
 the lightweight history model used for later LLM calls, `ChatMessageSimple`,
 does not expose a reasoning field. When Onyx rebuilds prior assistant
@@ -240,11 +242,21 @@ API `reasoning_items`. It preserves Onyx's existing reasoning text as the
 LiteLLM/OpenAI-compatible `reasoning_content` field, which is the best fit for
 teep's OpenAI-compatible chat completions endpoint.
 
+For the v4.1.9 / LiteLLM v1.89.4 upgrade, the relevant upstream Onyx change is
+limited to `onyx.llm.litellm_singleton.monkey_patches`: Onyx adjusted its
+OpenAI Responses API reasoning-summary concatenation patch to match LiteLLM's
+newer `ResponsesAPIResponse` type location. That upstream patch does not cover
+the wrapper's chat-completions problem: reconstructed assistant tool-call
+history still lacks a reasoning field. LiteLLM v1.89.4 continues to recognize
+top-level `reasoning_content` and `reasoning` in message dictionaries, so the
+wrapper keeps emitting both aliases for OpenAI-compatible chat completions.
+
 For upgrade/debug work, the patch also contains private developer switches in
 `onyx/patches/sitecustomize_base/wrapper_env_patches.py`. They are intentionally
-not exposed through `.env.wrapper.example`. `_REASONING_MODE_TRACE`, which
-defaults to `true`, emits metadata-only `reasoning_mode_trace` lines for
-reasoning-model detection and the resulting request mode. These lines include
+not exposed through `.env.wrapper.example`. `_REASONING_MODE_TRACE` defaults to
+`false`; temporarily enable it in the patch during controlled upgrade/debug
+work to emit metadata-only `reasoning_mode_trace` lines for reasoning-model
+detection and the resulting request mode. These lines include
 the provider/model pair, caller, `supports_reasoning` result, tool names,
 whether `think_tool` was offered, whether a custom think-tool token processor
 was installed, reasoning effort, placement indexes, and whether the LLM step
@@ -287,7 +299,7 @@ Onyx source areas:
 
 ### Why this is needed
 
-Onyx v4.1.7 can add a per-call `USER_REMINDER` message for citation, URL,
+Onyx v4.1.9 can add a per-call `USER_REMINDER` message for citation, URL,
 file-link, persona, or final-answer guidance. Onyx constructs that reminder as
 the final message in the LLM request and `llm_step` serializes it as an
 OpenAI-compatible `role="user"` message wrapped in `<system-reminder>` tags.
@@ -357,7 +369,7 @@ Onyx source areas:
 
 ### Why this is needed
 
-Onyx v4.1.7 reconstructs previous assistant tool-call history with the tool
+Onyx v4.1.9 reconstructs previous assistant tool-call history with the tool
 call name and arguments, but replaces every non-image tool response with the
 fixed placeholder `This tool call completed but the results are no longer
 accessible.` This keeps future prompts compact, but it means follow-up turns
@@ -407,7 +419,7 @@ Onyx source areas:
 
 ### Why this is needed
 
-Onyx v4.1.7 hardcodes the amount of page text that `web_search` and `open_url`
+Onyx v4.1.9 hardcodes the amount of page text that `web_search` and `open_url`
 can return to the LLM. Those defaults are reasonable for many hosted
 deployments, but they are too small for local research tasks that intentionally
 feed longer documents, local manuals, or source references through Onyx tools.
@@ -462,7 +474,7 @@ Onyx source areas:
 
 ### Why this is needed
 
-Onyx v4.1.7's internal search result payload is section/chunk content, not a
+Onyx v4.1.9's internal search result payload is section/chunk content, not a
 short excerpt. The agent-facing `internal_search` tool, the `/search` API, and
 the MCP `search_indexed_documents` tool all ultimately forward the LLM-facing
 search JSON. That JSON uses the selected section's `combined_content`, and a
@@ -526,7 +538,7 @@ CDP/Obscura only for configured search-engine hosts, blocked/thin responses,
 or pages it classifies as JS-required. The request-path details and known
 limitations are tracked in [Request handling](request_handling.md#known-limitations).
 
-Onyx v4.1.7 already sends only `url` and `formats` for the scrape payload, so
+Onyx v4.1.9 already sends only `url` and `formats` for the scrape payload, so
 this patch is mostly defensive for this release. It preserves the wrapper's
 desired contract if upstream later adds a hardcoded wait.
 
@@ -546,7 +558,7 @@ failures as empty content instead of fatal errors.
 The base API-server `sitecustomize` path calls this helper. Lite mode loads the
 lite `sitecustomize` first and currently imports selected base helpers for
 character limits and code-interpreter capability text, but not this defensive
-Firecrawl helper. For Onyx v4.1.7 that does not change the live request shape,
+Firecrawl helper. For Onyx v4.1.9 that does not change the live request shape,
 because upstream already sends the same no-`waitFor` payload.
 
 ### Upstream merge request shape
@@ -649,10 +661,11 @@ plain-text assistant reasoning section instead of being dropped. No
 `role="tool"` messages, assistant `tool_calls`, repeated assistant-only
 transcript messages, trailing separate user-role reminder, structured preserved
 reasoning fields, or empty tool-definition arrays are sent for that synthesis
-call. `_REASONING_MODE_TRACE` emits `coding_agent_final_answer_history_flattened`
-and `coding_agent_final_summarizer_request` events for this path; both events
-include metadata-only section ordering and counts so upgrades can verify that
-reasoning sections precede the matching tool-request sections.
+call. When `_REASONING_MODE_TRACE` is temporarily enabled, it emits
+`coding_agent_final_answer_history_flattened` and
+`coding_agent_final_summarizer_request` events for this path; both events include
+metadata-only section ordering and counts so upgrades can verify that reasoning
+sections precede the matching tool-request sections.
 
 During Onyx upgrades, re-check whether this is still necessary by inspecting
 `backend/onyx/tools/fake_tools/coding_agent.py`. If `_generate_final_answer()`
@@ -708,7 +721,7 @@ Lite mode disables the vector DB and removes full-mode dependencies. The wrapper
 still wants live web and Open URL workflows in lite mode, especially for chat
 and research against external or local web pages.
 
-In Onyx v4.1.7, `OpenURLTool.is_available` is coupled to vector DB availability.
+In Onyx v4.1.9, `OpenURLTool.is_available` is coupled to vector DB availability.
 That disables a tool that can still be useful as a live fetch and summarization
 tool.
 
@@ -758,7 +771,7 @@ connector can ingest local PDFs. These PDFs are often large and mostly static.
 Re-downloading and re-parsing every unchanged file wastes time and can make
 local indexing feel broken or noisy.
 
-Onyx v4.1.7 intentionally does not trust `Last-Modified` for web PDFs, which is
+Onyx v4.1.9 intentionally does not trust `Last-Modified` for web PDFs, which is
 a good default for arbitrary public web pages. The wrapper has a narrower case:
 trusted local hosts where `Last-Modified` and `Content-Length` are stable
 validators from a controlled file server.
@@ -972,7 +985,7 @@ It translates Onyx embedding payloads into OpenAI-compatible embedding requests:
 - Responses are translated back into `{"embeddings": ...}`.
 
 Onyx's agent-facing `internal_search` tool uses the normal Onyx search
-pipeline, not a separate Web connector HTTP path. In v4.1.7,
+pipeline, not a separate Web connector HTTP path. In v4.1.9,
 `SearchTool._run_search_for_query()` calls `search_pipeline()`, which calls
 `search_chunks()`, which embeds each query through
 `get_query_embedding()`/`EmbeddingModel.encode()`. Because full mode points

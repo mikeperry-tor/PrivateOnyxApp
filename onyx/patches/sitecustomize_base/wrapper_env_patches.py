@@ -20,10 +20,10 @@ from typing import Any
 # for "unlimited" we use a very large budget that won't be hit in practice.
 EFFECTIVE_UNLIMITED_CHARS = 2_000_000_000
 
-# Internal developer diagnostics. Reasoning-mode tracing is metadata-only and
-# enabled by default while validating model/provider routing. The deeper
-# reasoning traces remain opt-in; LiteLLM debug logging is intentionally
-# separate because it can include full request/response details.
+# Internal developer diagnostics. Reasoning-mode tracing is metadata-only but
+# quiet by default; enable it only during controlled model/provider routing
+# validation. The deeper reasoning traces remain opt-in; LiteLLM debug logging
+# is intentionally separate because it can include full request/response details.
 _REASONING_TRACE_ENABLED = False
 _REASONING_TRACE_LITELLM_DEBUG_ENABLED = False
 _REASONING_TRACE_SEQ = 0
@@ -1858,7 +1858,7 @@ def apply_reasoning_content_preservation_patch() -> None:
 def apply_llm_max_tokens_override_patch() -> None:
     """Make GEN_AI_MAX_TOKENS override DB and provider context limits.
 
-    Upstream Onyx v4.1.7 lets GEN_AI_MAX_TOKENS override provider/LiteLLM
+    Upstream Onyx v4.1.9 lets GEN_AI_MAX_TOKENS override provider/LiteLLM
     fallback metadata, but the normal chat construction path checks stored
     ModelConfiguration.max_input_tokens first. The wrapper exposes this as an
     admin override, so a configured value must win before the DB lookup too.
@@ -2357,10 +2357,17 @@ def apply_code_interpreter_network_description_patches() -> None:
         ca_prompts.CODING_AGENT_PROMPT = _replace_or_warn(
             owner_name="CODING_AGENT_PROMPT network commands",
             current=ca_prompts.CODING_AGENT_PROMPT,
-            old="Network commands (`curl`, `pip install`, `npm install`, `git pull`) — the sandbox has no network.",
+            old=(
+                "Avoid:\n"
+                "- Network commands (`curl`, `pip install`, `npm install`, `git pull`) "
+                "— the sandbox has no network.\n"
+            ),
             new=(
-                "Network commands (`curl`, `pip install`, `npm install`, `git pull`) are permitted — the sandbox has VPN-routed internet access."
+                "Network access:\n"
+                "- Network commands (`curl`, `pip install`, `npm install`, `git pull`) "
+                "are permitted and egress through the VPN tunnel."
                 + _CODING_AGENT_SERVICE_HINTS
+                + "\n\nAvoid:\n"
             ),
         )
 
