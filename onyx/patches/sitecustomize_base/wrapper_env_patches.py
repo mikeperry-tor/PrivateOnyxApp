@@ -2384,7 +2384,7 @@ def apply_code_interpreter_network_description_patches() -> None:
 
 
 def apply_firecrawl_wait_for_patch() -> None:
-    """Patch FirecrawlClient to omit `waitFor` from /v2/scrape payloads.
+    """Patch FirecrawlClient to omit `waitFor` from scrape payloads.
 
     Onyx's FirecrawlClient sends ``{url, formats: ["markdown"]}`` with no
     ``waitFor`` field. This patch monkey-patches

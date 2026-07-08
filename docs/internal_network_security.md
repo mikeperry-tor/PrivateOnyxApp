@@ -32,7 +32,7 @@ This document applies to the committed pins in `stack.versions.env`:
 | --- | --- |
 | Onyx | `onyxdotapp/onyx-backend:v4.1.7` and `onyxdotapp/onyx-web-server:v4.1.7` |
 | Code interpreter | `onyxdotapp/code-interpreter:0.4.4` |
-| CRW | `ghcr.io/us/crw:0.18.3` |
+| CRW | `ghcr.io/us/crw:0.21.1` |
 | Obscura | `h4ckf0r0day/obscura:0.1.9` |
 | SearXNG | `searxng/searxng:2026.6.26-f8ffbf36f` |
 | Teep | `13rac1/teep:cacfa5ab2a4e8cc52ec8a2020a763f7306ad3438` |

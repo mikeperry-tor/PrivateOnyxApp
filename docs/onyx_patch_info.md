@@ -537,8 +537,11 @@ The patch replaces `FirecrawlClient._get_webpage_content` and sends only:
 - `url`
 - `formats: ["markdown"]`
 
-It preserves Onyx's response parsing path and the existing behavior that treats
-some client-side scrape failures as empty content instead of fatal errors.
+It posts to the configured content-provider URL. In the README-recommended
+setup that URL is CRW's native `http://localhost:3010/v1/scrape` endpoint, not
+CRW's `/firecrawl/*` compatibility namespace. It preserves Onyx's response
+parsing path and the existing behavior that treats some client-side scrape
+failures as empty content instead of fatal errors.
 
 The base API-server `sitecustomize` path calls this helper. Lite mode loads the
 lite `sitecustomize` first and currently imports selected base helpers for

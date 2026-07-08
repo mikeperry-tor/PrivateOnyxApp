@@ -63,7 +63,7 @@ this file when any of these pins or their equivalent local overrides change.
 | Onyx application | `ONYX_IMAGE_TAG=v4.1.7` | Owns API/background/web service shape, tool prompts, SSRF settings, Firecrawl/Open URL wiring, and Compose references. |
 | Code interpreter | `CODE_INTERPRETER_IMAGE_TAG=0.4.4` | Owns executor pod creation, Docker network selection, and proxy env injection points. |
 | SearXNG | `SEARXNG_IMAGE_TAG=2026.6.26-f8ffbf36f` | Owns custom engine loading, outgoing proxy settings, and search app network needs. |
-| CRW | `CRW_IMAGE=ghcr.io/us/crw:0.18.3` | Owns scrape/search endpoints, HTTP prefetch behavior, CDP renderer settings, and peer assumptions. |
+| CRW | `CRW_IMAGE=ghcr.io/us/crw:0.21.1` | Owns scrape/search endpoints, HTTP prefetch behavior, CDP renderer settings, and peer assumptions. |
 | Obscura | `OBSCURA_IMAGE=h4ckf0r0day/obscura:0.1.9` | Owns browser rendering, `--proxy` behavior, private-target blocking, and CDP browser egress. |
 | Teep | `TEEP_REF=6413fe0547b449e67f7296986fe8b8ffbc9bbcd2` | Out of scope for restricted egress unless provider routing or namespace placement changes. |
 | Mysterium | `MYST_IMAGE=mysteriumnetwork/myst:docker_host_fixes_with_logs` | Owns the shared routing namespace, VPN connection, and kill-switch behavior behind final-hop policy. |

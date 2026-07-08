@@ -140,7 +140,7 @@ def extract_crw_html(resp: "SXNG_Response") -> str:
     if not isinstance(envelope, dict):
         return ""
 
-    # crw returns success:false + error/error_code when the target blocks.
+    # crw returns success:false + error/errorCode when the target blocks.
     # Raise the matching SearXNG exception so engine stats + suspension work.
     if envelope.get("success") is False:
         _raise_crw_block_exception(envelope)
@@ -174,7 +174,7 @@ def _raise_crw_block_exception(envelope: dict) -> None:
     )
 
     error_msg = envelope.get("error") or "crw scrape failed"
-    error_code = envelope.get("error_code") or ""
+    error_code = envelope.get("errorCode") or ""
 
     # Extract the target's HTTP status code from metadata or the error string.
     status_code = 0

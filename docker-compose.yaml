@@ -104,10 +104,9 @@ services:
       - ./docker-data/valkey:/data
 
   # ── fastCRW (crw) + obscura stealth CDP browser ─────────────────────────
-  # Self-hosted Firecrawl-compatible scraper (available in both lite and full
-  # mode), routed through Myst. crw exposes the Firecrawl-compatible
-  # /v1/scrape, /v1/crawl, /v1/map, and /v1/search endpoints that Onyx's Web
-  # Search connector can target.
+  # Self-hosted CRW scraper (available in both lite and full mode), routed
+  # through Myst. This stack points Onyx's Firecrawl content-provider setting
+  # and the CRW-backed SearXNG engines at CRW's native /v1/scrape endpoint.
   #
   # The JS renderer tier is obscura (a Rust-native headless browser with
   # built-in stealth), replacing crw's upstream browserless/chrome-stealth
@@ -390,7 +389,7 @@ services:
       netns-holder:
         condition: service_started
 
-  # Firecrawl-compatible API server. Configured entirely via CRW_* env vars
+  # CRW API server. Configured entirely via CRW_* env vars
   # (no config file mount needed — env layer wins over the baked-in
   # config.default.toml). CRW_SERVER__PORT moves it off 3000 (taken by
   # web_server in the shared netns). CRW_RENDERER__CHROME__WS_URL points at
@@ -727,7 +726,7 @@ services:
       myst-client:
         condition: service_healthy
         restart: true
-      # crw (Firecrawl-compatible scraper) is optional for Onyx, but wiring
+      # crw is optional for Onyx, but wiring
       # the dependency avoids a first-request race if Onyx's Web Search
       # connector is configured to point at crw's /v1/scrape endpoint.
       crw:

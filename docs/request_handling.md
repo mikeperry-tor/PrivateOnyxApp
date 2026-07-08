@@ -17,7 +17,7 @@ Version scope for this document, based on clean local checkouts under
 `reference_repos/`:
 
 - Onyx: `v4.1.7` (`34fc4c3d1f`, 2026-06-23)
-- CRW: `v0.18.3`
+- CRW: `v0.21.1` (`1dd823a115c9`, 2026-07-07)
 - Obscura: `v0.1.9`
 - SearXNG: master commit `f8ffbf36f903`
 
@@ -911,12 +911,11 @@ fetches the content of one or more URLs. The tool uses a `WebContentProvider`
 selected at configuration time:
 
 - **FirecrawlClient**: Sends URLs to the configured scrape endpoint (default
-  upstream constant: `https://api.firecrawl.dev/v2/scrape`; README
-  recommendation for this deployment: `http://localhost:3010/v1/scrape`).
-  Goes through CRW. Search-engine targets and pages that need browser rendering
-  go through CDP shim → Obscura; ordinary non-search pages may be returned from
-  CRW's HTTP prefetch without Obscura. This is the recommended wrapper
-  configuration.
+  upstream constant points at Firecrawl's hosted API; README recommendation
+  for this deployment: `http://localhost:3010/v1/scrape`). Goes through CRW.
+  Search-engine targets and pages that need browser rendering go through CDP
+  shim → Obscura; ordinary non-search pages may be returned from CRW's HTTP
+  prefetch without Obscura. This is the recommended wrapper configuration.
 - **OnyxWebCrawler**: Direct HTTP fetch via `ssrf_safe_get` (SSRF-validated
   `requests`). Handles HTML and PDF natively. Has an optional Playwright
   headless-browser fallback for Cloudflare/bot-challenge 403 responses. Does
@@ -1111,7 +1110,8 @@ since `pdf_inspector` has no OCR capability.
 
 ### 2.4 CRW scrape endpoint compatibility
 
-CRW exposes Firecrawl-compatible scrape endpoints. This stack uses:
+CRW exposes a native `/v1/*` API and also mounts Firecrawl compatibility
+routes under `/firecrawl/*`. This stack uses CRW's native scrape endpoint:
 
 - `/v1/scrape` for SearXNG engines via `_crw.py`. The payload asks for
   `rawHtml`, sets `onlyMainContent: false`, and sends no `renderer` or
@@ -1123,20 +1123,23 @@ CRW exposes Firecrawl-compatible scrape endpoints. This stack uses:
   sends `{url, formats: ["markdown"]}` to the configured URL. The base/full
   sitecustomize path defensively preserves that no-`waitFor` payload; lite mode
   already has that shape in Onyx v4.1.7.
-- `/v2/scrape` is supported by CRW and matches Onyx's upstream
-  `FIRECRAWL_SCRAPE_URL` constant, but it is not the URL shown in the README
-  setup steps for this wrapper.
+These calls go through CRW's `FallbackRenderer` pipeline. The HTTP prefetch
+runs first; PDFs are handled natively by `pdf_inspector` without reaching the
+CDP layer. For HTML, the requested format controls the output: `rawHtml` is
+the full HTML body used by SearXNG engines for XPath parsing; `markdown` is
+readability-extracted and converted to markdown for Onyx's `FirecrawlClient`.
+Search-engine scrapes are forced to CDP/Obscura by the prefetch-blocking
+proxy. `open_url` scrapes benefit from the CDP shim's `waitUntil` injection
+only when CRW escalates to browser rendering; usable non-search HTTPS-prefetch
+results can return without reaching CDP. Explicitly allowed plain HTTP
+prefetches behave the same way.
 
-Both go through the same CRW `FallbackRenderer` pipeline. The HTTP prefetch
-runs first for both; PDFs are handled natively by `pdf_inspector` without
-reaching the CDP layer. For HTML, the requested format controls the output:
-`rawHtml` is the full HTML body used by SearXNG engines for XPath parsing;
-`markdown` is readability-extracted and converted to markdown for Onyx's
-`FirecrawlClient`. Search-engine scrapes are forced to CDP/Obscura by the
-prefetch-blocking proxy. `open_url` scrapes benefit from the CDP shim's
-`waitUntil` injection only when CRW escalates to browser rendering; usable
-non-search HTTPS-prefetch results can return without reaching CDP. Explicitly
-allowed plain HTTP prefetches behave the same way.
+CRW `v0.21.1` serializes native `/v1` error responses with the camelCase
+`errorCode` field. The SearXNG helper reads that field when mapping CRW
+anti-bot, CAPTCHA, 429, and access-denied results into SearXNG engine
+suspension exceptions. Success responses used by this stack keep the same
+fields this wrapper consumes: `data.rawHtml` for search-engine parsing and
+`data.markdown` for Onyx `open_url`.
 
 ---
 

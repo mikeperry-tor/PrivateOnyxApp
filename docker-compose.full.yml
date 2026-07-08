@@ -197,7 +197,7 @@ services:
       myst-client:
         condition: service_healthy
         restart: true
-      # crw (Firecrawl-compatible scraper) is optional for Onyx, but wiring
+      # crw is optional for Onyx, but wiring
       # the dependency avoids a first-request race if Onyx's Web Search
       # connector is configured to point at crw's /v1/scrape endpoint.
       crw:

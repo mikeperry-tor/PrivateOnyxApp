@@ -39,7 +39,7 @@ OBSCURA_IMAGE := h4ckf0r0day/obscura:0.1.9
 endif
 CRW_IMAGE ?= $(call env_value,CRW_IMAGE)
 ifeq ($(strip $(CRW_IMAGE)),)
-CRW_IMAGE := ghcr.io/us/crw:0.18.3
+CRW_IMAGE := ghcr.io/us/crw:0.21.1
 endif
 CONTAINER_BIN ?= $(call env_value,CONTAINER_BIN)
 DOCKER_SOCK_PATH ?= $(call env_value,DOCKER_SOCK_PATH)

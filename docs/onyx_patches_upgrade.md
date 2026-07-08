@@ -9,7 +9,8 @@ Reference checkouts:
 - `reference_repos/python-sandbox` at `code-interpreter-0.4.4`
   (`8950eadc06567798ec61354f24260e5dc996684b`), remote
   `https://github.com/onyx-dot-app/python-sandbox`.
-- Companion web stack checked against `reference_repos/crw` at `v0.18.3`,
+- Companion web stack checked against `reference_repos/crw` at `v0.21.1`
+  (`1dd823a115c9`),
   `reference_repos/obscura` at `v0.1.9`, and `reference_repos/searxng` at
   `f8ffbf36f903`.
 
@@ -453,7 +454,8 @@ Upgrade notes:
 Patch behavior:
 
 - Replaces `FirecrawlClient._get_webpage_content`.
-- Sends only `{url, formats: ["markdown"]}` to the Firecrawl-compatible endpoint.
+- Sends only `{url, formats: ["markdown"]}` to the configured CRW scrape
+  endpoint.
 - Intentionally omits `waitFor`; wrapper page readiness is handled by the CRW /
   Obscura CDP path described in `docs/request_handling.md`.
 
@@ -877,7 +879,9 @@ Behavior:
   [Request Handling: SearXNG to CRW](request_handling.md#12-searxng--crw-custom-engines).
 - `_crw.extract_crw_html()` maps CRW anti-bot failures back to SearXNG engine
   exceptions so engine suspension stats work instead of silently returning an
-  empty result list.
+  empty result list. CRW `v0.21.1` serializes response error codes as
+  `errorCode`; the helper reads that field when classifying CAPTCHA, 429, and
+  access-denied failures.
 - `_crw.raise_no_results()` is used by each custom engine when its parser finds
   zero organic rows. It logs the engine, parser-miss reason, and rendered HTML
   length without logging query text or raw SERP HTML, then raises
