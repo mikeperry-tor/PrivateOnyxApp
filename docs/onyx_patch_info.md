@@ -599,8 +599,14 @@ patch rewrites LLM-facing text for:
 
 The replacement text says that network access is available through the VPN,
 that Python tool package installation is limited, and that the coding agent is
-better for package installation or multi-step coding workflows. It also names
-local scraping and browser services available in the shared namespace.
+better for package installation or multi-step coding workflows. Local CRW,
+SearXNG, and browser service details are added only to the coding-agent system
+prompts, not to the Python tool guidance, Python tool description, Bash tool
+description, or coding-agent tool metadata. The general Onyx agent should
+prefer `open_url` and `web_search` for page fetching; direct local API details
+are reserved for code-agent planning. The coding agent has a bash subtool, not
+the top-level Onyx Python tool, but it can run Python commands inside that bash
+session.
 
 The patch checks exact upstream string matches before claiming success. The
 wrapper runs these patches in strict mode, so missing expected strings or

@@ -2195,24 +2195,20 @@ def _is_code_interpreter_network_enabled() -> bool:
     )
 
 
-# Hint text for the Python tool: crw Firecrawl API only (no CDP browser, no
-# SearXNG). The Python tool is for data analysis / code execution, not browser
-# automation, so we only mention the scraping API.
-_PYTHON_SERVICE_HINTS = (
-    " Additionally, the sandbox shares a network namespace with a local Firecrawl-compatible "
-    "REST API at http://127.0.0.1:3010 exposing /v1/scrape, /v1/crawl, /v1/map, "
-    "and /v1/search, all backed by a stealth headless browser. All outbound "
-    "browser traffic egresses through the VPN tunnel."
-)
-
-# Hint text for the coding agent (BashTool + system prompt): crw Firecrawl API
-# + CDP browser (no SearXNG). The coding agent benefits from direct browser
-# automation for investigating web-accessible repos and docs.
+# Hint text for the coding agent system prompt only: CRW Firecrawl API,
+# SearXNG JSON search, and CDP browser. Do not append this to PythonTool,
+# BashTool, or code-agent tool descriptions; open_url() already follows this
+# path, and the internal API details are only useful for the code-agent's own
+# planning.
 _CODING_AGENT_SERVICE_HINTS = (
     " Additionally, the sandbox shares a network namespace with local scraping services: "
+    "bash commands and Python HTTP clients run from bash can call "
     "a Firecrawl-compatible REST API at http://127.0.0.1:3010 exposing "
-    "/v1/scrape, /v1/crawl, /v1/map, and /v1/search, all backed by a stealth "
-    "headless browser. Direct control of the stealth browser is available via "
+    "/v1/scrape, /v1/crawl, /v1/map, and /v1/search. The /v1/search endpoint "
+    "is backed by the bundled SearXNG sidecar; direct SearXNG JSON search is "
+    "also available at http://127.0.0.1:8888/search with form parameters "
+    "q=<query> and format=json. CRW-rendered pages are backed by a stealth "
+    "headless browser. Direct control of that browser is available via "
     "Chrome DevTools Protocol (CDP) browser at ws://127.0.0.1:9222/devtools/browser. "
     "All outbound browser traffic egresses through the VPN tunnel."
 )
@@ -2263,7 +2259,7 @@ def apply_code_interpreter_network_description_patches() -> None:
                 "scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, "
                 "python-docx, python-pptx, fpdf2, pydantic). For tasks requiring "
                 "additional packages or complex multi-step workflows, invoke the "
-                "code agent instead." + _PYTHON_SERVICE_HINTS
+                "code agent instead."
             ),
         )
     except Exception as e:  # pragma: no cover
@@ -2289,7 +2285,6 @@ def apply_code_interpreter_network_description_patches() -> None:
                 "pip package installation is NOT supported; only the pre-installed scientific stack is available "
                 "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, python-docx, python-pptx, fpdf2, pydantic). "
                 "For tasks requiring additional packages or complex multi-step workflows, invoke the code agent instead."
-                + _PYTHON_SERVICE_HINTS
             ),
         )
     except Exception as e:  # pragma: no cover
@@ -2311,7 +2306,6 @@ def apply_code_interpreter_network_description_patches() -> None:
                 "Execute a bash command inside a session with internet access via "
                 "VPN. Network commands (curl, wget, pip install, npm install, git "
                 "clone, etc.) are permitted and egress through the VPN tunnel."
-                + _CODING_AGENT_SERVICE_HINTS
             ),
         )
     except Exception as e:  # pragma: no cover
@@ -2336,7 +2330,7 @@ def apply_code_interpreter_network_description_patches() -> None:
             new=(
                 "The session has internet access via VPN. Network commands (curl, "
                 "pip install, npm install, git clone, etc.) are permitted and "
-                "egress through the VPN tunnel." + _CODING_AGENT_SERVICE_HINTS
+                "egress through the VPN tunnel."
             ),
         )
     except Exception as e:  # pragma: no cover

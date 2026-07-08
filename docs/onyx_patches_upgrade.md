@@ -485,7 +485,10 @@ Patch behavior:
 - Only active when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` is present in `api_server`.
 - Updates API-side LLM-facing text so Python, Bash, and coding-agent tools say
   the executor pods have VPN-routed network access.
-- Adds wrapper hints for local CRW, `/v1/search`, and CDP browser availability.
+- Adds wrapper hints for local CRW, SearXNG JSON search, `/v1/search`, and CDP
+  browser availability only to coding-agent system prompts. Do not expose those
+  API details in the Python tool prompt, Python tool description, Bash tool
+  description, or coding-agent tool metadata.
 
 Onyx service: `api_server`.
 

@@ -970,8 +970,9 @@ complete patch inventory and upstreaming notes.
   upstream truncation defaults.
 - `apply_code_interpreter_network_description_patches()` updates tool
   descriptions when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`; it is not part of the
-  `open_url` request path, but it explains the local CRW/Firecrawl API to
-  code-interpreter and coding-agent tools.
+  `open_url` request path. It explains the local CRW/Firecrawl and SearXNG APIs
+  only inside coding-agent system prompts, not in Python-tool or code-agent
+  tool descriptions.
 - Lite mode additionally mounts `onyx/patches/sitecustomize`, which patches
   `OpenURLTool.is_available()` to return `True`.
 
