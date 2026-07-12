@@ -28,6 +28,9 @@ At a high level:
 
 - Users reach the Onyx WebUI through the local host proxy or optional Tailscale Funnel.
 - Onyx sends LLM requests through the included Teep local inference service.
+- When explicitly enabled, the base `sitecustomize` patch gives nested Deep
+  Research agents the tools selected for the current chat Agent and executes
+  complete model-emitted tool batches with bounded concurrency.
 - Onyx `web_search` calls SearXNG, which uses custom CRW-backed engines.
 - CRW uses local proxy/CDP/Obscura components to render search and page content. These components exist to reduce 429 and 403 errors at search engines and web pages.
 - Search/browser traffic normally egresses through the shared Mysterium VPN

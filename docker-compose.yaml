@@ -678,8 +678,13 @@ services:
       MCP_SERVER_ALLOW_LOOPBACK: ${ONYX_SECURITY_SSRF_ALLOW_LOOPBACK:-false}
       # Wrapper-level alias for Onyx's asymmetric query prefix setting.
       ASYM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-}"
-      # Interactive chat + deep-research tool-call loop cap (per request); we want long research capability
+      # Interactive chat tool-call loop cap (per request).
       MAX_LLM_CYCLES: "${MAX_LLM_CYCLES:-200}"
+      # Nested Deep Research limits. Keep call acceptance separate from bounded
+      # execution concurrency so model-emitted calls are not silently dropped.
+      MAX_RESEARCH_AGENT_CYCLES: "${MAX_RESEARCH_AGENT_CYCLES:-200}"
+      MAX_DEEP_RESEARCH_TOOL_CALLS_PER_BATCH: "${MAX_DEEP_RESEARCH_TOOL_CALLS_PER_BATCH:-256}"
+      MAX_DEEP_RESEARCH_PARALLEL_TOOLS: "${MAX_DEEP_RESEARCH_PARALLEL_TOOLS:-1}"
       # Wrapper alias for Onyx's GEN_AI_MAX_TOKENS override. Empty means no
       # override; when set, sitecustomize makes this win over stored DB and
       # provider-advertised context limits.
@@ -699,6 +704,9 @@ services:
       ONYX_AGENT_PRESERVE_TURN_REASONING: "${ONYX_AGENT_PRESERVE_TURN_REASONING:-true}"
       # Optionally preserve assistant reasoning from all prior turns too.
       ONYX_AGENT_PRESERVE_ALL_REASONING: "${ONYX_AGENT_PRESERVE_ALL_REASONING:-false}"
+      # Give nested Deep Research agents the tools selected for the current chat
+      # Agent; sitecustomize preserves all accepted calls with bounded workers.
+      ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS: "${ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS:-true}"
       # Fail startup if wrapper monkey patches no longer match upstream Onyx.
       WRAPPER_PATCH_STRICT: "true"
       # Page load waiting is handled by the CDP shim's waitUntil injection

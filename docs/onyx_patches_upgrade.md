@@ -130,6 +130,7 @@ intended patch surface.
 | LLM context-window override | Keep. Stored `ModelConfiguration.max_input_tokens` still wins before the normal provider lookup, so the wrapper override must intercept both helpers. |
 | Native-reasoning detection override | Keep. Tenant-cached LiteLLM detection does not guarantee recognition of wrapper-managed OpenAI-compatible provider/model pairs. |
 | Assistant reasoning preservation | Keep. `ChatMessageSimple`, `AssistantMessage`, reconstructed tool-call history, and live tool-loop assistant messages still have no native reasoning field. |
+| Deep Research selected chat-Agent tools | Keep. Deep Research still filters constructed Agent tools to search/open-url, drops tool names after the first name in a nested batch, and couples batch truncation to worker count. Nested research cycles remain hardcoded separately from `MAX_LLM_CYCLES`. |
 | Reminder placement | Keep. `construct_message_history()` still appends the user-role reminder after assistant/tool messages. |
 | Coding-agent finalizer | Keep. Final synthesis still receives structured tool history through a no-tool LLM step, and the caller still masks finalizer exceptions. |
 | Saved tool-result preservation | Keep. Non-image saved responses are still replaced by `TOOL_CALL_RESPONSE_CROSS_MESSAGE` and assigned a fixed token estimate. |
@@ -355,6 +356,106 @@ Upgrade notes:
   messages. The next fallback should be merging the reminder into the latest
   user message under `<system-reminder>` tags, not removing reminder content
   unless Onyx has replaced it with an upstream-safe mechanism.
+
+### Deep Research selected chat-Agent tools
+
+Patch behavior:
+
+- Reads fixed base-Compose values `MAX_RESEARCH_AGENT_CYCLES`,
+  `MAX_DEEP_RESEARCH_TOOL_CALLS_PER_BATCH`, and
+  `MAX_DEEP_RESEARCH_PARALLEL_TOOLS`. The defaults are 200, 256, and 1.
+- Updates the nested research-agent loop limit and both prompt variants to the
+  configured cycle count. `MAX_LLM_CYCLES` remains the normal chat-loop limit
+  and does not configure Deep Research.
+- When `ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS=true`, replaces the
+  orchestrator's search/open-url filter with the already-constructed current
+  chat Agent tool list, after `allowed_tool_ids` has been applied.
+- Removes the nested loop's first-tool-name filtering, preserves Onyx's merge
+  behavior for repeated search/open-url calls, and rejects mixed control-tool
+  batches instead of silently discarding their ordinary calls.
+- Disables the generic runner's call-list truncation only for the nested
+  research batch, gives each merged call a distinct reserved `sub_turn_index`
+  range, and uses a patch-local `ContextVar` to bound worker threads
+  independently. Normal chat `run_tool_calls()` behavior is unchanged.
+- Wraps `CodingAgentTool.run()` so its zero-based internal substeps are offset
+  into the parent Deep Research call's reserved range. Coding-agent calls are
+  serialized while their emitter is mapped, even when the general worker limit
+  is greater than one.
+- Raises before executing any call when a model response exceeds
+  `MAX_DEEP_RESEARCH_TOOL_CALLS_PER_BATCH`. The cutoff is fail-closed and does
+  not partially execute or silently slice the batch.
+- Composes the Deep Research source edits with live reasoning preservation in
+  one recompilation when reasoning preservation is enabled. Do not split these
+  into two independent `_patch_function_source()` calls for the same target
+  functions.
+
+Onyx service: `api_server` in lite and full modes, including Podman layering.
+
+Upstream v4.2.5 assumptions to re-check:
+
+- `backend/onyx/deep_research/dr_loop.py` still constructs `allowed_tools` by
+  filtering to `SearchTool.NAME`, `WebSearchTool.NAME`, and `OpenURLTool.NAME`,
+  then passes that list to `run_research_agent_calls()`.
+- `backend/onyx/tools/fake_tools/research_agent.py` still imports
+  `MAX_RESEARCH_CYCLES` and both prompt strings from
+  `backend/onyx/prompts/deep_research/research_agent.py`.
+- Both nested prompt variants still contain exactly one
+  `of {MAX_RESEARCH_CYCLES}.` fragment materialized from the upstream constant.
+- The nested loop still filters a model batch to the first `tool_name`, calls
+  `run_tool_calls(..., max_concurrent_tools=1)`, increments
+  `llm_cycle_count` once per batch, and builds one assistant tool-call message
+  followed by a response message for every dispatched call.
+- `backend/onyx/tools/tool_runner.py` still merges repeated search/open-url
+  calls before filtering, slices `filtered_tool_calls` when
+  `max_concurrent_tools` is set, allocates separate citation ranges, and passes
+  the same setting as `max_workers` to its imported thread-pool helper.
+- `backend/onyx/utils/threadpool_concurrency.py` still uses the full function
+  count as its worker count when `max_workers=None` and preserves result order.
+- `Placement.sub_turn_index` remains the frontend grouping key for nested
+  research-agent tools, and the Deep Research renderer continues to group and
+  sort packets by that value.
+- `CodingAgentTool.run()` still passes its received placement into
+  `run_coding_agent_call()`, whose internal packets use zero-based
+  `sub_turn_index` values that require the wrapper's emitter offset.
+- `process_message.py` still constructs tools from the chat session's selected
+  persona/Agent with `allowed_tool_ids` before calling
+  `run_deep_research_llm_loop()`.
+
+Upgrade and patch-application validation:
+
+- Start the API server with `WRAPPER_PATCH_STRICT=true` and confirm startup
+  includes `configured Deep Research nested-agent cycles max=200`, `patched
+  Deep Research selected chat-Agent tools`, `patched Deep Research nested tool
+  batches`, `patched nested coding-agent UI placement`, and `Deep Research
+  provides selected chat-Agent tools batch_max=256 workers=1`.
+- Set `ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS=false`, restart, and confirm
+  startup says the feature is disabled while the configured cycle limit still
+  applies. Confirm nested Deep Research returns to the upstream three-tool
+  filter.
+- In both lite and full modes, inspect the effective `api_server` Compose model
+  and confirm all four Deep Research env values plus the base patch mount and
+  `PYTHONPATH` are present. Repeat with Podman override layering.
+- Use an Agent with at least two non-control tools and make a nested research
+  model emit different tool names in one response. Confirm every accepted call
+  executes, each receives a tool response, execution is sequential with the
+  default worker limit, and the live UI renders distinct nested steps in model
+  order.
+- Emit repeated `internal_search`, `web_search`, or `open_url` calls and confirm
+  Onyx still merges their query/URL arrays and citation mappings remain valid.
+- Emit `think_tool` or `generate_report` together with another call and confirm
+  the research branch reports a visible error without executing a partial
+  batch. With the wrapper's default native-reasoning override, `think_tool`
+  should not normally be offered.
+- Temporarily use a small batch cutoff during controlled validation and confirm
+  an oversized response executes no calls and reports the configured maximum.
+- Exercise Python, coding-agent, one custom/OpenAPI tool, and one MCP tool
+  before treating them as supported for a target Onyx release. Confirm tool
+  start/end packets, saved response text, follow-up LLM history, and final
+  report content. Python chat-file inputs and injected memory context remain
+  outside this patch and must not be claimed as supported by it.
+- With reasoning preservation enabled, repeat a multi-tool nested batch and
+  verify the assistant tool-call message still carries the current
+  `reasoning_content`. This catches patch-composition regressions.
 
 ### Onyx LiteLLM monkey-patch interaction
 
@@ -1218,9 +1319,11 @@ Patched Onyx services:
 
 - `api_server`: extends upstream, replaces image/build, joins
   `netns-holder`, disables telemetry/paid-cloud settings, sets SSRF-related
-  env aliases, sets `ASYM_QUERY_PREFIX`, raises `MAX_LLM_CYCLES`, injects base
-  `PYTHONPATH`, mounts wrapper patches and persistent file/model-cache dirs,
-  removes upstream `extra_hosts`, and lengthens healthcheck startup.
+  env aliases, sets `ASYM_QUERY_PREFIX`, raises `MAX_LLM_CYCLES` and the nested
+  Deep Research cycle/batch limits, passes
+  `ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS`, injects base `PYTHONPATH`,
+  mounts wrapper patches and persistent file/model-cache dirs, removes upstream
+  `extra_hosts`, and lengthens healthcheck startup.
 - `web_server`: extends upstream, joins `netns-holder`, disables frontend
   analytics/cloud/billing flags, changes healthcheck to probe namespace IP.
 - `nginx`: extends upstream, joins `netns-holder`, removes direct published
@@ -1512,6 +1615,9 @@ rg -n "google2|brave2|duckduckgo2|startpage2|bing2|last_resort|use_default_setti
 Manual behavior checks:
 
 - Lite chat can use `web_search` and `open_url`.
+- With `ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS=true`, lite and full Deep
+  Research can use tools enabled for the selected chat Agent, mixed ordinary
+  tool names are not dropped, and default nested execution is sequential.
 - SearXNG JSON search returns results from each custom engine shortcut
   (`go2`, `br2`, `ddg2`, `sp2`) when the target engine is not suspended or
   serving a challenge page.

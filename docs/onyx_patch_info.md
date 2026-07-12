@@ -41,6 +41,8 @@ small set of local deployment requirements that Onyx v4.2.5 does not expose as
 configuration:
 
 - Let a private deployment tune tool limits without rebuilding Onyx images.
+- Let Deep Research use the current chat Agent's selected tools without
+  silently dropping mixed or repeated tool calls from one model response.
 - Preserve active-turn assistant reasoning fields across multi-step tool calls
   for OpenAI-compatible private inference providers, with optional preservation
   across all prior turns.
@@ -84,6 +86,7 @@ settings.
 | LLM context window override env | `api_server` | Compose maps `ONYX_AGENT_LLM_MAX_TOKENS` to upstream `GEN_AI_MAX_TOKENS`; `sitecustomize` makes it win before DB/provider limits | First-class wrapper/admin override for model context window |
 | Native reasoning detection override | `api_server` | Compose passes `ONYX_AGENT_USE_NATIVE_REASONING`; `sitecustomize` can force Onyx `model_is_reasoning_model()` true for wrapper-managed agents | Provider/model reasoning capability override for OpenAI-compatible deployments |
 | Assistant reasoning preservation | `api_server` | `sitecustomize` carries active-turn saved/live assistant reasoning into LiteLLM `reasoning_content` fields by default; optional all-history mode preserves older turns too | Native chat-history support for provider reasoning fields |
+| Deep Research selected chat-Agent tools | `api_server` | Compose supplies nested-agent cycle, batch, and worker limits; configured `sitecustomize` removes the search-only filter, retains complete ordinary tool batches, assigns distinct nested placements, and bounds execution workers | First-class Deep Research tool selection with separate batch and concurrency controls |
 | Chat reminder placement for reasoning preservation | `api_server` | `sitecustomize` keeps Onyx's user-role reminder adjacent to the latest user request instead of trailing after assistant/tool history | Reminder placement that does not invalidate provider reasoning templates |
 | Coding-agent final answer synthesis | `api_server` | `sitecustomize` flattens structured tool history before the no-tool final-answer call and returns recent tool output if finalization still fails | Final-answer path that does not send tool-call protocol messages to non-tool calls |
 | Saved tool-result preservation | `api_server` | `sitecustomize` optionally replaces Onyx's cross-message placeholder with saved tool responses | Per-agent/admin setting for how much saved tool output to keep |
@@ -291,6 +294,109 @@ tool-argument omission, character counts, and a short transcript hash.
 debug suppression and calls LiteLLM's debug hook; only use it during controlled
 local validation because LiteLLM debug logs can include full request/response
 details.
+
+## Deep Research selected chat-Agent tools
+
+Local files:
+
+- `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- `onyx/patches/sitecustomize_base/sitecustomize.py`
+- `docker-compose.yaml`
+- `.env.wrapper.example`
+
+Onyx source areas:
+
+- `backend/onyx/deep_research/dr_loop.py`
+- `backend/onyx/prompts/deep_research/research_agent.py`
+- `backend/onyx/tools/fake_tools/research_agent.py`
+- `backend/onyx/tools/tool_runner.py`
+- `backend/onyx/utils/threadpool_concurrency.py`
+
+### Why this is needed
+
+Onyx constructs the current chat Agent's tools, including per-chat
+`allowed_tool_ids`, before entering Deep Research. The Deep Research
+orchestrator then filters that list to `internal_search`, `web_search`, and
+`open_url`. Inside each nested research agent, Onyx also keeps only calls whose
+name matches the first tool call in a model response and passes
+`max_concurrent_tools=1` to the generic runner. That argument both truncates
+the call list to one merged call and limits the thread pool to one worker.
+
+The search-only filter prevents Agent-selected Python, coding-agent, custom,
+and MCP tools from reaching nested research. The two call-list limits silently
+discard ordinary calls from otherwise valid assistant tool-call messages. The
+fixed nested-agent cycle limit is also independent of the normal chat
+`MAX_LLM_CYCLES` setting.
+
+### How it modifies Onyx
+
+`docker-compose.yaml` supplies these fixed API-server settings immediately
+after `MAX_LLM_CYCLES`:
+
+- `MAX_RESEARCH_AGENT_CYCLES=200` controls the number of LLM/tool cycles in
+  each nested research agent and updates the cycle count shown in both nested
+  research prompts.
+- `MAX_DEEP_RESEARCH_TOOL_CALLS_PER_BATCH=256` is a high fail-closed cutoff for
+  the number of tool calls emitted by one LLM response. It is not an ordinary
+  workflow limit. If it is exceeded, no call in that response is executed and
+  the research branch reports a visible error.
+- `MAX_DEEP_RESEARCH_PARALLEL_TOOLS=1` bounds worker threads without truncating
+  the accepted call list. The default therefore executes a complete batch
+  sequentially.
+
+`ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS=true` is exposed in
+`.env.wrapper.example` and passed to the API server by the base Compose file.
+When true, the base `sitecustomize` patch:
+
+- passes the already-constructed current chat Agent tool list to nested
+  research agents instead of applying Onyx's search-only allowlist;
+- removes the first-tool-name filter from the nested research loop;
+- reuses Onyx's merging of repeated `internal_search`, `web_search`, and
+  `open_url` calls;
+- assigns every remaining merged call a distinct reserved `sub_turn_index`
+  range, so the existing Deep Research renderer keeps nested tool packets in
+  separate UI groups;
+- calls the stock generic tool runner with call truncation disabled, while a
+  patch-local `ContextVar` independently bounds only the thread-pool worker
+  count;
+- keeps tool responses in model call order and advances the nested placement
+  counter by the original batch size so later LLM cycles cannot reuse a UI
+  index; and
+- rejects a response that mixes `think_tool` or `generate_report` with any
+  other call. Control tools must be called alone rather than causing ordinary
+  calls to disappear silently.
+
+The reserved nested-placement stride is 1024. A narrow `CodingAgentTool.run()`
+wrapper offsets coding-agent packets into the selected call's reserved range;
+coding-agent calls are serialized around that emitter mapping even if the
+general worker limit is raised. This prevents the coding agent's own substeps,
+which start at zero upstream, from colliding with sibling Deep Research tools.
+
+The patch validates the expected prompt cycle fragment, Deep Research source
+blocks, tool-call merge/truncation logic, and thread-pool behavior at startup.
+With `WRAPPER_PATCH_STRICT=true`, any mismatch stops API-server startup. Setting
+`ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS=false` restores the upstream tool
+filter and call handling while retaining the configured nested-agent cycle
+limit.
+
+The base API-server environment and patch mount are inherited by full, lite,
+Docker, and Podman Compose layering. No mode-specific override is required.
+Available tools still depend on the selected Agent, per-chat tool toggles,
+component availability, and mode; for example, lite mode has no vector-backed
+local-document search. Onyx's automatically injected memory tool is outside
+the per-chat `allowed_tool_ids` filter and remains available when user memory
+is enabled. The nested runner still supplies no chat-file list or user-memory
+context to tool overrides, so Python file inputs and memory-aware behavior are
+not added by this patch.
+
+### Upstream merge request shape
+
+Onyx should let Deep Research consume the tool set already selected for the
+chat Agent, separate maximum accepted calls from maximum execution workers,
+preserve a response for every accepted tool-call ID, and assign unique nested
+placements. Control tools should have an explicit mixed-batch policy. Nested
+cycle and timeout settings should be first-class configuration rather than
+unrelated hardcoded prompt and loop constants.
 
 ## Chat reminder placement for reasoning preservation
 
