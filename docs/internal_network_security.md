@@ -30,7 +30,7 @@ This document applies to the committed pins in `stack.versions.env`:
 
 | Component | Version / image |
 | --- | --- |
-| Onyx | `onyxdotapp/onyx-backend:v4.1.9` and `onyxdotapp/onyx-web-server:v4.1.9` |
+| Onyx | `onyxdotapp/onyx-backend:v4.2.5` and `onyxdotapp/onyx-web-server:v4.2.5` |
 | Code interpreter | `onyxdotapp/code-interpreter:0.4.4` |
 | CRW | `ghcr.io/us/crw:0.23.0` |
 | Obscura | `h4ckf0r0day/obscura:0.1.10` |
@@ -166,7 +166,7 @@ ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true
 ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false
 ```
 
-For Onyx `v4.1.9`, that maps to the "Allow Private Network" posture when no
+For Onyx `v4.2.5`, that maps to the "Allow Private Network" posture when no
 Admin UI value has been saved. The intended reason is full-mode local RAG:
 the Web connector must be able to crawl the trusted local doc-drop server, and
 some MCP/OAuth use cases may need private LAN or `host.docker.internal`

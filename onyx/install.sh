@@ -195,6 +195,32 @@ fetch_latest_release_tag() {
     return 0
 }
 
+# Craft sandbox backend for an image tag. The docker backend exists only in
+# v4.0.6+; non-release tags track the current docker backend.
+sandbox_backend_for_tag() {
+    local ver="${1#v}"; ver="${ver%%-*}"
+    printf '%s' "$ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo docker; return; }
+    local major="${ver%%.*}" rest="${ver#*.}"
+    local minor="${rest%%.*}" patch="${rest#*.}"
+    if [ "$major" -gt 4 ] ||
+        { [ "$major" -eq 4 ] && [ "$minor" -gt 0 ]; } ||
+        { [ "$major" -eq 4 ] && [ "$minor" -eq 0 ] && [ "$patch" -ge 6 ]; }; then
+        echo docker
+    else
+        echo kubernetes
+    fi
+}
+
+# Write SANDBOX_BACKEND to .env for image tag $1; sets SANDBOX_BACKEND_VALUE.
+set_sandbox_backend_for_tag() {
+    SANDBOX_BACKEND_VALUE="$(sandbox_backend_for_tag "$1")"
+    if grep -q "^#* *SANDBOX_BACKEND=" "$ENV_FILE"; then
+        sed -i.bak "s/^#* *SANDBOX_BACKEND=.*/SANDBOX_BACKEND=$SANDBOX_BACKEND_VALUE/" "$ENV_FILE"
+    else
+        echo "SANDBOX_BACKEND=$SANDBOX_BACKEND_VALUE" >> "$ENV_FILE"
+    fi
+}
+
 # --- Docker Compose detection ---
 # Sets COMPOSE_CMD to "docker compose" (plugin) or "docker-compose" (standalone).
 # Returns 0 if either is available, 1 otherwise. Safe to re-run after installing
@@ -866,7 +892,7 @@ fi
 if [[ "$LITE_MODE" = false ]]; then
     print_info "Which deployment mode would you like?"
     echo ""
-    echo "  1) Lite      - Minimal deployment (no Vespa, Redis, or model servers)"
+    echo "  1) Lite      - Minimal deployment (no OpenSearch, Redis, or model servers)"
     echo "                  LLM chat, tools, file uploads, and Projects still work"
     echo "  2) Standard  - Full deployment with search, connectors, and RAG"
     echo ""
@@ -966,27 +992,20 @@ if [ -f "$ENV_FILE" ]; then
     echo ""
 
     if [ "$REPLY" = "update" ]; then
-        if [ "$INCLUDE_CRAFT" = true ]; then
-            # --include-craft requires the craft-tagged backend image (Node.js
-            # + opencode CLI are only built into that image), so the tag is
-            # forced rather than prompted for.
-            VERSION="craft-edge"
-            print_info "Update selected. Using craft-edge (required by --include-craft)."
-        else
-            print_info "Update selected. Which tag would you like to deploy?"
-            echo ""
-            echo "• Press Enter for ${DEFAULT_IMAGE_TAG} (recommended)"
-            echo "• Type a specific tag (e.g., v0.1.0)"
-            echo ""
-            prompt_or_default "Enter tag [default: ${DEFAULT_IMAGE_TAG}]: " "${DEFAULT_IMAGE_TAG}"
-            VERSION="$REPLY"
-            echo ""
+        # Craft uses the regular backend image, so the tag is selected normally.
+        print_info "Update selected. Which tag would you like to deploy?"
+        echo ""
+        echo "• Press Enter for ${DEFAULT_IMAGE_TAG} (recommended)"
+        echo "• Type a specific tag (e.g., v0.1.0)"
+        echo ""
+        prompt_or_default "Enter tag [default: ${DEFAULT_IMAGE_TAG}]: " "${DEFAULT_IMAGE_TAG}"
+        VERSION="$REPLY"
+        echo ""
 
-            if [ "$VERSION" = "edge" ]; then
-                print_info "Selected: edge (latest nightly)"
-            else
-                print_info "Selected: $VERSION"
-            fi
+        if [ "$VERSION" = "edge" ]; then
+            print_info "Selected: edge (latest nightly)"
+        else
+            print_info "Selected: $VERSION"
         fi
 
         # Update .env file with new version
@@ -1005,6 +1024,18 @@ if [ -f "$ENV_FILE" ]; then
         print_success "Will restart with current settings"
     fi
 
+    # Honor --include-craft for existing installs on both update and restart.
+    if [ "$INCLUDE_CRAFT" = true ]; then
+        if grep -q "^#* *ENABLE_CRAFT=" "$ENV_FILE"; then
+            sed -i.bak 's/^#* *ENABLE_CRAFT=.*/ENABLE_CRAFT=true/' "$ENV_FILE"
+        else
+            echo "ENABLE_CRAFT=true" >> "$ENV_FILE"
+        fi
+        EFFECTIVE_TAG="${VERSION:-$(grep -E '^IMAGE_TAG=' "$ENV_FILE" | head -1 | cut -d= -f2-)}"
+        set_sandbox_backend_for_tag "$EFFECTIVE_TAG"
+        print_success "Onyx Craft enabled (ENABLE_CRAFT=true, SANDBOX_BACKEND=$SANDBOX_BACKEND_VALUE, image tag: ${EFFECTIVE_TAG})"
+    fi
+
     # Ensure COMPOSE_PROFILES is cleared when running in lite mode on an
     # existing .env (the template ships with s3-filestore enabled).
     if [[ "$LITE_MODE" = true ]] && grep -q "^COMPOSE_PROFILES=.*s3-filestore" "$ENV_FILE" 2>/dev/null; then
@@ -1015,26 +1046,20 @@ else
     print_info "No existing .env file found. Setting up new deployment..."
     echo ""
 
-    # Ask for version (skipped when --include-craft forces the craft-tagged
-    # backend image, which is the only image that ships Node.js + opencode CLI).
-    if [ "$INCLUDE_CRAFT" = true ]; then
-        VERSION="craft-edge"
-        print_info "Using craft-edge (required by --include-craft)."
-    else
-        print_info "Which tag would you like to deploy?"
-        echo ""
-        echo "• Press Enter for ${DEFAULT_IMAGE_TAG} (recommended)"
-        echo "• Type a specific tag (e.g., v0.1.0)"
-        echo ""
-        prompt_or_default "Enter tag [default: ${DEFAULT_IMAGE_TAG}]: " "${DEFAULT_IMAGE_TAG}"
-        VERSION="$REPLY"
-        echo ""
+    # Craft uses the regular backend image, so the tag is selected normally.
+    print_info "Which tag would you like to deploy?"
+    echo ""
+    echo "• Press Enter for ${DEFAULT_IMAGE_TAG} (recommended)"
+    echo "• Type a specific tag (e.g., v0.1.0)"
+    echo ""
+    prompt_or_default "Enter tag [default: ${DEFAULT_IMAGE_TAG}]: " "${DEFAULT_IMAGE_TAG}"
+    VERSION="$REPLY"
+    echo ""
 
-        if [ "$VERSION" = "edge" ]; then
-            print_info "Selected: edge (latest nightly)"
-        else
-            print_info "Selected: $VERSION"
-        fi
+    if [ "$VERSION" = "edge" ]; then
+        print_info "Selected: edge (latest nightly)"
+    else
+        print_info "Selected: $VERSION"
     fi
 
     # Ask for authentication schema
@@ -1076,11 +1101,11 @@ else
     sed -i.bak "s/^IMAGE_TAG=.*/IMAGE_TAG=$VERSION/" "$ENV_FILE"
     print_success "IMAGE_TAG set to $VERSION"
 
-    # In lite mode, clear COMPOSE_PROFILES so profiled services (MinIO, etc.)
-    # stay disabled — the template ships with s3-filestore enabled by default.
+    # In lite mode, MinIO never starts and the lite overlay uses Postgres.
     if [[ "$LITE_MODE" = true ]]; then
         sed -i.bak 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=/' "$ENV_FILE" 2>/dev/null || true
-        print_success "Cleared COMPOSE_PROFILES for lite mode"
+        sed -i.bak 's/^FILE_STORE_BACKEND=.*/FILE_STORE_BACKEND=postgres/' "$ENV_FILE" 2>/dev/null || true
+        print_success "Cleared COMPOSE_PROFILES and set FILE_STORE_BACKEND=postgres for lite mode"
     fi
 
     # Configure basic authentication (default)
@@ -1102,26 +1127,21 @@ else
     if [ "$INCLUDE_CRAFT" = true ]; then
         # Set ENABLE_CRAFT=true for runtime configuration (handles commented and uncommented lines)
         sed -i.bak 's/^#* *ENABLE_CRAFT=.*/ENABLE_CRAFT=true/' "$ENV_FILE" 2>/dev/null || true
-        # Ensure SANDBOX_BACKEND=docker is written explicitly (docker-compose
-        # defaults to it already, but a literal entry in .env makes the
-        # selection visible/auditable to operators).
-        if grep -q "^#* *SANDBOX_BACKEND=" "$ENV_FILE"; then
-            sed -i.bak 's/^#* *SANDBOX_BACKEND=.*/SANDBOX_BACKEND=docker/' "$ENV_FILE"
-        else
-            echo "SANDBOX_BACKEND=docker" >> "$ENV_FILE"
-        fi
-        print_success "Onyx Craft enabled (ENABLE_CRAFT=true, SANDBOX_BACKEND=docker)"
+        set_sandbox_backend_for_tag "$VERSION"
+        print_success "Onyx Craft enabled (ENABLE_CRAFT=true, SANDBOX_BACKEND=$SANDBOX_BACKEND_VALUE)"
 
-        # Trust boundary warning. api_server + background mount the host
-        # Docker socket so they can drive sandbox containers. Anything that
-        # can talk to that socket is effectively root on the host.
-        echo ""
-        print_warning "Craft + docker backend: api_server and background mount"
-        print_warning "/var/run/docker.sock. Compromise of either container ="
-        print_warning "root on the host. Only enable on hosts you fully control."
-        print_warning "On EC2, require IMDSv2 (HttpTokens=required) so sandboxes"
-        print_warning "cannot pull IAM credentials from the instance metadata service."
-        echo ""
+        if [ "$SANDBOX_BACKEND_VALUE" = "docker" ]; then
+            echo ""
+            print_warning "Craft + docker backend: api_server and background bind-mount"
+            print_warning "/var/run/docker.sock (RW = root on host on compromise);"
+            print_warning "sandbox-proxy bind-mounts it RO (still exposes container env,"
+            print_warning "labels, and the events stream). Only enable on hosts you fully"
+            print_warning "control. On EC2, require IMDSv2 (HttpTokens=required) so"
+            print_warning "sandboxes cannot pull IAM credentials from instance metadata."
+            echo ""
+        else
+            print_info "Image tag ${VERSION} uses SANDBOX_BACKEND=${SANDBOX_BACKEND_VALUE}."
+        fi
     else
         print_info "Onyx Craft disabled (use --include-craft to enable)"
     fi
@@ -1146,6 +1166,16 @@ if [ "$INCLUDE_CRAFT" = true ]; then
         else
             print_warning "Could not create sandbox network $SANDBOX_NET — create it manually:"
             echo "    docker network create $SANDBOX_NET"
+        fi
+    fi
+
+    SANDBOX_PROXY_CA_VOL="sandbox_proxy_ca"
+    if ! ${DOCKER_SUDO[@]+"${DOCKER_SUDO[@]}"} docker volume inspect "$SANDBOX_PROXY_CA_VOL" >/dev/null 2>&1; then
+        if ${DOCKER_SUDO[@]+"${DOCKER_SUDO[@]}"} docker volume create "$SANDBOX_PROXY_CA_VOL" >/dev/null 2>&1; then
+            print_success "Created sandbox proxy CA volume: $SANDBOX_PROXY_CA_VOL"
+        else
+            print_warning "Could not create sandbox proxy CA volume $SANDBOX_PROXY_CA_VOL — create it manually:"
+            echo "    docker volume create $SANDBOX_PROXY_CA_VOL"
         fi
     fi
 fi
@@ -1229,15 +1259,11 @@ print_success "Using port $AVAILABLE_PORT for nginx"
 # Read IMAGE_TAG from .env file and remove any quotes or whitespace.
 CURRENT_IMAGE_TAG=$(grep "^IMAGE_TAG=" "$ENV_FILE" | head -1 | cut -d'=' -f2 | tr -d ' "'"'"'')
 
-if [ "$CURRENT_IMAGE_TAG" = "edge" ] || [ "$CURRENT_IMAGE_TAG" = "latest" ] || [[ "$CURRENT_IMAGE_TAG" == craft-* ]]; then
+if [ "$CURRENT_IMAGE_TAG" = "edge" ] || [ "$CURRENT_IMAGE_TAG" = "latest" ]; then
     USE_LATEST=true
     # Floating tags track main, so configs should come from main.
     CONFIG_REF="main"
-    if [[ "$CURRENT_IMAGE_TAG" == craft-* ]]; then
-        print_info "Using craft tag '$CURRENT_IMAGE_TAG' - will force pull and recreate containers"
-    else
-        print_info "Using '$CURRENT_IMAGE_TAG' tag - will force pull and recreate containers"
-    fi
+    print_info "Using '$CURRENT_IMAGE_TAG' tag - will force pull and recreate containers"
 else
     USE_LATEST=false
     # Pinned release tags use their own ref so configs match the images.

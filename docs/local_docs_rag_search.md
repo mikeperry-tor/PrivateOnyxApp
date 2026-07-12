@@ -41,7 +41,7 @@ Onyx fork:
 - The optional `make embedserv-*` targets install and run a local MLX
   OpenAI-compatible embedding server on the host.
 
-These pieces exist because Onyx v4.1.7 has strong assumptions about where local
+These pieces exist because Onyx v4.2.5 has strong assumptions about where local
 documents and embedding models live. The wrapper keeps the user-facing Onyx
 configuration simple while preserving those assumptions at the service
 boundary.
@@ -110,7 +110,7 @@ without giving the Onyx containers write access to the user's document tree.
 
 ## SSRF And Security Hardening
 
-Onyx v4.1+ has SSRF protection for URL-fetching paths. The wrapper seeds the
+Onyx v4.2.5 has SSRF protection for URL-fetching paths. The wrapper seeds the
 default Onyx Security Hardening posture with:
 
 ```env
@@ -119,7 +119,7 @@ ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true
 ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false
 ```
 
-In Onyx v4.1.7 this maps to "Allow Private Network" when no Security Hardening
+In Onyx v4.2.5 this maps to "Allow Private Network" when no Security Hardening
 setting has been saved in the Admin UI. That is the desired default for local
 doc-drop crawling: the Web connector is allowed to crawl the local document
 server, MCP/OAuth endpoints may use private LAN or `host.docker.internal`
@@ -161,7 +161,7 @@ the upstream symbols and line references to re-check during an Onyx upgrade are
 in
 [Background Web connector PDF freshness patch](onyx_patches_upgrade.md#background-web-connector-pdf-freshness-patch).
 
-Onyx v4.1.7 intentionally avoids trusting `Last-Modified` for Web PDFs because
+Onyx v4.2.5 intentionally avoids trusting `Last-Modified` for Web PDFs because
 public websites often emit unreliable validators. That is sensible for the
 general internet, but wasteful for a local document-drop server where the file
 metadata is trusted and stable.
@@ -189,7 +189,7 @@ Implementation:
   `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
   `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`
 
-Onyx's internal search path is chunk-oriented, not excerpt-oriented. In v4.1.7,
+Onyx's internal search path is chunk-oriented, not excerpt-oriented. In v4.2.5,
 the `internal_search` tool and the `/search` API serialize the selected
 section's full `content` into the model-facing tool result. Onyx may also merge
 nearby matching chunks and expand a selected section with adjacent chunks before
@@ -268,7 +268,7 @@ model server or extend the shim with compatible implementations.
 
 ## Why The Shim Exists
 
-The wrapper needs release-image-compatible local embeddings. Onyx v4.1.7 can
+The wrapper needs release-image-compatible local embeddings. Onyx v4.2.5 can
 use self-hosted/custom embedding models, but the practical path is still shaped
 by internal model-server assumptions:
 
@@ -457,7 +457,8 @@ assumptions:
   patch has been updated for the new search path.
 - The Web connector scrape path and document model fields used by the PDF
   freshness patch still exist.
-- The Security Hardening env-to-UI mapping has not changed.
+- The Security Hardening env-to-UI mapping matches the posture documented in
+  [Internal network security](internal_network_security.md).
 - The recommended Admin model type and embedding dimension still match the
   current Onyx UI behavior and the selected local model.
 

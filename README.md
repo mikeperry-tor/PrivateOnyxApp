@@ -111,7 +111,7 @@ Most likely variables you want to change:
 - **Optional LAN access** (for local inference APIs):
   - Set `MYST_VPN_ALLOW_LAN_BYPASS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
   - If you want MCP servers on `host.docker.internal` and the doc-drop connector at `http://localhost:8091/`, use `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL=true`, `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true`, and `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false`. That yields `Allow Private Network`: Web connectors can crawl local/private targets, and MCP/OAuth endpoints can use private LAN or `host.docker.internal` addresses, while loopback MCP/OAuth targets such as `127.0.0.1` remain blocked.
-  - Set `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` only when you intentionally need loopback MCP/OAuth access. In Onyx v4.1 this seeds SSRT `Disabled`, which is broader than the wrapper default.
+  - Set `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` only when you intentionally need loopback MCP/OAuth access. In Onyx v4.2.5 this seeds SSRF `Disabled`, which is broader than the wrapper default.
 
 ### Initial VPN Connection (Myst Payment)
 
@@ -391,7 +391,7 @@ Notes:
 
 - Directory listing pages are crawlable; you can also target specific files
   directly, e.g. `http://localhost:8091/my-paper.pdf`.
-- Onyx v4.1+ has SSRF Protection that can block this service if you save a
+- Onyx v4.2.5 has SSRF Protection that can block this service if you save a
   Security Hardening override in the Admin UI.
 - The defaults in `.env.wrapper.example` seed the `Allow Private Network` posture
   in the Security Hardening UI. That is enough for this Web connector because
@@ -480,7 +480,7 @@ but it is not a stack-internal access-control boundary.
 3. Select which tools to expose (or select all).
 4. Save the assistant.
 
-Chat agents using that assistant can now drive a stealth browser to navigate, read, and interact with web pages — with all traffic egressing through the VPN.
+Chat agents using that assistant can drive a stealth browser to navigate, read, and interact with web pages — with all traffic egressing through the VPN.
 
 **Security notes:**
 
@@ -513,7 +513,7 @@ but single-hop VPN activity is not as strong as Tor, and may not even be as
 strong as [Tinfoil's distributed trust
 architecture](https://tinfoil.sh/security-and-privacy-faq#web-search).
 
-As noted previously, this stack will use the host OS VPN as the "first hop"
+This stack uses the host OS VPN as the "first hop"
 before connecting to the Mysterium endpoint. Additionally, all inference,
 search, and web traffic exiting the Mysterium VPN uses TLS or https.
 

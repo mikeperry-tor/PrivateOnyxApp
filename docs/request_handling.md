@@ -16,7 +16,7 @@ separately below.
 Version scope for this document, based on clean local checkouts under
 `reference_repos/`:
 
-- Onyx: `v4.1.9` (`361cce5af7a0`, 2026-07-01)
+- Onyx: `v4.2.5` (`b7482a59fb74`, 2026-07-09)
 - CRW: `v0.23.0` (`dc497fdf35a6`, 2026-07-10)
 - Obscura: `v0.1.10` (`50e66320b084`)
 - SearXNG: master commit `f8ffbf36f903`
@@ -38,7 +38,7 @@ This document focuses on request chains and browser/scraper behavior. For the
 Compose-level VPN namespace, optional `ONYX_AGENT_OUTBOUND_PROXY_URL`, teep, Tailscale, and
 code-interpreter routing switches, see
 [VPN routing and proxies](vpn_routing_and_proxies.md). For the Onyx runtime
-patches that shape Firecrawl payloads, tool availability, prompt text, and
+patches that shape tool availability, prompt text, and
 executor pod networking, see [Onyx patch information](onyx_patch_info.md). For
 line-oriented upgrade checks, including the SearXNG custom engines and config
 overlay notes, see [Onyx wrapper patches](onyx_patches_upgrade.md). For the
@@ -971,7 +971,7 @@ The wrapper mounts `onyx/patches/sitecustomize_base` into the API server and
 puts it on `PYTHONPATH`. In full mode, that base `sitecustomize` module is the
 one Python imports at process startup. In lite mode, `docker-compose.lite.yml`
 places `onyx/patches/sitecustomize` first on `PYTHONPATH`; that lite patch
-imports selected helpers from the base patch module and then applies the
+imports every applicable helper from the base patch module and then applies the
 lite-only Open URL availability patch.
 
 These patches do not choose the active content provider; the Onyx Admin
@@ -979,13 +979,6 @@ Firecrawl setting does that. They adjust behavior around the
 `open_url` path. See [Onyx patch information](onyx_patch_info.md) for the
 complete patch inventory and upstreaming notes.
 
-- `apply_firecrawl_wait_for_patch()` monkey-patches
-  `FirecrawlClient._get_webpage_content` to send only
-  `{url, formats: ["markdown"]}` to the configured endpoint. This is a guard
-  against future upstream Onyx changes adding a `waitFor` field. It is called
-  by the base sitecustomize path; the lite sitecustomize does not
-  call this helper, but Onyx v4.1.9 already sends the same no-`waitFor` payload
-  in lite mode.
 - `apply_open_url_char_limit_patches()` lets wrapper env vars
   `ONYX_OPEN_URL_MAX_CHARS_PER_URL` and `ONYX_OPEN_URL_MAX_TOTAL_CHARS` override
   upstream truncation defaults.
@@ -1022,13 +1015,9 @@ Onyx open_url → FirecrawlClient.contents(urls)
 ```
 
 The `FirecrawlClient` sends each URL to the configured scrape endpoint with
-`formats: ["markdown"]`. In the base/full API-server patch path, the wrapper's
-sitecustomize patch replaces `FirecrawlClient._get_webpage_content` at startup
-and preserves that payload shape with **no** `waitFor` field, even if a future
-upstream Onyx release adds one. In lite mode, Onyx v4.1.9 already sends the
-same no-`waitFor` payload. When CRW escalates to CDP, this keeps page-load
-waiting in the shim/obscura `waitUntil` path and CRW's post-navigation
-heuristics instead of adding a blind fixed sleep.
+`formats: ["markdown"]` and no `waitFor` field. When CRW escalates to CDP,
+page readiness remains in the shim/Obscura `waitUntil` path and CRW's
+post-navigation heuristics.
 
 CRW's `FallbackRenderer` performs an HTTP prefetch first to check the content
 type ([`lib.rs:801-862`](../reference_repos/crw/crates/crw-renderer/src/lib.rs:801)).
@@ -1045,9 +1034,7 @@ In this deployment the prefetch goes through the prefetch-blocking proxy:
 - **Other HTTPS pages**: The proxy forwards the prefetch through a CONNECT
   tunnel. If CRW decides the response is blocked, thin, or JS-required, it
   escalates to the CDP renderer. If the response is usable, CRW can return it
-  directly without Obscura. For HTTPS non-search URLs this was already true
-  when the prefetch-blocking proxy allowed CONNECT tunnels for PDF/content
-  detection. See [Known Limitations](#known-limitations).
+  directly without Obscura. See [Known Limitations](#known-limitations).
 
 - **Other plain HTTP pages**: Blocked by default before any upstream request is
   opened. The response body tells the agent to use an `https://` URL instead.
@@ -1142,9 +1129,7 @@ routes under `/firecrawl/*`. This stack uses CRW's native scrape endpoint:
   escalates to the chrome/obscura CDP renderer.
 - `/v1/scrape` for the README-recommended Onyx Firecrawl content provider
   configuration (`http://localhost:3010/v1/scrape`). Onyx's FirecrawlClient
-  sends `{url, formats: ["markdown"]}` to the configured URL. The base/full
-  sitecustomize path defensively preserves that no-`waitFor` payload; lite mode
-  already has that shape in Onyx v4.1.9.
+  sends `{url, formats: ["markdown"]}` to the configured URL.
 These calls go through CRW's `FallbackRenderer` pipeline. The HTTP prefetch
 runs first; PDFs are handled natively by `pdf_inspector` without reaching the
 CDP layer. For HTML, the requested format controls the output: `rawHtml` is
