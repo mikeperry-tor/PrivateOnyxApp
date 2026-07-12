@@ -132,6 +132,7 @@ intended patch surface.
 | Assistant reasoning preservation | Keep. `ChatMessageSimple`, `AssistantMessage`, reconstructed tool-call history, and live tool-loop assistant messages still have no native reasoning field. |
 | Deep Research selected chat-Agent tools | Keep. Deep Research still filters constructed Agent tools to search/open-url, drops tool names after the first name in a nested batch, and couples batch truncation to worker count. Nested research cycles remain hardcoded separately from `MAX_LLM_CYCLES`. |
 | Reminder placement | Keep. `construct_message_history()` still appends the user-role reminder after assistant/tool messages. |
+| GLM automatic tool choice | Keep only while the deployed GLM service uses the affected vLLM 0.24.0 unified parser/structural-tag path. Coding Agent, Deep Research, nested Research Agent, and explicit chat-tool forcing otherwise reach the broken required-tool path. Remove after upstream restores it. |
 | Coding-agent finalizer | Keep. Final synthesis still receives structured tool history through a no-tool LLM step, and the caller still masks finalizer exceptions. |
 | Saved tool-result preservation | Keep. Non-image saved responses are still replaced by `TOOL_CALL_RESPONSE_CROSS_MESSAGE` and assigned a fixed token estimate. |
 | Open URL and web-search budgets | Keep. The relevant constants and bound default arguments remain hardcoded. |
@@ -481,6 +482,49 @@ These six patches operate on Ollama or Responses API translation and logging.
 They neither populate reasoning on reconstructed `ChatMessageSimple` /
 `AssistantMessage` objects nor preserve reasoning through Chat Completions tool
 history. They do not replace the wrapper reasoning patch.
+
+### GLM automatic tool-choice compatibility
+
+Patch behavior:
+
+- Wraps the LLM-step references bound locally in Coding Agent, Deep Research,
+  nested Research Agent, and the normal chat loop.
+- Converts `ToolChoiceOptions.REQUIRED` to `ToolChoiceOptions.AUTO` while
+  passing existing `AUTO` and `NONE` choices through unchanged.
+- Validates exactly one forced-tool site in each owner function and composes
+  with reasoning preservation rebuilding the agent functions.
+- Preserves existing no-tool handling: Coding Agent finalizes; later Deep
+  Research cycles finalize; a first Deep Research cycle still fails loudly;
+  and explicit top-level forcing may return ordinary assistant text.
+
+Onyx service: `api_server`.
+
+Upstream and provider assumptions to re-check:
+
+- Onyx v4.2.5 still has one forced-tool site in each of
+  `run_coding_agent_call()`, `run_deep_research_llm_loop()`,
+  `run_research_agent_call()`, and `run_llm_loop()`.
+- Coding Agent still has an explicit no-tool branch that breaks to final answer
+  generation. Deep Research still treats a first-cycle no-tool result as an
+  error and later no-tool results as a reason to generate the final report.
+- The deployed GLM-5.2 provider still uses the affected vLLM 0.24.0 parser
+  introduced by vLLM commit `6c379b9e5`.
+- vLLM 0.23.0's GLM parser explicitly bypassed structured decoding for
+  required/named tool choice; vLLM 0.24.0's unified GLM adapter no longer
+  retains that request adjustment.
+
+Upgrade notes:
+
+- Test a real Coding Agent run, Deep Research orchestrator cycle, nested
+  Research Agent cycle, and explicit top-level forced-tool request. Confirm
+  expected tools execute and Teep shows no embedded upstream stream error.
+- Also test a request where the model emits no tool under automatic selection;
+  it must take the existing finalization path rather than fail or loop.
+- Confirm a first-cycle Deep Research response without tool calls still fails
+  loudly; automatic selection must not create an empty-result substitute.
+- Remove this patch when the deployed vLLM/GLM service supports required tool
+  choice again. Prefer deleting the wrapper workaround over retaining provider
+  compatibility indefinitely.
 
 ### Coding-agent final answer synthesis
 

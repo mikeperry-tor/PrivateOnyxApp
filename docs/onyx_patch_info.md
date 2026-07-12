@@ -88,6 +88,7 @@ settings.
 | Assistant reasoning preservation | `api_server` | `sitecustomize` carries active-turn saved/live assistant reasoning into LiteLLM `reasoning_content` fields by default; optional all-history mode preserves older turns too | Native chat-history support for provider reasoning fields |
 | Deep Research selected chat-Agent tools | `api_server` | Compose supplies nested-agent cycle, batch, and worker limits; configured `sitecustomize` removes the search-only filter, retains complete ordinary tool batches, assigns distinct nested placements, and bounds execution workers | First-class Deep Research tool selection with separate batch and concurrency controls |
 | Chat reminder placement for reasoning preservation | `api_server` | `sitecustomize` keeps Onyx's user-role reminder adjacent to the latest user request instead of trailing after assistant/tool history | Reminder placement that does not invalidate provider reasoning templates |
+| GLM automatic tool choice | `api_server` | `sitecustomize` changes forced to automatic tool selection in Coding Agent, Deep Research, nested Research Agent, and explicit chat-tool forcing | Temporary compatibility with the vLLM 0.24.0 GLM parser/structural-tag regression |
 | Coding-agent final answer synthesis | `api_server` | `sitecustomize` flattens structured tool history before the no-tool final-answer call and returns recent tool output if finalization still fails | Final-answer path that does not send tool-call protocol messages to non-tool calls |
 | Saved tool-result preservation | `api_server` | `sitecustomize` optionally replaces Onyx's cross-message placeholder with saved tool responses | Per-agent/admin setting for how much saved tool output to keep |
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
@@ -624,6 +625,63 @@ nominal chunk count.
 Tests should cover the chat `internal_search` tool, `/search`, and MCP
 `search_indexed_documents`, because all three paths can expose the same
 oversized content.
+
+## GLM automatic tool choice
+
+Local files:
+
+- `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- `onyx/patches/sitecustomize_base/sitecustomize.py`
+- `onyx/patches/sitecustomize/sitecustomize.py`
+
+Onyx source area:
+
+- `backend/onyx/tools/fake_tools/coding_agent.py`
+- `backend/onyx/deep_research/dr_loop.py`
+- `backend/onyx/tools/fake_tools/research_agent.py`
+- `backend/onyx/chat/llm_loop.py`
+
+### Why this is needed
+
+Onyx uses `ToolChoiceOptions.REQUIRED` in the internal Coding Agent loop, Deep
+Research orchestrator, nested Research Agent, and an explicit top-level chat
+request that forces one selected tool.
+
+Unfortunately, vLLM 0.24.0 moved GLM-5.x to the unified streaming parser and
+structural-tag engine. In doing so it removed the vLLM 0.23.0 GLM request
+adjustment that explicitly skipped structured decoding for required or named
+tool choice because GLM emits XML tool calls. The affected GLM-5.2 service
+accepts the request as HTTP 200, starts its SSE stream, and then emits an
+internal error before a tool call. Teep therefore sees a successful HTTP stream
+while LiteLLM raises `MidStreamFallbackError`.
+
+### How it modifies Onyx
+
+The base API-server patch wraps the step-function references bound separately
+inside the Coding Agent, Deep Research orchestrator, nested Research Agent, and
+normal chat-loop modules. Calls using `ToolChoiceOptions.REQUIRED` are changed
+to `ToolChoiceOptions.AUTO`; `AUTO` and `NONE` calls pass through unchanged.
+This module-local approach avoids changing unrelated callers of the shared LLM
+step functions.
+
+Coding Agent ordinary text takes the existing final-synthesis path. Later Deep
+Research orchestrator no-tool cycles generate the final report, while a
+first-cycle no-tool result remains a loud upstream error. Nested Research Agent
+no-tool output follows its normal cycle/finalization behavior. For an explicit
+top-level forced tool, Onyx still sends only that selected tool, but the model
+may return ordinary text instead of invoking it.
+
+Startup validation requires exactly one forced-tool site in each owner
+function and fails in strict mode on drift. Wrapping module-bound step
+functions, rather than rebuilding loops, also composes with the later
+reasoning-preservation source patches.
+
+### Upstream merge request shape
+
+The preferred fix is in vLLM: restore the GLM required/named-tool safeguard or
+make its new structural-tag path compatible with GLM XML tool output, with an
+end-to-end streaming test. Remove this wrapper patch after the deployed GLM
+service contains that fix.
 
 ## Code-interpreter capability descriptions
 

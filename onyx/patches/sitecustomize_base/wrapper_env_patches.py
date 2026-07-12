@@ -1600,6 +1600,98 @@ def _coding_agent_final_answer_fallback(history: Any, error: BaseException) -> s
     return header + "\n\n" + "\n\n".join(chunks)
 
 
+def apply_vllm_glm_auto_tool_choice_patch() -> None:
+    """Avoid vLLM's broken forced-tool path in wrapper agent workflows.
+
+    vLLM 0.24.0 moved GLM-5.x onto its unified parser/structural-tag engine
+    and removed the previous GLM safeguard that skipped structured decoding
+    for ``tool_choice=required``. Keep the workaround scoped to the internal
+    coding-agent loop; its existing no-tool branch safely proceeds to final
+    answer synthesis when the model returns ordinary assistant content.
+    """
+
+    try:
+        from onyx.chat import llm_loop
+        from onyx.deep_research import dr_loop
+        from onyx.tools.fake_tools import coding_agent
+        from onyx.tools.fake_tools import research_agent
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing agent tool-choice modules: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    targets = (
+        (
+            "coding-agent",
+            coding_agent,
+            "run_coding_agent_call",
+            "tool_choice=ToolChoiceOptions.REQUIRED,",
+            "run_llm_step_pkt_generator",
+        ),
+        (
+            "deep-research orchestrator",
+            dr_loop,
+            "run_deep_research_llm_loop",
+            "tool_choice=ToolChoiceOptions.REQUIRED,",
+            "run_llm_step",
+        ),
+        (
+            "nested research-agent",
+            research_agent,
+            "run_research_agent_call",
+            "tool_choice=ToolChoiceOptions.REQUIRED,",
+            "run_llm_step",
+        ),
+        (
+            "explicit chat tool forcing",
+            llm_loop,
+            "run_llm_loop",
+            "tool_choice = ToolChoiceOptions.REQUIRED",
+            "run_llm_step",
+        ),
+    )
+
+    for label, module, owner_function_name, expected, step_function_name in targets:
+        try:
+            source = inspect.getsource(getattr(module, owner_function_name))
+        except Exception as e:  # pragma: no cover
+            _warn_or_raise(f"could not inspect {label} tool-choice call site: {e}")
+            continue
+        if source.count(expected) != 1:
+            _warn_or_raise(
+                f"{label} automatic tool-choice patch expected exactly one "
+                f"forced-tool call site, found {source.count(expected)}"
+            )
+            continue
+
+        original_step = getattr(module, step_function_name)
+        if getattr(original_step, "_wrapper_vllm_glm_auto_choice", False):
+            continue
+
+        def _make_auto_choice_wrapper(original, owner_module):
+            @functools.wraps(original)
+            def _step_with_auto_choice(*args, **kwargs):
+                if (
+                    kwargs.get("tool_choice")
+                    == owner_module.ToolChoiceOptions.REQUIRED
+                ):
+                    kwargs["tool_choice"] = owner_module.ToolChoiceOptions.AUTO
+                return original(*args, **kwargs)
+
+            _step_with_auto_choice._wrapper_vllm_glm_auto_choice = True
+            return _step_with_auto_choice
+
+        setattr(
+            module,
+            step_function_name,
+            _make_auto_choice_wrapper(original_step, module),
+        )
+        print(f"sitecustomize: patched {label} automatic tool choice", flush=True)
+
+
 def _coding_agent_flattened_final_answer(
     coding_agent: Any,
     *,
