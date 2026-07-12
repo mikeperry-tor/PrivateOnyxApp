@@ -33,7 +33,7 @@ This document applies to the committed pins in `stack.versions.env`:
 | Onyx | `onyxdotapp/onyx-backend:v4.1.9` and `onyxdotapp/onyx-web-server:v4.1.9` |
 | Code interpreter | `onyxdotapp/code-interpreter:0.4.4` |
 | CRW | `ghcr.io/us/crw:0.23.0` |
-| Obscura | `h4ckf0r0day/obscura:0.1.9` |
+| Obscura | `h4ckf0r0day/obscura:0.1.10` |
 | SearXNG | `searxng/searxng:2026.6.26-f8ffbf36f` |
 | Teep | `13rac1/teep:6413fe0547b449e67f7296986fe8b8ffbc9bbcd2` |
 | Mysterium | `mysteriumnetwork/myst:docker_host_fixes_with_logs` |
@@ -123,7 +123,7 @@ component deciding whether that target is allowed.
 
 ## Obscura
 
-Obscura `v0.1.9` has a private-network deny behavior by default. The CLI help
+Obscura has a private-network deny behavior by default. The CLI help
 documents `--allow-private-network` as the opt-in that permits loopback,
 RFC1918, and link-local fetches.
 

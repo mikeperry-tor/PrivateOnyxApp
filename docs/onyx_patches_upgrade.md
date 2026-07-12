@@ -13,7 +13,7 @@ Reference checkouts:
   `https://github.com/onyx-dot-app/python-sandbox`.
 - Companion web stack checked against `reference_repos/crw` at `v0.23.0`
   (`dc497fdf35a6`),
-  `reference_repos/obscura` at `v0.1.9`, and `reference_repos/searxng` at
+  `reference_repos/obscura` at `v0.1.10` (`50e66320b084`), and `reference_repos/searxng` at
   `f8ffbf36f903`.
 
 Use this document when moving to a new major Onyx release or any companion
@@ -1328,7 +1328,8 @@ Patched services:
 
 Behavior:
 
-- Adds `--proxy` to Obscura commands.
+- Sets `OBSCURA_PROXY` for the Obscura CDP server so proxy credentials do not
+  appear in its command line, and adds `--proxy` to the Obscura MCP command.
 - Starts SearXNG through `searxng-proxy-entrypoint.sh`, which merges proxy
   settings into `settings.yml`.
 - Adds `ONYX_AGENT_OUTBOUND_PROXY_URL` to code-interpreter so the code-interpreter `sitecustomize`
@@ -1338,7 +1339,7 @@ Upgrade notes:
 
 - Update [Restricted egress network plan](plans/restricted_egress.md) if
   proxy-mode service coverage, `ONYX_AGENT_OUTBOUND_PROXY_URL`,
-  `ONYX_AGENT_ALLOW_HTTP_URLS`, SearXNG proxy mutation, Obscura `--proxy`, or
+  `ONYX_AGENT_ALLOW_HTTP_URLS`, SearXNG proxy mutation, Obscura proxy input, or
   executor proxy propagation changes.
 - Main Onyx source references are mostly indirect here: `api_server` prompt text
   must match executor network/proxy reality, and code-interpreter service wiring

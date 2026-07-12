@@ -287,7 +287,7 @@ services:
       # normal wrapper path CRW uses Target.createTarget on obscura's default
       # context, so cookies can persist between CDP WebSocket connections.
       # If a per-request Target.createBrowserContext path is introduced,
-      # obscura v0.1.9 clears the default jar on create/dispose. Default: 3600
+      # Obscura clears the default jar on context create/dispose. Default: 3600
       # (60 min). Set to 0 to disable.
       OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL: "${OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL:-3600}"
       # Optional sanitized CDP lifecycle/network trace for short debugging

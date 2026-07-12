@@ -1,7 +1,7 @@
 ## Proxy override layer.
 ## Applied when ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty in .env.wrapper (via Makefile
 ## COMPOSE_FILE layering). Threads a single upstream proxy through:
-##   - obscura (CDP `serve`)        : --proxy ${ONYX_AGENT_OUTBOUND_PROXY_URL}
+##   - obscura (CDP `serve`)        : OBSCURA_PROXY environment variable
 ##   - obscura-mcp                  : --proxy ${ONYX_AGENT_OUTBOUND_PROXY_URL}
 ##   - prefetch-blocking-proxy      : proxy env for HTTP/HTTPS egress
 ##   - searxng-core                 : outgoing.proxies merged into settings.yml
@@ -18,8 +18,8 @@
 ## NO_PROXY keeps all internal loopback / Docker-DNS traffic off the proxy.
 
 services:
-  # Stealth CDP browser. The obscura image is distroless (no shell), so the
-  # --proxy flag must be added to the command list directly via this override.
+  # Stealth CDP browser. Obscura reads OBSCURA_PROXY for `serve`, keeping
+  # proxy credentials out of the process command line.
   #
   # CRW's HTTP prefetch path is routed to the local prefetch-blocking proxy by
   # HTTP_PROXY/HTTPS_PROXY in the base compose. This override only gives
@@ -38,15 +38,8 @@ services:
   # IP or a publicly-resolvable hostname, the resolved value equals the
   # configured URL.
   obscura:
-    command:
-      - "serve"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "9222"
-      - "--stealth"
-      - "--proxy"
-      - "${ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED:-${ONYX_AGENT_OUTBOUND_PROXY_URL}}"
+    environment:
+      OBSCURA_PROXY: "${ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED:-${ONYX_AGENT_OUTBOUND_PROXY_URL}}"
 
   # Obscura MCP server. Same distroless constraint as obscura above.
   obscura-mcp:

@@ -238,11 +238,11 @@ and Docker DNS names such as `myst-client`, `api_server`, `nginx`,
 
 ### Obscura CDP Browser
 
-`docker-compose.proxy.yml` replaces the `obscura` command with the normal
-`serve` command plus:
+`docker-compose.proxy.yml` passes the resolved proxy to the `obscura` CDP
+server without placing credentials in its process command line:
 
 ```text
---proxy ${ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED:-${ONYX_AGENT_OUTBOUND_PROXY_URL}}
+OBSCURA_PROXY=${ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED:-${ONYX_AGENT_OUTBOUND_PROXY_URL}}
 ```
 
 This applies the upstream proxy to the stealth browser traffic used by CRW's
@@ -253,9 +253,10 @@ covered in [Request handling](request_handling.md).
 
 ### Obscura MCP
 
-The same override adds the same `--proxy` flag to `obscura-mcp`. Browser
-automation requests made through the MCP server therefore use the configured
-upstream proxy as well.
+The same override passes the resolved URL with `--proxy` to `obscura-mcp`,
+whose MCP command does not read the serve-specific `OBSCURA_PROXY` fallback.
+Browser automation requests made through the MCP server therefore use the
+configured upstream proxy as well.
 
 ### CRW and the Prefetch-Blocking Proxy
 
@@ -300,8 +301,8 @@ upstream proxy path.
 
 The CDP shim in `crw/cdp_shim.py` sits between CRW and obscura. Among its
 runtime behaviors, it strips CRW's `proxyServer` field from
-`Target.createBrowserContext`, so the CDP path uses obscura's own `--proxy`
-setting instead of CRW attempting to configure a per-context proxy. It also
+`Target.createBrowserContext`, so the CDP path uses obscura's own process-level
+proxy setting instead of CRW attempting to configure a per-context proxy. It also
 enforces the same `ONYX_AGENT_ALLOW_HTTP_URLS=false` default for CDP browser
 navigations, so an HTTP URL cannot bypass the prefetch-proxy block by
 escalating to Obscura.

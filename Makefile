@@ -35,7 +35,7 @@ TAILSCALE_IMAGE := tailscale/tailscale:stable
 endif
 OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
 ifeq ($(strip $(OBSCURA_IMAGE)),)
-OBSCURA_IMAGE := h4ckf0r0day/obscura:0.1.9
+OBSCURA_IMAGE := h4ckf0r0day/obscura:0.1.10
 endif
 CRW_IMAGE ?= $(call env_value,CRW_IMAGE)
 ifeq ($(strip $(CRW_IMAGE)),)

@@ -141,7 +141,7 @@ HTTP_URL_BLOCK_MESSAGE = (
 # context. Cookies can persist across CRW WebSocket connections in that
 # in-process jar. This loop periodically clears them to prevent indefinite
 # accumulation from open_url visits to arbitrary sites. If a future CRW config
-# uses Target.createBrowserContext, obscura v0.1.9 clears cookies on
+# uses Target.createBrowserContext, obscura clears cookies on
 # create/dispose and this loop becomes mostly defensive.
 # Default: 3600 (60 minutes) — long enough for multi-query research
 # sessions, short enough to limit tracking surface.

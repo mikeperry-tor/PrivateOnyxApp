@@ -18,7 +18,7 @@ Version scope for this document, based on clean local checkouts under
 
 - Onyx: `v4.1.9` (`361cce5af7a0`, 2026-07-01)
 - CRW: `v0.23.0` (`dc497fdf35a6`, 2026-07-10)
-- Obscura: `v0.1.9`
+- Obscura: `v0.1.10` (`50e66320b084`)
 - SearXNG: master commit `f8ffbf36f903`
 
 SearXNG does not publish Git release tags. It is a rolling release from
@@ -599,6 +599,28 @@ soon as the HTML is parsed, without waiting for network silence. CRW's smart
 heuristics still run in the post-navigate phase. This is not recommended —
 it will cause JS-heavy SERPs (Brave's SvelteKit SPA) to return empty shells.
 
+### 1.6.2 Obscura CDP Compatibility
+
+Obscura's CDP surface matches the CRW `v0.23.0` renderer calls used by this
+stack. CRW sends exact `Page.navigate` commands, uses
+`Fetch.continueRequest` while resource interception is enabled, and reads
+selected bodies with `Network.getResponseBody`. Obscura supports those calls,
+including request overrides supplied to `Fetch.continueRequest` and the real
+MIME/body metadata for a directly navigated main resource.
+
+Obscura also implements the opt-in `Fetch.takeResponseBodyAsStream`,
+`IO.read`, and `IO.close` calls. CRW does not call those methods, so their
+buffer limits do not affect the wrapper's scrape, search, or PDF-prefetch
+paths. CRW continues to detect and parse PDFs in its HTTP prefetch tier.
+
+These upstream CDP capabilities do not replace the local shim. The shim still
+provides stack policy that neither CRW nor Obscura owns: per-host `waitUntil`
+selection, rejection of cleartext HTTP browser navigation, removal of CRW's
+conflicting stealth script, removal of per-context `proxyServer`, and periodic
+cookie clearing. They also do not replace the prefetch-blocking proxy, because
+Obscura only runs after CRW's separate HTTP prefetch has been accepted or
+rejected.
+
 ### 1.7 Prefetch-Blocking Proxy
 
 The prefetch-blocking proxy ([`crw/prefetch_blocking_proxy.py`](../crw/prefetch_blocking_proxy.py:1))
@@ -693,7 +715,7 @@ generation and code-interpreter executor pod caveats, is documented in
 
 | Component | Proxy used | How |
 |-----------|-----------|-----|
-| **Obscura (CDP browser)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `--proxy` flag in docker-compose.proxy.yml |
+| **Obscura (CDP browser)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `OBSCURA_PROXY` in docker-compose.proxy.yml |
 | **Prefetch-blocking proxy (HTTP/CONNECT)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `ONYX_AGENT_OUTBOUND_PROXY_URL` env var → upstream connection |
 | **CRW HTTP prefetch** | prefetch-blocking proxy | `HTTPS_PROXY` / `HTTP_PROXY` env vars on the CRW container |
 | **CRW CDP (obscura)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
@@ -762,7 +784,7 @@ This is critical for two reasons:
    `REQUEST_PROXY` is set, CRW creates a new
    browser context per request (`fetch_with_ws` path, `cdp.rs:1204-1439`)
    with `Target.createBrowserContext`, then disposes it after the fetch.
-   In Obscura `v0.1.9`, `Target.createBrowserContext` and
+   In Obscura, `Target.createBrowserContext` and
    `Target.disposeBrowserContext` clear the default cookie jar. That weakens
    session continuity and can erase any cookies gathered by earlier requests.
 
@@ -1596,7 +1618,7 @@ by requesting and preferring `rawHtml` for raw-file URLs.
 
 #### Stability Limit
 
-Obscura `v0.1.9` selects a realistic browser profile from a built-in pool for
+Obscura selects a realistic browser profile from a built-in pool for
 each `BrowserContext`, and the default is a single stable profile rather than
 rotation. That keeps the User-Agent, `navigator.platform`,
 `navigator.userAgentData`, and the declared browser family internally
