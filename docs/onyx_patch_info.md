@@ -555,6 +555,11 @@ CRW's `/firecrawl/*` compatibility namespace. It preserves Onyx's response
 parsing path and the existing behavior that treats some client-side scrape
 failures as empty content instead of fatal errors.
 
+CRW v0.23.0 also exposes native asynchronous structured extraction at
+`/v1/extract`. Its multi-URL request and per-URL result contract does not
+intersect this patch: Onyx posts one `{url, formats: ["markdown"]}` scrape
+request to `/v1/scrape` and reads `data.markdown` from the scrape response.
+
 The base API-server `sitecustomize` path calls this helper. Lite mode loads the
 lite `sitecustomize` first and currently imports selected base helpers for
 character limits and code-interpreter capability text, but not this defensive

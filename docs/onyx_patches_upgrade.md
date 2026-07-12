@@ -11,8 +11,8 @@ Reference checkouts:
 - `reference_repos/python-sandbox` at `code-interpreter-0.4.4`
   (`8950eadc06567798ec61354f24260e5dc996684b`), remote
   `https://github.com/onyx-dot-app/python-sandbox`.
-- Companion web stack checked against `reference_repos/crw` at `v0.21.1`
-  (`1dd823a115c9`),
+- Companion web stack checked against `reference_repos/crw` at `v0.23.0`
+  (`dc497fdf35a6`),
   `reference_repos/obscura` at `v0.1.9`, and `reference_repos/searxng` at
   `f8ffbf36f903`.
 
@@ -942,9 +942,14 @@ Behavior:
   [Request Handling: SearXNG to CRW](request_handling.md#12-searxng--crw-custom-engines).
 - `_crw.extract_crw_html()` maps CRW anti-bot failures back to SearXNG engine
   exceptions so engine suspension stats work instead of silently returning an
-  empty result list. CRW `v0.21.1` serializes response error codes as
+  empty result list. CRW `v0.23.0` serializes response error codes as
   `errorCode`; the helper reads that field when classifying CAPTCHA, 429, and
   access-denied failures.
+- CRW's native `/v1/extract` is an asynchronous structured-extraction endpoint
+  that accepts multiple URLs and returns per-URL results. Neither the custom
+  engines nor Onyx's `FirecrawlClient` use it: both POST single scrape payloads
+  to `/v1/scrape`. The wrapper uses the `url`, `formats`, `onlyMainContent`,
+  `data.rawHtml`, and `data.markdown` request and response fields.
 - `_crw.raise_no_results()` is used by each custom engine when its parser finds
   zero organic rows. It logs the engine, parser-miss reason, and rendered HTML
   length without logging query text or raw SERP HTML, then raises

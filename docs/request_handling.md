@@ -16,8 +16,8 @@ separately below.
 Version scope for this document, based on clean local checkouts under
 `reference_repos/`:
 
-- Onyx: `v4.1.7` (`34fc4c3d1f`, 2026-06-23)
-- CRW: `v0.21.1` (`1dd823a115c9`, 2026-07-07)
+- Onyx: `v4.1.9` (`361cce5af7a0`, 2026-07-01)
+- CRW: `v0.23.0` (`dc497fdf35a6`, 2026-07-10)
 - Obscura: `v0.1.9`
 - SearXNG: master commit `f8ffbf36f903`
 
@@ -962,7 +962,7 @@ complete patch inventory and upstreaming notes.
   `{url, formats: ["markdown"]}` to the configured endpoint. This is a guard
   against future upstream Onyx changes adding a `waitFor` field. It is called
   by the base sitecustomize path; the lite sitecustomize does not
-  call this helper, but Onyx v4.1.7 already sends the same no-`waitFor` payload
+  call this helper, but Onyx v4.1.9 already sends the same no-`waitFor` payload
   in lite mode.
 - `apply_open_url_char_limit_patches()` lets wrapper env vars
   `ONYX_OPEN_URL_MAX_CHARS_PER_URL` and `ONYX_OPEN_URL_MAX_TOTAL_CHARS` override
@@ -1003,7 +1003,7 @@ The `FirecrawlClient` sends each URL to the configured scrape endpoint with
 `formats: ["markdown"]`. In the base/full API-server patch path, the wrapper's
 sitecustomize patch replaces `FirecrawlClient._get_webpage_content` at startup
 and preserves that payload shape with **no** `waitFor` field, even if a future
-upstream Onyx release adds one. In lite mode, Onyx v4.1.7 already sends the
+upstream Onyx release adds one. In lite mode, Onyx v4.1.9 already sends the
 same no-`waitFor` payload. When CRW escalates to CDP, this keeps page-load
 waiting in the shim/obscura `waitUntil` path and CRW's post-navigation
 heuristics instead of adding a blind fixed sleep.
@@ -1122,7 +1122,7 @@ routes under `/firecrawl/*`. This stack uses CRW's native scrape endpoint:
   configuration (`http://localhost:3010/v1/scrape`). Onyx's FirecrawlClient
   sends `{url, formats: ["markdown"]}` to the configured URL. The base/full
   sitecustomize path defensively preserves that no-`waitFor` payload; lite mode
-  already has that shape in Onyx v4.1.7.
+  already has that shape in Onyx v4.1.9.
 These calls go through CRW's `FallbackRenderer` pipeline. The HTTP prefetch
 runs first; PDFs are handled natively by `pdf_inspector` without reaching the
 CDP layer. For HTML, the requested format controls the output: `rawHtml` is
@@ -1134,11 +1134,13 @@ only when CRW escalates to browser rendering; usable non-search HTTPS-prefetch
 results can return without reaching CDP. Explicitly allowed plain HTTP
 prefetches behave the same way.
 
-CRW `v0.21.1` serializes native `/v1` error responses with the camelCase
+CRW `v0.23.0` serializes native `/v1` error responses with the camelCase
 `errorCode` field. The SearXNG helper reads that field when mapping CRW
 anti-bot, CAPTCHA, 429, and access-denied results into SearXNG engine
-suspension exceptions. Success responses used by this stack keep the same
-fields this wrapper consumes: `data.rawHtml` for search-engine parsing and
+suspension exceptions. Its native `/v1/extract` endpoint is an asynchronous,
+multi-URL structured-extraction API with per-URL results; it is separate from
+`/v1/scrape` and is not called by either wrapper request path. The scrape
+success fields consumed here are `data.rawHtml` for search-engine parsing and
 `data.markdown` for Onyx `open_url`.
 
 ---
