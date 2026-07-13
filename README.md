@@ -28,7 +28,7 @@ The Docker Compose files in this stack relies on the following components:
 
 3. [Mysterium](https://github.com/mysteriumnetwork/node) is a Wireguard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. The use of residential IP addresses reduces the rate of captchas and rate limiting by search engines and websites. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
-4. [Obscura](https://github.com/h4ckf0r0day/obscura) is combined with [crw](https://github.com/us/crw) to provide the Onyx agent with an actual headless browser with anti-fingerprinting defenses, as a Firecrawl-compatible API endpoint. This helps reduce fingerprint-based bans by search engines and pages that CRW renders through the browser. Ordinary non-search `open_url` pages may be returned from CRW's HTTP prefetch without Obscura when the HTTP result is usable; see [`docs/request_handling.md`](docs/request_handling.md#known-limitations). Both CRW and Obscura run inside the shared Myst namespace so scrape/crawl traffic egresses through the VPN endpoint IP unless an explicit proxy mode is configured.
+4. [Obscura](https://github.com/h4ckf0r0day/obscura) is combined with [crw](https://github.com/us/crw) to provide the Onyx agent with an actual headless browser with anti-fingerprinting defenses, as a Firecrawl-compatible API endpoint. This helps reduce fingerprint-based bans by search engines and pages that CRW renders through the browser. Ordinary non-search `open_url` pages may be returned from CRW's HTTP prefetch without Obscura when the HTTP result is usable; see [`docs/request_handling.md`](docs/request_handling.md#known-limitations). CRW, SearXNG, and both Obscura processes run on narrow internal networks; their internet traffic crosses local bridges to destination-validating final-hop proxies in the selected Myst/proxy/no-VPN routing namespace.
 
 5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends. The Google, Brave, DuckDuckGo, Startpage, and Bing web engines are wrapper-provided CRW-backed variants that use the Obscura+crw instance to fetch their search results, which significantly reduces captchas and bans by these search engines.
 
@@ -272,11 +272,15 @@ For a detailed request-flow map of Web Search, `open_url`, SearXNG, CRW, the CDP
 
 1. Go to **Admin Panel -> Web Search -> Web Crawler**.
 2. Open **SearXNG** and click **Connect**
-3. Set the **SearXNG Base URL** to `http://localhost:8080`.
+3. Set the **SearXNG Base URL** to `http://searxng-service-gateway:8888`.
 4. Open **Firecrawl** and click **Connect**.
-5. Set **API Base URL** to `http://localhost:3010/v1/scrape`.
+5. Set **API Base URL** to `http://crw-service-gateway:3010/v1/scrape`.
 6. Set **API Key** to any non-empty placeholder value.
 7. Click **Connect**, then **Set as Default** on the Firecrawl card.
+
+Existing deployments must replace previously saved localhost URLs with these
+gateway URLs after upgrading; saved Onyx Admin values are not rewritten by
+Compose.
 
 ## Optional Configurations
 
@@ -327,30 +331,27 @@ The Makefile conditionally applies `docker-compose.teep-vpn.yml` and/or `docker-
 
 By default, Onyx's code-interpreter (the `onyxdotapp/code-interpreter` image from [onyx-dot-app/python-sandbox](https://github.com/onyx-dot-app/python-sandbox)) hardcodes `--network none` on every executor pod it spawns. This means the Python tool and coding-agent bash sessions have **zero network access** — the LLM-generated code cannot make any outbound requests. This is a security isolation measure baked into the upstream image.
 
-You can optionally give executor pods outbound network access through the shared stack namespace by setting:
+You can optionally give executor pods restricted proxy-only access by setting:
 
 ```bash
 # Give code-interpreter executor pods network access
-# SECURITY: This removes the code-interpreter's network isolation.
+# Executors remain isolated from stack, host, LAN, and direct internet routes.
 ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true
 ```
 
-With `MYST_VPN_ENABLED=true`, executor pod egress goes through Mysterium. If
-`ONYX_AGENT_OUTBOUND_PROXY_URL` is set, proxy env is forwarded into executor
-pods. With the default `ONYX_AGENT_ALLOW_HTTP_URLS=false`, ordinary executor
-HTTP clients that honor proxy variables are also routed through the local
-prefetch-blocking proxy so cleartext `http://` requests receive the same block
-as `open_url()`. This is still not a firewall: generated code can bypass proxy
-env with raw sockets, explicit no-proxy options, or tools that ignore proxy
-settings.
-
-The code tool descriptions and code agent prompts are updated to mention internet access, and include service hints for the in-namespace scraping/browser services that executor pods can reach via localhost (since they inherit the netns-holder namespace).
+Executor pods join only the internal `onyx-code-interpreter-executor` network.
+Their sole peer is an HTTP proxy bridge; raw direct connections have no route
+to the internet, Onyx services, CRW, SearXNG, Obscura, Docker host gateway,
+LAN/private ranges, or metadata addresses. The final-hop proxy blocks direct
+search-engine URLs and preserves the selected VPN/upstream-proxy/no-VPN mode.
+Tool descriptions advertise this restricted capability and do not expose
+stack-local service endpoints.
 
 Restart the stack after changing this setting (`make down-lite && make up-lite`, or the full-mode equivalents).
 
 ### Optional: Outbound Proxy (`ONYX_AGENT_OUTBOUND_PROXY_URL`)
 
-Set `ONYX_AGENT_OUTBOUND_PROXY_URL` in `.env.wrapper` to route internet egress from **crw**, **obscura** (both the CDP `serve` instance and the MCP server), **SearXNG**, the **code-interpreter**, and the **code agent** through a single upstream proxy. This is orthogonal to the Mysterium VPN: if both are set, traffic is proxied **through** the VPN tunnel (the proxy connection itself egresses over the VPN).
+Set `ONYX_AGENT_OUTBOUND_PROXY_URL` in `.env.wrapper` to give the final-hop policy proxies an upstream proxy. Restricted components continue to use local bridge URLs. This is orthogonal to Mysterium: if both are set, the upstream-proxy connection crosses the VPN.
 
 Accepts any scheme:
 
@@ -368,9 +369,9 @@ ONYX_AGENT_OUTBOUND_PROXY_URL="socks5://proxy.example.com:1080"
 ONYX_AGENT_OUTBOUND_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
-> **NOTE** The proxy setup has not been audited for leaks. You still likely want the Myst VPN, or at least a host VPN, in case of proxy bypass. In particular, Obscura/Chrome does not support SOCKS5 usernames and passwords, and will bypass the proxy entirely if these are set. Code-interpreter executor pods receive `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` pointing at the local prefetch-blocking-proxy HTTP adapter, but proxy env vars are still routing hints rather than a security boundary for arbitrary generated code. See [docs/plans/restricted_egress.md](docs/plans/restricted_egress.md) for hardening ideas.
+The local policy proxies block private/internal literals and names. With an upstream proxy, target DNS remains remote to avoid DNS leakage, so a public-looking hostname that the upstream resolves to a private address is a residual risk. Host Tor (`socks5h://host.docker.internal:9150`) also currently requires `MYST_VPN_ALLOW_LAN_BYPASS=true`; that is a broad LAN route exemption for the trusted final-hop proxy, not general LAN access for restricted components.
 
-**SearXNG crw-engine loopback exclusion:** The crw-backed SearXNG engines (`google2`, `brave2`, `duckduckgo2`, `startpage2`, `bing2`) POST their search queries to the local crw scraper at `http://127.0.0.1:3010/v1/scrape` (loopback inside the `netns-holder` namespace). The `searxng-proxy-entrypoint.sh` wrapper defines a `direct` network (`proxies: {}`) and assigns these engines to it, so their loopback requests to crw bypass the upstream proxy. Without this, the `all://` proxy pattern would catch the loopback request and the proxy would reject it as a private address. All other SearXNG engines (which fetch external URLs directly) use the default network and egress through the proxy.
+The default SearXNG engines (`google2`, `brave2`, `duckduckgo2`, `startpage2`, `bing2`) POST only to `http://crw:3010/v1/scrape` on the internal search network. SearXNG has no general internet route. Intentionally enabling external engines requires a separately reviewed `searxng-external` proxy policy.
 
 ### Optional: Local Document RAG via Web Connector
 
@@ -440,39 +441,21 @@ To use this shim:
 
 In addition to the stealth Obscura browser that the crw Firecrawl API uses, a second obscura instance runs as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) HTTP server by default. This exposes obscura's stealth browser automation tools directly to Onyx chat agents — they can navigate pages, take snapshots, click elements, fill forms, extract content, and more, all through the MCP tool interface.
 
-The MCP server runs in the netns-holder VPN namespace, so all browser traffic egresses through the Mysterium VPN tunnel with stealth anti-fingerprinting enabled. It listens on `127.0.0.1:9223` inside the namespace.
+The MCP server has separate control and egress networks. Onyx reaches its
+unauthenticated listener only through `obscura-mcp-gateway`; browser traffic
+uses a search-allowed, private-target-blocking final-hop policy. The bundled
+server does not require disabling Onyx SSRF protection globally.
 
-**Step 1: Configure SSRF Protection to allow loopback**
-
-The obscura MCP server listens on `127.0.0.1` inside the netns-holder namespace. The api_server (which runs in the same namespace) reaches it via localhost, but Onyx's SSRF protection blocks loopback addresses by default — even at the `Allow Private Network` level (the wrapper's default via `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true`, `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false`).
-
-To allow the MCP client to reach `127.0.0.1`, set SSRF Protection to **Disabled**:
-
-1. Go to **Admin Panel -> Security Hardening** ([http://localhost:3000/admin/security](http://localhost:3000/admin/security)).
-2. Set **SSRF Protection** to **Disabled**.
-3. Click **Save**.
-
-This allows loopback and private-network targets for MCP and OAuth endpoints.
-Cloud-metadata and link-local addresses (169.254.0.0/16) remain blocked as an
-always-on floor. Treat this as a trusted-local deployment choice: it lets Onyx
-reach more internal endpoints, but it is not a browser sandbox and it does not
-stop JavaScript running in Obscura from attempting requests to network-reachable
-internal addresses. Browser same-origin/CORS behavior may limit response reads,
-but it is not a stack-internal access-control boundary.
-
-> **Note:** If you prefer not to disable SSRF protection globally, you can alternatively run the obscura-mcp service on a non-loopback address by giving the netns-holder namespace a dedicated bridge IP. However, the simplest path is the Disabled setting above, since the wrapper's threat model already assumes all services are co-located in the VPN namespace.
-
-**Step 2: Configure the MCP server in Onyx**
+**Step 1: Configure the MCP server in Onyx**
 
 1. Go to **Admin Panel -> MCP Servers** ([http://localhost:3000/admin/mcp-servers](http://localhost:3000/admin/mcp-servers)).
 2. Click **Add MCP Server**.
 3. Set **Name** to `obscura` (or any name you prefer).
-4. Set **Server URL** to `http://127.0.0.1:9223/mcp`.
-   - The api_server runs in the same netns-holder namespace, so it reaches the MCP server via localhost.
-5. Set **Auth Type** to **None** (the MCP HTTP transport has no built-in auth; it's only reachable within the VPN namespace).
+4. Set **Server URL** to `http://obscura-mcp-gateway:9223/mcp`.
+5. Set **Auth Type** to **None** (the gateway is reachable only from the Onyx-side ingress network).
 6. Click **Save**, then click **Discover Tools** to verify the connection.
 
-**Step 3: Assign the MCP tools to an Assistant**
+**Step 2: Assign the MCP tools to an Assistant**
 
 0. **RELOAD THE ONYX Admin WebUI**. After MCP config change, the Admin WebUI needs to be updated with the proper set of tool lists.
 1. Go to **Admin Panel -> Assistants** and edit an assistant (or create a new one).
@@ -484,7 +467,7 @@ Chat agents using that assistant can drive a stealth browser to navigate, read, 
 
 **Security notes:**
 
-- The MCP HTTP transport has no built-in auth. It binds `0.0.0.0` inside the netns-holder namespace, so it's only reachable by other services in that namespace (and the host-web-proxy bridge).
+- The MCP HTTP transport has no built-in auth. Only the narrow Onyx-side gateway reaches its control network; it is not host-published or executor-accessible.
 - The browser session is shared across all tool calls within a single MCP server instance. Multiple concurrent chat sessions share the same browser state.
 - See the [obscura MCP documentation](https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md) for full details.
 
@@ -525,4 +508,4 @@ The reality is that many websites subject Tor and datacenter VPNs to increased c
 
 Until this landscape changes, residential IP address leasing is the only reliable option for a self-hosted private research agent, and Mysterium was the best choice among those, since the server side is open source, and payment is made in cryptocurrency.
 
-If you want to see the difference, you can use set `ONYX_AGENT_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:9150` and `MYST_VPN_ALLOW_LAN_BYPASS=true` in `.env.wrapper` to use the host Tor Browser proxy. SearXNG provides search engine success statistics on the "Engines" of the [Preferences Pane](http://localhost:8080/preferences), which is available on your host. Again, be aware that the `ONYX_AGENT_OUTBOUND_PROXY_URL` config is not audited for proxy bypass leaks.
+To compare routing, set `ONYX_AGENT_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:9150` and `MYST_VPN_ALLOW_LAN_BYPASS=true` in `.env.wrapper` to use the host Tor Browser proxy. SearXNG provides search-engine success statistics on the "Engines" tab of the [Preferences Pane](http://localhost:8080/preferences). Remember that the Myst LAN bypass is broader than the single host-proxy endpoint and upstream-proxy DNS classification has the residual risk documented above.

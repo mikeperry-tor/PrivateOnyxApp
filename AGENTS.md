@@ -14,8 +14,8 @@ Before changing a subsystem, read the matching document below, then inspect the 
 
 - `README.md` - user setup, first-run flow, optional features, and host endpoints.
 - `docs/request_handling.md` - `web_search`, `open_url`, CRW, Obscura, CDP shim, prefetch blocking, readiness, cookies, and anti-bot behavior.
-- `docs/vpn_routing_and_proxies.md` - shared VPN namespace layout, Mysterium, explicit no-VPN mode, optional routing switches, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and `NO_PROXY`.
-- `docs/internal_network_security.md` - tested internal-network reachability, Obscura/CRW private-target blocking, prefetch-proxy direct-use risks, Onyx SSRF interaction, and code-interpreter networking gaps.
+- `docs/vpn_routing_and_proxies.md` - trusted VPN namespace, restricted component networks, final-hop proxy policies, explicit no-VPN mode, and optional routing switches.
+- `docs/internal_network_security.md` - restricted component reachability, destination validation, bridge boundaries, Onyx SSRF interaction, and residual risks.
 - `docs/onyx_patch_info.md` - why local runtime patches exist.
 - `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/CRW/Obscura/ Teep upgrade checklist and patch validation, for use when image/source pins or runtime Python locks are updated.
 - `docs/local_docs_rag_search.md` - full-mode local document RAG, local doc serving, PDF freshness, embedding shim, and diagnostics.
@@ -33,8 +33,9 @@ At a high level:
   complete model-emitted tool batches with bounded concurrency.
 - Onyx `web_search` calls SearXNG, which uses custom CRW-backed engines.
 - CRW uses local proxy/CDP/Obscura components to render search and page content. These components exist to reduce 429 and 403 errors at search engines and web pages.
-- Search/browser traffic normally egresses through the shared Mysterium VPN
-  namespace; optional proxy routing is configured explicitly.
+- CRW, SearXNG, both Obscura processes, CDP shim, and optional executor pods
+  use narrow internal networks. Internet traffic crosses component bridges to
+  final-hop policy proxies in the trusted Mysterium routing namespace.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 
 Those bullets are only a map. Read the docs above before changing any runtime path.
@@ -47,11 +48,12 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 - `docker-compose.yaml` - base wrapper stack.
 - `docker-compose.full.yml` - full Onyx/RAG mode.
 - `docker-compose.lite.yml` - lite mode.
+- `docker-compose.restricted-egress.yml` - always-on atomic CRW/SearXNG/CDP/Obscura restricted topology and service gateways.
+- `docker-compose.code-interpreter-network.yml` - optional executor-only internal network and proxy bridge.
 - `docker-compose.*-vpn.yml`, `docker-compose.proxy.yml`, and Podman overrides
   - optional routing/proxy/container-engine layers selected by the Makefile.
 - `crw/` - CDP shim and prefetch-blocking proxy around CRW/Obscura.
-- `searxng/` - custom CRW-backed engines, minimal SearXNG overlay, and
-  proxy-mode entrypoint.
+- `searxng/` - custom CRW-backed engines and the minimal SearXNG overlay.
 - `myst/` - Mysterium image build file, entrypoint, signup compose, and helper CLI.
 - `teep/` - Teep image build file and entrypoint.
 - `onyx/patches/` - runtime `sitecustomize` patches applied inside Onyx and code-interpreter containers.

@@ -17,8 +17,7 @@ Architecture
                                                                   ▼
                                                           target search engine
 
-All three containers share one network namespace (``netns-holder``), so crw is
-reachable at ``http://127.0.0.1:3010`` from inside searxng-core.
+SearXNG and CRW share only the dedicated internal search network.
 
 Why omit ``renderer`` and ``waitFor``
     The wrapper leaves CRW in render auto mode and lets the local
@@ -31,17 +30,19 @@ Why omit ``renderer`` and ``waitFor``
 
 import json
 import logging
+import os
 import typing as t
 
 if t.TYPE_CHECKING:
     from searx.extended_types import SXNG_Response
     from searx.search.processors import OnlineParams
 
-# crw Firecrawl-compatible scrape endpoint.  Reachable on loopback because
-# searxng-core and crw share the netns-holder network namespace.
-CRW_SCRAPE_URL = "http://127.0.0.1:3010/v1/scrape"
-
-import os
+# Firecrawl-compatible scrape endpoint on the dedicated search network.
+CRW_SCRAPE_URL = os.environ.get(
+    "CRW_SCRAPE_URL", "http://crw:3010/v1/scrape"
+).strip()
+if not CRW_SCRAPE_URL:
+    raise RuntimeError("CRW_SCRAPE_URL must not be empty")
 
 # The wrapper deploy runs crw with the default self-host auth bypass, so any
 # non-empty bearer token works. The Makefile supplies an ephemeral placeholder

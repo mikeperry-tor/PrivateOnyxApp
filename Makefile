@@ -5,6 +5,7 @@ FULL_OVERRIDE_FILE := docker-compose.full.yml
 LITE_OVERRIDE_FILE := docker-compose.lite.yml
 PODMAN_OVERRIDE_FILE := docker-compose.podman.yml
 PODMAN_FULL_OVERRIDE_FILE := docker-compose.podman-full.yml
+RESTRICTED_EGRESS_FILE := docker-compose.restricted-egress.yml
 
 env_value = $(strip $(shell for f in "$(ENV_FILE)" "$(VERSION_FILE)"; do [ -f "$$f" ] || continue; sed -n 's/^$(1)=//p' "$$f" | head -1 | sed 's/^"//; s/"$$//'; done | head -1))
 COMPOSE_ENV_FILES = --env-file "$(VERSION_FILE)" --env-file "$(ENV_FILE)"
@@ -48,30 +49,6 @@ TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN ?= $(call env_value,TAILSCALE_FUNNEL_ROU
 ONYX_CODE_INTERPRETER_ENABLE_NETWORK ?= $(call env_value,ONYX_CODE_INTERPRETER_ENABLE_NETWORK)
 MYST_VPN_ENABLED ?= $(call env_value,MYST_VPN_ENABLED)
 ONYX_AGENT_OUTBOUND_PROXY_URL ?= $(call env_value,ONYX_AGENT_OUTBOUND_PROXY_URL)
-# obscura and crw's SOCKS proxy connectors cannot resolve Docker-internal DNS
-# names (host.docker.internal) -- they try to resolve the proxy hostname
-# through the SOCKS proxy itself, which fails. Derive the resolved proxy URL by
-# replacing host.docker.internal with its resolved IP address. If
-# ONYX_AGENT_OUTBOUND_PROXY_URL is empty or already uses an IP/public hostname,
-# the resolved value equals ONYX_AGENT_OUTBOUND_PROXY_URL.
-ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED :=
-ifneq ($(strip $(ONYX_AGENT_OUTBOUND_PROXY_URL)),)
-PROXY_HOST_INTERNAL := $(strip $(shell echo "$(ONYX_AGENT_OUTBOUND_PROXY_URL)" | grep -oE 'host\.docker\.internal' | head -1))
-ifneq ($(strip $(PROXY_HOST_INTERNAL)),)
-# Resolve host.docker.internal via Docker (run a one-shot container). Falls
-# back to getent on the host if Docker resolution fails.
-PROXY_HOST_IP := $(strip $(shell "$(CONTAINER_BIN)" run --rm alpine:3.20 sh -c 'getent hosts host.docker.internal 2>/dev/null | awk "{print \$$1}" | head -1' 2>/dev/null || getent hosts host.docker.internal 2>/dev/null | awk '{print $$1}' | head -1 || true))
-ifneq ($(strip $(PROXY_HOST_IP)),)
-ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED := $(strip $(shell echo "$(ONYX_AGENT_OUTBOUND_PROXY_URL)" | sed 's/host\.docker\.internal/$(PROXY_HOST_IP)/g'))
-else
-# Could not resolve; fall back to the original URL.
-ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED := $(ONYX_AGENT_OUTBOUND_PROXY_URL)
-endif
-else
-ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED := $(ONYX_AGENT_OUTBOUND_PROXY_URL)
-endif
-endif
-export ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -106,16 +83,15 @@ ifneq ($(filter true,$(TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN)),)
 TAILSCALE_VPN_SUFFIX :=:docker-compose.tailscale-vpn.yml
 endif
 
-# When ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true, code-interpreter executor
-# pods inherit the code-interpreter's shared netns via a sitecustomize patch.
-CODE_INTERPRETER_VPN_SUFFIX :=
+# When enabled, executor pods join only the named internal executor network.
+CODE_INTERPRETER_NETWORK_SUFFIX :=
 ifneq ($(filter true,$(ONYX_CODE_INTERPRETER_ENABLE_NETWORK)),)
-CODE_INTERPRETER_VPN_SUFFIX :=:docker-compose.code-interpreter-vpn.yml
+CODE_INTERPRETER_NETWORK_SUFFIX :=:docker-compose.code-interpreter-network.yml
 endif
 
 # When ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty, apply the proxy override
-# layer that threads a single upstream proxy through crw, obscura (CDP + MCP),
-# SearXNG, the code-interpreter, and the code agent. See docker-compose.proxy.yml.
+# layer records the explicit upstream-proxy mode. Restricted components always
+# use local bridges; only final-hop policy proxies receive the upstream URL.
 PROXY_SUFFIX :=
 ifneq ($(strip $(ONYX_AGENT_OUTBOUND_PROXY_URL)),)
 PROXY_SUFFIX :=:docker-compose.proxy.yml
@@ -177,8 +153,8 @@ CDP_SHIM_REQUIREMENTS_IN := crw/cdp-shim-requirements.in
 CDP_SHIM_REQUIREMENTS := crw/cdp-shim-requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_VPN_SUFFIX)$(PROXY_SUFFIX)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE):$(RESTRICTED_EGRESS_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE):$(RESTRICTED_EGRESS_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
 .PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 

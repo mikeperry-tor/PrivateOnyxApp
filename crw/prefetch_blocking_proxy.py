@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prefetch-blocking HTTP proxy for CRW.
+"""Destination-validating final-hop HTTP proxy.
 
 Sits between CRW's HTTP prefetcher and the internet to eliminate the
 double-hit problem: CRW unconditionally sends a bare reqwest GET (non-browser
@@ -8,7 +8,12 @@ stealth CDP browser. For anti-bot-protected search engines, this double-hit
 from the same IP — first with a non-browser TLS fingerprint — is a strong
 bot detection signal and a primary cause of 429s.
 
-This proxy intercepts CRW's HTTP prefetch requests and:
+``EGRESS_PROXY_POLICY`` selects ``prefetch``, ``executor``, ``browser``, or
+``searxng-external``. Prefetch/executor modes block configured search hosts;
+browser modes allow them. Every mode blocks private/internal targets and uses
+the same cleartext URL policy.
+
+For prefetch traffic this proxy:
 
 1. **For known search engine URLs**: returns ``403 Forbidden`` immediately,
    without any network request. CRW's auto-mode renderer sees the 403
@@ -34,12 +39,12 @@ proxy is set, target DNS resolution is intentionally skipped to avoid leaking
 target DNS outside the configured proxy path.
 
 When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
-routes its own upstream requests through that proxy. This ensures CRW prefetch
-and code-interpreter urllib requests egress through the configured proxy.
+routes its own upstream requests through that proxy. Restricted components
+reach policy instances only through their local bridges.
 
 Architecture::
 
-    CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
+    restricted component ──HTTP proxy──> local bridge ──> policy proxy
                                    │
                                    ├─ Search engine URL → 403 (no fetch)
                                    ├─ Internal/private target → 403
@@ -49,18 +54,14 @@ Architecture::
                                    └── upstream ──> ONYX_AGENT_OUTBOUND_PROXY_URL (Tor/VPN)
                                                     (if set)
 
-CRW is configured with ``HTTP_PROXY=http://127.0.0.1:3128`` and
-``HTTPS_PROXY=http://127.0.0.1:3128`` so its reqwest HTTP fetcher routes
-through this proxy while CDP/WebSocket traffic stays direct via ``NO_PROXY``.
+CRW is configured with ``HTTP_PROXY``/``HTTPS_PROXY`` pointing at its
+restricted bridge. CDP/WebSocket traffic uses a separate peer network.
 The stack intentionally avoids ``CRW_CRAWLER__PROXY``; the CDP shim still
 strips ``proxyServer`` from ``Target.createBrowserContext`` as a safety net if
 that path is enabled later.
 
-Code-interpreter executor pods also use this listener for
-``HTTP_PROXY``/``HTTPS_PROXY`` when ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is a
-SOCKS proxy. This closes the common Python ``urllib`` gap without pointing
-urllib directly at a SOCKS port. The proxy still blocks configured
-search-engine hosts and internal/private destinations.
+Code-interpreter executor pods use a separate ``executor`` policy instance and
+always see an ordinary local HTTP proxy, regardless of upstream proxy scheme.
 
 See ``docs/request_handling.md`` §1.6 for the full wait strategy and §1.7
 for the prefetch-blocking proxy design.
@@ -82,6 +83,11 @@ from urllib.parse import urlparse
 
 LISTEN_HOST = os.environ.get("PREFETCH_PROXY_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("PREFETCH_PROXY_PORT", "3128"))
+
+POLICY_MODE = os.environ.get("EGRESS_PROXY_POLICY", "prefetch").strip().lower()
+if POLICY_MODE not in {"prefetch", "executor", "browser", "searxng-external"}:
+    raise RuntimeError(f"Unsupported EGRESS_PROXY_POLICY={POLICY_MODE!r}")
+BLOCK_SEARCH_ENGINES = POLICY_MODE in {"prefetch", "executor"}
 
 # Upstream proxy (ONYX_AGENT_OUTBOUND_PROXY_URL from .env.wrapper). When set,
 # the proxy routes its own requests through this upstream. Supports:
@@ -239,7 +245,9 @@ async def _resolve_host(host: str, port: int) -> set[str]:
     return resolved
 
 
-async def _blocked_destination_reason(host: str, port: int) -> str | None:
+async def _validate_destination(
+    host: str, port: int
+) -> tuple[str | None, tuple[str, ...]]:
     """Validate a proxy target before any upstream connection is opened.
 
     Literal IPs and known internal hostnames are blocked in every mode. When no
@@ -250,42 +258,48 @@ async def _blocked_destination_reason(host: str, port: int) -> str | None:
     host = _normalize_host(host)
 
     if not 0 < port <= 65535:
-        return "invalid port"
+        return "invalid port", ()
 
     if _parse_ip_literal(host) and not _ip_block_reason(host):
-        return None
+        return None, (host,)
 
     ip_reason = _ip_block_reason(host)
     if ip_reason:
-        return ip_reason
+        return ip_reason, ()
     if _loose_ipv4_literal(host):
         loose_ip = _loose_ipv4_literal(host)
         loose_reason = _ip_block_reason(loose_ip or "")
         if loose_reason:
-            return f"{loose_reason} via IPv4 shorthand {loose_ip}"
-        return None
+            return f"{loose_reason} via IPv4 shorthand {loose_ip}", ()
+        return None, (loose_ip or host,)
 
     hostname_reason = _hostname_block_reason(host)
     if hostname_reason:
-        return hostname_reason
+        return hostname_reason, ()
 
     if UPSTREAM_PROXY:
-        return None
+        return None, ()
 
     try:
         resolved_ips = await _resolve_host(host, port)
     except (socket.gaierror, OSError) as e:
-        return f"DNS resolution failed: {e}"
+        return f"DNS resolution failed: {e}", ()
 
     if not resolved_ips:
-        return "DNS resolution returned no addresses"
+        return "DNS resolution returned no addresses", ()
 
     for resolved_ip in sorted(resolved_ips):
         resolved_reason = _ip_block_reason(resolved_ip)
         if resolved_reason:
-            return f"DNS resolved to blocked {resolved_ip} ({resolved_reason})"
+            return f"DNS resolved to blocked {resolved_ip} ({resolved_reason})", ()
 
-    return None
+    return None, tuple(sorted(resolved_ips))
+
+
+async def _blocked_destination_reason(host: str, port: int) -> str | None:
+    """Compatibility helper used by policy tests and diagnostics."""
+    reason, _validated_ips = await _validate_destination(host, port)
+    return reason
 
 
 async def _reject_blocked_destination(
@@ -294,10 +308,10 @@ async def _reject_blocked_destination(
     port: int,
     writer: asyncio.StreamWriter,
     peer: Any,
-) -> bool:
-    reason = await _blocked_destination_reason(host, port)
+) -> tuple[bool, tuple[str, ...]]:
+    reason, validated_ips = await _validate_destination(host, port)
     if not reason:
-        return False
+        return False, validated_ips
 
     logger.warning(
         "BLOCKED %s %s:%d (%s, peer=%s) -> 403",
@@ -309,7 +323,7 @@ async def _reject_blocked_destination(
     )
     writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
     await writer.drain()
-    return True
+    return True, ()
 
 
 async def _write_text_response(
@@ -360,7 +374,9 @@ def _https_proxy_ssl_context() -> ssl.SSLContext:
 
 
 async def _connect_via_upstream(
-    target_host: str, target_port: int
+    target_host: str,
+    target_port: int,
+    validated_ips: tuple[str, ...] = (),
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Connect to target_host:target_port through UPSTREAM_PROXY.
 
@@ -368,11 +384,7 @@ async def _connect_via_upstream(
     Returns (reader, writer) for the established tunnel.
     """
     if not UPSTREAM_PROXY:
-        # Direct connection
-        return await asyncio.wait_for(
-            asyncio.open_connection(target_host, target_port),
-            timeout=TUNNEL_CONNECT_TIMEOUT,
-        )
+        return await _open_validated_direct_connection(validated_ips, target_port)
 
     scheme, proxy_host, proxy_port, proxy_user, proxy_pass = _parse_proxy_url(
         UPSTREAM_PROXY
@@ -400,6 +412,29 @@ async def _connect_via_upstream(
         )
     else:
         raise ValueError(f"Unsupported proxy scheme: {scheme}")
+
+
+async def _open_validated_direct_connection(
+    validated_ips: tuple[str, ...], target_port: int
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Connect only to addresses returned by destination validation."""
+    if not validated_ips:
+        raise ConnectionError(
+            "direct connection has no validated destination addresses"
+        )
+
+    failures: list[str] = []
+    for ip in validated_ips:
+        try:
+            return await asyncio.wait_for(
+                asyncio.open_connection(ip, target_port),
+                timeout=TUNNEL_CONNECT_TIMEOUT,
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            failures.append(f"{ip}: {exc}")
+    raise ConnectionError(
+        "all validated destination addresses failed: " + "; ".join(failures)
+    )
 
 
 async def _connect_via_socks5(
@@ -580,6 +615,7 @@ async def _open_http_proxy_connection(
 async def _open_plain_http_forward_connection(
     target_host: str,
     target_port: int,
+    validated_ips: tuple[str, ...],
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, bool]:
     """Open the connection used to forward a plain HTTP origin request.
 
@@ -588,9 +624,8 @@ async def _open_plain_http_forward_connection(
     SOCKS paths expect origin-form.
     """
     if not UPSTREAM_PROXY:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(target_host, target_port),
-            timeout=TUNNEL_CONNECT_TIMEOUT,
+        reader, writer = await _open_validated_direct_connection(
+            validated_ips, target_port
         )
         return reader, writer, False
 
@@ -637,9 +672,12 @@ async def _open_origin_connection(
     target_host: str,
     target_port: int,
     use_tls: bool,
+    validated_ips: tuple[str, ...],
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Open a connection to an origin, optionally upgrading through TLS."""
-    reader, writer = await _connect_via_upstream(target_host, target_port)
+    reader, writer = await _connect_via_upstream(
+        target_host, target_port, validated_ips
+    )
     if use_tls:
         ssl_ctx = ssl.create_default_context()
         await writer.start_tls(ssl_ctx, server_hostname=target_host)
@@ -785,7 +823,7 @@ async def _handle_connect(
         return
 
     # Search engine short-circuit: return 403 immediately
-    if _is_search_engine(target_host):
+    if BLOCK_SEARCH_ENGINES and _is_search_engine(target_host):
         logger.info(
             "BLOCKED CONNECT %s:%d (search engine) → 403",
             target_host,
@@ -799,15 +837,22 @@ async def _handle_connect(
         )
         return
 
-    if await _reject_blocked_destination(
+    if target_port == 80 and not ALLOW_HTTP_URLS:
+        await _write_text_response(
+            client_writer, 403, "Forbidden", HTTP_URL_BLOCK_MESSAGE
+        )
+        return
+
+    blocked, validated_ips = await _reject_blocked_destination(
         "CONNECT", target_host, target_port, client_writer, peer
-    ):
+    )
+    if blocked:
         return
 
     # Non-search-engine: tunnel through.
     try:
         upstream_reader, upstream_writer = await _connect_via_upstream(
-            target_host, target_port
+            target_host, target_port, validated_ips
         )
     except Exception as e:
         logger.warning(
@@ -894,7 +939,7 @@ async def _handle_forward_http(
         )
         return
 
-    if _is_search_engine(target_host):
+    if BLOCK_SEARCH_ENGINES and _is_search_engine(target_host):
         logger.info(
             "BLOCKED FORWARD %s %s:%d%s (search engine) → 403",
             method,
@@ -910,15 +955,16 @@ async def _handle_forward_http(
         )
         return
 
-    if await _reject_blocked_destination(
+    blocked, validated_ips = await _reject_blocked_destination(
         f"FORWARD {method}", target_host, target_port, client_writer, peer
-    ):
+    )
+    if blocked:
         return
 
     try:
         if use_tls:
             upstream_reader, upstream_writer = await _open_origin_connection(
-                target_host, target_port, use_tls
+                target_host, target_port, use_tls, validated_ips
             )
             request_target = path
             proxy_authorization = None
@@ -927,7 +973,9 @@ async def _handle_forward_http(
                 upstream_reader,
                 upstream_writer,
                 use_absolute_uri,
-            ) = await _open_plain_http_forward_connection(target_host, target_port)
+            ) = await _open_plain_http_forward_connection(
+                target_host, target_port, validated_ips
+            )
             request_target = (
                 f"http://{target_host}:{target_port}{path}"
                 if use_absolute_uri
@@ -995,9 +1043,10 @@ async def _handle_forward_http(
 
 async def main() -> None:
     logger.info(
-        "Prefetch-blocking proxy starting on %s:%d (upstream: %s, allow_http_urls: %s, block_hosts: %s, block_internal_hosts: %s, dns_internal_check: %s)",
+        "Restricted egress proxy starting on %s:%d (policy: %s, upstream: %s, allow_http_urls: %s, block_hosts: %s, block_internal_hosts: %s, dns_internal_check: %s)",
         LISTEN_HOST,
         LISTEN_PORT,
+        POLICY_MODE,
         UPSTREAM_PROXY or "(direct)",
         ALLOW_HTTP_URLS,
         ", ".join(sorted(SEARCH_ENGINE_HOSTS)),
@@ -1013,9 +1062,10 @@ async def main() -> None:
 
     async with server:
         logger.info(
-            "Prefetch-blocking proxy listening on %s:%d",
+            "Restricted egress proxy listening on %s:%d (policy=%s)",
             LISTEN_HOST,
             LISTEN_PORT,
+            POLICY_MODE,
         )
         await server.serve_forever()
 

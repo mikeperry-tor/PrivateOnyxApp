@@ -1,0 +1,209 @@
+## Atomic restricted-egress request-path topology.
+## This layer is always selected by the Makefile. Restricted components have
+## no default-network attachment and no direct internet route.
+
+x-tcp-gateway: &tcp-gateway
+  image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+x-policy-proxy: &policy-proxy
+  image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
+  restart: unless-stopped
+  network_mode: "service:netns-holder"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  volumes:
+    - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
+  command: ["python", "-u", "/app/prefetch_blocking_proxy.py"]
+  healthcheck:
+    test: ["CMD", "python", "-c", "import os,socket; s=socket.create_connection(('127.0.0.1', int(os.environ['PREFETCH_PROXY_PORT'])), 2); s.close()"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 5s
+
+services:
+  netns-holder:
+    networks:
+      default:
+        aliases: [myst-client, api_server, web_server, background, nginx, code-interpreter]
+        gw_priority: 1
+      prefetch-policy-upstream:
+        aliases: [myst-client]
+      browser-policy-upstream:
+        aliases: [myst-client]
+      mcp-browser-policy-upstream:
+        aliases: [myst-client]
+      onyx-crw-ingress: {}
+      onyx-searxng-ingress: {}
+      onyx-mcp-ingress: {}
+
+  prefetch-blocking-proxy:
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      EGRESS_PROXY_POLICY: prefetch
+
+  browser-egress-proxy:
+    <<: *policy-proxy
+    environment:
+      PREFETCH_PROXY_HOST: "0.0.0.0"
+      PREFETCH_PROXY_PORT: "3130"
+      EGRESS_PROXY_POLICY: browser
+      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
+      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
+      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
+      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-localhost,host.docker.internal}"
+    depends_on:
+      netns-holder: {condition: service_started}
+
+  mcp-browser-egress-proxy:
+    <<: *policy-proxy
+    environment:
+      PREFETCH_PROXY_HOST: "0.0.0.0"
+      PREFETCH_PROXY_PORT: "3131"
+      EGRESS_PROXY_POLICY: browser
+      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
+      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
+      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
+      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-localhost,host.docker.internal}"
+    depends_on:
+      netns-holder: {condition: service_started}
+
+  crw-prefetch-bridge:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3128"]
+    networks: [crw-prefetch-egress, prefetch-policy-upstream]
+    depends_on:
+      prefetch-blocking-proxy: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  obscura-egress-bridge:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3130"]
+    networks: [browser-egress, browser-policy-upstream]
+    depends_on:
+      browser-egress-proxy: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  obscura-mcp-egress-bridge:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3131"]
+    networks: [mcp-browser-egress, mcp-browser-policy-upstream]
+    depends_on:
+      mcp-browser-egress-proxy: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  crw-service-gateway:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3010,fork,reuseaddr", "tcp-connect:crw:3010"]
+    networks: [onyx-crw-ingress, crw-api]
+    depends_on:
+      crw: {condition: service_healthy}
+
+  searxng-service-gateway:
+    <<: *tcp-gateway
+    command: ["tcp-listen:8888,fork,reuseaddr", "tcp-connect:searxng-core:8888"]
+    networks: [onyx-searxng-ingress, searxng-api]
+    depends_on:
+      searxng-core: {condition: service_started}
+
+  obscura-mcp-gateway:
+    <<: *tcp-gateway
+    command: ["tcp-listen:9223,fork,reuseaddr", "tcp-connect:obscura-mcp:9223"]
+    networks: [onyx-mcp-ingress, obscura-mcp-control]
+    depends_on:
+      obscura-mcp: {condition: service_healthy}
+
+  obscura:
+    network_mode: !reset null
+    networks: [obscura-control, browser-egress]
+    environment:
+      OBSCURA_PROXY: "http://obscura-egress-bridge:3128"
+    depends_on: !override
+      obscura-egress-bridge: {condition: service_healthy}
+
+  obscura-mcp:
+    network_mode: !reset null
+    networks: [obscura-mcp-control, mcp-browser-egress]
+    command: ["mcp", "--http", "--host", "0.0.0.0", "--port", "9223", "--stealth", "--proxy", "http://obscura-mcp-egress-bridge:3128"]
+    depends_on: !override
+      obscura-mcp-egress-bridge: {condition: service_healthy}
+
+  cdp-shim:
+    network_mode: !reset null
+    networks: [crw-cdp, obscura-control]
+    environment:
+      OBSCURA_CDP_URL: "ws://obscura:9222/devtools/browser"
+    depends_on: !override
+      obscura: {condition: service_healthy}
+
+  crw:
+    network_mode: !reset null
+    networks: [crw-api, crw-cdp, crw-search, crw-prefetch-egress]
+    environment:
+      CRW_RENDERER__CHROME__WS_URL: "ws://cdp-shim:9224/devtools/browser"
+      CRW_SEARCH__SEARXNG_URL: "http://searxng-core:8888"
+      HTTP_PROXY: "http://crw-prefetch-bridge:3128"
+      HTTPS_PROXY: "http://crw-prefetch-bridge:3128"
+      NO_PROXY: "127.0.0.1,localhost,::1,cdp-shim,searxng-core"
+    depends_on: !override
+      crw-prefetch-bridge: {condition: service_healthy}
+      cdp-shim: {condition: service_healthy}
+      searxng-core: {condition: service_started}
+
+  searxng-core:
+    network_mode: !reset null
+    networks: [searxng-api, crw-search, searxng-valkey]
+    environment:
+      CRW_SCRAPE_URL: "http://crw:3010/v1/scrape"
+    depends_on: !override
+      searxng-valkey: {condition: service_started}
+
+  searxng-valkey:
+    networks: !override [searxng-valkey]
+
+  host-searxng-proxy:
+    command: ["tcp-listen:8888,fork,reuseaddr", "tcp-connect:searxng-core:8888"]
+    networks: [default, searxng-api]
+    depends_on: !override
+      searxng-core: {condition: service_started}
+
+networks:
+  prefetch-policy-upstream: {internal: true}
+  browser-policy-upstream: {internal: true}
+  mcp-browser-policy-upstream: {internal: true}
+  onyx-crw-ingress: {internal: true}
+  onyx-searxng-ingress: {internal: true}
+  onyx-mcp-ingress: {internal: true}
+  crw-api: {internal: true}
+  crw-cdp: {internal: true}
+  crw-search: {internal: true}
+  crw-prefetch-egress: {internal: true}
+  searxng-api: {internal: true}
+  searxng-valkey: {internal: true}
+  obscura-control: {internal: true}
+  browser-egress: {internal: true}
+  obscura-mcp-control: {internal: true}
+  mcp-browser-egress: {internal: true}

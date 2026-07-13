@@ -1,457 +1,157 @@
-# VPN Routing and Proxies
+# VPN Routing And Restricted Egress
 
-This document describes the current VPN and proxy implementation in the wrapper
-stack. The main controls live in `.env.wrapper`, with defaults documented in
-`.env.wrapper.example`. The Makefile reads those values and builds the effective
-Compose stack by layering optional override files.
+The wrapper separates trusted routing services from components influenced by
+generated code, URL input, or untrusted pages. Docker network placement is the
+security boundary; proxy environment variables are routing hints inside that
+boundary.
 
-Related implementation docs:
-
-- [Request handling](request_handling.md) describes the Onyx web-search and
-  `open_url` request chains through SearXNG, CRW, the CDP shim, and obscura.
-- [Onyx patch information](onyx_patch_info.md) describes the runtime
-  `sitecustomize` patches used by the API server, background worker, and
-  code-interpreter containers.
-- [Internal network security](internal_network_security.md) describes
-  localhost/private-network reachability, prefetch-proxy destination
-  validation, Obscura/CRW blocking behavior, and code-interpreter networking
-  risks.
+See [Request handling](request_handling.md) for the web paths and
+[Internal network security](internal_network_security.md) for the resulting
+reachability and residual risks.
 
 ## Compose Layering
 
-The wrapper does not rewrite the base Compose file at startup. `make up-lite`
-and `make up-full` assemble `COMPOSE_FILE` from:
+`make up-lite` and `make up-full` assemble:
 
-- `docker-compose.yaml`
-- either `docker-compose.lite.yml` or `docker-compose.full.yml`
-- optional Podman overrides
-- optional routing/proxy overrides:
-  - `docker-compose.teep-vpn.yml` when `TEEP_ROUTE_THROUGH_MYST_VPN=true`
-  - `docker-compose.tailscale-vpn.yml` when `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true`
-  - `docker-compose.code-interpreter-vpn.yml` when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`
-  - `docker-compose.proxy.yml` when `ONYX_AGENT_OUTBOUND_PROXY_URL` is non-empty
+- `docker-compose.yaml`;
+- the lite or full Onyx mode;
+- `docker-compose.restricted-egress.yml`, always, as one atomic request-path
+  topology;
+- optional Podman, Teep-VPN, and Tailscale-VPN layers;
+- `docker-compose.code-interpreter-network.yml` only when
+  `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`;
+- `docker-compose.proxy.yml` only when `ONYX_AGENT_OUTBOUND_PROXY_URL` is set.
 
-This means the default path stays small: if an optional switch is unset, its
-override file is not part of the Compose model.
+The proxy layer is intentionally only a routing-mode marker. Final-hop policy
+proxies read the upstream URL directly; it never attaches executor pods to a
+network or gives restricted components the upstream URL.
 
-## Shared VPN Namespace
+## Trusted Routing Namespace
 
-`docker-compose.yaml` creates a long-lived `netns-holder` container. Services
-that should share VPN routing use:
+`netns-holder` remains the stable owner of the Mysterium routing namespace.
+Trusted Onyx services, the Mysterium client, and final-hop policy proxies use
+`network_mode: service:netns-holder`. Restarting Myst therefore does not
+invalidate their namespace references.
 
-```yaml
-network_mode: "service:netns-holder"
+CRW, SearXNG, Obscura CDP, Obscura MCP, and executor pods do not share this
+namespace. Narrow internal networks and TCP gateways expose only the required
+ports:
+
+| Restricted component | Direct peers | Internet path |
+| --- | --- | --- |
+| CRW | CRW API callers, CDP shim, SearXNG | `crw-prefetch-bridge` to `prefetch` policy |
+| SearXNG | CRW and Valkey | none in the default CRW-backed engine profile |
+| Obscura CDP | CDP shim and its egress bridge | `obscura-egress-bridge` to `browser` policy |
+| Obscura MCP | Onyx MCP gateway and its egress bridge | separate bridge to `browser` policy |
+| Executor pods | `executor-egress-bridge` only | `executor` policy |
+
+The final-hop proxies bind distinct ports in `netns-holder`. Their bridges use
+dedicated internal upstream networks, have no host ports, Docker socket, or
+writable mounts, and fail closed when the policy proxy is unavailable.
+
+## Final-Hop Routing Matrix
+
+Restricted components always use the same local bridge URL. The selected
+operator preferences change only the final connection:
+
+| `MYST_VPN_ENABLED` | `ONYX_AGENT_OUTBOUND_PROXY_URL` | Result |
+| --- | --- | --- |
+| `true` | empty | allowed requests leave through Mysterium |
+| `true` | set | policy proxy connects to the upstream proxy through Mysterium |
+| `false` | empty | allowed requests leave directly through Docker by explicit choice |
+| `false` | set | policy proxy connects directly to the upstream proxy |
+
+When `MYST_VPN_ENABLED=false`, Myst idles without arming its kill switch,
+funding, registering, or connecting. Restricted-network isolation is unchanged;
+only the trusted namespace's final route changes.
+
+## Proxy Policies
+
+`crw/prefetch_blocking_proxy.py` implements explicit modes:
+
+| Mode | Search hosts | Private/internal targets | Cleartext target URLs |
+| --- | --- | --- | --- |
+| `prefetch` | blocked | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` |
+| `executor` | blocked | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` |
+| `browser` | allowed | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` |
+| `searxng-external` | allowed | blocked | reserved for intentional external features |
+
+When `ONYX_AGENT_ALLOW_HTTP_URLS=false`, ordinary HTTP requests and CONNECT to
+destination port 80 are rejected. Other CONNECT ports are opaque TCP tunnels;
+the policy does not inspect their application protocol.
+
+Without an upstream proxy, the policy resolves target DNS once, rejects the
+entire answer if any address is non-global, and connects only to an address
+from that validated set. It does not resolve the hostname again between
+classification and connection. The original hostname remains available for
+HTTP Host and TLS SNI.
+
+With an upstream proxy, target DNS stays remote to avoid local DNS leakage.
+The policy still rejects private IP literals, localhost and host-gateway names,
+single-label service names, and configured internal names. A public-looking
+hostname that the upstream proxy resolves to a private address remains a
+residual risk; eliminating it requires upstream-side policy or allowlisting.
+
+## Code Interpreter
+
+The trusted `code-interpreter` control service remains in `netns-holder`
+because it must serve Onyx and use the Docker socket to spawn pods. Its
+executor pods default to upstream Docker network `none`.
+
+When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`:
+
+- the Makefile adds `docker-compose.code-interpreter-network.yml`;
+- `PYTHON_EXECUTOR_DOCKER_NETWORK=onyx-code-interpreter-executor` selects an
+  explicitly named internal network;
+- the runtime patch rejects `container:*` and `host` network values;
+- executor `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and lowercase variants
+  point to `http://executor-egress-bridge:3128`;
+- executor `NO_PROXY` is only `127.0.0.1,localhost,::1`;
+- the upstream proxy URL and trusted-service bypass list are not propagated.
+
+Direct sockets therefore have no route to the internet or stack. Search hosts,
+private/internal targets, and cleartext URL policy are enforced at the
+`executor` final-hop proxy.
+
+Podman keeps code-interpreter disabled by default; restricted executor
+networking is unsupported there until its spawned-container network behavior
+is explicitly validated.
+
+## Request-Path Service URLs
+
+The restricted topology replaces shared loopback endpoints:
+
+- Onyx SearXNG base URL: `http://searxng-service-gateway:8888`;
+- Onyx Firecrawl/CRW URL: `http://crw-service-gateway:3010/v1/scrape`;
+- bundled Obscura MCP URL: `http://obscura-mcp-gateway:9223/mcp`;
+- CRW CDP URL: `ws://cdp-shim:9224/devtools/browser`;
+- CRW SearXNG URL: `http://searxng-core:8888`;
+- SearXNG CRW scrape URL: `http://crw:3010/v1/scrape`;
+- CDP shim Obscura URL: `ws://obscura:9222/devtools/browser`.
+
+The bundled MCP gateway uses a non-loopback address, so operators do not need
+to disable Onyx SSRF protection globally merely to configure it.
+Existing saved Web Search/content-provider/MCP records are application data and
+are not rewritten by Compose; update old localhost URLs in Onyx Admin during
+the restricted-egress upgrade.
+
+## Host-Resident Upstream Proxies
+
+Tor Browser remains supported with:
+
+```env
+ONYX_AGENT_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:9150
+MYST_VPN_ALLOW_LAN_BYPASS=true
 ```
 
-`myst-client` also joins this namespace and owns the Mysterium WireGuard tunnel
-and kill-switch rules. The stable namespace owner is separate from
-`myst-client` so restarting the VPN daemon does not invalidate other services'
-network namespace references.
-
-The main VPN-routed services are:
-
-- `myst-client`
-- `searxng-core`
-- `obscura`
-- `obscura-mcp`
-- `cdp-shim`
-- `prefetch-blocking-proxy`
-- `crw`
-- Onyx app services such as `api_server`, `web_server`, `nginx`, and
-  `code-interpreter`
-- full-mode extras such as `background`, `doc-drop-web`, and
-  `local-embedding-shim`
-
-Host-facing access to services inside the namespace is provided by small
-`alpine/socat` bridge containers on the normal Compose network:
-
-- `host-web-proxy` maps the host `HOST_PORT_ONYX_WEBUI` to `nginx` in the shared namespace.
-- `host-searxng-proxy` maps the host `HOST_PORT_SEARXNG` to SearXNG.
-- `host-doc-drop-web-proxy` exists in full mode for the local doc-drop web view.
-- `host-teep-proxy` is added only when `TEEP_ROUTE_THROUGH_MYST_VPN=true`.
-
-## Mysterium Runtime Behavior
-
-The Mysterium image is built from `myst/build/Dockerfile`, which compiles the
-configured Mysterium node source and packages it with the wrapper entrypoint
-mounted from `myst/myst-client-entrypoint.sh`.
-
-At runtime, `myst-client`:
-
-- starts the daemon in consumer mode
-- creates or reuses the first identity in `docker-data/myst-data`
-- unlocks the identity
-- submits on-chain registration when needed
-- checks balance and payment orders when funding is needed
-- optionally waits for funds when `MYST_VPN_WAIT_FOR_FUNDS=true`
-- connects to a provider when `MYST_AUTO_CONNECT=true`
-- keeps the Mysterium kill-switch active while the daemon runs
-
-Provider selection is controlled by `MYST_VPN_PREFERRED_PROVIDER_IDS`, `MYST_COUNTRY`,
-`MYST_LOCATION_TYPE`, and `MYST_SERVICE_TYPE`. When `MYST_VPN_PREFERRED_PROVIDER_IDS` is set,
-the entrypoint tries one pinned provider per retry cycle. Otherwise it lets
-Mysterium select a provider using the configured country/location filters.
-
-`MYST_VPN_WIREGUARD_MTU` is passed to the daemon and also enforced periodically on
-the live `myst0` interface. `MYST_VPN_ALLOW_LAN_BYPASS=true` appends RFC 1918 LAN CIDRs
-to route exemptions so local services can be reached through the Docker bridge
-while non-exempt egress remains protected by the VPN kill-switch.
-
-## Disabling VPN Egress
-
-`MYST_VPN_ENABLED=false` keeps the topology intact but starts `myst-client` in
-idle mode:
-
-- no kill-switch firewall is armed
-- no VPN connection is attempted
-- no identity, registration, funding, or provider flow runs
-- the healthcheck is based on TequilAPI reachability instead of connected VPN
-  status
-
-Services join `netns-holder`, so internal addressing remains the same.
-External traffic leaves directly through the Docker bridge instead of through
-Mysterium.
-
-## Optional Service VPN Routing
-
-### Teep
-
-By default, `teep` runs on the normal Compose network and publishes
-`HOST_PORT_TEEP` directly. Its provider API traffic does not use the Mysterium
-namespace. Onyx reaches it through Docker DNS at:
-
-```text
-http://teep:8337/v1
-```
-
-When `TEEP_ROUTE_THROUGH_MYST_VPN=true`, the Makefile adds
-`docker-compose.teep-vpn.yml`. That override moves `teep` into
-`netns-holder`, removes direct port publishing, and adds `host-teep-proxy` for
-host access. In this mode, services in the shared namespace reach teep on
-loopback:
-
-```text
-http://127.0.0.1:8337/v1
-```
-
-The teep image is built by `teep/build/Dockerfile`. `make teep-build` pins the
-source checkout with `TEEP_REF`, which defaults to a commit SHA, and derives the
-default image tag from that pin. To upgrade teep, change `TEEP_REF` to the new
-commit; the wrapper will build and run a distinct image tag. Its entrypoint
-defaults to `teep serve` and appends `TEEP_SERVE_ARGS` for serve mode, allowing
-wrapper flags such as `--offline` without rebuilding the image.
-
-### Tailscale Funnel
-
-By default, `tailscale-funnel` runs on the normal Compose network, outside the
-Mysterium namespace. Its entrypoint idles unless `TAILSCALE_FUNNEL_ENABLED` is
-true and `TAILSCALE_FUNNEL_AUTHKEY` is set. When enabled, it uses Tailscale userspace
-networking and generates a serve/funnel config that proxies HTTPS traffic to:
-
-```text
-http://host-web-proxy:3000
-```
-
-When `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true`, the Makefile adds
-`docker-compose.tailscale-vpn.yml`. That override moves `tailscale-funnel` into
-`netns-holder` and retargets the local proxy to:
-
-```text
-http://127.0.0.1:80
-```
-
-That routes Tailscale traffic through the Mysterium namespace. It also links
-the Tailscale identity's control/data-plane traffic to the VPN exit IP, so the
-default is intentionally not VPN-routed.
-
-### Code Interpreter
-
-The `code-interpreter` service itself runs in the shared namespace by default,
-but upstream executor pods default to Docker network `none`. That means the
-Python tool and coding-agent bash sessions have no network access unless
-explicitly enabled.
-
-When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, the Makefile adds
-`docker-compose.code-interpreter-vpn.yml`. That mounts
-`onyx/patches/sitecustomize_code_interpreter` into the code-interpreter image
-and sets `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`. The override also sets:
-
-```text
-PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1
-```
-
-The patch monkey-patches `DockerExecutor._build_run_command` to propagate
-executor network policy into executor containers. It injects proxy settings
-when `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, and also routes ordinary executor
-HTTP clients through the local prefetch-blocking proxy when
-`ONYX_AGENT_ALLOW_HTTP_URLS=false`.
-The override waits for the prefetch-blocking proxy healthcheck before starting
-`code-interpreter`, because that proxy is part of the default executor HTTP
-policy path.
-
-Because the code-interpreter container already shares `netns-holder`, executor
-pods inherit the shared namespace. With `MYST_VPN_ENABLED=true`, egress goes
-through Mysterium; with VPN explicitly disabled, egress leaves through the
-Docker bridge. This intentionally removes the upstream network isolation for
-LLM-generated code.
-
-The same override sets `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` on `api_server`.
-`onyx/patches/sitecustomize_base/wrapper_env_patches.py` then updates the
-Python tool, Bash tool, and coding-agent prompt text so the model is told that
-network access is available through the VPN. The patch mechanics are described
-in [Onyx patch information](onyx_patch_info.md#code-interpreter-executor-networking-and-proxying).
-
-## ONYX_AGENT_OUTBOUND_PROXY_URL
-
-`ONYX_AGENT_OUTBOUND_PROXY_URL` is an optional upstream proxy, independent of Mysterium routing.
-It accepts HTTP, HTTPS, SOCKS5, and SOCKS5h URLs, for example:
-
-```text
-ONYX_AGENT_OUTBOUND_PROXY_URL="http://user:pass@proxy.example.com:8080"
-ONYX_AGENT_OUTBOUND_PROXY_URL="https://user:pass@proxy.example.com:8443"
-ONYX_AGENT_OUTBOUND_PROXY_URL="socks5://proxy.example.com:1080"
-ONYX_AGENT_OUTBOUND_PROXY_URL="socks5h://host.docker.internal:9150"
-```
-
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, `docker-compose.proxy.yml` is not applied. When it
-is non-empty, the override threads the proxy through services that perform
-external fetches. If those services are also in the Mysterium namespace, their
-connection to the upstream proxy leaves through the VPN tunnel.
-
-For the local `prefetch-blocking-proxy` adapter, `https://` upstream proxies
-are contacted with certificate verification and explicit SNI. The adapter
-requires TLS 1.3 on that proxy leg by default when the Python/OpenSSL runtime
-supports TLS 1.3. Obscura and SearXNG use their own native proxy stacks; those
-stacks generally negotiate the highest TLS version supported by their runtime
-and the upstream proxy.
-
-The Makefile also derives `ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED`. If `ONYX_AGENT_OUTBOUND_PROXY_URL` contains
-`host.docker.internal`, the Makefile resolves it to an IP address and passes
-that resolved URL to obscura. This avoids SOCKS connectors trying to resolve
-the Docker-internal hostname through the upstream SOCKS proxy.
-
-Internal service traffic is excluded with `NO_PROXY` values covering loopback
-and Docker DNS names such as `myst-client`, `api_server`, `nginx`,
-`code-interpreter`, `obscura`, `crw`, and `searxng-core`.
-
-## How ONYX_AGENT_OUTBOUND_PROXY_URL Applies by Service
-
-### Obscura CDP Browser
-
-`docker-compose.proxy.yml` passes the resolved proxy to the `obscura` CDP
-server without placing credentials in its process command line:
-
-```text
-OBSCURA_PROXY=${ONYX_AGENT_OUTBOUND_PROXY_URL_RESOLVED:-${ONYX_AGENT_OUTBOUND_PROXY_URL}}
-```
-
-This applies the upstream proxy to the stealth browser traffic used by CRW's
-CDP renderer. CRW uses that renderer for configured search-engine pages and for
-`open_url` pages that it escalates after the HTTP prefetch. Usable non-search
-`open_url` prefetches can return without Obscura; the request-chain details are
-covered in [Request handling](request_handling.md).
-
-### Obscura MCP
-
-The same override passes the resolved URL with `--proxy` to `obscura-mcp`,
-whose MCP command does not read the serve-specific `OBSCURA_PROXY` fallback.
-Browser automation requests made through the MCP server therefore use the
-configured upstream proxy as well.
-
-### CRW and the Prefetch-Blocking Proxy
-
-CRW's base environment points raw HTTP prefetch traffic at the local
-`prefetch-blocking-proxy` on `127.0.0.1:3128` using `HTTP_PROXY` and
-`HTTPS_PROXY`. It does not point CRW directly at `ONYX_AGENT_OUTBOUND_PROXY_URL`.
-
-The local proxy in `crw/prefetch_blocking_proxy.py` handles CRW's prefetch
-step on port `3128`:
-
-- known search engine hosts receive an immediate 403 with no upstream request
-- internal/private destinations receive 403 without opening any `CONNECT` or
-  HTTP forwarding path
-- non-search plain HTTP requests receive 403 by default with a message telling
-  the caller to use HTTPS, unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`
-- non-search HTTPS `CONNECT` requests are tunneled to the target
-
-Forwarded non-search HTTPS prefetches, and explicitly allowed plain HTTP
-prefetches, can be the final CRW result when CRW considers the HTTP response
-usable. In those cases `open_url` does not reach the CDP shim or Obscura.
-Search-engine hosts remain different: their prefetches are blocked locally so
-CRW escalates to the browser renderer without the search provider seeing the
-raw reqwest request.
-
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `prefetch-blocking-proxy` uses it
-for its own upstream connections. That keeps CRW prefetch traffic and
-SOCKS-backed code-interpreter urllib traffic on the same proxy path as obscura.
-Allowed plain HTTP origin requests use absolute-form request targets when the
-upstream is an HTTP or HTTPS proxy; HTTPS requests continue to use CONNECT.
-For an `https://` upstream proxy, the proxy first establishes the verified TLS
-connection to the upstream proxy, then sends either the absolute-form HTTP
-request or the HTTPS `CONNECT` request inside that TLS connection.
-
-Destination validation applies to literal IP addresses, localhost,
-`host.docker.internal`, and single-label Docker-style names without opening an
-upstream connection. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, the proxy
-also resolves target DNS names locally and blocks any name that resolves to
-loopback, private/RFC1918, link-local, reserved, or otherwise non-global
-addresses. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, the proxy skips that
-target DNS resolution check so target DNS is not leaked outside the configured
-upstream proxy path.
-
-The CDP shim in `crw/cdp_shim.py` sits between CRW and obscura. Among its
-runtime behaviors, it strips CRW's `proxyServer` field from
-`Target.createBrowserContext`, so the CDP path uses obscura's own process-level
-proxy setting instead of CRW attempting to configure a per-context proxy. It also
-enforces the same `ONYX_AGENT_ALLOW_HTTP_URLS=false` default for CDP browser
-navigations, so an HTTP URL cannot bypass the prefetch-proxy block by
-escalating to Obscura.
-
-### SearXNG
-
-SearXNG does not reliably honor `HTTP_PROXY`/`HTTPS_PROXY` for its engine
-requests because it builds explicit httpx transport mounts from
-`outgoing.proxies` in `settings.yml`.
-
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `docker-compose.proxy.yml` replaces the SearXNG
-entrypoint with `searxng/searxng-proxy-entrypoint.sh`. The wrapper copies the
-mounted SearXNG config to `/tmp/searxng-proxy`, edits the copy, sets
-`SEARXNG_SETTINGS_PATH` to that copy, and then execs the image's original
-entrypoint. The host-side `settings.yml` bind mount is not modified.
-
-The generated settings add:
-
-- `outgoing.proxies.all://` pointing at `ONYX_AGENT_OUTBOUND_PROXY_URL`
-- `extra_proxy_timeout: 20`
-- a `direct` outgoing network with `proxies: {}`
-- `network: direct` on the local CRW-backed engines (`google2`, `brave2`,
-  `duckduckgo2`, `startpage2`, and `bing2`)
-
-The direct network is needed because those engines call the local CRW API at
-`http://127.0.0.1:3010`. Those loopback calls must not be sent to the upstream
-proxy.
-
-### Code Interpreter Executor Pods
-
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, `docker-compose.proxy.yml` mounts the same
-`sitecustomize_code_interpreter` patch into `code-interpreter` and sets
-`ONYX_AGENT_OUTBOUND_PROXY_URL`, `ONYX_AGENT_ALLOW_HTTP_URLS`, `ALL_PROXY`,
-and `NO_PROXY` on the service.
-
-The patch injects proxy environment variables into every executor pod's
-`docker run` command when either `ONYX_AGENT_OUTBOUND_PROXY_URL` is set or
-`ONYX_AGENT_ALLOW_HTTP_URLS=false`:
-
-- `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and lowercase variants point at
-  the local prefetch-blocking-proxy HTTP listener on `http://127.0.0.1:3128`
-- `ONYX_AGENT_ALLOW_HTTP_URLS` is passed through for diagnostics and policy
-  visibility
-- `NO_PROXY` is injected so ordinary stack-internal service names stay off the
-  proxy
-
-Proxy injection and VPN routing are separate code paths. With `ONYX_AGENT_OUTBOUND_PROXY_URL`
-alone, executor pods receive proxy environment variables but remain
-network-isolated. With `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor
-pods inherit the shared namespace. Supported tools then use the local proxy
-adapter for HTTP/HTTPS when env vars are honored; the adapter connects through
-the configured upstream proxy if present, or directly through the shared
-namespace/VPN path if not.
-
-For every upstream proxy scheme, executor pods receive an ordinary HTTP proxy
-URL. The local sidecar adapts upstream egress to HTTP, HTTPS, SOCKS5, or
-SOCKS5h as configured, so executor pods do not need Python SOCKS transport
-libraries. The sidecar is not a transparent firewall and does not make
-network-enabled executors safe against raw-socket bypasses. It also
-intentionally blocks configured search-engine hosts, so generated code using
-urllib/curl/git through these proxy variables should not expect direct access
-to Google, Brave Search, DuckDuckGo HTML, Startpage, or Bing search pages from
-the code-interpreter path. With the default
-`ONYX_AGENT_ALLOW_HTTP_URLS=false`, plain `http://` requests from clients that
-honor these proxy variables receive the same HTTPS guidance error as CRW
-prefetch requests; generated code can still bypass this with raw sockets,
-explicit no-proxy options, or tools that ignore proxy variables.
-
-## VPN Signup and Funding Flows
-
-The Makefile exposes four Myst helper targets:
-
-- `make vpn-signup-orderform`
-- `make vpn-signup-blockchain`
-- `make vpn-orderstatus`
-- `make vpn-balance`
-
-These targets operate on the standalone Myst Compose file at
-`myst/docker-compose.yaml` and the persistent data directory
-`docker-data/myst-data`.
-
-### Order Form Flow
-
-`make vpn-signup-orderform` ensures the Mysterium image exists, starts the
-standalone `myst-client-vpn` container if needed, and disables automatic VPN
-connection while signing up:
-
-```text
-MYST_AUTO_CONNECT=false
-MYST_VPN_WAIT_FOR_FUNDS=false
-```
-
-It then runs:
-
-```text
-myst/myst-vpn-cli.sh signup
-```
-
-The helper waits for TequilAPI, creates or reuses an identity, unlocks it,
-checks registration and balance, reuses an existing unpaid order if present,
-or creates a new order using:
-
-- `MYST_VPN_ORDER_AMOUNT`
-- `MYST_VPN_ORDER_CURRENCY`
-- `MYST_VPN_ORDER_GATEWAY`
-- `MYST_VPN_ORDER_COUNTRY`
-- `MYST_VPN_ORDER_GATEWAY_DATA`
-
-The payment URL is extracted from the Myst CLI order response and printed in a
-prominent banner.
-
-### Direct Blockchain Flow
-
-`make vpn-signup-blockchain` starts the same standalone container but also sets:
-
-```text
-MYST_SKIP_ORDER_CREATION=true
-```
-
-It runs:
-
-```text
-myst/myst-vpn-cli.sh blockchain
-```
-
-The helper creates or reuses the identity, submits registration when needed,
-and prints the consumer channel address from `myst cli identities get`. The
-user sends Polygon MYST to that channel address, not to the identity address.
-No payment order is created in this flow.
-
-### Status and Balance
-
-`make vpn-orderstatus` prints the active identity, balance, registration
-status, all known orders, and any payment URLs it can extract from unpaid
-orders.
-
-`make vpn-balance` prints a compact identity, balance, and registration summary.
-
-### Starting the Main Stack
-
-`make up-lite` and `make up-full` run `ensure-myst-funded` before starting the
-main wrapper stack. If `MYST_VPN_ENABLED=false`, the check is skipped. Otherwise
-the target:
-
-- stops the standalone signup container if it is running
-- preserves wallet data in `docker-data/myst-data`
-- verifies that `docker-data/myst-data/keystore` contains an identity
-- asks the user to run one of the signup flows if no identity exists
-
-Funding is not destructively managed by the wrapper. The Myst daemon and helper
-commands read the persisted identity and on-chain/channel balance from the
-Mysterium node state.
+Only final-hop policy proxies receive this URL. Restricted components cannot
+route to the host gateway. `MYST_VPN_ALLOW_LAN_BYPASS=true` is nevertheless a
+broad RFC1918 route exemption inside the trusted routing namespace, not an
+endpoint-scoped host-proxy exception. Treat that as a residual risk.
+
+## Other Optional Routing
+
+Teep and Tailscale retain their existing independent switches. Their VPN
+overrides move trusted services into `netns-holder`; neither attaches to any
+restricted component network. Host WebUI, SearXNG diagnostics, doc-drop, and
+optional Teep access continue through explicit host-facing bridge containers.

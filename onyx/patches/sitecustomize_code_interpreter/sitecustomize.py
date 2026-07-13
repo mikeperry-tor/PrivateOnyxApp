@@ -1,23 +1,10 @@
-"""Wrapper-side runtime patches for the Onyx code-interpreter container.
+"""Restricted-network runtime patches for the Onyx code-interpreter.
 
 Loaded automatically by Python when this directory is on PYTHONPATH.
 
-In VPN mode, code-interpreter 0.4.4 receives
-``PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`` from compose,
-so Python/bash executor containers inherit the shared ``netns-holder`` network
-namespace.
-
-This patch forwards proxy settings into executor containers created by
-code-interpreter. It also routes ordinary executor HTTP clients through the
-local prefetch-blocking proxy when cleartext ``http://`` URLs are disabled, so
-the executor path gets the same default HTTP URL policy as ``open_url()`` for
-clients that honor proxy environment variables.
-
-Security note: enabling this removes the code-interpreter's network isolation.
-Executor pods (Python tool + coding agent bash sessions) gain outbound internet
-access through the VPN. Only enable this on trusted, single-tenant deployments
-where you understand the LLM will be able to make arbitrary outbound network
-requests from its generated code.
+When explicitly enabled, executor pods join only the named internal executor
+network and receive a local HTTP proxy URL. They never inherit the broad Onyx
+network namespace or the operator's upstream proxy URL.
 """
 
 from __future__ import annotations
@@ -41,57 +28,54 @@ def _raise_if_strict() -> None:
         raise
 
 
-DEFAULT_EXECUTOR_HTTP_PROXY_URL = "http://127.0.0.1:3128"
-
-
-def _proxy_url() -> str:
-    return os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
+def _network_enabled() -> bool:
+    return _env_enabled("ONYX_CODE_INTERPRETER_ENABLE_NETWORK", False)
 
 
 def _executor_http_proxy_url() -> str:
     """HTTP proxy URL injected into executor pods for all proxy schemes."""
     return os.environ.get(
         "ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL",
-        DEFAULT_EXECUTOR_HTTP_PROXY_URL,
+        "",
     ).strip()
 
 
-def _allow_http_urls() -> bool:
-    return _env_enabled("ONYX_AGENT_ALLOW_HTTP_URLS", False)
+def _validate_configuration() -> None:
+    if not _network_enabled():
+        return
+    network = os.environ.get("PYTHON_EXECUTOR_DOCKER_NETWORK", "").strip()
+    if not network:
+        raise RuntimeError("PYTHON_EXECUTOR_DOCKER_NETWORK is required")
+    if network.startswith("container:") or network == "host":
+        raise RuntimeError(
+            "executor network must be a dedicated named Docker network, not "
+            f"{network!r}"
+        )
+    if not _executor_http_proxy_url():
+        raise RuntimeError("ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL is required")
 
 
 def _executor_env_vars() -> list[str]:
     """Build the ``-e KEY=VALUE`` argument pairs for executor network env vars.
 
-    Returns an empty list only when no upstream proxy is configured and
-    cleartext HTTP URLs are explicitly allowed.
-
-    Executor pods always receive an HTTP proxy URL that points at the local
-    prefetch-blocking proxy. That sidecar adapts to the configured upstream
-    proxy scheme (HTTP, HTTPS, SOCKS5, or SOCKS5h), so executor pods do not need
-    SOCKS transport libraries. When no upstream proxy is configured, the local
-    proxy connects directly from the shared namespace/VPN path after applying
-    its destination and HTTP URL policy.
+    Disabled executor networking leaves the upstream ``network=none`` behavior
+    untouched. Enabled networking always injects the restricted bridge URL.
 
     Lowercase variants (``http_proxy`` etc.) are also injected because some
     tools (notably ``curl`` and ``git``) only honor the lowercase form.
     """
-    proxy_url = _proxy_url()
-    allow_http_urls = _allow_http_urls()
-    if not proxy_url and allow_http_urls:
+    if not _network_enabled():
         return []
 
+    _validate_configuration()
+
     no_proxy = os.environ.get(
-        "NO_PROXY",
-        "127.0.0.1,localhost,::1,myst-client,api_server,web_server,background,"
-        "nginx,code-interpreter,obscura,crw,searxng-core,searxng-valkey,"
-        "netns-holder,host-web-proxy,host-searxng-proxy",
+        "ONYX_AGENT_EXECUTOR_NO_PROXY",
+        "127.0.0.1,localhost,::1",
     )
 
     executor_proxy_url = _executor_http_proxy_url()
     pairs = [
-        ("ONYX_AGENT_ALLOW_HTTP_URLS", "true" if allow_http_urls else "false"),
-        ("ONYX_AGENT_OUTBOUND_PROXY_URL", proxy_url),
         ("HTTP_PROXY", executor_proxy_url),
         ("HTTPS_PROXY", executor_proxy_url),
         ("ALL_PROXY", executor_proxy_url),
@@ -126,16 +110,9 @@ def _apply_executor_patches() -> None:
         return
 
     _original_build_run_command = DockerExecutor._build_run_command
-    patch_reason = (
-        "upstream_proxy_configured"
-        if _proxy_url()
-        else "http_urls_disabled"
-    )
     print(
         "sitecustomize: installed DockerExecutor run-command patch "
-        f"(proxy_enabled={bool(_proxy_url())}, "
-        f"allow_http_urls={_allow_http_urls()}, "
-        f"reason={patch_reason}, "
+        f"(network={os.environ.get('PYTHON_EXECUTOR_DOCKER_NETWORK')}, "
         f"executor_http_proxy_url={_executor_http_proxy_url()})",
         flush=True,
     )
@@ -167,8 +144,7 @@ def _apply_executor_patches() -> None:
             patched = out
             print(
                 "sitecustomize: injected executor network env vars into "
-                f"executor pod command (reason={patch_reason}, "
-                f"{len(executor_env_args) // 2} vars)",
+                f"executor pod command ({len(executor_env_args) // 2} vars)",
                 flush=True,
             )
 

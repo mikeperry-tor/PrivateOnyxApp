@@ -57,7 +57,7 @@ configuration:
   document RAG without relying on obscure upstream env names.
 - Keep generated tool descriptions accurate when executor capabilities differ
   from upstream defaults.
-- Support trusted, VPN-routed code-interpreter execution when explicitly
+- Support restricted proxy-only code-interpreter execution when explicitly
   enabled.
 - Use a local OpenAI-compatible embedding server while preserving Onyx's
   model-server HTTP contract.
@@ -689,7 +689,7 @@ Local files:
 
 - `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
 - `docker-compose.yaml`
-- `docker-compose.code-interpreter-vpn.yml`
+- `docker-compose.code-interpreter-network.yml`
 
 Onyx source areas:
 
@@ -706,8 +706,8 @@ Onyx describes the Python tool, Bash tool, and coding agent as running without
 network access when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=false`. That matches
 code-interpreter 0.4.4's default executor network, `none`.
 
-The wrapper can explicitly enable executor networking through the shared stack
-namespace. When that is enabled, the upstream descriptions become actively
+The wrapper can explicitly enable executor networking through a dedicated
+internal network and policy proxy. When enabled, upstream descriptions become
 harmful: the LLM is told not to use network operations even though network
 access is available and expected. The inverse would also be dangerous, so the
 text must track actual executor capabilities.
@@ -723,16 +723,11 @@ patch rewrites LLM-facing text for:
 - Coding-agent bash tool metadata
 - Coding-agent system prompts
 
-The replacement text says that network access is available through the VPN,
-that Python tool package installation is limited, and that the coding agent is
-better for package installation or multi-step coding workflows. Local CRW,
-SearXNG, and browser service details are added only to the coding-agent system
-prompts, not to the Python tool guidance, Python tool description, Bash tool
-description, or coding-agent tool metadata. The general Onyx agent should
-prefer `open_url` and `web_search` for page fetching; direct local API details
-are reserved for code-agent planning. The coding agent has a bash subtool, not
-the top-level Onyx Python tool, but it can run Python commands inside that bash
-session.
+The replacement text says that HTTP/HTTPS access is available only through a
+restricted proxy, direct sockets and internal/private targets are blocked, and
+direct search-engine URLs are blocked. It does not advertise CRW, SearXNG,
+CDP, or other stack endpoints. Python package limitations and the code-agent
+recommendation remain aligned with the upstream tool roles.
 
 The patch checks exact upstream string matches before claiming success. The
 wrapper runs these patches in strict mode, so missing expected strings or
@@ -804,10 +799,10 @@ result.
 Onyx should generate tool descriptions from a capability model rather than
 hardcoded assumptions. Useful capability fields include:
 
-- Executor network mode: disabled, enabled, VPN-routed, or proxied.
+- Executor network mode: disabled or restricted proxy-only.
 - Whether Python package installation is supported.
 - Which package managers or network commands are expected to work.
-- Optional local service hints for deployments that expose internal tools.
+- No local service hints unless a separately reviewed gateway is added later.
 
 The API server and code-interpreter service should share the same source of
 truth. A merge request could start with static env-driven capabilities, then
@@ -963,8 +958,8 @@ A merge request should include tests with a local static HTTP server:
 Local files:
 
 - `onyx/patches/sitecustomize_code_interpreter/sitecustomize.py`
-- `docker-compose.code-interpreter-vpn.yml`
-- `docker-compose.proxy.yml`
+- `docker-compose.code-interpreter-network.yml`
+- `docker-compose.restricted-egress.yml`
 - `docker-compose.yaml`
 
 Python-sandbox source area:
@@ -976,11 +971,8 @@ Python-sandbox source area:
 Onyx's code-interpreter source, from `python-sandbox`, defaults executor pods to
 Docker network `none`. That is a strong and sensible hosted default.
 
-This wrapper also supports a different deployment mode: trusted, single-tenant
-local execution where generated Python and bash should be able to reach the
-internet through the shared VPN namespace, optionally using the configured
-upstream proxy. This is useful for research, package inspection, fetching
-public data, and coding-agent workflows where network commands are expected.
+This wrapper optionally gives generated Python and bash restricted HTTP/HTTPS
+egress without placing untrusted pods in the stack routing namespace.
 
 The wrapper uses code-interpreter 0.4.4's
 `PYTHON_EXECUTOR_DOCKER_NETWORK` setting to choose the executor container
@@ -988,54 +980,39 @@ network before command construction.
 
 ### How it modifies Onyx
 
-When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, `docker-compose.code-interpreter-vpn.yml`
-sets `PYTHON_EXECUTOR_DOCKER_NETWORK=container:onyx-netns-holder-1`, so
-code-interpreter starts executor containers directly in the shared network
-namespace. The code-interpreter container also loads a `sitecustomize` patch
-that:
+When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`,
+`docker-compose.code-interpreter-network.yml` sets
+`PYTHON_EXECUTOR_DOCKER_NETWORK=onyx-code-interpreter-executor`. The internal
+network contains executor pods and one egress bridge. The code-interpreter
+container also loads a `sitecustomize` patch that:
 
 - Patches `DockerExecutor._build_run_command`.
-- Injects executor network env vars into executor pod commands when an
-  upstream proxy is configured or when `ONYX_AGENT_ALLOW_HTTP_URLS=false`.
+- Requires the dedicated named network and rejects `container:*` and `host`.
+- Requires `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL`.
+- Injects upper/lowercase HTTP proxy variables pointing only at the bridge.
+- Injects executor-only `NO_PROXY=127.0.0.1,localhost,::1`.
 
-The wrapper compose already runs code-interpreter in the shared
-`netns-holder` namespace. Inheriting that namespace gives executor pods the
-same egress path: Mysterium when `MYST_VPN_ENABLED=true`, or direct bridge
-egress when VPN is explicitly disabled. The network-enabled override waits for
-the prefetch-blocking proxy healthcheck before starting `code-interpreter`,
-because that proxy is part of the default executor HTTP policy path.
-
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, the same patch injects proxy
-environment variables into executor pod commands. When
-`ONYX_AGENT_ALLOW_HTTP_URLS=false`, which is the default, it also injects the
-local prefetch-blocking proxy even without an upstream proxy so ordinary
-executor HTTP clients receive the same cleartext-HTTP block as CRW prefetch
-and CDP navigation. This injection is independent from the executor network
-setting: with `ONYX_AGENT_OUTBOUND_PROXY_URL` alone, executor pods remain
-network-isolated. With `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, executor
-pods inherit the shared namespace and supported tools use the local proxy
-adapter, which routes through the configured upstream proxy if present or
-directly through the shared namespace/VPN path if not.
+The trusted code-interpreter control service still shares `netns-holder` to
+serve Onyx and spawn containers through the Docker socket. Executor pods do
+not inherit it. `ONYX_AGENT_OUTBOUND_PROXY_URL` is consumed only by final-hop
+policy proxies and is never injected into executor pods. With network access
+disabled, the patch makes no changes and upstream `network=none` remains.
 
 When active, the patch injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and
-their lowercase variants pointing at `http://127.0.0.1:3128`, the
-prefetch-blocking-proxy service's HTTP listener. That gives Python `urllib`,
+their lowercase variants pointing at
+`http://executor-egress-bridge:3128`. That gives Python `urllib`,
 `requests`, `httpx`, curl, git, and similar clients an ordinary HTTP proxy
 endpoint while the sidecar adapts upstream egress to the configured
 `ONYX_AGENT_OUTBOUND_PROXY_URL` scheme, including SOCKS.
 
-The proxy listener still blocks configured search-engine hosts, so the
+The executor policy still blocks configured search-engine hosts, so the
 code-interpreter path should not expect direct access to those search pages
 through the injected proxy variables. With
 `ONYX_AGENT_ALLOW_HTTP_URLS=false`, it also blocks plain `http://` requests
-from executor clients that honor proxy variables. This is not a transparent
-firewall; generated code can still bypass the proxy with raw sockets,
-explicit no-proxy options, or tools that ignore proxy settings.
-
-This is intentionally high trust. It removes the upstream executor network
-isolation when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` and lets generated code make
-outbound network requests. See
-[VPN routing and proxies](vpn_routing_and_proxies.md#code-interpreter-executor-pods)
+from executor clients. Raw sockets cannot bypass the proxy because the
+executor network has no direct route. CONNECT to port 80 is also rejected in
+this mode; other CONNECT ports remain opaque. See
+[VPN routing and proxies](vpn_routing_and_proxies.md#code-interpreter)
 for the service-level routing behavior.
 
 ## Local embedding shim
@@ -1153,7 +1130,8 @@ Local files:
 - `docker-compose.lite.yml`
 - `docker-compose.podman.yml`
 - `docker-compose.podman-full.yml`
-- `docker-compose.code-interpreter-vpn.yml`
+- `docker-compose.code-interpreter-network.yml`
+- `docker-compose.restricted-egress.yml`
 - `docker-compose.proxy.yml`
 
 Onyx source area:
@@ -1193,8 +1171,8 @@ The base compose wrapper changes the runtime shape of core Onyx services:
 - `web_server` joins the shared namespace and disables analytics/cloud UI flags.
 - `nginx` no longer publishes ports directly; host access goes through a
   wrapper proxy.
-- `code-interpreter` joins the shared namespace, moves to port 7000, and can be
-  patched for VPN-routed executor pods.
+- `code-interpreter` joins the trusted shared namespace, moves to port 7000,
+  and can spawn executor pods on the separate restricted network.
 - `relational_db` uses wrapper-managed persistent storage.
 
 Full mode adds model-server routing through the local embedding shim, internal

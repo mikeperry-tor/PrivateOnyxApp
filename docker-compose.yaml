@@ -8,6 +8,11 @@
 
 name: onyx
 
+## NOTE: The Makefile always layers docker-compose.restricted-egress.yml over
+## this file. The CRW/SearXNG/Obscura/CDP network_mode and loopback values below
+## are upstream-shaped base definitions only; the supported effective model
+## atomically replaces them with narrow internal networks and gateway URLs.
+
 services:
   # Stable owner for the shared network namespace.
   # All VPN-routed services join this namespace so myst-client can restart
@@ -111,8 +116,8 @@ services:
   # The JS renderer tier is obscura (a Rust-native headless browser with
   # built-in stealth), replacing crw's upstream browserless/chrome-stealth
   # profile. obscura exposes a CDP WebSocket on port 9222 that crw drives via
-  # its `cdp` cargo feature. Both services run inside the shared netns-holder
-  # namespace so scrape/crawl traffic egresses through the VPN endpoint IP.
+  # its `cdp` cargo feature. The required restricted-egress layer moves these
+  # services onto narrow networks and sends egress through policy bridges.
   #
   # Both images are pulled from their upstream registries (no local builds):
   #   - obscura: h4ckf0r0day/obscura (release builds include the stealth feature)
@@ -193,8 +198,8 @@ services:
   # above so crw's browser driving is not disrupted.
   #
   # The HTTP transport has no built-in auth. It binds 0.0.0.0 inside the
-  # netns-holder namespace (only reachable by other services in that namespace
-  # + the host-web-proxy bridge).
+  # The required restricted-egress layer exposes this listener only through a
+  # narrow Onyx-side gateway.
   #
   # See: https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md
   obscura-mcp:

@@ -2692,28 +2692,17 @@ def _is_code_interpreter_network_enabled() -> bool:
     )
 
 
-# Hint text for the coding agent system prompt only: CRW Firecrawl API,
-# SearXNG JSON search, and CDP browser. Do not append this to PythonTool,
-# BashTool, or code-agent tool descriptions; open_url() already follows this
-# path, and the internal API details are only useful for the code-agent's own
-# planning.
-_CODING_AGENT_SERVICE_HINTS = (
-    " Additionally, the sandbox shares a network namespace with local scraping services: "
-    "bash commands and Python HTTP clients run from bash can call "
-    "a Firecrawl-compatible REST API at http://127.0.0.1:3010 exposing "
-    "/v1/scrape, /v1/crawl, /v1/map, and /v1/search. The /v1/search endpoint "
-    "is backed by the bundled SearXNG sidecar; direct SearXNG JSON search is "
-    "also available at http://127.0.0.1:8888/search with form parameters "
-    "q=<query> and format=json. CRW-rendered pages are backed by a stealth "
-    "headless browser. Direct control of that browser is available via "
-    "Chrome DevTools Protocol (CDP) browser at ws://127.0.0.1:9222/devtools/browser. "
-    "All outbound browser traffic egresses through the VPN tunnel."
+_RESTRICTED_NETWORK_TEXT = (
+    "Network access is available through a restricted HTTP/HTTPS proxy. "
+    "Direct socket access to the internet and direct access to stack-internal "
+    "services are blocked. Internal/private network targets and direct "
+    "search-engine URLs are blocked by the proxy."
 )
 
 
 def apply_code_interpreter_network_description_patches() -> None:
     """Update tool descriptions, system-prompt guidance, and coding-agent
-    prompts when the code-interpreter executor pods are VPN-routed.
+    prompts when executor pods use the restricted egress network.
 
     By default, Onyx's code-interpreter hardcodes ``--network none`` on every
     executor pod, so the Python tool, BashTool, and coding-agent bash sessions
@@ -2725,8 +2714,8 @@ def apply_code_interpreter_network_description_patches() -> None:
 
     When ``ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`` is set on the api_server
     container, a companion sitecustomize patch in the code-interpreter
-    container rewrites ``--network none`` to ``--network container:<self>``,
-    giving executor pods VPN-routed internet access. This function updates the
+    container attaches pods to a dedicated internal network and injects its
+    local policy proxy. This function updates the
     api_server-side descriptions and prompts so the LLM is told it has network
     access and can use network commands (curl, pip install, etc.) — otherwise
     the LLM would continue to avoid network commands based on the stale
@@ -2748,9 +2737,9 @@ def apply_code_interpreter_network_description_patches() -> None:
             current=PythonTool.DESCRIPTION,
             old="Execute Python code in an isolated sandbox environment.",
             new=(
-                "Execute Python code in a sandbox environment with internet access "
-                "via VPN. Network operations (requests, urllib, etc.) are permitted "
-                "and egress through the VPN tunnel. pip package installation is NOT "
+                "Execute Python code in a sandbox environment. "
+                + _RESTRICTED_NETWORK_TEXT
+                + " pip package installation is NOT "
                 "supported — only the pre-installed scientific stack is available "
                 "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, "
                 "scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, "
@@ -2778,7 +2767,7 @@ def apply_code_interpreter_network_description_patches() -> None:
             current=tool_prompts.PYTHON_TOOL_GUIDANCE,
             old="Internet access for this session is disabled. Do not make external web requests or API calls as they will fail.",
             new=(
-                "Internet access is available via VPN — external web requests and API calls are permitted and egress through the VPN tunnel. "
+                _RESTRICTED_NETWORK_TEXT + " "
                 "pip package installation is NOT supported; only the pre-installed scientific stack is available "
                 "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, python-docx, python-pptx, fpdf2, pydantic). "
                 "For tasks requiring additional packages or complex multi-step workflows, invoke the code agent instead."
@@ -2800,9 +2789,8 @@ def apply_code_interpreter_network_description_patches() -> None:
             current=BashTool.DESCRIPTION,
             old="Execute a bash command inside an isolated, network-restricted session.",
             new=(
-                "Execute a bash command inside a session with internet access via "
-                "VPN. Network commands (curl, wget, pip install, npm install, git "
-                "clone, etc.) are permitted and egress through the VPN tunnel."
+                "Execute a bash command inside a sandboxed session. "
+                + _RESTRICTED_NETWORK_TEXT
             ),
         )
     except Exception as e:  # pragma: no cover
@@ -2825,9 +2813,7 @@ def apply_code_interpreter_network_description_patches() -> None:
             current=_desc,
             old="The session has no network access.",
             new=(
-                "The session has internet access via VPN. Network commands (curl, "
-                "pip install, npm install, git clone, etc.) are permitted and "
-                "egress through the VPN tunnel."
+                _RESTRICTED_NETWORK_TEXT
             ),
         )
     except Exception as e:  # pragma: no cover
@@ -2849,7 +2835,7 @@ def apply_code_interpreter_network_description_patches() -> None:
             owner_name="CODING_AGENT_PROMPT network sandbox",
             current=ca_prompts.CODING_AGENT_PROMPT,
             old="network-isolated sandbox",
-            new="sandbox with VPN-routed internet access",
+            new="sandbox with restricted proxy-only network access",
         )
         ca_prompts.CODING_AGENT_PROMPT = _replace_or_warn(
             owner_name="CODING_AGENT_PROMPT network commands",
@@ -2862,8 +2848,8 @@ def apply_code_interpreter_network_description_patches() -> None:
             new=(
                 "Network access:\n"
                 "- Network commands (`curl`, `pip install`, `npm install`, `git pull`) "
-                "are permitted and egress through the VPN tunnel."
-                + _CODING_AGENT_SERVICE_HINTS
+                "may use the restricted HTTP/HTTPS proxy. Direct sockets, "
+                "private/internal targets, and direct search-engine URLs are blocked."
                 + "\n\nAvoid:\n"
             ),
         )
@@ -2872,14 +2858,13 @@ def apply_code_interpreter_network_description_patches() -> None:
             owner_name="CODING_AGENT_PROMPT_REASONING network sandbox",
             current=ca_prompts.CODING_AGENT_PROMPT_REASONING,
             old="network-isolated sandbox",
-            new="sandbox with VPN-routed internet access",
+            new="sandbox with restricted proxy-only network access",
         )
         ca_prompts.CODING_AGENT_PROMPT_REASONING = _replace_or_warn(
             owner_name="CODING_AGENT_PROMPT_REASONING network access",
             current=ca_prompts.CODING_AGENT_PROMPT_REASONING,
             old="No network.",
-            new="VPN-routed internet access is available."
-            + _CODING_AGENT_SERVICE_HINTS,
+            new=_RESTRICTED_NETWORK_TEXT,
         )
 
     except Exception as e:  # pragma: no cover

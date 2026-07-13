@@ -47,11 +47,11 @@ network-enabled code-interpreter executors, see
 [Internal network security](internal_network_security.md).
 
 Unless a section says otherwise, diagrams assume `MYST_VPN_ENABLED=true`.
-When `MYST_VPN_ENABLED=false`, shared-namespace services keep the same internal
-addresses but external traffic leaves through the Docker bridge. When
-`ONYX_AGENT_OUTBOUND_PROXY_URL` is set, obscura, SearXNG, and the prefetch path use the
-configured upstream proxy as described in
-[VPN routing and proxies](vpn_routing_and_proxies.md#proxy_url).
+When `MYST_VPN_ENABLED=false`, restricted networks stay unchanged while policy
+proxy traffic leaves the trusted namespace through Docker. When
+`ONYX_AGENT_OUTBOUND_PROXY_URL` is set, final-hop policies connect through it;
+default SearXNG still has no general internet route. See
+[VPN routing and proxies](vpn_routing_and_proxies.md#final-hop-routing-matrix).
 
 ## Path 1: Web Search (`web_search` tool)
 
@@ -84,7 +84,7 @@ configured upstream proxy as described in
 │  │  max_concurrent=1 per eTLD+1)                     │
 │  ├─ HTTP prefetch → prefetch-blocking-proxy :3128    │
 │  │  (returns 403 for search engines → escalate CDP)  │
-│  ├─ CDP client → ws://127.0.0.1:9224                  │
+│  ├─ CDP client → ws://cdp-shim:9224                   │
 │  └─ Returns {success, data: {rawHtml}} envelope       │
 └─────────┬────────────────────────────────────────────┘
           │ CDP WebSocket (Target.createTarget,
@@ -98,7 +98,7 @@ configured upstream proxy as described in
 │  ├─ Strips proxyServer from createBrowserContext     │
 │  ├─ Periodic cookie clearing (every 60 min)          │
 │  ├─ Suppresses non-fatal CDP error logs              │
-│  └─ Proxies to → ws://127.0.0.1:9222                  │
+│  └─ Proxies to → ws://obscura:9222                    │
 └─────────┬────────────────────────────────────────────┘
           │ CDP WebSocket (transparent proxy)
           ▼
@@ -110,7 +110,7 @@ configured upstream proxy as described in
 │  ├─ Cookie jar on the default CDP context             │
 │  └─ Renders SERP → returns HTML                      │
 └─────────┬────────────────────────────────────────────┘
-          │ HTTPS (through Myst VPN exit IP)
+          │ explicit proxy → browser bridge → final-hop policy
           ▼
 ┌──────────────────────────────────────────────────────┐
 │  Target search engine                                │
@@ -193,7 +193,7 @@ payload = {
     # heuristics for any remaining post-navigate work.
 }
 params["method"] = "POST"
-params["url"] = "http://127.0.0.1:3010/v1/scrape"
+params["url"] = os.environ["CRW_SCRAPE_URL"]
 params["data"] = json.dumps(payload)
 params["headers"] = headers
 ```
@@ -280,7 +280,7 @@ signal to escalate to the CDP renderer. The flow is:
    duration, so a second query to the same engine waits.
 
 2. **CDP connection**: CRW opens a WebSocket to
-   `ws://127.0.0.1:9224/devtools/browser` (the CDP shim).
+   `ws://cdp-shim:9224/devtools/browser` on the dedicated CDP network.
 
 3. **Target creation**: CRW calls `Target.createTarget` with the search engine
    URL. Obscura creates a new page on its shared default browser context.
@@ -490,8 +490,8 @@ prefetch is a normal reqwest fetch, not an obscura browser navigation. CRW uses
 it to detect content type before spending a browser render.
 
 The compose default routes CRW's reqwest traffic through
-`HTTPS_PROXY=http://127.0.0.1:3128` and
-`HTTP_PROXY=http://127.0.0.1:3128`. The local prefetch-blocking proxy rejects
+`HTTPS_PROXY=http://crw-prefetch-bridge:3128` and the equivalent
+`HTTP_PROXY`. The final-hop prefetch policy rejects
 search-engine prefetches with `403 Forbidden` without opening an upstream
 connection. CRW auto mode sees that blocked HTTP result and escalates to the
 chrome/obscura CDP renderer. Non-search HTTPS requests are forwarded through
@@ -632,7 +632,10 @@ HTTP prefetch requests. For configured search-engine hosts it returns
 **Architecture:**
 
 ```
-CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
+CRW :3010 ──HTTP proxy──> crw-prefetch-bridge :3128
+                               │
+                               v
+                         prefetch policy in netns-holder
                                │
                                ├─ Search engine URL → 403 (no network request)
                                ├─ Internal/private target → 403 (logged)
@@ -645,10 +648,10 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
 
 **How it works:**
 
-1. CRW is configured with `HTTPS_PROXY=http://127.0.0.1:3128` and
-   `HTTP_PROXY=http://127.0.0.1:3128` so its reqwest HTTP fetcher routes
-   through the prefetch-blocking proxy. `NO_PROXY` keeps loopback traffic such
-   as the CDP WebSocket direct.
+1. CRW is configured with
+   `HTTPS_PROXY=http://crw-prefetch-bridge:3128` and the equivalent
+   `HTTP_PROXY`. CRW has no direct internet route. Its CDP and SearXNG peers
+   are explicit `NO_PROXY` names on separate internal networks.
 2. CRW uses auto mode (`RENDER_JS_DEFAULT` unset) so HTTP prefetch failure
    or 403 status causes escalation to the CDP renderer.
 3. The proxy intercepts every HTTP request from CRW:
@@ -662,9 +665,13 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
      loopback/private/link-local/reserved/non-global IP addresses, and legacy
      IPv4 shorthand forms. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, the
      proxy also resolves DNS names and blocks any name that resolves to a
-     blocked address. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, this DNS
+     blocked address. The connection then uses only that validated address set;
+     it does not resolve the hostname a second time, closing the validation-to-
+     connect rebinding race. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, this DNS
      resolution check is skipped to avoid leaking target DNS outside the
-     configured upstream proxy path. Blocked attempts are logged.
+     configured upstream proxy path. A public-looking name that the upstream
+     resolves privately is therefore a documented residual risk. Blocked
+     attempts are logged.
    - **Other plain HTTP URLs**: returns `403 Forbidden` by default with the
      message `HTTP URLs are disabled by ONYX_AGENT_ALLOW_HTTP_URLS=false. Use
      an https:// URL instead.` Set `ONYX_AGENT_ALLOW_HTTP_URLS=true` to allow
@@ -686,24 +693,17 @@ CRW :3010 ──HTTP proxy──> prefetch-blocking-proxy :3128
    rather than `CRW_CRAWLER__PROXY`, so `REQUEST_PROXY` is not set and CRW
    usually does not send `createBrowserContext` at all.
 
-Code-interpreter executor pods receive
-`HTTP_PROXY`/`HTTPS_PROXY=http://127.0.0.1:3128` when
-`ONYX_AGENT_OUTBOUND_PROXY_URL` is configured, or when
-`ONYX_AGENT_ALLOW_HTTP_URLS=false`. Python `urllib` therefore sees an ordinary
-HTTP proxy endpoint, while the sidecar adapts upstream egress to HTTP, HTTPS,
-SOCKS5, or SOCKS5h if an upstream proxy is configured. With the default
-`ONYX_AGENT_ALLOW_HTTP_URLS=false`, ordinary executor HTTP clients that honor
-proxy variables get the same plain-HTTP block as CRW prefetch requests. The
-same internal/private and search-engine blocks apply, but generated code can
-still bypass proxy variables with raw sockets, explicit no-proxy options, or
-tools that ignore proxy settings.
+When executor networking is enabled, executor pods live only on the internal
+`onyx-code-interpreter-executor` network and receive
+`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY=http://executor-egress-bridge:3128`.
+Direct sockets have no internet or stack route; the bridge reaches a separate
+search-blocking `executor` policy in `netns-holder`.
 
 **ONYX_AGENT_OUTBOUND_PROXY_URL usage:**
 
 When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set (e.g., Tor SOCKS proxy), the prefetch-blocking proxy
 routes its own upstream requests through `ONYX_AGENT_OUTBOUND_PROXY_URL`. This
-keeps CRW prefetch and ordinary code-interpreter HTTP-client traffic on the
-same proxy path as obscura.
+keeps all final-hop policy connections on the configured upstream path.
 
 For `https://` upstream proxies, the prefetch-blocking proxy verifies the
 proxy certificate, sends SNI for the proxy host, and requires TLS 1.3 by
@@ -711,22 +711,25 @@ default when the Python/OpenSSL runtime supports it.
 
 The full service-by-service `ONYX_AGENT_OUTBOUND_PROXY_URL` behavior, including SearXNG settings
 generation and code-interpreter executor pod caveats, is documented in
-[VPN routing and proxies](vpn_routing_and_proxies.md#how-proxy_url-applies-by-service).
+[VPN routing and proxies](vpn_routing_and_proxies.md#final-hop-routing-matrix).
 
 | Component | Proxy used | How |
 |-----------|-----------|-----|
-| **Obscura (CDP browser)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `OBSCURA_PROXY` in docker-compose.proxy.yml |
+| **Obscura (CDP browser)** | browser policy | `OBSCURA_PROXY=http://obscura-egress-bridge:3128` |
+| **Obscura MCP browser** | separate browser policy instance | explicit `--proxy http://obscura-mcp-egress-bridge:3128` |
 | **Prefetch-blocking proxy (HTTP/CONNECT)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `ONYX_AGENT_OUTBOUND_PROXY_URL` env var → upstream connection |
 | **CRW HTTP prefetch** | prefetch-blocking proxy | `HTTPS_PROXY` / `HTTP_PROXY` env vars on the CRW container |
 | **CRW CDP (obscura)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
-| **SearXNG** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `outgoing.proxies` in settings.yml |
-| **Code-interpreter HTTP clients** | prefetch-blocking proxy | `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY=http://127.0.0.1:3128` in executor pods; search-engine hosts are blocked |
+| **SearXNG** | none by default | CRW-backed engines use only the internal CRW peer network |
+| **Code-interpreter HTTP clients** | executor policy | local executor bridge; search-engine and private/internal targets are blocked |
 | **OnyxWebCrawler** | shared namespace direct egress | Does not go through CRW or explicit `ONYX_AGENT_OUTBOUND_PROXY_URL`; traffic uses the Mysterium VPN when `MYST_VPN_ENABLED=true`, otherwise the Docker bridge |
 
 **CONNECT handling:**
 
 For HTTPS URLs (which include all search engine URLs), reqwest uses HTTP
 CONNECT tunneling. The proxy handles CONNECT requests as follows:
+- **Port 80 while `ONYX_AGENT_ALLOW_HTTP_URLS=false`**: returns `403` before
+  opening a tunnel. Other allowed ports are opaque and are not protocol-inspected.
 - **Search engine hosts**: returns `403` immediately (rejects the CONNECT).
   This forces CRW's auto mode to escalate to the CDP renderer (obscura),
   eliminating the double-hit. The search engine never sees the bare reqwest
@@ -821,7 +824,7 @@ This is critical for two reasons:
 The open_url path does **not** involve the SearXNG container. It goes directly
 from Onyx to a content provider. In the README-recommended configuration, that
 provider is **Firecrawl**, configured with API Base URL
-`http://localhost:3010/v1/scrape` and any non-empty API key placeholder.
+`http://crw-service-gateway:3010/v1/scrape` and any non-empty API key placeholder.
 Self-hosted CRW runs open by default unless auth keys are configured. Upstream
 Onyx falls back to `OnyxWebCrawler` if no content provider is configured,
 but that is not the recommended wrapper setup.
@@ -835,7 +838,7 @@ but that is not the recommended wrapper setup.
 │  (parallel URLs)     │
 └─────────┬────────────┘
           │ POST configured Firecrawl URL (per URL, in parallel)
-          │ README: http://localhost:3010/v1/scrape
+          │ README: http://crw-service-gateway:3010/v1/scrape
           │ {url: <url>, formats: ["markdown"]}
           ▼
 ┌──────────────────────────────────────────────────────┐
@@ -845,7 +848,7 @@ but that is not the recommended wrapper setup.
 │  ├─ Non-search HTTPS → prefetch tunnel                │
 │  │  (return prefetch result, or CDP if needed)        │
 │  ├─ Non-search HTTP → 403 unless explicitly allowed   │
-│  ├─ CDP client → ws://127.0.0.1:9224                  │
+│  ├─ CDP client → ws://cdp-shim:9224                   │
 │  └─ Returns {success, data: {markdown}} envelope      │
 └─────────┬────────────────────────────────────────────┘
           │ CDP WebSocket only after CRW escalates
@@ -855,7 +858,7 @@ but that is not the recommended wrapper setup.
 │  ├─ STEALTH_JS stripping                             │
 │  ├─ waitUntil injection                              │
 │  ├─ proxyServer stripping safety net                 │
-│  └─ Proxies to → ws://127.0.0.1:9222                  │
+│  └─ Proxies to → ws://obscura:9222                    │
 └─────────┬────────────────────────────────────────────┘
           │ CDP WebSocket
           ▼
@@ -934,7 +937,7 @@ selected at configuration time:
 
 - **FirecrawlClient**: Sends URLs to the configured scrape endpoint (default
   upstream constant points at Firecrawl's hosted API; README recommendation
-  for this deployment: `http://localhost:3010/v1/scrape`). Goes through CRW.
+  for this deployment: `http://crw-service-gateway:3010/v1/scrape`). Goes through CRW.
   Search-engine targets and pages that need browser rendering go through CDP
   shim → Obscura; ordinary non-search pages may be returned from CRW's HTTP
   prefetch without Obscura. This is the recommended wrapper configuration.
@@ -950,7 +953,7 @@ If no content provider is configured, `OnyxWebCrawler` is the upstream default;
 the README setup tells you to configure Firecrawl and set it as default.
 
 SSRF handling differs by provider. The recommended Firecrawl path sends the
-target URL as JSON to the configured CRW endpoint (`http://localhost:3010/v1/scrape`
+target URL as JSON to the configured CRW endpoint (`http://crw-service-gateway:3010/v1/scrape`
 in this wrapper); Onyx's upstream `ssrf_safe_get()` target validation is not
 applied to that URL before CRW/Obscura handles it. The fallback
 `OnyxWebCrawler` path does use `ssrf_safe_get()` and therefore applies Onyx's
@@ -997,7 +1000,7 @@ When Firecrawl is configured as the content provider:
 ```
 Onyx open_url → FirecrawlClient.contents(urls)
   → POST <configured Firecrawl base_url>
-      README recommendation: http://localhost:3010/v1/scrape
+      README recommendation: http://crw-service-gateway:3010/v1/scrape
       payload: {url: <url>, formats: ["markdown"]}
   → CRW scrape endpoint
     ├─ HTTP prefetch through prefetch-blocking proxy
@@ -1128,7 +1131,7 @@ routes under `/firecrawl/*`. This stack uses CRW's native scrape endpoint:
   prefetch-blocking proxy returns 403 for search-engine prefetches, and CRW
   escalates to the chrome/obscura CDP renderer.
 - `/v1/scrape` for the README-recommended Onyx Firecrawl content provider
-  configuration (`http://localhost:3010/v1/scrape`). Onyx's FirecrawlClient
+  configuration (`http://crw-service-gateway:3010/v1/scrape`). Onyx's FirecrawlClient
   sends `{url, formats: ["markdown"]}` to the configured URL.
 These calls go through CRW's `FallbackRenderer` pipeline. The HTTP prefetch
 runs first; PDFs are handled natively by `pdf_inspector` without reaching the
@@ -1271,13 +1274,13 @@ browsing/search data.
   provider, or CRW's auto-mode HTTP prefetch is returning usable HTTP content
   without escalating to CDP.
 - Check that the prefetch-blocking proxy is running (`docker compose ps
-  prefetch-blocking-proxy`). If it's down, CRW's HTTP prefetch goes direct
-  and search-engine prefetches will no longer be locally forced to CDP.
-- Check that the CRW container has `HTTPS_PROXY=http://127.0.0.1:3128` and
-  `HTTP_PROXY=http://127.0.0.1:3128` from `docker-compose.yaml`. Without
-  those env vars, CRW's HTTP prefetch doesn't go through the blocking proxy.
+  prefetch-blocking-proxy` and `crw-prefetch-bridge`). If either is down,
+  CRW prefetch fails closed; it has no direct fallback route.
+- Check that CRW has `HTTPS_PROXY=http://crw-prefetch-bridge:3128` and the
+  equivalent `HTTP_PROXY` in the effective Compose model.
 - Also verify that the Onyx content provider is actually configured as
-  Firecrawl (README: API Base URL `http://localhost:3010/v1/scrape`, any
+  Firecrawl (README: API Base URL
+  `http://crw-service-gateway:3010/v1/scrape`, any
   non-empty API key placeholder) in Onyx Admin → Web Search. If no content
   provider is configured, `open_url` uses `OnyxWebCrawler` (direct HTTP) and
   never touches CRW at all.
@@ -1373,10 +1376,10 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 |----------|---------|-------------|
 | `CRW_RENDERER__MODE` | `chrome` | Selects which JS renderers are in the ladder (chrome only, not lightpanda). |
 | `CRW_RENDERER__RENDER_JS_DEFAULT` | (unset) | Auto mode: HTTP prefetch first, escalate to CDP on failure/403, blocked/thin content, or JS-required detection. The prefetch-blocking proxy returns 403 for configured search-engine hosts, forcing CRW to escalate to obscura for SERPs. Non-search HTTPS pages may return from the HTTP prefetch when usable; plain HTTP pages are blocked unless explicitly allowed. Do not set this to `true`; forced render-js mode propagates prefetch failures instead of using the auto-mode escalation path. |
-| `HTTPS_PROXY` / `HTTP_PROXY` | `http://127.0.0.1:3128` | Routes CRW's reqwest HTTP prefetch through the prefetch-blocking proxy without setting CRW's `REQUEST_PROXY` task-local. This avoids per-request `Target.createBrowserContext {proxyServer}` and its hardcoded 2s timeout. |
+| `HTTPS_PROXY` / `HTTP_PROXY` | `http://crw-prefetch-bridge:3128` | Routes CRW's reqwest prefetch through the restricted bridge without setting `REQUEST_PROXY`. |
 | `NO_PROXY` | `127.0.0.1,localhost,::1` | Keeps CRW loopback traffic, including the CDP shim WebSocket and health checks, direct. |
 | `CRW_CRAWLER__PROXY` | (unset) | Intentionally not used for the prefetch-blocking proxy. Setting it would make CRW include `proxyServer` in `Target.createBrowserContext`; the shim can strip this as a safety net, but the compose default avoids that path entirely. |
-| `CRW_RENDERER__CHROME__WS_URL` | `ws://127.0.0.1:9224/devtools/browser` | CDP shim endpoint (not obscura directly) |
+| `CRW_RENDERER__CHROME__WS_URL` | `ws://cdp-shim:9224/devtools/browser` | CDP shim endpoint on the dedicated network |
 | `CRW_RENDERER__CHROME_TIMEOUT_MS` | `50000` | Per-page navigation timeout for the chrome (obscura) renderer tier. Must be ≥ `OBSCURA_NAV_TIMEOUT_MS` so CRW's deadline doesn't fire before obscura's nav timeout. |
 | `CRW_RENDERER__HTTP_TIMEOUT_MS` | `60000` | HTTP prefetch timeout. CRW always runs an HTTP prefetch before the CDP renderer (even with `RENDER_JS_DEFAULT=true`) to check Content-Type. PDFs and usable non-search HTTPS results can bypass obscura; plain HTTP results can only do so if `ONYX_AGENT_ALLOW_HTTP_URLS=true`. Ceiling, not delay — completes in 1-3s on happy path. Contributes to `ladder_min`. No happy-path impact. |
 | `CRW_RENDERER__CHROME_NAV_BUDGET_MS` | `48000` | Post-navigate budget for the chrome renderer tier. This races CRW's post-navigation work after `Page.loadEventFired`: SPA selector poll, content stability, challenge retry, and DOM extraction. |
@@ -1391,7 +1394,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 |----------|---------|-------------|
 | `CDP_SHIM_HOST` | `0.0.0.0` | Listen address |
 | `CDP_SHIM_PORT` | `9224` | Listen port |
-| `OBSCURA_CDP_URL` | `ws://127.0.0.1:9222/devtools/browser` | Obscura CDP endpoint |
+| `OBSCURA_CDP_URL` | `ws://obscura:9222/devtools/browser` | Obscura CDP endpoint on the browser-control network |
 | `CDP_SHIM_STRIP_STEALTH_JS` | `1` | Strip CRW's STEALTH_JS (1=yes, 0=no) |
 | `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` | `networkidle2` | `waitUntil` for search engine URLs (SERPs). SERPs are JS-heavy SPAs that load results via XHR — network idle ensures results have loaded. Options: `domcontentloaded`, `load`, `networkidle0`, `networkidle2`. |
 | `OBSCURA_BROWSER_WAIT_UNTIL_WEB` | `load` | `waitUntil` for non-search URLs that CRW escalates to CDP (`open_url` web pages). Content is ready at `load`; many modern sites keep long-polling connections that prevent network idle. |

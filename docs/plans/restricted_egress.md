@@ -1,5 +1,12 @@
 # Restricted Egress Network Plan
 
+> **Status: implemented (2026-07-13).** The normative runtime documentation is
+> now [VPN routing and restricted egress](../vpn_routing_and_proxies.md),
+> [Internal network security](../internal_network_security.md), and
+> [Request handling](../request_handling.md). “Current state” and workstream
+> wording below records the pre-implementation design context; it is retained
+> as the architecture/validation decision record, not as deployed topology.
+
 ## Goal
 
 Implement one restricted-egress model for every stack component that can give

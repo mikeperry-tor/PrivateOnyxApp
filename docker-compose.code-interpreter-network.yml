@@ -1,0 +1,78 @@
+## Optional proxy-only executor network. Selected only when
+## ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true.
+
+services:
+  netns-holder:
+    networks:
+      executor-policy-upstream:
+        aliases: [myst-client]
+
+  executor-egress-proxy:
+    image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
+    restart: unless-stopped
+    network_mode: "service:netns-holder"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      PREFETCH_PROXY_HOST: "0.0.0.0"
+      PREFETCH_PROXY_PORT: "3129"
+      EGRESS_PROXY_POLICY: executor
+      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
+      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
+      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
+      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-localhost,host.docker.internal}"
+    volumes:
+      - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
+    command: ["python", "-u", "/app/prefetch_blocking_proxy.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 3129), 2); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      netns-holder: {condition: service_started}
+
+  executor-egress-bridge:
+    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3129"]
+    networks: [executor-egress, executor-policy-upstream]
+    depends_on:
+      executor-egress-proxy: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  code-interpreter:
+    environment:
+      ONYX_CODE_INTERPRETER_ENABLE_NETWORK: "true"
+      PYTHON_EXECUTOR_DOCKER_NETWORK: "onyx-code-interpreter-executor"
+      ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL: "http://executor-egress-bridge:3128"
+      ONYX_AGENT_EXECUTOR_NO_PROXY: "127.0.0.1,localhost,::1"
+      WRAPPER_PATCH_STRICT: "true"
+      PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"
+    volumes: !override
+      - ${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./onyx/patches/sitecustomize_code_interpreter:/app/wrapper-patches:ro
+    depends_on:
+      executor-egress-bridge: {condition: service_healthy}
+
+  api_server:
+    environment:
+      ONYX_CODE_INTERPRETER_ENABLE_NETWORK: "true"
+      WRAPPER_PATCH_STRICT: "true"
+
+networks:
+  executor-egress:
+    name: onyx-code-interpreter-executor
+    internal: true
+  executor-policy-upstream: {internal: true}
