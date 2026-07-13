@@ -14,7 +14,33 @@ if [ "${MYST_VPN_ENABLED:-true}" = "false" ]; then
     echo "VPN-disabled readiness failed: unexpected myst0 interface" >&2
     exit 1
   fi
-  ip -4 route show default dev eth0 | grep -q '^default '
+
+  # Docker assigns ethN names from network-attachment order. In the full
+  # topology the Internet-capable default network is not necessarily eth0,
+  # so validate the selected IPv4 default route rather than an interface name.
+  default_dev="$(
+    ip -4 route show default 2>/dev/null \
+      | awk '$1 == "default" {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "dev" && $(i + 1) != "myst0") {
+              print $(i + 1)
+              exit
+            }
+          }
+        }'
+  )"
+  if [ -z "${default_dev}" ]; then
+    echo "VPN-disabled readiness failed: no non-myst0 IPv4 default route" >&2
+    exit 1
+  fi
+  if ! ip link show dev "${default_dev}" >/dev/null 2>&1; then
+    echo "VPN-disabled readiness failed: default interface ${default_dev} is missing" >&2
+    exit 1
+  fi
+  if ! ip -4 -o addr show dev "${default_dev}" scope global | grep -q .; then
+    echo "VPN-disabled readiness failed: default interface ${default_dev} has no global IPv4 address" >&2
+    exit 1
+  fi
   exit 0
 fi
 

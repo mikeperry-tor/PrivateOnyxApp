@@ -132,7 +132,10 @@ A query succeeds against the derived provider resolver while source-bound to
 the `myst0` address. The fixed probe contains no user browsing hostname. It
 also ensures a stale control-plane Connected state makes the container
 unhealthy. In explicit no-VPN mode, readiness instead requires no `myst0` and
-a direct default route on `eth0`.
+a usable IPv4 default route on a non-`myst0` interface. The interface name is
+not fixed because Docker assigns `ethN` names according to network-attachment
+order; the full restricted topology commonly places the default route on an
+interface other than `eth0`.
 
 Only `myst-client` has the `autoheal=true` label. Restarting it leaves the
 `netns-holder` namespace—and therefore every dependent service's namespace

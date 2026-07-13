@@ -107,6 +107,9 @@ Most likely variables you want to change:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **Master VPN switch**:
   - Set `MYST_VPN_ENABLED=false` to run the entire stack without the Mysterium VPN. The `myst-client` container still starts and joins the shared `netns-holder` namespace (so all service wiring stays identical), but it idles the daemon without arming the kill-switch or attempting to connect. Traffic egresses directly via the Docker bridge. This skips the Myst wallet/funding requirement entirely.
+  - No-VPN readiness requires no stale `myst0` interface and a usable IPv4
+    default route on whichever Docker interface owns it; full-mode network
+    attachment order means that interface is not necessarily `eth0`.
   - With the VPN enabled, Myst readiness requires a connected daemon, a usable
     `myst0` subnet, and a source-bound query to the provider resolver. Docker
     autoheal restarts only `myst-client` when that data-plane check fails; the
