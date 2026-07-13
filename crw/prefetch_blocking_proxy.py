@@ -31,13 +31,14 @@ For prefetch traffic this proxy:
 
 Before any CONNECT tunnel or HTTP forwarding, the proxy rejects loopback,
 private/RFC1918, link-local, multicast, reserved, and other non-global IP
-destinations. It also rejects ``localhost``,
-``host.docker.internal``, their subdomains, and single-label Docker-style
-hostnames. When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is empty, DNS names are
-resolved directly through the Mysterium provider resolver when VPN routing is
-enabled, or through system DNS only in explicit no-VPN mode; all returned
-addresses are classified. When an upstream proxy is set, target DNS resolution
-is skipped so the target hostname is sent only through the proxy protocol.
+destinations. It also rejects loopback names, Docker Desktop's current and
+legacy ``*.docker.internal`` host/gateway names, their subdomains, and
+single-label Docker-style hostnames. When
+``ONYX_AGENT_OUTBOUND_PROXY_URL`` is empty, DNS names are resolved directly
+through the Mysterium provider resolver when VPN routing is enabled, or through
+system DNS only in explicit no-VPN mode; all returned addresses are classified.
+When an upstream proxy is set, target DNS resolution is skipped so the target
+hostname is sent only through the proxy protocol.
 
 When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
 routes its own upstream requests through that proxy. Restricted components
@@ -158,16 +159,37 @@ TUNNEL_CONNECT_TIMEOUT = int(os.environ.get("PREFETCH_TUNNEL_TIMEOUT", "15"))
 # Buffer size for tunneling.
 TUNNEL_BUFFER = 65536
 
-# Hostnames that should never be proxied, even when an upstream proxy is
-# configured and arbitrary DNS resolution is intentionally avoided.
-BLOCKED_HOSTNAMES = frozenset(
+# Built-in hostnames that should never be proxied. Keep these independent of
+# operator additions so configuration cannot remove the Docker/loopback floor.
+BUILTIN_BLOCKED_HOSTNAMES = frozenset(
+    {
+        "localhost",
+        "localhost.localdomain",
+        "host.docker.internal",
+        "gateway.docker.internal",
+        "vm.docker.internal",
+        # Deprecated Docker Desktop names remain blocked for older engines.
+        "docker.for.mac.host.internal",
+        "docker.for.mac.localhost",
+        "docker.for.mac.gateway.internal",
+        "docker.for.win.host.internal",
+        "docker.for.win.localhost",
+    }
+)
+BUILTIN_BLOCKED_HOSTNAME_SUFFIXES = frozenset({"docker.internal"})
+
+# Additional deployment-specific internal names. Docker service names,
+# container names, and the aliases in this repository are single-label and
+# are already rejected structurally.
+CONFIGURED_BLOCKED_HOSTNAMES = frozenset(
     h.strip().lower().rstrip(".")
     for h in os.environ.get(
         "PREFETCH_BLOCK_INTERNAL_HOSTS",
-        "localhost,host.docker.internal",
+        "",
     ).split(",")
     if h.strip()
 )
+BLOCKED_HOSTNAMES = BUILTIN_BLOCKED_HOSTNAMES | CONFIGURED_BLOCKED_HOSTNAMES
 
 logging.basicConfig(
     level=os.environ.get("PREFETCH_PROXY_LOG_LEVEL", "INFO").upper(),
@@ -180,9 +202,13 @@ logger = logging.getLogger("prefetch-proxy")
 
 
 def _normalize_host(host: str) -> str:
-    """Normalize a parsed host for comparison and IP classification."""
-    host = host.strip().strip("[]").lower().rstrip(".")
-    return host
+    """Normalize a parsed host, including IDNA-equivalent DNS separators."""
+    normalized = host.strip().strip("[]").lower().rstrip(".")
+    try:
+        return normalized.encode("idna").decode("ascii").rstrip(".")
+    except UnicodeError:
+        # Classification rejects remaining non-ASCII text before any request.
+        return normalized
 
 
 def _parse_ip_literal(
@@ -230,14 +256,22 @@ def _loose_ipv4_literal(host: str) -> str | None:
 
 def _hostname_block_reason(host: str) -> str | None:
     """Return a block reason for hostnames that are internal by name."""
+    host = _normalize_host(host)
     if not host:
         return "empty host"
+    if not host.isascii():
+        return "invalid IDNA hostname"
     if "%" in host:
         return "IPv6 zone identifier"
     if host in BLOCKED_HOSTNAMES:
         return "blocked internal hostname"
     if any(host.endswith("." + blocked) for blocked in BLOCKED_HOSTNAMES):
         return "blocked internal hostname suffix"
+    if any(
+        host == suffix or host.endswith("." + suffix)
+        for suffix in BUILTIN_BLOCKED_HOSTNAME_SUFFIXES
+    ):
+        return "blocked Docker-internal hostname suffix"
     if "." not in host:
         return "single-label/internal hostname"
     return None
@@ -285,15 +319,20 @@ def _interface_ipv4_network(interface: str) -> tuple[ipaddress.IPv4Address, ipad
     return address, network
 
 
-def _myst_provider_dns_ip() -> str:
-    """Return Myst's provider DNS address without consulting system DNS."""
+def _myst_provider_dns_endpoint() -> tuple[str, str]:
+    """Return (provider DNS, local VPN IP) without consulting system DNS."""
     local_address, network = _interface_ipv4_network(MYST_VPN_INTERFACE)
     if network.prefixlen == 32:
         raise RuntimeError("cannot derive provider DNS from a /32 Myst interface")
     provider_dns = network.network_address + 1
     if provider_dns == local_address:
         raise RuntimeError("derived provider DNS address equals the local Myst address")
-    return str(provider_dns)
+    return str(provider_dns), str(local_address)
+
+
+def _myst_provider_dns_ip() -> str:
+    """Return Myst's provider DNS address without consulting system DNS."""
+    return _myst_provider_dns_endpoint()[0]
 
 
 def _encode_dns_name(host: str) -> bytes:
@@ -380,21 +419,17 @@ def _parse_dns_a_response(message: bytes, query_id: int) -> tuple[set[str], bool
     return addresses, False
 
 
-def _bind_socket_to_interface(sock: socket.socket, interface: str) -> None:
-    """Bind a socket to the VPN device, failing closed if that is impossible."""
+def _bind_socket_to_vpn_address(sock: socket.socket, local_ip: str) -> None:
+    """Source-bind a DNS socket to the Myst address without extra capabilities."""
     try:
-        sock.setsockopt(
-            socket.SOL_SOCKET,
-            socket.SO_BINDTODEVICE,
-            interface.encode("ascii") + b"\x00",
-        )
-    except (AttributeError, OSError, UnicodeError) as exc:
+        sock.bind((local_ip, 0))
+    except OSError as exc:
         raise RuntimeError(
-            f"cannot bind provider DNS socket to VPN interface {interface!r}"
+            f"cannot source-bind provider DNS socket to Myst address {local_ip}"
         ) from exc
 
 
-async def _dns_query_a(host: str, resolver_ip: str, interface: str) -> set[str]:
+async def _dns_query_a(host: str, resolver_ip: str, local_ip: str) -> set[str]:
     """Resolve A records against a literal resolver through one VPN device."""
     query_id = secrets.randbits(16)
     query = (
@@ -405,7 +440,7 @@ async def _dns_query_a(host: str, resolver_ip: str, interface: str) -> set[str]:
     loop = asyncio.get_running_loop()
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        _bind_socket_to_interface(udp_sock, interface)
+        _bind_socket_to_vpn_address(udp_sock, local_ip)
         udp_sock.setblocking(False)
         udp_sock.connect((resolver_ip, 53))
         await asyncio.wait_for(
@@ -424,7 +459,7 @@ async def _dns_query_a(host: str, resolver_ip: str, interface: str) -> set[str]:
 
     tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        _bind_socket_to_interface(tcp_sock, interface)
+        _bind_socket_to_vpn_address(tcp_sock, local_ip)
         tcp_sock.setblocking(False)
         await asyncio.wait_for(
             loop.sock_connect(tcp_sock, (resolver_ip, 53)),
@@ -457,8 +492,8 @@ async def _resolve_target_host(host: str, port: int) -> set[str]:
     """Resolve public targets through Myst DNS, or system DNS in no-VPN mode."""
     if not MYST_VPN_ENABLED:
         return await _resolve_system_host(host, port)
-    resolver_ip = _myst_provider_dns_ip()
-    return await _dns_query_a(host, resolver_ip, MYST_VPN_INTERFACE)
+    resolver_ip, local_ip = _myst_provider_dns_endpoint()
+    return await _dns_query_a(host, resolver_ip, local_ip)
 
 
 async def _validate_destination(

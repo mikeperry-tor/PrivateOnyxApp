@@ -96,8 +96,9 @@ Every final-hop policy rejects:
 - loopback, private/RFC1918, link-local, multicast, unspecified, reserved, and
   other non-global IP literals;
 - legacy IPv4 shorthand after normalization;
-- localhost, `host.docker.internal`, configured internal names, their
-  subdomains, and single-label Docker-style names;
+- localhost names, every `*.docker.internal` name, known legacy Docker Desktop
+  host/gateway names, configured additional internal names, their subdomains,
+  and single-label Docker service/container/alias names;
 - DNS names whose selected resolver answer contains any blocked address, when
   no upstream proxy is configured.
 
@@ -117,10 +118,12 @@ content-inspected.
 
 With Myst enabled, direct mode derives the provider DNS address from the
 `myst0` IPv4 subnet and sends DNS packets directly to that literal address.
-The DNS sockets are bound to `myst0`; failure to identify or bind that device
-fails the request closed. Docker's `127.0.0.11` resolver is not used for
-browsing targets. Validation queries A records because IPv6 is disabled in the
-trusted routing namespace, then returns the exact approved address set.
+The DNS sockets are source-bound to the IPv4 address assigned to `myst0`, and
+the provider resolver is on that interface's directly connected subnet.
+Failure to identify or bind that address fails the request closed without
+granting the proxy `CAP_NET_RAW`. Docker's `127.0.0.11` resolver is not used
+for browsing targets. Validation queries A records because IPv6 is disabled in
+the trusted routing namespace, then returns the exact approved address set.
 Connection code retries only those addresses and never passes the hostname to
 a second resolver call. HTTP Host and TLS SNI retain the original hostname. The unit test
 `tests/test_restricted_egress_proxy.py` verifies resolver selection and
@@ -132,6 +135,15 @@ discovery and an explicitly configured internal upstream proxy such as
 `host.docker.internal`; those lookups contain no browsing target hostname.
 Any VPN-switch value other than the exact strings `true` and `false` fails
 policy-proxy startup.
+
+The built-in Docker and loopback hostname floor cannot be removed with
+`PREFETCH_BLOCK_INTERNAL_HOSTS`; that variable only adds deployment-specific
+multi-label names. All current Compose service names, container-style names,
+and explicit network aliases are single-label and are rejected independently.
+Hostname classification applies IDNA normalization first, including Unicode
+characters that DNS treats as dot separators.
+If a future override introduces a dotted internal alias outside
+`*.docker.internal`, add it through `PREFETCH_BLOCK_INTERNAL_HOSTS`.
 
 ### Upstream-proxy DNS residual risk
 

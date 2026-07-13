@@ -93,6 +93,53 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(module._is_search_engine("google.com."))
         self.assertTrue(module._is_search_engine("WWW.GOOGLE.COM."))
 
+    def test_default_docker_internal_names_are_blocked(self) -> None:
+        module = _load_module()
+        for host in (
+            "host.docker.internal",
+            "gateway.docker.internal",
+            "vm.docker.internal",
+            "kubernetes.docker.internal",
+            "subdomain.gateway.docker.internal",
+            "docker.for.mac.host.internal",
+            "docker.for.mac.localhost",
+            "docker.for.mac.gateway.internal",
+            "docker.for.win.host.internal",
+            "docker.for.win.localhost",
+        ):
+            with self.subTest(host=host):
+                self.assertIsNotNone(module._hostname_block_reason(host))
+
+    def test_idna_equivalent_docker_internal_name_is_blocked(self) -> None:
+        module = _load_module()
+        self.assertIsNotNone(
+            module._hostname_block_reason(
+                "HOST\N{IDEOGRAPHIC FULL STOP}"
+                "DOCKER\N{IDEOGRAPHIC FULL STOP}INTERNAL"
+            )
+        )
+
+    def test_compose_style_service_and_container_names_are_blocked(self) -> None:
+        module = _load_module()
+        for host in (
+            "api_server",
+            "crw-service-gateway",
+            "onyx-api_server-1",
+            "executor-egress-bridge",
+        ):
+            with self.subTest(host=host):
+                self.assertEqual(
+                    module._hostname_block_reason(host),
+                    "single-label/internal hostname",
+                )
+
+    def test_config_cannot_remove_builtin_internal_names(self) -> None:
+        module = _load_module(
+            env_overrides={"PREFETCH_BLOCK_INTERNAL_HOSTS": "custom.internal"}
+        )
+        self.assertIn("host.docker.internal", module.BLOCKED_HOSTNAMES)
+        self.assertIn("custom.internal", module.BLOCKED_HOSTNAMES)
+
     def test_upstream_proxy_logging_redacts_credentials(self) -> None:
         module = _load_module(
             env_overrides={
@@ -234,14 +281,18 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         vpn_query = AsyncMock(return_value={"93.184.216.34"})
         system_query = AsyncMock()
         with patch.object(
-            module, "_myst_provider_dns_ip", return_value="10.10.0.1"
+            module,
+            "_myst_provider_dns_endpoint",
+            return_value=("10.10.0.1", "10.10.0.2"),
         ), patch.object(module, "_dns_query_a", vpn_query), patch.object(
             module, "_resolve_system_host", system_query
         ):
             addresses = await module._resolve_target_host("example.com", 443)
 
         self.assertEqual(addresses, {"93.184.216.34"})
-        vpn_query.assert_awaited_once_with("example.com", "10.10.0.1", "myst0")
+        vpn_query.assert_awaited_once_with(
+            "example.com", "10.10.0.1", "10.10.0.2"
+        )
         system_query.assert_not_awaited()
 
     def test_provider_dns_is_first_usable_myst_subnet_address(self) -> None:
@@ -256,25 +307,21 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(module._myst_provider_dns_ip(), "10.42.7.1")
 
-    def test_provider_dns_socket_is_bound_to_myst_interface(self) -> None:
+    def test_provider_dns_socket_is_source_bound_to_myst_address(self) -> None:
         module = _load_module()
         sock = Mock()
 
-        module._bind_socket_to_interface(sock, "myst0")
+        module._bind_socket_to_vpn_address(sock, "10.42.7.2")
 
-        sock.setsockopt.assert_called_once_with(
-            module.socket.SOL_SOCKET,
-            module.socket.SO_BINDTODEVICE,
-            b"myst0\x00",
-        )
+        sock.bind.assert_called_once_with(("10.42.7.2", 0))
 
     def test_provider_dns_socket_bind_failure_is_fatal(self) -> None:
         module = _load_module()
         sock = Mock()
-        sock.setsockopt.side_effect = OSError("not permitted")
+        sock.bind.side_effect = OSError("not available")
 
-        with self.assertRaisesRegex(RuntimeError, "cannot bind provider DNS"):
-            module._bind_socket_to_interface(sock, "myst0")
+        with self.assertRaisesRegex(RuntimeError, "cannot source-bind provider DNS"):
+            module._bind_socket_to_vpn_address(sock, "10.42.7.2")
 
     async def test_explicit_no_vpn_mode_uses_system_dns(self) -> None:
         module = _load_module(env_overrides={"MYST_VPN_ENABLED": "false"})

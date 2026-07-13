@@ -369,7 +369,15 @@ ONYX_AGENT_OUTBOUND_PROXY_URL="socks5://proxy.example.com:1080"
 ONYX_AGENT_OUTBOUND_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
-The local policy proxies block private/internal literals and names. With an upstream proxy, target DNS remains remote to avoid DNS leakage, so a public-looking hostname that the upstream resolves to a private address is a residual risk. Host Tor (`socks5h://host.docker.internal:9150`) also currently requires `MYST_VPN_ALLOW_LAN_BYPASS=true`; that is a broad LAN route exemption for the trusted final-hop proxy, not general LAN access for restricted components.
+The local policy proxies block private/internal literals, all
+`*.docker.internal` names, known legacy Docker Desktop host/gateway names, and
+single-label Docker service/container names. These built-in blocks cannot be
+removed by configuration. With an upstream proxy, target DNS remains remote to
+avoid DNS leakage, so a public-looking hostname that the upstream resolves to a
+private address is a residual risk. Host Tor
+(`socks5h://host.docker.internal:9150`) also currently requires
+`MYST_VPN_ALLOW_LAN_BYPASS=true`; that is a broad LAN route exemption for the
+trusted final-hop proxy, not general LAN access for restricted components.
 
 Without an upstream proxy, Myst mode queries the provider's DNS resolver
 directly through the tunnel and pins connections to the validated answer;

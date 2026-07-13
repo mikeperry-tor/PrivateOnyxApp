@@ -381,8 +381,8 @@ Final-hop proxy destination classification should preserve the current routing
 semantics while closing the direct-mode resolution-to-connect race:
 
 - with no upstream proxy, use the Mysterium provider resolver directly through
-  sockets bound to `myst0` when VPN mode is active, or system DNS only in
-  explicit no-VPN mode;
+  sockets source-bound to the `myst0` address when VPN mode is active, or
+  system DNS only in explicit no-VPN mode;
   block any answer containing loopback, private/RFC1918, link-local, reserved,
   or other non-global addresses, and connect only to the exact validated IPs;
 - with an upstream proxy, avoid local target DNS resolution so target DNS does
@@ -399,7 +399,8 @@ would return a private address; the later lookup must never occur.
 Remote target resolution creates a deliberate residual risk in upstream-proxy
 mode: a public-looking hostname might resolve to a private address at the
 upstream proxy. The local final-hop proxy can still block IP literals,
-localhost names, `host.docker.internal`, single-label Docker-style names, and
+localhost names, the `*.docker.internal` family, known legacy Docker Desktop
+host/gateway names, single-label Docker-style names, and
 other syntactic private-target forms without opening a connection. Eliminating
 the remaining risk requires upstream-proxy-side policy, DNS-over-proxy
 classification, or explicit allowlists, and is out of scope for the first

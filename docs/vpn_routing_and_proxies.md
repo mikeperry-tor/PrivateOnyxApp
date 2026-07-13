@@ -83,9 +83,11 @@ the policy does not inspect their application protocol.
 
 Without an upstream proxy, VPN mode sends A queries directly to the Mysterium
 provider resolver at the first usable address of the `myst0` consumer subnet.
-The UDP and TCP DNS sockets are bound to `myst0`; an absent or unusable device
-fails the lookup closed. They do not use Docker's embedded resolver. The
-policy queries A records because the routing namespace disables
+The UDP and TCP DNS sockets are source-bound to the IPv4 address on `myst0`,
+and the resolver is on that interface's directly connected subnet. An absent
+or unusable device fails the lookup closed. This needs no additional container
+capability and does not use Docker's embedded resolver. The policy queries A
+records because the routing namespace disables
 IPv6. It rejects the entire answer if any address is non-global
 and connects only to an address from that validated set. It does not resolve
 the hostname again between classification and connection. The original
@@ -96,8 +98,9 @@ values `true` and `false`; other values fail startup rather than selecting a
 resolver ambiguously.
 
 With an upstream proxy, target DNS stays remote to avoid local DNS leakage.
-The policy still rejects private IP literals, localhost and host-gateway names,
-single-label service names, and configured internal names. A public-looking
+The policy still rejects private IP literals, localhost names, the current and
+legacy Docker Desktop internal-name families, single-label service/container
+names, and configured additional internal names. A public-looking
 hostname that the upstream proxy resolves to a private address remains a
 residual risk; eliminating it requires upstream-side policy or allowlisting.
 
