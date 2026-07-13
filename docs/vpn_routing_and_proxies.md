@@ -81,17 +81,32 @@ When `ONYX_AGENT_ALLOW_HTTP_URLS=false`, ordinary HTTP requests and CONNECT to
 destination port 80 are rejected. Other CONNECT ports are opaque TCP tunnels;
 the policy does not inspect their application protocol.
 
-Without an upstream proxy, the policy resolves target DNS once, rejects the
-entire answer if any address is non-global, and connects only to an address
-from that validated set. It does not resolve the hostname again between
-classification and connection. The original hostname remains available for
-HTTP Host and TLS SNI.
+Without an upstream proxy, VPN mode sends A queries directly to the Mysterium
+provider resolver at the first usable address of the `myst0` consumer subnet.
+The UDP and TCP DNS sockets are bound to `myst0`; an absent or unusable device
+fails the lookup closed. They do not use Docker's embedded resolver. The
+policy queries A records because the routing namespace disables
+IPv6. It rejects the entire answer if any address is non-global
+and connects only to an address from that validated set. It does not resolve
+the hostname again between classification and connection. The original
+hostname remains available for HTTP Host and TLS SNI. Explicit
+`MYST_VPN_ENABLED=false` mode instead uses system/Docker DNS as part of the
+operator's direct-routing choice. The policy proxies accept only the exact
+values `true` and `false`; other values fail startup rather than selecting a
+resolver ambiguously.
 
 With an upstream proxy, target DNS stays remote to avoid local DNS leakage.
 The policy still rejects private IP literals, localhost and host-gateway names,
 single-label service names, and configured internal names. A public-looking
 hostname that the upstream proxy resolves to a private address remains a
 residual risk; eliminating it requires upstream-side policy or allowlisting.
+
+Public upstream-proxy hostnames themselves are bootstrapped through the Myst
+provider resolver when VPN mode is active, then connected by validated IP
+while retaining TLS SNI. Literal proxy IPs need no lookup. Explicit internal
+proxy endpoints such as `host.docker.internal`, and all proxy bootstrap in
+no-VPN mode, use the system resolver. Arbitrary browsing target names are
+never sent to Docker DNS in upstream-proxy mode.
 
 Upstream proxy URLs are validated before a policy listener starts. Supported
 schemes are `http`, `https`, `socks5`, and `socks5h`; malformed ports,

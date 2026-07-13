@@ -946,8 +946,10 @@ Upgrade notes:
   messages when `ONYX_AGENT_OUTBOUND_PROXY_URL` is set.
 - Verify `PYTHON_EXECUTOR_DOCKER_NETWORK` remains the concrete internal network
   name, never `container:*`, and the bridge is the only executor-network peer.
-- Re-run direct-mode DNS pinning, port-80 CONNECT, search-host block, private
-  target block, and upstream-proxy remote-DNS residual-risk checks.
+- Re-run Myst-provider DNS selection and `myst0` socket-binding checks,
+  explicit no-VPN system-DNS selection, direct-mode DNS pinning, port-80
+  CONNECT, search-host/private-target blocks, and upstream-proxy
+  no-local-target-resolution checks.
 
 ## Local embedding shim
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import ipaddress
 import os
+import struct
 import unittest
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "crw" / "prefetch_blocking_proxy.py"
@@ -22,6 +24,7 @@ def _load_module(
     env = {
         "EGRESS_PROXY_POLICY": policy,
         "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "test-bridge",
+        "MYST_VPN_ENABLED": "true",
         "ONYX_AGENT_OUTBOUND_PROXY_URL": "",
         "ONYX_AGENT_ALLOW_HTTP_URLS": "false",
     }
@@ -52,7 +55,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         open_connection = AsyncMock(return_value=(fake_reader, fake_writer))
         resolve = AsyncMock(return_value={"93.184.216.34"})
 
-        with patch.object(module, "_resolve_host", resolve), patch.object(
+        with patch.object(module, "_resolve_target_host", resolve), patch.object(
             module.asyncio, "open_connection", open_connection
         ):
             reason, validated_ips = await module._validate_destination(
@@ -70,7 +73,9 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_validation_rejects_private_dns_answer(self) -> None:
         module = _load_module()
         with patch.object(
-            module, "_resolve_host", AsyncMock(return_value={"192.168.1.20"})
+            module,
+            "_resolve_target_host",
+            AsyncMock(return_value={"192.168.1.20"}),
         ):
             reason, addresses = await module._validate_destination(
                 "public.example", 443
@@ -212,7 +217,9 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_policy_listener_accepts_only_resolved_bridge_ip(self) -> None:
         module = _load_module()
         with patch.object(
-            module, "_resolve_host", AsyncMock(return_value={"172.30.0.5"})
+            module,
+            "_resolve_system_host",
+            AsyncMock(return_value={"172.30.0.5"}),
         ):
             self.assertIsNone(
                 await module._allowed_client_reason(("172.30.0.5", 12345))
@@ -221,6 +228,145 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 "not an allowed bridge",
                 await module._allowed_client_reason(("172.30.0.6", 12345)) or "",
             )
+
+    async def test_direct_mode_uses_myst_provider_dns(self) -> None:
+        module = _load_module()
+        vpn_query = AsyncMock(return_value={"93.184.216.34"})
+        system_query = AsyncMock()
+        with patch.object(
+            module, "_myst_provider_dns_ip", return_value="10.10.0.1"
+        ), patch.object(module, "_dns_query_a", vpn_query), patch.object(
+            module, "_resolve_system_host", system_query
+        ):
+            addresses = await module._resolve_target_host("example.com", 443)
+
+        self.assertEqual(addresses, {"93.184.216.34"})
+        vpn_query.assert_awaited_once_with("example.com", "10.10.0.1", "myst0")
+        system_query.assert_not_awaited()
+
+    def test_provider_dns_is_first_usable_myst_subnet_address(self) -> None:
+        module = _load_module()
+        with patch.object(
+            module,
+            "_interface_ipv4_network",
+            return_value=(
+                ipaddress.IPv4Address("10.42.7.2"),
+                ipaddress.IPv4Network("10.42.7.0/24"),
+            ),
+        ):
+            self.assertEqual(module._myst_provider_dns_ip(), "10.42.7.1")
+
+    def test_provider_dns_socket_is_bound_to_myst_interface(self) -> None:
+        module = _load_module()
+        sock = Mock()
+
+        module._bind_socket_to_interface(sock, "myst0")
+
+        sock.setsockopt.assert_called_once_with(
+            module.socket.SOL_SOCKET,
+            module.socket.SO_BINDTODEVICE,
+            b"myst0\x00",
+        )
+
+    def test_provider_dns_socket_bind_failure_is_fatal(self) -> None:
+        module = _load_module()
+        sock = Mock()
+        sock.setsockopt.side_effect = OSError("not permitted")
+
+        with self.assertRaisesRegex(RuntimeError, "cannot bind provider DNS"):
+            module._bind_socket_to_interface(sock, "myst0")
+
+    async def test_explicit_no_vpn_mode_uses_system_dns(self) -> None:
+        module = _load_module(env_overrides={"MYST_VPN_ENABLED": "false"})
+        system_query = AsyncMock(return_value={"93.184.216.34"})
+        with patch.object(module, "_resolve_system_host", system_query), patch.object(
+            module, "_dns_query_a", AsyncMock()
+        ) as vpn_query:
+            addresses = await module._resolve_target_host("example.com", 443)
+
+        self.assertEqual(addresses, {"93.184.216.34"})
+        system_query.assert_awaited_once_with("example.com", 443)
+        vpn_query.assert_not_awaited()
+
+    def test_invalid_vpn_mode_fails_startup(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be exactly"):
+            _load_module(env_overrides={"MYST_VPN_ENABLED": "flase"})
+
+    async def test_upstream_mode_does_not_resolve_target_hostname(self) -> None:
+        module = _load_module(
+            env_overrides={
+                "ONYX_AGENT_OUTBOUND_PROXY_URL": "socks5h://proxy.example:1080"
+            }
+        )
+        target_resolver = AsyncMock()
+        with patch.object(module, "_resolve_target_host", target_resolver):
+            reason, addresses = await module._validate_destination(
+                "target.example", 443
+            )
+
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ())
+        target_resolver.assert_not_awaited()
+
+    async def test_public_upstream_proxy_bootstrap_uses_myst_dns(self) -> None:
+        module = _load_module(
+            env_overrides={
+                "ONYX_AGENT_OUTBOUND_PROXY_URL": "http://proxy.example:8080"
+            }
+        )
+        vpn_resolver = AsyncMock(return_value={"93.184.216.34"})
+        open_connection = AsyncMock(return_value=(object(), object()))
+        with patch.object(module, "_resolve_target_host", vpn_resolver), patch.object(
+            module.asyncio, "open_connection", open_connection
+        ):
+            await module._open_http_proxy_connection(
+                "proxy.example", 8080, "http"
+            )
+
+        vpn_resolver.assert_awaited_once_with("proxy.example", 8080)
+        open_connection.assert_awaited_once_with(
+            "93.184.216.34", 8080, ssl=None, server_hostname=None
+        )
+
+    async def test_internal_upstream_proxy_bootstrap_uses_system_dns(self) -> None:
+        module = _load_module(
+            env_overrides={
+                "ONYX_AGENT_OUTBOUND_PROXY_URL": (
+                    "socks5h://host.docker.internal:9150"
+                )
+            }
+        )
+        system_resolver = AsyncMock(return_value={"192.168.65.2"})
+        vpn_resolver = AsyncMock()
+        open_connection = AsyncMock(return_value=(object(), object()))
+        with patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module, "_resolve_target_host", vpn_resolver), patch.object(
+            module.asyncio, "open_connection", open_connection
+        ):
+            await module._open_http_proxy_connection(
+                "host.docker.internal", 9150, "socks5h"
+            )
+
+        system_resolver.assert_awaited_once_with("host.docker.internal", 9150)
+        vpn_resolver.assert_not_awaited()
+
+    def test_dns_a_response_parser(self) -> None:
+        module = _load_module()
+        query_id = 0x1234
+        question = module._encode_dns_name("example.com") + struct.pack("!HH", 1, 1)
+        answer = (
+            b"\xc0\x0c"
+            + struct.pack("!HHIH", 1, 1, 60, 4)
+            + bytes([93, 184, 216, 34])
+        )
+        response = struct.pack("!HHHHHH", query_id, 0x8180, 1, 1, 0, 0)
+        response += question + answer
+
+        addresses, truncated = module._parse_dns_a_response(response, query_id)
+
+        self.assertEqual(addresses, {"93.184.216.34"})
+        self.assertFalse(truncated)
 
     async def test_connect_port_80_is_rejected_when_http_is_disabled(self) -> None:
         module = _load_module("browser")

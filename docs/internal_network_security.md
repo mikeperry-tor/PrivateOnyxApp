@@ -98,7 +98,7 @@ Every final-hop policy rejects:
 - legacy IPv4 shorthand after normalization;
 - localhost, `host.docker.internal`, configured internal names, their
   subdomains, and single-label Docker-style names;
-- DNS names whose locally resolved answer contains any blocked address, when
+- DNS names whose selected resolver answer contains any blocked address, when
   no upstream proxy is configured.
 
 Hostname comparisons normalize case, brackets, and a trailing DNS root dot
@@ -113,12 +113,25 @@ CONNECT to destination port 80 receive 403. CONNECT on other allowed ports is
 an opaque TCP tunnel; it can carry protocols other than HTTPS and is not
 content-inspected.
 
-### Direct-mode DNS pinning
+### Direct-mode VPN DNS and pinning
 
-In direct mode, validation returns the exact approved address set. Connection
-code retries only those addresses and never passes the hostname to a second
-resolver call. HTTP Host and TLS SNI retain the original hostname. The unit
-test `tests/test_restricted_egress_proxy.py` verifies this connection pinning.
+With Myst enabled, direct mode derives the provider DNS address from the
+`myst0` IPv4 subnet and sends DNS packets directly to that literal address.
+The DNS sockets are bound to `myst0`; failure to identify or bind that device
+fails the request closed. Docker's `127.0.0.11` resolver is not used for
+browsing targets. Validation queries A records because IPv6 is disabled in the
+trusted routing namespace, then returns the exact approved address set.
+Connection code retries only those addresses and never passes the hostname to
+a second resolver call. HTTP Host and TLS SNI retain the original hostname. The unit test
+`tests/test_restricted_egress_proxy.py` verifies resolver selection and
+connection pinning.
+
+When `MYST_VPN_ENABLED=false`, direct mode deliberately uses system/Docker DNS
+along with direct Docker egress. Docker DNS remains in use for internal service
+discovery and an explicitly configured internal upstream proxy such as
+`host.docker.internal`; those lookups contain no browsing target hostname.
+Any VPN-switch value other than the exact strings `true` and `false` fails
+policy-proxy startup.
 
 ### Upstream-proxy DNS residual risk
 
@@ -128,6 +141,11 @@ configured proxy route. Syntactic private targets are still blocked locally,
 but a public-looking hostname may be resolved to a private address by the
 upstream proxy. Upstream-side policy, DNS-over-proxy classification, or an
 allowlist is required to eliminate that residual risk.
+
+For HTTP CONNECT, SOCKS5/SOCKS5h, and absolute-form HTTP forwarding, the target
+hostname is sent to the upstream proxy without a local target lookup. A public
+upstream-proxy hostname is itself resolved through Myst DNS when VPN mode is
+active; this bootstrap reveals the proxy endpoint but not browsing targets.
 
 ## Bridge Properties And Risks
 

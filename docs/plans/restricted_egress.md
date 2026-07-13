@@ -380,9 +380,11 @@ an upstream proxy is configured, see
 Final-hop proxy destination classification should preserve the current routing
 semantics while closing the direct-mode resolution-to-connect race:
 
-- with no upstream proxy, resolve target hostnames locally, block any name that
-  resolves to loopback, private/RFC1918, link-local, reserved, or other
-  non-global addresses, and connect only to the exact validated IP addresses;
+- with no upstream proxy, use the Mysterium provider resolver directly through
+  sockets bound to `myst0` when VPN mode is active, or system DNS only in
+  explicit no-VPN mode;
+  block any answer containing loopback, private/RFC1918, link-local, reserved,
+  or other non-global addresses, and connect only to the exact validated IPs;
 - with an upstream proxy, avoid local target DNS resolution so target DNS does
   not leak outside the configured proxy path.
 
@@ -402,6 +404,10 @@ other syntactic private-target forms without opening a connection. Eliminating
 the remaining risk requires upstream-proxy-side policy, DNS-over-proxy
 classification, or explicit allowlists, and is out of scope for the first
 implementation.
+
+Docker's embedded resolver remains appropriate for internal bridge/service
+discovery and explicit internal upstream proxy endpoints, but it must not
+receive browsing target names in Myst direct mode or upstream-proxy mode.
 
 Component bridges should not perform target DNS classification. Keep that
 logic centralized in the final-hop proxy policy.
@@ -1210,6 +1216,8 @@ Remaining risks:
   not protocol-inspected and may carry non-HTTP application traffic;
 - upstream-proxy mode intentionally skips local target DNS resolution, leaving
   the hostname-to-private-IP residual risk described above;
+- explicit no-VPN mode uses system/Docker DNS by operator choice; Myst direct
+  mode instead sends target queries to the provider resolver through `myst0`;
 - host-resident upstream proxies currently rely on
   `MYST_VPN_ALLOW_LAN_BYPASS=true`, which is broader than endpoint-scoped host
   proxy access;

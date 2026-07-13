@@ -663,15 +663,15 @@ CRW :3010 ──HTTP proxy──> crw-prefetch-bridge :3128
      tunnel or HTTP forwarding path. This covers localhost,
      `host.docker.internal`, single-label Docker-style hostnames, literal
      loopback/private/link-local/reserved/non-global IP addresses, and legacy
-     IPv4 shorthand forms. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, the
-     proxy also resolves DNS names and blocks any name that resolves to a
-     blocked address. The connection then uses only that validated address set;
-     it does not resolve the hostname a second time, closing the validation-to-
-     connect rebinding race. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, this DNS
-     resolution check is skipped to avoid leaking target DNS outside the
-     configured upstream proxy path. A public-looking name that the upstream
-     resolves privately is therefore a documented residual risk. Blocked
-     attempts are logged.
+     IPv4 shorthand forms. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, Myst
+     mode sends A queries directly to the provider resolver inside the tunnel;
+     explicit no-VPN mode uses system/Docker DNS. The proxy blocks any name
+     that resolves to a blocked address and connects only to that validated
+     address set without a second hostname lookup, closing the validation-to-
+     connect rebinding race. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, target
+     resolution is left entirely to the upstream proxy protocol. A
+     public-looking name that the upstream resolves privately is therefore a
+     documented residual risk. Blocked attempts are logged.
    - **Other plain HTTP URLs**: returns `403 Forbidden` by default with the
      message `HTTP URLs are disabled by ONYX_AGENT_ALLOW_HTTP_URLS=false. Use
      an https:// URL instead.` Set `ONYX_AGENT_ALLOW_HTTP_URLS=true` to allow
@@ -718,6 +718,10 @@ keeps all final-hop policy connections on the configured upstream path.
 The URL is validated before the listener starts; unsupported schemes,
 malformed ports, incomplete credentials, and path/query/fragment components
 fail startup. Logs show only a credential-free scheme/host/port description.
+In VPN mode, a public upstream-proxy hostname is bootstrapped through the Myst
+provider resolver and connected by IP. `host.docker.internal` and other
+explicit internal proxy endpoints use Docker service resolution. Browsing
+target hostnames are never sent to Docker DNS in upstream-proxy mode.
 
 For `https://` upstream proxies, the prefetch-blocking proxy verifies the
 proxy certificate, sends SNI for the proxy host, and requires TLS 1.3 by

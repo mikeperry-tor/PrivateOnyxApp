@@ -34,9 +34,10 @@ private/RFC1918, link-local, multicast, reserved, and other non-global IP
 destinations. It also rejects ``localhost``,
 ``host.docker.internal``, their subdomains, and single-label Docker-style
 hostnames. When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is empty, DNS names are
-resolved locally and all returned addresses are classified. When an upstream
-proxy is set, target DNS resolution is intentionally skipped to avoid leaking
-target DNS outside the configured proxy path.
+resolved directly through the Mysterium provider resolver when VPN routing is
+enabled, or through system DNS only in explicit no-VPN mode; all returned
+addresses are classified. When an upstream proxy is set, target DNS resolution
+is skipped so the target hostname is sent only through the proxy protocol.
 
 When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
 routes its own upstream requests through that proxy. Restricted components
@@ -70,12 +71,15 @@ for the prefetch-blocking proxy design.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import ipaddress
 import logging
 import os
 import re
+import secrets
 import socket
 import ssl
+import struct
 import traceback
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -95,6 +99,12 @@ BLOCK_SEARCH_ENGINES = POLICY_MODE in {"prefetch", "executor"}
 # http://, https://, socks5://, socks5h://
 # When empty, requests go direct (through the VPN namespace).
 UPSTREAM_PROXY = os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
+_MYST_VPN_ENABLED_RAW = os.environ.get("MYST_VPN_ENABLED", "true").strip()
+if _MYST_VPN_ENABLED_RAW not in {"true", "false"}:
+    raise RuntimeError("MYST_VPN_ENABLED must be exactly 'true' or 'false'")
+MYST_VPN_ENABLED = _MYST_VPN_ENABLED_RAW == "true"
+MYST_VPN_INTERFACE = "myst0"
+DNS_QUERY_TIMEOUT = int(os.environ.get("EGRESS_DNS_QUERY_TIMEOUT", "10"))
 
 # Comma-separated Docker service names allowed to reach this policy listener.
 # Loopback is always allowed for the local healthcheck. Each policy instance
@@ -244,8 +254,8 @@ def _parse_authority(authority: str, default_port: int) -> tuple[str, int]:
     return host, port
 
 
-async def _resolve_host(host: str, port: int) -> set[str]:
-    """Resolve host to all stream addresses. Called only without upstream proxy."""
+async def _resolve_system_host(host: str, port: int) -> set[str]:
+    """Resolve Docker/internal names through the container system resolver."""
     loop = asyncio.get_running_loop()
     addrs = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     resolved: set[str] = set()
@@ -256,15 +266,210 @@ async def _resolve_host(host: str, port: int) -> set[str]:
     return resolved
 
 
+def _interface_ipv4_network(interface: str) -> tuple[ipaddress.IPv4Address, ipaddress.IPv4Network]:
+    """Return an interface IPv4 address and network using Linux ioctls."""
+    if not interface or len(interface.encode("ascii")) >= 16:
+        raise RuntimeError("invalid Mysterium VPN interface name")
+    ifreq = struct.pack("256s", interface.encode("ascii"))
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        try:
+            address_raw = fcntl.ioctl(sock.fileno(), 0x8915, ifreq)[20:24]
+            netmask_raw = fcntl.ioctl(sock.fileno(), 0x891B, ifreq)[20:24]
+        except OSError as exc:
+            raise RuntimeError(
+                f"Mysterium VPN interface {interface!r} has no usable IPv4 configuration"
+            ) from exc
+    address = ipaddress.IPv4Address(address_raw)
+    netmask = ipaddress.IPv4Address(netmask_raw)
+    network = ipaddress.IPv4Network(f"{address}/{netmask}", strict=False)
+    return address, network
+
+
+def _myst_provider_dns_ip() -> str:
+    """Return Myst's provider DNS address without consulting system DNS."""
+    local_address, network = _interface_ipv4_network(MYST_VPN_INTERFACE)
+    if network.prefixlen == 32:
+        raise RuntimeError("cannot derive provider DNS from a /32 Myst interface")
+    provider_dns = network.network_address + 1
+    if provider_dns == local_address:
+        raise RuntimeError("derived provider DNS address equals the local Myst address")
+    return str(provider_dns)
+
+
+def _encode_dns_name(host: str) -> bytes:
+    normalized = _normalize_host(host)
+    try:
+        ascii_host = normalized.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise socket.gaierror(f"invalid IDNA hostname: {host}") from exc
+    labels = ascii_host.split(".")
+    if not labels or any(not label or len(label.encode("ascii")) > 63 for label in labels):
+        raise socket.gaierror(f"invalid DNS hostname: {host}")
+    encoded = b"".join(bytes([len(label)]) + label.encode("ascii") for label in labels)
+    if len(encoded) + 1 > 255:
+        raise socket.gaierror(f"DNS hostname is too long: {host}")
+    return encoded + b"\x00"
+
+
+def _skip_dns_name(message: bytes, offset: int) -> int:
+    """Return the first byte after a possibly compressed DNS name."""
+    labels_seen = 0
+    while True:
+        if offset >= len(message):
+            raise ValueError("truncated DNS name")
+        length = message[offset]
+        if length & 0xC0 == 0xC0:
+            if offset + 1 >= len(message):
+                raise ValueError("truncated DNS compression pointer")
+            return offset + 2
+        if length & 0xC0:
+            raise ValueError("invalid DNS label type")
+        offset += 1
+        if length == 0:
+            return offset
+        offset += length
+        labels_seen += 1
+        if offset > len(message) or labels_seen > 127:
+            raise ValueError("invalid DNS name")
+
+
+def _parse_dns_a_response(message: bytes, query_id: int) -> tuple[set[str], bool]:
+    """Parse A answers and return (addresses, truncated)."""
+    if len(message) < 12:
+        raise ValueError("truncated DNS response")
+    (
+        response_id,
+        flags,
+        question_count,
+        answer_count,
+        _authority_count,
+        _additional_count,
+    ) = struct.unpack("!HHHHHH", message[:12])
+    if response_id != query_id or not flags & 0x8000:
+        raise ValueError("mismatched DNS response")
+    rcode = flags & 0x000F
+    if rcode == 3:
+        raise socket.gaierror(socket.EAI_NONAME, "DNS name does not exist")
+    if rcode != 0:
+        raise socket.gaierror(f"DNS resolver returned rcode {rcode}")
+    if flags & 0x0200:
+        return set(), True
+
+    offset = 12
+    for _ in range(question_count):
+        offset = _skip_dns_name(message, offset)
+        if offset + 4 > len(message):
+            raise ValueError("truncated DNS question")
+        offset += 4
+
+    addresses: set[str] = set()
+    for _ in range(answer_count):
+        offset = _skip_dns_name(message, offset)
+        if offset + 10 > len(message):
+            raise ValueError("truncated DNS answer")
+        record_type, record_class, _ttl, data_length = struct.unpack(
+            "!HHIH", message[offset : offset + 10]
+        )
+        offset += 10
+        data_end = offset + data_length
+        if data_end > len(message):
+            raise ValueError("truncated DNS answer data")
+        if record_type == 1 and record_class == 1 and data_length == 4:
+            addresses.add(str(ipaddress.IPv4Address(message[offset:data_end])))
+        offset = data_end
+    return addresses, False
+
+
+def _bind_socket_to_interface(sock: socket.socket, interface: str) -> None:
+    """Bind a socket to the VPN device, failing closed if that is impossible."""
+    try:
+        sock.setsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_BINDTODEVICE,
+            interface.encode("ascii") + b"\x00",
+        )
+    except (AttributeError, OSError, UnicodeError) as exc:
+        raise RuntimeError(
+            f"cannot bind provider DNS socket to VPN interface {interface!r}"
+        ) from exc
+
+
+async def _dns_query_a(host: str, resolver_ip: str, interface: str) -> set[str]:
+    """Resolve A records against a literal resolver through one VPN device."""
+    query_id = secrets.randbits(16)
+    query = (
+        struct.pack("!HHHHHH", query_id, 0x0100, 1, 0, 0, 0)
+        + _encode_dns_name(host)
+        + struct.pack("!HH", 1, 1)
+    )
+    loop = asyncio.get_running_loop()
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        _bind_socket_to_interface(udp_sock, interface)
+        udp_sock.setblocking(False)
+        udp_sock.connect((resolver_ip, 53))
+        await asyncio.wait_for(
+            loop.sock_sendall(udp_sock, query),
+            timeout=DNS_QUERY_TIMEOUT,
+        )
+        response = await asyncio.wait_for(
+            loop.sock_recv(udp_sock, 65535), timeout=DNS_QUERY_TIMEOUT
+        )
+    finally:
+        udp_sock.close()
+
+    addresses, truncated = _parse_dns_a_response(response, query_id)
+    if not truncated:
+        return addresses
+
+    tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _bind_socket_to_interface(tcp_sock, interface)
+        tcp_sock.setblocking(False)
+        await asyncio.wait_for(
+            loop.sock_connect(tcp_sock, (resolver_ip, 53)),
+            timeout=DNS_QUERY_TIMEOUT,
+        )
+        reader, writer = await asyncio.open_connection(sock=tcp_sock)
+    except BaseException:
+        tcp_sock.close()
+        raise
+    try:
+        writer.write(struct.pack("!H", len(query)) + query)
+        await writer.drain()
+        length_raw = await asyncio.wait_for(
+            reader.readexactly(2), timeout=DNS_QUERY_TIMEOUT
+        )
+        response_length = struct.unpack("!H", length_raw)[0]
+        tcp_response = await asyncio.wait_for(
+            reader.readexactly(response_length), timeout=DNS_QUERY_TIMEOUT
+        )
+    finally:
+        writer.close()
+        await writer.wait_closed()
+    addresses, tcp_truncated = _parse_dns_a_response(tcp_response, query_id)
+    if tcp_truncated:
+        raise socket.gaierror("DNS TCP response was unexpectedly truncated")
+    return addresses
+
+
+async def _resolve_target_host(host: str, port: int) -> set[str]:
+    """Resolve public targets through Myst DNS, or system DNS in no-VPN mode."""
+    if not MYST_VPN_ENABLED:
+        return await _resolve_system_host(host, port)
+    resolver_ip = _myst_provider_dns_ip()
+    return await _dns_query_a(host, resolver_ip, MYST_VPN_INTERFACE)
+
+
 async def _validate_destination(
     host: str, port: int
 ) -> tuple[str | None, tuple[str, ...]]:
     """Validate a proxy target before any upstream connection is opened.
 
     Literal IPs and known internal hostnames are blocked in every mode. When no
-    explicit upstream proxy is configured, DNS names are also resolved locally
-    and every returned address is classified. When an upstream proxy is set,
-    this function intentionally avoids DNS resolution to prevent DNS leakage.
+    explicit upstream proxy is configured, DNS names are resolved through the
+    selected VPN/no-VPN resolver and every returned address is classified.
+    When an upstream proxy is set, target resolution is left to that proxy.
     """
     host = _normalize_host(host)
 
@@ -292,8 +497,8 @@ async def _validate_destination(
         return None, ()
 
     try:
-        resolved_ips = await _resolve_host(host, port)
-    except (socket.gaierror, OSError) as e:
+        resolved_ips = await _resolve_target_host(host, port)
+    except (socket.gaierror, OSError, RuntimeError, ValueError) as e:
         return f"DNS resolution failed: {e}", ()
 
     if not resolved_ips:
@@ -331,7 +536,7 @@ async def _allowed_client_reason(peer: Any) -> str | None:
     allowed_ips: set[str] = set()
     for host in ALLOWED_CLIENT_HOSTS:
         try:
-            allowed_ips.update(await _resolve_host(host, LISTEN_PORT))
+            allowed_ips.update(await _resolve_system_host(host, LISTEN_PORT))
         except (socket.gaierror, OSError):
             logger.warning("Unable to resolve allowed bridge service %s", host)
     if peer_ip_text not in allowed_ips:
@@ -439,6 +644,14 @@ def _sanitized_upstream_proxy() -> str:
     scheme, host, port, _username, _password = _parse_proxy_url(UPSTREAM_PROXY)
     display_host = f"[{host}]" if ":" in host else host
     return f"{scheme}://{display_host}:{port}"
+
+
+def _target_dns_mode() -> str:
+    if UPSTREAM_PROXY:
+        return "upstream-proxy"
+    if MYST_VPN_ENABLED:
+        return f"myst-provider-via-{MYST_VPN_INTERFACE}"
+    return "system-explicit-no-vpn"
 
 
 def _https_proxy_ssl_context() -> ssl.SSLContext:
@@ -674,15 +887,50 @@ async def _open_http_proxy_connection(
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Open a connection to an HTTP/HTTPS upstream proxy."""
     ssl_ctx = _https_proxy_ssl_context() if scheme == "https" else None
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(
-            proxy_host,
-            proxy_port,
-            ssl=ssl_ctx,
-            server_hostname=proxy_host if ssl_ctx else None,
-        ),
-        timeout=TUNNEL_CONNECT_TIMEOUT,
-    )
+    normalized_host = _normalize_host(proxy_host)
+    literal_ip = _parse_ip_literal(normalized_host)
+    hostname_reason = _hostname_block_reason(normalized_host)
+    if literal_ip is not None:
+        proxy_addresses = (normalized_host,)
+    elif MYST_VPN_ENABLED and hostname_reason is None:
+        resolved = await _resolve_target_host(normalized_host, proxy_port)
+        if not resolved:
+            raise ConnectionError("VPN DNS returned no upstream proxy addresses")
+        for resolved_ip in resolved:
+            reason = _ip_block_reason(resolved_ip)
+            if reason:
+                raise ConnectionError(
+                    f"VPN DNS resolved upstream proxy to blocked {resolved_ip} ({reason})"
+                )
+        proxy_addresses = tuple(sorted(resolved))
+    else:
+        # Explicit no-VPN mode and configured internal proxy endpoints use the
+        # container resolver. Arbitrary target names never reach this branch.
+        proxy_addresses = tuple(
+            sorted(await _resolve_system_host(proxy_host, proxy_port))
+        )
+        if not proxy_addresses:
+            raise ConnectionError("system DNS returned no upstream proxy addresses")
+
+    failures: list[str] = []
+    for address in proxy_addresses:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    address,
+                    proxy_port,
+                    ssl=ssl_ctx,
+                    server_hostname=proxy_host if ssl_ctx else None,
+                ),
+                timeout=TUNNEL_CONNECT_TIMEOUT,
+            )
+            break
+        except (OSError, asyncio.TimeoutError) as exc:
+            failures.append(f"{address}: {exc}")
+    else:
+        raise ConnectionError(
+            "all upstream proxy addresses failed: " + "; ".join(failures)
+        )
     if ssl_ctx:
         ssl_object = writer.get_extra_info("ssl_object")
         logger.debug(
@@ -1327,7 +1575,7 @@ async def main() -> None:
         "Restricted egress proxy starting on %s:%d "
         "(policy: %s, upstream: %s, allowed_clients: %s, "
         "allow_http_urls: %s, block_hosts: %s, block_internal_hosts: %s, "
-        "dns_internal_check: %s)",
+        "target_dns: %s)",
         LISTEN_HOST,
         LISTEN_PORT,
         POLICY_MODE,
@@ -1336,7 +1584,7 @@ async def main() -> None:
         ALLOW_HTTP_URLS,
         ", ".join(sorted(SEARCH_ENGINE_HOSTS)),
         ", ".join(sorted(BLOCKED_HOSTNAMES)),
-        "disabled (upstream proxy set)" if UPSTREAM_PROXY else "enabled",
+        _target_dns_mode(),
     )
 
     server = await asyncio.start_server(
