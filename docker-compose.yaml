@@ -575,7 +575,14 @@ services:
   obscura-mcp-gateway:
     <<: *tcp-gateway
     command: ["tcp-listen:9223,fork,reuseaddr", "tcp-connect:obscura-mcp:9223"]
-    networks: [onyx-mcp-ingress, obscura-mcp-control]
+    networks:
+      # Onyx's frontend uses Yup's public-style URL validator, which rejects
+      # single-label Docker service names. The dotted alias remains scoped to
+      # this internal ingress network and is covered by the final-hop policy's
+      # non-removable *.docker.internal block.
+      onyx-mcp-ingress:
+        aliases: [obscura-mcp-gateway.docker.internal]
+      obscura-mcp-control: {}
     depends_on:
       obscura-mcp:
         condition: service_healthy

@@ -492,9 +492,17 @@ server does not require disabling Onyx SSRF protection globally.
 1. Go to **Admin Panel -> MCP Servers** ([http://localhost:3000/admin/mcp-servers](http://localhost:3000/admin/mcp-servers)).
 2. Click **Add MCP Server**.
 3. Set **Name** to `obscura` (or any name you prefer).
-4. Set **Server URL** to `http://obscura-mcp-gateway:9223/mcp`.
+4. Set **Server URL** to
+   `http://obscura-mcp-gateway.docker.internal:9223/mcp`. The dotted alias is
+   required because Onyx's frontend URL validator rejects single-label Docker
+   service names in MCP URL fields (but not others)...
 5. Set **Auth Type** to **None** (the gateway is reachable only from the Onyx-side ingress network).
 6. Click **Save**, then click **Discover Tools** to verify the connection.
+
+Onyx Admin → Security Hardening → SSRF Protection must permit private networks
+for tool discovery and calls. The wrapper defaults seed **Allow Private
+Network**, which is sufficient; globally **Disabled** is not required. A saved
+Admin setting takes precedence over the wrapper environment.
 
 **Step 2: Assign the MCP tools to an Assistant**
 

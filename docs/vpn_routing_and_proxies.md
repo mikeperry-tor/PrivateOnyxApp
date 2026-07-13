@@ -192,7 +192,9 @@ The restricted topology replaces shared loopback endpoints:
 
 - Onyx SearXNG base URL: `http://searxng-service-gateway:8888`;
 - Onyx Firecrawl/CRW URL: `http://crw-service-gateway:3010/v1/scrape`;
-- bundled Obscura MCP URL: `http://obscura-mcp-gateway:9223/mcp`;
+- bundled Obscura MCP URL:
+  `http://obscura-mcp-gateway.docker.internal:9223/mcp` (a dotted alias scoped
+  to `onyx-mcp-ingress` for Onyx frontend URL validation);
 - CRW CDP URL: `ws://cdp-shim:9224/devtools/browser`;
 - CRW SearXNG URL: `http://searxng-core:8888`;
 - SearXNG CRW scrape URL: `http://crw:3010/v1/scrape`;

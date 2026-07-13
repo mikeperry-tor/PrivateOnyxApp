@@ -220,10 +220,17 @@ Remaining bridge risks:
 settings take precedence. These values govern Onyx-managed URL paths; they are
 not firewall rules for restricted components or final-hop proxies.
 
-The bundled Obscura MCP endpoint now uses the narrow non-loopback gateway
-`http://obscura-mcp-gateway:9223/mcp`. It no longer requires globally disabling
-Onyx SSRF protection solely to access shared loopback. Full-mode local document
-RAG retains its documented private-network needs.
+The bundled Obscura MCP endpoint now uses the narrow non-loopback gateway at
+`http://obscura-mcp-gateway.docker.internal:9223/mcp`. The dotted alias exists
+only on `onyx-mcp-ingress`; it satisfies Onyx's frontend URL validator without
+adding another network path. It is also covered by the final-hop policy's
+non-removable `*.docker.internal` destination block. The gateway no longer
+requires globally disabling Onyx SSRF protection solely to access shared
+loopback. Onyx's effective SSRF level must still be **Allow Private Network**
+or **Disabled** because the alias resolves to the gateway's private ingress
+address; the wrapper default seeds the narrower **Allow Private Network**
+level. Full-mode local document RAG retains its documented private-network
+needs.
 
 ## Host Proxy Exception
 

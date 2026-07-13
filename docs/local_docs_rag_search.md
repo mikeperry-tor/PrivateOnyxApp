@@ -127,7 +127,8 @@ addresses, and loopback MCP/OAuth endpoints such as `127.0.0.1` remain blocked.
 Setting `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` seeds the broader "Disabled"
 posture and should be reserved for cases that intentionally need loopback
 MCP/OAuth access. The bundled Obscura MCP server uses the non-loopback
-`http://obscura-mcp-gateway:9223/mcp` endpoint and does not require this.
+`http://obscura-mcp-gateway.docker.internal:9223/mcp` endpoint and does not
+require this.
 
 Once an admin saves Security Hardening settings in Onyx, the saved UI value is
 the effective runtime policy and these env vars only act as startup defaults.
