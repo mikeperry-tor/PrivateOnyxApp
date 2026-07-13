@@ -485,7 +485,10 @@ In addition to the stealth Obscura browser that the crw Firecrawl API uses, a se
 The MCP server has separate control and egress networks. Onyx reaches its
 unauthenticated listener only through `obscura-mcp-gateway`; browser traffic
 uses a search-allowed, private-target-blocking final-hop policy. The bundled
-server does not require disabling Onyx SSRF protection globally.
+server does not require disabling Onyx SSRF protection globally. Obscura is
+allowed to resolve the private address of its mandatory egress bridge, while
+the isolated network and final-hop policy remain responsible for preventing
+direct egress and rejecting Docker-internal/private navigation targets.
 
 **Step 1: Configure the MCP server in Onyx**
 

@@ -39,6 +39,10 @@ At a high level:
 - CRW's mandatory local URL-safety lookup uses the loopback-only
   `crw-validation-dns` sidecar. It never forwards target names; authoritative
   destination DNS and address validation remain at the final-hop policy.
+- Both isolated Obscura processes allow private-address resolution only so
+  their HTTP clients can resolve the mandatory Docker egress-bridge proxy.
+  Their narrow networks prevent direct Internet egress, and final-hop policy
+  proxies remain authoritative for target DNS and private-target rejection.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 
 Those bullets are only a map. Read the docs above before changing any runtime path.

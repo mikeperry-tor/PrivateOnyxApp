@@ -40,7 +40,7 @@ ports:
 | CRW | CRW API callers, CDP shim, SearXNG | `crw-prefetch-bridge` to `prefetch` policy |
 | SearXNG | CRW and Valkey | none in the default CRW-backed engine profile |
 | Obscura CDP | CDP shim and its egress bridge | `obscura-egress-bridge` to `browser` policy |
-| Obscura MCP | Onyx MCP gateway and its egress bridge | separate bridge to `browser` policy |
+| Obscura MCP | Onyx MCP gateway and its egress bridge | `obscura-mcp-egress-bridge` to a separate `browser` policy |
 | Executor pods | `executor-egress-bridge` only | `executor` policy |
 
 The final-hop proxies bind distinct ports in `netns-holder`. Their bridges use

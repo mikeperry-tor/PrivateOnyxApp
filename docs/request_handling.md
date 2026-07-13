@@ -761,8 +761,8 @@ generation and code-interpreter executor pod caveats, is documented in
 
 | Component | Proxy used | How |
 |-----------|-----------|-----|
-| **Obscura (CDP browser)** | browser policy | `OBSCURA_PROXY=http://obscura-egress-bridge:3128` |
-| **Obscura MCP browser** | separate browser policy instance | explicit `--proxy http://obscura-mcp-egress-bridge:3128` |
+| **Obscura (CDP browser)** | browser policy | `OBSCURA_PROXY=http://obscura-egress-bridge:3128`; `OBSCURA_ALLOW_PRIVATE_NETWORK=true` lets Obscura's own resolver reach that private proxy name |
+| **Obscura MCP browser** | separate browser policy instance | explicit `--proxy http://obscura-mcp-egress-bridge:3128`; `OBSCURA_ALLOW_PRIVATE_NETWORK=true` is required because Obscura 0.1.10 does not propagate the equivalent CLI flag into its MCP browser context |
 | **Prefetch-blocking proxy (HTTP/CONNECT)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `ONYX_AGENT_OUTBOUND_PROXY_URL` env var → upstream connection |
 | **CRW HTTP prefetch** | prefetch-blocking proxy | `HTTPS_PROXY` / `HTTP_PROXY` env vars on the CRW container |
 | **CRW CDP (obscura)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |

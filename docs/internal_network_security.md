@@ -84,7 +84,12 @@ gateways. Valkey is reachable only from the SearXNG state network.
 The renderer attaches only to its control network with CDP shim and its browser
 egress network. Its explicit `OBSCURA_PROXY` points to
 `obscura-egress-bridge:3128`, which reaches a search-allowed `browser` policy.
-Obscura's default private-network deny remains enabled as defense in depth.
+`OBSCURA_ALLOW_PRIVATE_NETWORK=true` is necessary because Obscura's reqwest
+SSRF resolver also evaluates the private Docker address of that mandatory
+proxy. This delegates target validation to the final-hop policy; it does not
+provide a direct Internet route because the renderer has only internal
+networks. All browser HTTP(S) requests still use the explicit proxy, where
+Docker-internal names and private target addresses are rejected.
 
 The CDP shim is dual-homed only between CRW's CDP network and Obscura's control
 network. It continues to strip conflicting stealth/proxy settings, inject
@@ -101,7 +106,11 @@ network. Onyx reaches it only through `obscura-mcp-gateway:9223`.
 Its browser uses a separate egress bridge and `browser` policy instance, so a
 failure does not share the CDP renderer's bridge process. Browser state remains
 shared across callers of that MCP instance but separate from the CRW-driven
-renderer.
+renderer. The MCP process also sets `OBSCURA_ALLOW_PRIVATE_NETWORK=true` so
+Obscura can resolve its private proxy hostname. In the pinned Obscura release,
+the MCP constructor does not carry the equivalent CLI flag into its browser
+context. Its internal-only network placement and final-hop destination policy
+provide the same containment and target rejection as the CDP renderer.
 
 ## Final-Hop Destination Validation
 

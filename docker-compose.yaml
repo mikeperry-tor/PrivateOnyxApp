@@ -210,6 +210,12 @@ services:
       # Request timeout for scripted fetch()/XHR/ES-module loads. Default
       # 30s; bump to 45000 for slow proxy paths.
       OBSCURA_FETCH_TIMEOUT_MS: "${OBSCURA_FETCH_TIMEOUT_MS:-45000}"
+      # Obscura's reqwest SSRF resolver also validates the configured proxy
+      # hostname. Permit its private Docker address so requests can reach the
+      # mandatory egress bridge. The browser remains confined to internal
+      # networks, and the final-hop browser policy performs authoritative
+      # destination DNS resolution and private-address rejection.
+      OBSCURA_ALLOW_PRIVATE_NETWORK: "true"
       OBSCURA_PROXY: "http://obscura-egress-bridge:3128"
     volumes:
       - obscura-data:/data/obscura
@@ -218,10 +224,11 @@ services:
       # healthcheck uses the obscura binary's own `fetch` subcommand against
       # the /json/version HTTP endpoint. --dump original bypasses the JS/DOM
       # layer (raw response body); --allow-private-network permits loopback;
-      # --quiet suppresses the banner. /json/version is served on the
+      # --proxy "" overrides the inherited OBSCURA_PROXY for this local-only
+      # probe; --quiet suppresses the banner. /json/version is served on the
       # dedicated accept thread (issue #62) so it stays responsive even while
       # V8 JS evaluation blocks the LocalSet.
-      test: ["CMD", "/obscura", "fetch", "http://127.0.0.1:9222/json/version", "--dump", "original", "--allow-private-network", "--quiet"]
+      test: ["CMD", "/obscura", "fetch", "http://127.0.0.1:9222/json/version", "--dump", "original", "--proxy", "", "--allow-private-network", "--quiet"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -254,6 +261,13 @@ services:
       - "--stealth"
       - "--proxy"
       - "http://obscura-mcp-egress-bridge:3128"
+    environment:
+      # Obscura 0.1.10's MCP constructor does not propagate the CLI
+      # --allow-private-network flag, but its reqwest SSRF resolver applies to
+      # the private proxy hostname itself. The env form permits that mandatory
+      # bridge lookup. Network isolation plus the final-hop browser policy
+      # remains the destination-security boundary.
+      OBSCURA_ALLOW_PRIVATE_NETWORK: "true"
     healthcheck:
       # The obscura image is distroless. Probe the MCP HTTP endpoint via the
       # obscura binary's own `fetch` subcommand. The MCP server responds to
