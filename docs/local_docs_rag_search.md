@@ -31,7 +31,8 @@ Onyx fork:
   `HOST_PORT_ONYX_RAG_DOC_WEB`, so the connector URL and resulting document
   links use `http://localhost:8091/` by default.
 - `onyx/patches/sitecustomize_background/sitecustomize.py` adds a local-host
-  PDF freshness optimization for the Web connector.
+  PDF freshness optimization and routes its shared Playwright launcher through
+  the Onyx helper egress policy.
 - `onyx/patches/sitecustomize_base/sitecustomize.py` can apply optional
   internal-search content caps so selected chunks do not overwhelm the
   answering model.
@@ -56,7 +57,10 @@ boundary.
 4. In Onyx Admin -> Connectors -> Web, create a Recursive Web connector pointed
    at `http://localhost:8091/`.
 5. The Onyx `background` worker crawls the directory listing and downloads
-   documents through the Web connector.
+   documents through the Web connector. Playwright uses the loopback helper
+   proxy; that policy permits only the exact local document listener on port
+   8091 as a direct internal/cleartext destination and rejects other private
+   targets.
 6. During indexing, `background` calls `MODEL_SERVER_HOST:MODEL_SERVER_PORT`.
    In full mode the wrapper points that to `127.0.0.1:9101`, which is the local
    embedding shim in the same network namespace.
@@ -433,7 +437,8 @@ Common failure modes:
 
 - The Web connector cannot crawl `http://localhost:8091/`: check that full mode
   is running, `doc-drop-web` is healthy, `host-doc-drop-web-proxy` published the
-  port, and Onyx Security Hardening is not set to strict `Validate All`.
+  port, `onyx-helper-egress-proxy` is healthy, and Onyx Security Hardening is
+  not set to strict `Validate All`.
 - Directory listings work but hidden files are missing: this is expected.
 - Indexing starts but embedding fails with connection errors: confirm the host
   embedding server is running at `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`,

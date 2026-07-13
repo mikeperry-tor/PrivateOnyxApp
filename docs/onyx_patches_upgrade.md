@@ -113,7 +113,7 @@ handling and browser-rendered SERP extraction.
 | --- | --- | --- | --- |
 | `onyx/patches/sitecustomize_base/sitecustomize.py` | `api_server` | Mounted at `/app/wrapper-patches-base`; `PYTHONPATH` in `docker-compose.yaml` | `backend/onyx/chat/chat_utils.py`, `backend/onyx/chat/llm_loop.py`, `backend/onyx/chat/llm_step.py`, `backend/onyx/llm/multi_llm.py`, `backend/onyx/deep_research/dr_loop.py`, fake-tool agent loops, web/open-url modules, code-interpreter tool/prompt files |
 | `onyx/patches/sitecustomize/sitecustomize.py` | `api_server` in lite mode | Mounted at `/app/wrapper-patches`; `PYTHONPATH` in `docker-compose.lite.yml` before base path | Applicable base API-server helpers plus `backend/onyx/tools/tool_implementations/open_url/open_url_tool.py` |
-| `onyx/patches/sitecustomize_background/sitecustomize.py` | `background` | Mounted at `/app/wrapper-patches-background`; `PYTHONPATH` in `docker-compose.full.yml` | `backend/onyx/connectors/web/connector.py`, `backend/onyx/db/models.py` |
+| `onyx/patches/sitecustomize_background/sitecustomize.py` | `background` | Mounted at `/app/wrapper-patches-background`, with base helpers at `/app/wrapper-patches-base`; `PYTHONPATH` in `docker-compose.full.yml` | `backend/onyx/connectors/web/connector.py`, `backend/onyx/utils/playwright_fetch.py`, `backend/onyx/db/models.py` |
 | `onyx/patches/sitecustomize_code_interpreter/sitecustomize.py` | `code-interpreter` and spawned executor pods | Mounted by `docker-compose.code-interpreter-network.yml` when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`; proxy env points only at the executor bridge | Main Onyx compose defines the service; executor code is in `reference_repos/python-sandbox/code-interpreter/app/services/executor_docker.py` |
 | `onyx/local_embedding_shim.py` | `api_server` and `background` model-server calls | `docker-compose.full.yml` points `MODEL_SERVER_*` and `INDEXING_MODEL_SERVER_*` to `127.0.0.1:9101` | `backend/model_server/*`, `backend/onyx/natural_language_processing/search_nlp_models.py`, `backend/onyx/indexing/embedder.py`, `backend/shared_configs/model_server_models.py` |
 | `onyx/doc_drop_webserver.py` | `doc-drop-web` | Mounted at `/app/doc_drop_webserver.py`; command in `docker-compose.full.yml` | Python `http.server.SimpleHTTPRequestHandler` behavior |
@@ -672,6 +672,78 @@ Upgrade notes:
 - If Onyx exposes first-class env/config for these limits, prefer that over the
   monkey patch.
 
+### Coding-agent repository and code-interpreter upload limit
+
+Patch behavior:
+
+- Reads positive-integer `ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB` (default 1000).
+- Compose maps the same value to code-interpreter `MAX_FILE_SIZE_MB`.
+- Rewrites `onyx.utils.github.DEFAULT_MAX_TARBALL_SIZE_BYTES` and the bound
+  `max_size_bytes` default on `download_github_repo()`.
+- Strictly validates the three-parameter signature and `(None, int)` defaults.
+
+Onyx services: `api_server` and `code-interpreter`.
+
+Upstream v4.2.5 assumptions to re-check:
+
+- `backend/onyx/utils/github.py` defines a 500 MiB
+  `DEFAULT_MAX_TARBALL_SIZE_BYTES`.
+- `download_github_repo(repo, github_token=None, max_size_bytes=...)` streams
+  chunks, raises after the counter exceeds the limit, and is imported by
+  `backend/onyx/tools/fake_tools/coding_agent.py`.
+- `reference_repos/python-sandbox/code-interpreter/app/app_configs.py` reads
+  `MAX_FILE_SIZE_MB`, and `app/api/routes.py` enforces it on `/v1/files`.
+
+Upgrade notes:
+
+- Prefer an upstream call-time config over bound-default mutation when one is
+  available.
+- Retest a repository under and over the configured limit. The oversized case
+  must fail in the API downloader before code-interpreter returns 413.
+- Keep this byte limit separate from Open URL character limits.
+
+### Onyx helper HTTP and Playwright proxy routing
+
+Patch behavior:
+
+- API and background uppercase/lowercase `HTTP_PROXY`/`HTTPS_PROXY` point to
+  loopback `http://127.0.0.1:3132`.
+- The tracked `onyx/helper-egress.env` file contains only trusted internal/host
+  dependencies, stays aligned with Compose service names and aliases, and is
+  never propagated to executor pods.
+- `apply_playwright_helper_proxy_patch()` wraps both the shared
+  `onyx.utils.playwright_fetch.sync_playwright()` reference and package-level
+  synchronous factory, injecting the same proxy server with no internal bypass
+  list into Chromium launch, including direct connector imports such as
+  Highspot.
+- An upstream-supplied Playwright proxy or changed factory signature fails
+  strictly rather than silently selecting a different route.
+
+Onyx services: `api_server` and `background`.
+
+Upstream v4.2.5 assumptions to re-check:
+
+- `backend/onyx/utils/playwright_fetch.py:start_playwright()` calls
+  zero-argument `sync_playwright()`, then `playwright.chromium.launch()` with
+  no `proxy` keyword.
+- OnyxWebCrawler's fallback and the Web connector both use this common helper.
+- `backend/onyx/connectors/highspot/utils.py` imports package-level
+  `sync_playwright` directly and launches Chromium without a proxy keyword.
+- GitHub and normal connector/file helper clients continue to use
+  environment-aware `requests`, `httpx`, or `urllib` transports.
+
+Upgrade notes:
+
+- Inventory explicit `trust_env=False`, custom httpx transports, raw sockets,
+  and direct browser launch sites; each needs component-specific routing.
+- Verify public helper DNS is absent from Docker resolver traffic in VPN and
+  upstream-proxy modes, and that loopback/internal bypasses still work.
+- Test Playwright navigation, a Web connector fetch, a coding-agent GitHub
+  download, and an ordinary helper request through each selected route.
+- Verify Chromium still appends `<-loopback>`. The helper policy's only trusted
+  internal exception must remain the exact loopback document listener on port
+  8091, resolve once, connect directly, and reject every other private target.
+
 ### Internal search content caps
 
 Patch behavior:
@@ -756,10 +828,11 @@ Local files:
 
 Patch behavior:
 
-- Applies the context-window override, Open URL budgets, native-reasoning
-  override, capability text, reasoning preservation, coding-agent finalizer,
-  and saved tool-result helpers from the base patch module. Internal-search
-  caps are omitted because lite mode disables the vector database.
+- Applies the context-window override, Open URL budgets, repository byte limit,
+  helper Playwright proxy, native-reasoning override, capability text,
+  reasoning preservation, coding-agent finalizer, and saved tool-result helpers
+  from the base patch module. Internal-search caps are omitted because lite mode
+  disables the vector database.
 - Forces `OpenURLTool.is_available` to return `True`.
 
 Onyx service: `api_server` in lite mode.

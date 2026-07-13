@@ -9,6 +9,10 @@ services:
     image: onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
     network_mode: "service:netns-holder"
+    # Use the same stack-owned internal-service bypasses as api_server.
+    env_file:
+      - path: ./onyx/helper-egress.env
+        required: true
     environment:
       # Disable optional telemetry/analytics integrations from wrapper layer.
       DISABLE_TELEMETRY: "true"
@@ -48,11 +52,18 @@ services:
       INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
       INDEXING_MODEL_SERVER_PORT: "9101"
       WRAPPER_PATCH_STRICT: "true"
-      PYTHONPATH: "/app/wrapper-patches-background:${PYTHONPATH:-}"
+      PYTHONPATH: "/app/wrapper-patches-background:/app/wrapper-patches-base:${PYTHONPATH:-}"
       ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED: "true"
       ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS: "localhost,127.0.0.1,::1"
       # code-interpreter runs on 7000 in the shared netns (8000 is taken by background prometheus).
       CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
+      # Route connector downloads and other environment-aware background HTTP
+      # clients through the trusted loopback final-hop policy.
+      HTTP_PROXY: "http://127.0.0.1:3132"
+      HTTPS_PROXY: "http://127.0.0.1:3132"
+      http_proxy: "http://127.0.0.1:3132"
+      https_proxy: "http://127.0.0.1:3132"
+      ONYX_HELPER_HTTP_PROXY_URL: "http://127.0.0.1:3132"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
@@ -65,11 +76,14 @@ services:
         restart: true
       local-embedding-shim:
         condition: service_healthy
+      onyx-helper-egress-proxy:
+        condition: service_healthy
     volumes: !override
       - ./docker-data/file-system:/app/file-system
       - ./docker-data/model-cache:/app/.cache/huggingface
       - ./docker-data/model-cache:/root/.cache/huggingface
       - ./onyx/patches/sitecustomize_background:/app/wrapper-patches-background:ro
+      - ./onyx/patches/sitecustomize_base:/app/wrapper-patches-base:ro
       - background_logs:/var/log/onyx
 
   # Onyx internal/data services (full mode only)
@@ -216,6 +230,8 @@ services:
       obscura-mcp-gateway:
         condition: service_healthy
       local-embedding-shim:
+        condition: service_healthy
+      onyx-helper-egress-proxy:
         condition: service_healthy
 
   # Model-server-compatible embedding shim for local OpenAI-compatible

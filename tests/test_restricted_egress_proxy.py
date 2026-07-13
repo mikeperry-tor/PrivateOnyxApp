@@ -91,6 +91,74 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(module.BLOCK_SEARCH_ENGINES)
         self.assertTrue(module._is_search_engine("www.google.com"))
 
+    def test_onyx_helper_policy_allows_search_hosts(self) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "PREFETCH_PROXY_HOST": "127.0.0.1",
+                "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "",
+            },
+        )
+        self.assertFalse(module.BLOCK_SEARCH_ENGINES)
+        self.assertTrue(module._is_search_engine("www.google.com"))
+        self.assertTrue(module._listener_is_loopback_only())
+
+    def test_wildcard_listener_is_not_loopback_only(self) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "PREFETCH_PROXY_HOST": "0.0.0.0",
+                "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "",
+            },
+        )
+        self.assertFalse(module._listener_is_loopback_only())
+
+    async def test_helper_trusted_internal_destination_bypasses_upstream_exactly(
+        self,
+    ) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "PREFETCH_PROXY_HOST": "127.0.0.1",
+                "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "",
+                "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS": "localhost:8091",
+                "ONYX_AGENT_OUTBOUND_PROXY_URL": "socks5h://proxy.example:1080",
+            },
+        )
+        resolve = AsyncMock(return_value={"127.0.0.1"})
+        fake_reader = object()
+        fake_writer = object()
+        open_connection = AsyncMock(return_value=(fake_reader, fake_writer))
+
+        with patch.object(module, "_resolve_system_host", resolve), patch.object(
+            module.asyncio, "open_connection", open_connection
+        ):
+            reason, addresses = await module._validate_destination("localhost", 8091)
+            result = await module._connect_via_upstream(
+                "localhost", 8091, addresses
+            )
+            plain_result = await module._open_plain_http_forward_connection(
+                "localhost", 8091, addresses
+            )
+
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("127.0.0.1",))
+        self.assertEqual(result, (fake_reader, fake_writer))
+        self.assertEqual(plain_result, (fake_reader, fake_writer, False))
+        resolve.assert_awaited_once_with("localhost", 8091)
+        self.assertEqual(open_connection.await_count, 2)
+        open_connection.assert_awaited_with("127.0.0.1", 8091)
+        self.assertFalse(module._is_trusted_internal_destination("localhost", 8080))
+
+    def test_trusted_internal_destination_rejected_for_non_helper_policy(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "allowed only"):
+            _load_module(
+                "browser",
+                {
+                    "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS": "localhost:8091"
+                },
+            )
+
     def test_search_policy_normalizes_fully_qualified_hostnames(self) -> None:
         module = _load_module("executor")
         self.assertTrue(module._is_search_engine("google.com."))

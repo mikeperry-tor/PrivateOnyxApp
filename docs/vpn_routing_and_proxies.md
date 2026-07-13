@@ -41,6 +41,7 @@ ports:
 | SearXNG | CRW and Valkey | none in the default CRW-backed engine profile |
 | Obscura CDP | CDP shim and its egress bridge | `obscura-egress-bridge` to `browser` policy |
 | Obscura MCP | Onyx MCP gateway and its egress bridge | `obscura-mcp-egress-bridge` to a separate `browser` policy |
+| Onyx API/background helpers (trusted) | Shared-namespace internal services | loopback `onyx-helper` policy for environment-aware external HTTP(S) |
 | Executor pods | `executor-egress-bridge` only | `executor` policy |
 
 The final-hop proxies bind distinct ports in `netns-holder`. Their bridges use
@@ -52,8 +53,9 @@ shared namespace are not usable from unrelated network attachments.
 
 ## Final-Hop Routing Matrix
 
-Restricted components always use the same local bridge URL. The selected
-operator preferences change only the final connection:
+Restricted components always use the same local bridge URL, while trusted
+Onyx helpers use `http://127.0.0.1:3132`. The selected operator preferences
+change only the final connection:
 
 | `MYST_VPN_ENABLED` | `ONYX_AGENT_OUTBOUND_PROXY_URL` | Result |
 | --- | --- | --- |
@@ -75,6 +77,7 @@ only the trusted namespace's final route changes.
 | `prefetch` | blocked | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` |
 | `executor` | blocked | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` |
 | `browser` | allowed | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` |
+| `onyx-helper` | allowed | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` |
 | `searxng-external` | allowed | blocked | reserved for intentional external features |
 
 When `ONYX_AGENT_ALLOW_HTTP_URLS=false`, ordinary HTTP requests and CONNECT to
@@ -164,6 +167,38 @@ It does not recursively change a running consumer's Docker health when a
 dependency later fails. Operators should inspect the specific Myst, policy,
 bridge, gateway, CRW, and Onyx health states when diagnosing a live outage.
 
+## Trusted Onyx HTTP Helpers
+
+The API server in both lite and full mode sets uppercase and lowercase
+`HTTP_PROXY`/`HTTPS_PROXY` to the loopback-only `onyx-helper-egress-proxy`.
+The full-mode background worker does the same. This covers the coding-agent
+GitHub downloader and normal environment-aware `requests`, `httpx`, and
+`urllib` helpers, including Web connector downloads. The proxy is healthy
+before each applicable Onyx service starts.
+
+The client resolves only `127.0.0.1`. With no upstream proxy, the helper policy
+resolves and pins public targets using Myst's provider DNS when VPN mode is on,
+or system DNS only in explicit no-VPN mode. With an upstream proxy, it performs
+no local target lookup and sends the hostname through the upstream protocol.
+Thus helper downloads use the same four-way routing matrix as the restricted
+request paths.
+
+The tracked `onyx/helper-egress.env` file is the stack-owned trusted-service
+exception list for loopback, Compose data/model services, wrapper request-path
+gateways, Teep, the bundled Obscura MCP endpoint, and intentional host-local
+model/proxy endpoints. Maintainers must update it when service names or aliases
+change. It is not a user-facing setting; public entries would bypass both
+destination validation and the upstream proxy. The list is never propagated
+to executor pods. Clients that explicitly disable environment proxy discovery
+or install a custom transport require their own component-specific route.
+
+Playwright receives no trusted internal bypass list; every browser navigation
+must reach the policy. The `onyx-helper` policy has a fixed exact exception for
+`localhost`, `127.0.0.1`, and
+`::1` on port `8091`. Those names are resolved once with system DNS and the
+connection is pinned directly to that result; the upstream proxy is not used.
+No other internal/private host or port receives this exception.
+
 ## Code Interpreter
 
 The trusted `code-interpreter` control service remains in `netns-holder`
@@ -184,6 +219,12 @@ When `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`:
 Direct sockets therefore have no route to the internet or stack. Search hosts,
 private/internal targets, and cleartext URL policy are enforced at the
 `executor` final-hop proxy.
+
+`ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB` (default `1000`) configures both the
+control service's file upload ceiling and the API-side coding-agent GitHub
+tarball ceiling. This fails oversized repository bootstrap at the downloader
+instead of downloading up to 500 MiB and then receiving a 413 from the upload
+API. It is a byte/MiB control, independent of the Open URL character budgets.
 
 Podman keeps code-interpreter disabled by default; restricted executor
 networking is unsupported there until its spawned-container network behavior

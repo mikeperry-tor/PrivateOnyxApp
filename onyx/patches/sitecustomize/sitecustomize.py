@@ -21,9 +21,11 @@ def _apply_base_env_patches() -> None:
     try:
         from wrapper_env_patches import apply_code_interpreter_network_description_patches
         from wrapper_env_patches import apply_coding_agent_final_answer_fallback_patch
+        from wrapper_env_patches import apply_coding_agent_repo_download_limit_patch
         from wrapper_env_patches import apply_llm_max_tokens_override_patch
         from wrapper_env_patches import apply_native_reasoning_detection_override_patch
         from wrapper_env_patches import apply_open_url_char_limit_patches
+        from wrapper_env_patches import apply_playwright_helper_proxy_patch
         from wrapper_env_patches import apply_preserve_tool_results_patch
         from wrapper_env_patches import apply_reasoning_content_preservation_patch
         from wrapper_env_patches import apply_reasoning_mode_trace_patch
@@ -31,6 +33,8 @@ def _apply_base_env_patches() -> None:
 
         apply_llm_max_tokens_override_patch()
         apply_open_url_char_limit_patches()
+        apply_coding_agent_repo_download_limit_patch()
+        apply_playwright_helper_proxy_patch()
         apply_native_reasoning_detection_override_patch()
         apply_code_interpreter_network_description_patches()
         apply_vllm_glm_auto_tool_choice_patch()

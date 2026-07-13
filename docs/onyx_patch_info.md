@@ -91,6 +91,8 @@ settings.
 | Coding-agent final answer synthesis | `api_server` | `sitecustomize` flattens structured tool history before the no-tool final-answer call and returns recent tool output if finalization still fails | Final-answer path that does not send tool-call protocol messages to non-tool calls |
 | Saved tool-result preservation | `api_server` | `sitecustomize` optionally replaces Onyx's cross-message placeholder with saved tool responses | Per-agent/admin setting for how much saved tool output to keep |
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
+| Coding-agent repository/upload limit | `api_server`, `code-interpreter` | `sitecustomize` aligns the GitHub downloader default with Compose `MAX_FILE_SIZE_MB` | One first-class byte limit applied at producer and receiver |
+| Onyx helper HTTP/Playwright proxying | `api_server`, `background` | Proxy environment plus `sitecustomize` Playwright launch injection | First-class outbound transport/proxy configuration for backend helpers |
 | Internal search content caps | `api_server` | `sitecustomize` optionally wraps result formatting; full compose passes wrapper env aliases | Admin/env settings for per-result and aggregate tool-response budgets |
 | Code-interpreter capability text | `api_server` | `sitecustomize` rewrites tool descriptions and prompt constants | Capability-driven tool descriptions generated from actual executor config |
 | Lite Open URL availability | Lite `api_server` | `sitecustomize` forces `OpenURLTool.is_available` true | Separate Open URL availability from vector DB availability |
@@ -568,6 +570,80 @@ The implementation should read the configured values at call time or pass them
 through tool configuration, rather than relying on module constants captured as
 default parameters. Tests should cover default behavior, custom limits, and the
 "unlimited" value if that is accepted upstream.
+
+## Coding-agent repository and code-interpreter upload limit
+
+Local files:
+
+- `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- `onyx/patches/sitecustomize_base/sitecustomize.py`
+- `docker-compose.yaml`
+- `.env.wrapper.example`
+
+Onyx source area:
+
+- `backend/onyx/utils/github.py`
+
+Onyx v4.2.5 streams coding-agent GitHub tarballs with a 500 MiB default, then
+uploads the completed bytes to code-interpreter. The code-interpreter file API
+defaults to 100 MiB, so repositories between those limits waste a full download
+and then fail with HTTP 413.
+
+`ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB` now configures both sides. Compose maps
+it to code-interpreter's upstream `MAX_FILE_SIZE_MB`; the API base patch strictly
+validates a positive integer and rewrites both
+`DEFAULT_MAX_TARBALL_SIZE_BYTES` and the bound `max_size_bytes` default on
+`download_github_repo()`. Signature drift fails startup in strict mode. This is
+a byte/MiB limit and deliberately does not reuse Open URL's post-extraction
+character budgets.
+
+Upstream should expose one repository-bootstrap byte limit and pass it
+explicitly to the downloader, ideally rejecting a declared oversized response
+before streaming while retaining the streaming counter for chunked or
+incorrectly framed responses.
+
+## Onyx helper HTTP and Playwright proxy routing
+
+Local files:
+
+- `docker-compose.yaml`
+- `docker-compose.full.yml`
+- `onyx/helper-egress.env`
+- `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- `onyx/patches/sitecustomize_background/sitecustomize.py`
+- `crw/prefetch_blocking_proxy.py`
+
+The API server in both modes, plus the full-mode background worker, point
+uppercase/lowercase `HTTP_PROXY` and `HTTPS_PROXY` at the loopback-bound
+`onyx-helper` final-hop policy. This routes environment-aware repository,
+connector, OAuth/JWT, file, and other `requests`/`httpx`/`urllib` operations
+through the selected VPN/upstream-proxy/no-VPN path. The tracked
+`onyx/helper-egress.env` file supplies their explicit trusted internal and
+host-local bypasses. It is stack-owned rather than user-configurable and is
+not inherited by executor pods.
+
+Onyx's common `start_playwright()` helper launches Chromium with an explicit
+Playwright transport, which does not reliably consume the HTTP client proxy
+environment. The base patch wraps `sync_playwright()` and injects
+`proxy={server: ONYX_HELPER_HTTP_PROXY_URL}` into Chromium launch, deliberately
+without the backend's trusted internal bypass list. It also replaces the
+package-level synchronous factory before
+connector modules import it, covering Highspot's direct Playwright launcher.
+Both the API fallback crawler and full-mode Web connector use the common
+launcher. An upstream-provided Playwright proxy causes a strict failure at
+first launch so routing changes cannot silently override the wrapper.
+
+The helper policy binds only `127.0.0.1` in the trusted namespace, blocks
+private/internal targets, and performs provider-DNS validation or remote
+upstream-proxy resolution exactly like the other final-hop policies. Libraries
+that explicitly install another transport still require component-specific
+routing.
+
+Playwright intentionally appends Chromium's `<-loopback>` proxy rule, so its
+browser bypass list does not bypass `localhost`. The loopback-only helper
+policy carries one exact, non-configurable Compose exception for the bundled
+document server on port 8091 (loopback names/literals only). It resolves and
+pins that direct connection and continues to reject all other private targets.
 
 ## Internal search content caps
 

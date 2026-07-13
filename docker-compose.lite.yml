@@ -25,6 +25,8 @@ services:
         condition: service_healthy
       obscura-mcp-gateway:
         condition: service_healthy
+      onyx-helper-egress-proxy:
+        condition: service_healthy
     environment:
       DISABLE_VECTOR_DB: "true"
       FILE_STORE_BACKEND: "postgres"

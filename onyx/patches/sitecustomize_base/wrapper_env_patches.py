@@ -16,6 +16,7 @@ import threading
 from contextvars import ContextVar
 from types import ModuleType
 from typing import Any
+from urllib.parse import urlsplit
 
 
 # We cannot remove truncation logic entirely without editing upstream code, so
@@ -2679,6 +2680,173 @@ def apply_open_url_char_limit_patches() -> None:
     print(
         "sitecustomize: applied open_url char limit patch "
         f"(per_url={ws_utils.MAX_CHARS_PER_URL}, across_urls={across_urls})",
+        flush=True,
+    )
+
+
+def apply_coding_agent_repo_download_limit_patch() -> None:
+    """Align coding-agent repository downloads with the upload receiver.
+
+    Onyx downloads a GitHub tarball in the API server and then uploads the
+    resulting bytes to code-interpreter. Upstream currently permits a 500 MiB
+    download while code-interpreter accepts 100 MiB by default. Patch the
+    bound downloader default so an oversized archive fails at the producer,
+    before Onyx attempts an upload that code-interpreter must reject.
+    """
+
+    var_name = "ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB"
+    raw = os.environ.get(var_name, "1000").strip()
+    try:
+        max_size_mb = int(raw)
+    except ValueError:
+        _warn_or_raise(f"{var_name} must be a positive integer, found {raw!r}")
+        return
+
+    if max_size_mb <= 0:
+        _warn_or_raise(f"{var_name} must be greater than zero, found {raw!r}")
+        return
+
+    try:
+        from onyx.utils import github as github_utils
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed importing onyx.utils.github: {e}", flush=True)
+        _raise_if_strict()
+        return
+
+    function = github_utils.download_github_repo
+    signature = inspect.signature(function)
+    parameter_names = tuple(signature.parameters)
+    defaults = function.__defaults__
+    if parameter_names != ("repo", "github_token", "max_size_bytes"):
+        _warn_or_raise(
+            "onyx.utils.github.download_github_repo parameters changed; "
+            f"found signature={signature}"
+        )
+        return
+    if defaults is None or len(defaults) != 2 or defaults[0] is not None:
+        _warn_or_raise(
+            "onyx.utils.github.download_github_repo expected defaults "
+            f"(None, max_size_bytes), found {defaults!r}; signature={signature}"
+        )
+        return
+
+    max_size_bytes = max_size_mb * 1024 * 1024
+    github_utils.DEFAULT_MAX_TARBALL_SIZE_BYTES = max_size_bytes
+    function.__defaults__ = (None, max_size_bytes)
+    print(
+        "sitecustomize: aligned coding-agent repository download limit with "
+        f"code-interpreter uploads ({max_size_mb} MiB)",
+        flush=True,
+    )
+
+
+def apply_playwright_helper_proxy_patch() -> None:
+    """Route Onyx's shared Playwright launcher through the helper policy."""
+
+    proxy_url = os.environ.get("ONYX_HELPER_HTTP_PROXY_URL", "").strip()
+    if not proxy_url:
+        return
+
+    parsed = urlsplit(proxy_url)
+    try:
+        proxy_port = parsed.port
+    except ValueError:
+        proxy_port = None
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "localhost"}
+        or proxy_port is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        _warn_or_raise(
+            "ONYX_HELPER_HTTP_PROXY_URL must be an uncredentialed loopback "
+            f"http proxy URL, found {proxy_url!r}"
+        )
+        return
+
+    try:
+        from onyx.utils import playwright_fetch
+        from playwright import sync_api as playwright_sync_api
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed importing playwright_fetch: {e}", flush=True)
+        _raise_if_strict()
+        return
+
+    if getattr(playwright_fetch, "_wrapper_helper_proxy_patched", False):
+        return
+
+    original_sync_playwright = playwright_fetch.sync_playwright
+    if playwright_sync_api.sync_playwright is not original_sync_playwright:
+        _warn_or_raise(
+            "Onyx Playwright helper no longer uses playwright.sync_api's "
+            "sync_playwright factory"
+        )
+        return
+    signature = inspect.signature(original_sync_playwright)
+    if signature.parameters:
+        _warn_or_raise(
+            "onyx.utils.playwright_fetch.sync_playwright signature changed; "
+            f"found signature={signature}"
+        )
+        return
+
+    proxy_settings = {"server": proxy_url}
+
+    class _BrowserTypeProxy:
+        def __init__(self, browser_type) -> None:
+            self._browser_type = browser_type
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._browser_type, name)
+
+        def launch(self, *args, **kwargs):
+            if kwargs.get("proxy") is not None:
+                _warn_or_raise(
+                    "Onyx Playwright launcher now supplies its own proxy; "
+                    "wrapper helper-proxy injection must be reviewed"
+                )
+                return self._browser_type.launch(*args, **kwargs)
+            kwargs["proxy"] = dict(proxy_settings)
+            return self._browser_type.launch(*args, **kwargs)
+
+    class _PlaywrightProxy:
+        def __init__(self, playwright) -> None:
+            self._playwright = playwright
+            self.chromium = _BrowserTypeProxy(playwright.chromium)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._playwright, name)
+
+    class _PlaywrightContextManagerProxy:
+        def __init__(self, manager) -> None:
+            self._manager = manager
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._manager, name)
+
+        def start(self):
+            return _PlaywrightProxy(self._manager.start())
+
+        def __enter__(self):
+            return _PlaywrightProxy(self._manager.__enter__())
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return self._manager.__exit__(exc_type, exc_value, traceback)
+
+    def _helper_proxy_sync_playwright():
+        return _PlaywrightContextManagerProxy(original_sync_playwright())
+
+    playwright_fetch.sync_playwright = _helper_proxy_sync_playwright
+    # Cover connector modules (currently Highspot) that import sync_playwright
+    # directly instead of using onyx.utils.playwright_fetch.start_playwright().
+    playwright_sync_api.sync_playwright = _helper_proxy_sync_playwright
+    playwright_fetch._wrapper_helper_proxy_patched = True
+    print(
+        "sitecustomize: routed Onyx Playwright through loopback helper proxy",
         flush=True,
     )
 

@@ -170,6 +170,38 @@ characters that DNS treats as dot separators.
 If a future override introduces a dotted internal alias outside
 `*.docker.internal`, add it through `PREFETCH_BLOCK_INTERNAL_HOSTS`.
 
+### Trusted Onyx helper egress
+
+The API server in both modes and the full-mode background worker are trusted
+services in the shared routing namespace, not restricted components. Their
+environment-aware external HTTP(S) clients use `http://127.0.0.1:3132`, where
+the loopback-bound `onyx-helper` policy applies the same private/internal
+destination and cleartext rules as the browser policies. No component bridge
+or host port can reach this listener.
+
+Internal dependencies must bypass that policy because it intentionally blocks
+private and Docker-internal targets. The tracked `onyx/helper-egress.env` file
+therefore lists only trusted loopback, Compose service, request-path gateway,
+and explicit host-local endpoints. It is a stack-maintainer-controlled trust
+boundary rather than user configuration: adding a public name bypasses
+destination validation and upstream-proxy routing for that name. Executor pods
+receive their separate loopback-only `NO_PROXY` and never inherit this list.
+
+In direct VPN mode the helper policy resolves targets through the Myst provider
+resolver and pins the connection to the validated answer. In upstream-proxy
+mode it omits local target lookup entirely. Onyx only resolves the loopback
+proxy endpoint, so the generic helper path does not leak public target names to
+Docker's embedded resolver. Libraries that explicitly replace their HTTP
+transport are not covered merely by setting proxy environment variables and
+must be routed at that component boundary.
+
+Chromium's explicit Playwright proxy receives no trusted internal bypass list.
+To preserve the bundled full-mode document crawl, only the exact local document listener
+(`localhost`, `127.0.0.1`, or `::1`, port `8091`) may traverse the helper
+policy directly. The exception is valid only in `onyx-helper` mode, is resolved
+and connection-pinned locally, bypasses the upstream proxy, and does not admit
+other loopback/private ports.
+
 ### Upstream-proxy DNS residual risk
 
 When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, the local policy intentionally

@@ -8,10 +8,10 @@ stealth CDP browser. For anti-bot-protected search engines, this double-hit
 from the same IP — first with a non-browser TLS fingerprint — is a strong
 bot detection signal and a primary cause of 429s.
 
-``EGRESS_PROXY_POLICY`` selects ``prefetch``, ``executor``, ``browser``, or
-``searxng-external``. Prefetch/executor modes block configured search hosts;
-browser modes allow them. Every mode blocks private/internal targets and uses
-the same cleartext URL policy.
+``EGRESS_PROXY_POLICY`` selects ``prefetch``, ``executor``, ``browser``,
+``onyx-helper``, or ``searxng-external``. Prefetch/executor modes block
+configured search hosts; browser/helper modes allow them. Every mode blocks
+private/internal targets and uses the same cleartext URL policy.
 
 For prefetch traffic this proxy:
 
@@ -92,7 +92,13 @@ LISTEN_HOST = os.environ.get("PREFETCH_PROXY_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("PREFETCH_PROXY_PORT", "3128"))
 
 POLICY_MODE = os.environ.get("EGRESS_PROXY_POLICY", "prefetch").strip().lower()
-if POLICY_MODE not in {"prefetch", "executor", "browser", "searxng-external"}:
+if POLICY_MODE not in {
+    "prefetch",
+    "executor",
+    "browser",
+    "onyx-helper",
+    "searxng-external",
+}:
     raise RuntimeError(f"Unsupported EGRESS_PROXY_POLICY={POLICY_MODE!r}")
 BLOCK_SEARCH_ENGINES = POLICY_MODE in {"prefetch", "executor"}
 
@@ -117,6 +123,13 @@ ALLOWED_CLIENT_HOSTS = tuple(
     for host in os.environ.get("EGRESS_PROXY_ALLOWED_CLIENT_HOSTS", "").split(",")
     if host.strip()
 )
+
+
+def _listener_is_loopback_only() -> bool:
+    try:
+        return ipaddress.ip_address(LISTEN_HOST.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
 
 # HTTPS upstream proxies use normal certificate verification and explicit SNI.
 # When the runtime supports TLS 1.3, require it for the proxy leg so
@@ -287,6 +300,57 @@ def _parse_authority(authority: str, default_port: int) -> tuple[str, int]:
     except ValueError as e:
         raise ValueError(f"invalid port in target {authority!r}") from e
     return host, port
+
+
+def _parse_trusted_internal_destinations() -> frozenset[tuple[str, int]]:
+    raw = os.environ.get("EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS", "").strip()
+    if not raw:
+        return frozenset()
+    if POLICY_MODE != "onyx-helper":
+        raise RuntimeError(
+            "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS is allowed only for "
+            "the loopback-only onyx-helper policy"
+        )
+
+    destinations: set[tuple[str, int]] = set()
+    for item in raw.split(","):
+        authority = item.strip()
+        if not authority:
+            continue
+        parsed = urlparse("//" + authority)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise RuntimeError(
+                f"invalid trusted internal destination {authority!r}"
+            ) from exc
+        host = _normalize_host(parsed.hostname or "")
+        if (
+            not host
+            or port is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RuntimeError(
+                "trusted internal destinations must be exact host:port "
+                f"authorities, found {authority!r}"
+            )
+        destinations.add((host, port))
+    if not destinations:
+        raise RuntimeError(
+            "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS contained no destinations"
+        )
+    return frozenset(destinations)
+
+
+TRUSTED_INTERNAL_DESTINATIONS = _parse_trusted_internal_destinations()
+
+
+def _is_trusted_internal_destination(host: str, port: int) -> bool:
+    return (_normalize_host(host), port) in TRUSTED_INTERNAL_DESTINATIONS
 
 
 async def _resolve_system_host(host: str, port: int) -> set[str]:
@@ -640,6 +704,15 @@ async def _validate_destination(
     if not 0 < port <= 65535:
         return "invalid port", ()
 
+    if _is_trusted_internal_destination(host, port):
+        try:
+            resolved_ips = await _resolve_system_host(host, port)
+        except (socket.gaierror, OSError, ValueError) as e:
+            return f"trusted internal DNS resolution failed: {e}", ()
+        if not resolved_ips:
+            return "trusted internal DNS resolution returned no addresses", ()
+        return None, tuple(sorted(resolved_ips))
+
     if _parse_ip_literal(host) and not _ip_block_reason(host):
         return None, (host,)
 
@@ -842,6 +915,9 @@ async def _connect_via_upstream(
     Supports HTTP CONNECT, SOCKS5, and SOCKS5h proxies.
     Returns (reader, writer) for the established tunnel.
     """
+    if _is_trusted_internal_destination(target_host, target_port):
+        return await _open_validated_direct_connection(validated_ips, target_port)
+
     if not UPSTREAM_PROXY:
         return await _open_validated_direct_connection(validated_ips, target_port)
 
@@ -1117,6 +1193,12 @@ async def _open_plain_http_forward_connection(
     expect absolute-form request targets for plain HTTP forwarding; direct and
     SOCKS paths expect origin-form.
     """
+    if _is_trusted_internal_destination(target_host, target_port):
+        reader, writer = await _open_validated_direct_connection(
+            validated_ips, target_port
+        )
+        return reader, writer, False
+
     if not UPSTREAM_PROXY:
         reader, writer = await _open_validated_direct_connection(
             validated_ips, target_port
@@ -1489,7 +1571,11 @@ async def _handle_connect(
         )
         return
 
-    if target_port == 80 and not ALLOW_HTTP_URLS:
+    if (
+        target_port == 80
+        and not ALLOW_HTTP_URLS
+        and not _is_trusted_internal_destination(target_host, target_port)
+    ):
         await _write_text_response(
             client_writer, 403, "Forbidden", HTTP_URL_BLOCK_MESSAGE
         )
@@ -1600,7 +1686,11 @@ async def _handle_forward_http(
         use_tls = False
         path = target or "/"
 
-    if not use_tls and not ALLOW_HTTP_URLS:
+    if (
+        not use_tls
+        and not ALLOW_HTTP_URLS
+        and not _is_trusted_internal_destination(target_host, target_port)
+    ):
         logger.info(
             "BLOCKED FORWARD %s http://%s:%d%s (HTTP URLs disabled) -> 403",
             method,
@@ -1733,21 +1823,29 @@ async def _handle_forward_http(
 
 async def main() -> None:
     _validate_upstream_proxy_config()
-    if not ALLOWED_CLIENT_HOSTS:
-        raise RuntimeError("EGRESS_PROXY_ALLOWED_CLIENT_HOSTS must name the dedicated bridge")
+    if not ALLOWED_CLIENT_HOSTS and not _listener_is_loopback_only():
+        raise RuntimeError(
+            "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS must name the dedicated bridge "
+            "unless PREFETCH_PROXY_HOST is a literal loopback address"
+        )
     logger.info(
         "Restricted egress proxy starting on %s:%d "
         "(policy: %s, upstream: %s, allowed_clients: %s, "
         "allow_http_urls: %s, block_hosts: %s, block_internal_hosts: %s, "
-        "target_dns: %s)",
+        "trusted_internal_destinations: %s, target_dns: %s)",
         LISTEN_HOST,
         LISTEN_PORT,
         POLICY_MODE,
         _sanitized_upstream_proxy(),
-        ", ".join(ALLOWED_CLIENT_HOSTS),
+        ", ".join(ALLOWED_CLIENT_HOSTS) or "loopback only",
         ALLOW_HTTP_URLS,
         ", ".join(sorted(SEARCH_ENGINE_HOSTS)),
         ", ".join(sorted(BLOCKED_HOSTNAMES)),
+        ", ".join(
+            f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+            for host, port in sorted(TRUSTED_INTERNAL_DESTINATIONS)
+        )
+        or "none",
         _target_dns_mode(),
     )
 

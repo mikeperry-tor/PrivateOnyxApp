@@ -43,6 +43,9 @@ At a high level:
   their HTTP clients can resolve the mandatory Docker egress-bridge proxy.
   Their narrow networks prevent direct Internet egress, and final-hop policy
   proxies remain authoritative for target DNS and private-target rejection.
+- Environment-aware HTTP helpers in the Onyx API/background services and their
+  Playwright launchers use a loopback-only final-hop policy. Trusted internal
+  service URLs bypass it explicitly; executor pods never inherit that bypass.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 
 Those bullets are only a map. Read the docs above before changing any runtime path.
@@ -64,6 +67,8 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 - `myst/` - Mysterium image build file, entrypoint, signup compose, and helper CLI.
 - `teep/` - Teep image build file and entrypoint.
 - `onyx/patches/` - runtime `sitecustomize` patches applied inside Onyx and code-interpreter containers.
+- `onyx/helper-egress.env` - stack-owned `NO_PROXY` set for trusted Onyx
+  backend dependencies; update it when Compose service names or aliases change.
 - `onyx/local_embedding_shim.py` - model-server-compatible bridge to an OpenAI-compatible embeddings endpoint. Exists to provide embedding query prefix strings and model name conversion.
 - `onyx/doc_drop_webserver.py` - read-only local document HTTP server for the Web connector, to serve files for RAG indexing and embedding.
 - `reference_repos/` - upstream checkouts for audits and upgrades, if present. Treat them as references only; do not patch them.
@@ -129,8 +134,10 @@ There is no single test framework for this wrapper. Choose checks based on what 
   `python3 -m unittest discover -s tests -p 'test_*.py' -v`. Add focused cases
   under `tests/` when changing proxy destination/DNS policy, HTTP request
   framing, bridge-client enforcement, executor network selection, or injected
-  executor environment. Tests must be deterministic and must not require live
-  internet, VPN credentials, or the private `.env.wrapper`.
+  executor environment. Runtime-limit patches should get focused signature,
+  configured-value, and invalid-value cases. Tests must be deterministic and
+  must not require live internet, VPN credentials, or the private
+  `.env.wrapper`.
 
 - Compose or Makefile changes: run `make help` and inspect the effective compose model for the affected mode using the Makefile's layering.
 - Stack startup changes: run the relevant `make up-lite` or `make up-full`, then `make ps-*` and targeted logs when practical.

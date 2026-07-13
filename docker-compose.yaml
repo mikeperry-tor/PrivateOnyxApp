@@ -488,6 +488,37 @@ services:
         condition: service_healthy
         restart: true
 
+  # HTTP(S) egress for trusted Onyx backend helpers. The listener is available
+  # only on loopback in the shared namespace, so it is not another bridge for
+  # restricted components. Onyx resolves only this loopback endpoint; the
+  # policy performs target DNS through Myst or delegates names to the explicit
+  # upstream proxy. Internal service URLs use the stack-owned bypasses in
+  # onyx/helper-egress.env.
+  onyx-helper-egress-proxy:
+    <<: *policy-proxy
+    environment:
+      PREFETCH_PROXY_HOST: "127.0.0.1"
+      PREFETCH_PROXY_PORT: "3132"
+      EGRESS_PROXY_POLICY: onyx-helper
+      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: ""
+      # Playwright deliberately forces loopback requests through its configured
+      # proxy. Permit only the local document server's exact listener and keep
+      # every other internal/private proxy target blocked.
+      EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS: "localhost:8091,127.0.0.1:8091,[::1]:8091"
+      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
+      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
+      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
+      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
+      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
+    depends_on:
+      netns-holder:
+        condition: service_started
+      myst-client:
+        condition: service_healthy
+        restart: true
+
   crw-prefetch-bridge:
     <<: *tcp-gateway
     command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3128"]
@@ -867,6 +898,11 @@ services:
     image: onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
     network_mode: "service:netns-holder"
+    # Shared, stack-owned internal-service bypasses. This file is deliberately
+    # not part of the user-facing .env.wrapper configuration surface.
+    env_file:
+      - path: ./onyx/helper-egress.env
+        required: true
     environment:
       # code-interpreter runs on 7000 in the shared netns (8000 is taken by background prometheus).
       CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
@@ -918,6 +954,17 @@ services:
       # Leave empty to use Onyx defaults.
       ONYX_OPEN_URL_MAX_CHARS_PER_URL: "${ONYX_OPEN_URL_MAX_CHARS_PER_URL:-}"
       ONYX_OPEN_URL_MAX_TOTAL_CHARS: "${ONYX_OPEN_URL_MAX_TOTAL_CHARS:-}"
+      # One byte-oriented ceiling for coding-agent repository tarballs and the
+      # code-interpreter file API that receives them. This is intentionally
+      # separate from the post-fetch open_url character budgets above.
+      ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB: "${ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB:-1000}"
+      # Route environment-aware Onyx HTTP clients through the loopback final-hop
+      # policy. The bypass is restricted to trusted stack/host endpoints.
+      HTTP_PROXY: "http://127.0.0.1:3132"
+      HTTPS_PROXY: "http://127.0.0.1:3132"
+      http_proxy: "http://127.0.0.1:3132"
+      https_proxy: "http://127.0.0.1:3132"
+      ONYX_HELPER_HTTP_PROXY_URL: "http://127.0.0.1:3132"
       # When true, previous-turn tool responses are preserved in future LLM
       # context instead of being replaced with Onyx's generic placeholder.
       ONYX_AGENT_PRESERVE_TOOL_RESULTS: "${ONYX_AGENT_PRESERVE_TOOL_RESULTS:-true}"
@@ -969,6 +1016,8 @@ services:
       searxng-service-gateway:
         condition: service_healthy
       obscura-mcp-gateway:
+        condition: service_healthy
+      onyx-helper-egress-proxy:
         condition: service_healthy
     volumes: !override
       - ./docker-data/file-system:/app/file-system
@@ -1059,6 +1108,7 @@ services:
       CPU_TIME_LIMIT_SEC: "${ONYX_CODE_INTERPRETER_CPU_TIME_LIMIT_SEC:-60}"
       MAX_OUTPUT_BYTES: "${ONYX_CODE_INTERPRETER_MAX_OUTPUT_BYTES:-20000000}"
       MAX_EXEC_TIMEOUT_MS: "${ONYX_CODE_INTERPRETER_MAX_EXEC_TIMEOUT_MS:-120000}"
+      MAX_FILE_SIZE_MB: "${ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB:-1000}"
     depends_on:
       netns-holder:
         condition: service_started

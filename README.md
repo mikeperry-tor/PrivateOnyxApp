@@ -361,11 +361,25 @@ search-engine URLs and preserves the selected VPN/upstream-proxy/no-VPN mode.
 Tool descriptions advertise this restricted capability and do not expose
 stack-local service endpoints.
 
+`ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB` (default `1000`) is the shared
+byte-oriented ceiling for code-interpreter file uploads and coding-agent
+GitHub repository tarball downloads. Oversized repositories now fail in the
+API server before it attempts an upload that code-interpreter would reject.
+The `ONYX_OPEN_URL_MAX_CHARS_PER_URL` and
+`ONYX_OPEN_URL_MAX_TOTAL_CHARS` settings are separate post-fetch text budgets;
+they do not limit network bytes or uploaded files.
+
 Restart the stack after changing this setting (`make down-lite && make up-lite`, or the full-mode equivalents).
 
 ### Optional: Outbound Proxy (`ONYX_AGENT_OUTBOUND_PROXY_URL`)
 
-Set `ONYX_AGENT_OUTBOUND_PROXY_URL` in `.env.wrapper` to give the final-hop policy proxies an upstream proxy. Restricted components continue to use local bridge URLs. This is orthogonal to Mysterium: if both are set, the upstream-proxy connection crosses the VPN.
+Set `ONYX_AGENT_OUTBOUND_PROXY_URL` in `.env.wrapper` to give the final-hop
+policy proxies an upstream proxy. This includes the loopback-only policy used
+by environment-aware HTTP clients in the Onyx API and background workers, so
+coding-agent repository downloads, Web connector downloads, and similar
+helpers follow the same routing matrix. Restricted components continue to use
+local bridge URLs. This is orthogonal to Mysterium: if both are set, the
+upstream-proxy connection crosses the VPN.
 
 Supported schemes:
 
@@ -392,6 +406,21 @@ private address is a residual risk. Host Tor
 (`socks5h://host.docker.internal:9150`) also currently requires
 `MYST_VPN_ALLOW_LAN_BYPASS=true`; that is a broad LAN route exemption for the
 trusted final-hop proxy, not general LAN access for restricted components.
+
+In both lite and full mode, the Onyx API uses the helper policy for public
+downloads; the full-only background worker uses it as well. Their direct
+stack-local and host-local dependencies are maintained in the tracked
+`onyx/helper-egress.env` file, not user configuration. Public destinations
+must not be added there because they would bypass the helper policy and
+upstream proxy. Executor pods do not inherit this trusted bypass list. HTTP
+libraries that explicitly disable
+environment proxy discovery or install their own transport are outside this
+generic helper route and require component-specific routing; the bundled
+GitHub downloader and normal `requests`, `httpx`, and `urllib` helpers honor it.
+Playwright does not inherit the backend bypass set; every browser navigation
+uses its explicit proxy. The helper policy has one fixed direct exception for
+the full-mode local document server at
+`localhost`/`127.0.0.1`/`::1` port `8091`; no other private target is allowed.
 
 CRW 0.23 requires a local lookup before it will hand a URL to its configured
 proxy. Docker's embedded resolver answers known internal service names with

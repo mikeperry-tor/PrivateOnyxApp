@@ -26,6 +26,20 @@ _INDEXING_SKIP_PATCHED = False
 _LOG_ONCE_KEYS: set[str] = set()
 
 
+def _apply_playwright_helper_proxy_patch() -> None:
+    try:
+        from wrapper_env_patches import apply_playwright_helper_proxy_patch
+
+        apply_playwright_helper_proxy_patch()
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize_background: failed to patch Playwright proxy: {e}",
+            flush=True,
+        )
+        if _strict_mode():
+            raise
+
+
 def _env_enabled(name: str, default: bool = True) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -689,4 +703,5 @@ def _apply_web_connector_http_freshness_patch() -> None:
     )
 
 
+_apply_playwright_helper_proxy_patch()
 _apply_web_connector_http_freshness_patch()

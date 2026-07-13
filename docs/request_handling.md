@@ -768,7 +768,8 @@ generation and code-interpreter executor pod caveats, is documented in
 | **CRW CDP (obscura)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
 | **SearXNG** | none by default | CRW-backed engines use only the internal CRW peer network |
 | **Code-interpreter HTTP clients** | executor policy | local executor bridge; search-engine and private/internal targets are blocked |
-| **OnyxWebCrawler** | shared namespace direct egress | Does not go through CRW or explicit `ONYX_AGENT_OUTBOUND_PROXY_URL`; traffic uses the Mysterium VPN when `MYST_VPN_ENABLED=true`, otherwise the Docker bridge |
+| **Onyx API/background HTTP helpers** | loopback `onyx-helper` policy | The API in both modes and the full-only background worker send environment-aware `requests`, `httpx`, and `urllib` clients through `HTTP_PROXY`/`HTTPS_PROXY=http://127.0.0.1:3132`; stack-owned internal bypasses come from `onyx/helper-egress.env` |
+| **OnyxWebCrawler** | loopback `onyx-helper` policy | Does not go through CRW/Obscura, but its SSRF-validated `requests` fetch uses the helper proxy and selected VPN/upstream-proxy/no-VPN route |
 
 **CONNECT handling:**
 
@@ -924,7 +925,7 @@ but that is not the recommended wrapper setup.
 └──────────────────────────────────────────────────────┘
 ```
 
-**Option B: OnyxWebCrawler (upstream fallback — direct HTTP, no CRW/obscura)**
+**Option B: OnyxWebCrawler (upstream fallback — helper-policy HTTP, no CRW/obscura)**
 
 ```
 ┌──────────────────────┐
@@ -936,7 +937,7 @@ but that is not the recommended wrapper setup.
           ▼
 ┌──────────────────────────────────────────────────────┐
 │  OnyxWebCrawler (in-process, no container)           │
-│  ├─ ssrf_safe_get(url) (direct HTTP, through VPN)    │
+│  ├─ ssrf_safe_get(url) through helper policy         │
 │  ├─ 4xx/403 + CF headers → Playwright fallback       │
 │  │   (one-shot headless render, if enabled)          │
 │  ├─ is_pdf_resource() check:                         │
@@ -945,7 +946,7 @@ but that is not the recommended wrapper setup.
 │  ├─ Max sizes: PDF 50MB, HTML 20MB                   │
 │  └─ User-Agent: "OnyxWebCrawler/1.0 (+https://...)"  │
 └─────────┬────────────────────────────────────────────┘
-          │ HTTPS (through Myst VPN exit IP)
+          │ HTTPS (selected VPN/upstream/no-VPN route)
           ▼
 ┌──────────────────────────────────────────────────────┐
 │  Target website (arbitrary URL)                      │
@@ -963,8 +964,8 @@ but that is not the recommended wrapper setup.
     CRW's HTTP prefetch without Obscura. Plain HTTP URLs are blocked by
     default unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`. PDFs are handled
     natively by CRW's `pdf_inspector` and bypass Obscura entirely.
-  - **OnyxWebCrawler (fallback if no provider is configured)**: Direct HTTP via
-    `ssrf_safe_get`, handles PDFs natively (PyPDF2), optional Playwright
+  - **OnyxWebCrawler (fallback if no provider is configured)**: In-process HTTP
+    via `ssrf_safe_get` and the helper policy, handles PDFs natively (PyPDF2), optional Playwright
     fallback for Cloudflare/bot-challenge 403s; no stealth on the initial HTTP
     request
 - CRW's per-host rate limiter applies to the Firecrawl path (same as search)
@@ -988,8 +989,8 @@ selected at configuration time:
   Search-engine targets and pages that need browser rendering go through CDP
   shim → Obscura; ordinary non-search pages may be returned from CRW's HTTP
   prefetch without Obscura. This is the recommended wrapper configuration.
-- **OnyxWebCrawler**: Direct HTTP fetch via `ssrf_safe_get` (SSRF-validated
-  `requests`). Handles HTML and PDF natively. Has an optional Playwright
+- **OnyxWebCrawler**: In-process HTTP fetch via `ssrf_safe_get` (SSRF-validated
+  `requests`) and the loopback helper policy. Handles HTML and PDF natively. Has an optional Playwright
   headless-browser fallback for Cloudflare/bot-challenge 403 responses. Does
   NOT go through CRW/obscura. Upstream Onyx uses this only when no content
   provider is configured.
@@ -1032,6 +1033,10 @@ complete patch inventory and upstreaming notes.
 - `apply_open_url_char_limit_patches()` lets wrapper env vars
   `ONYX_OPEN_URL_MAX_CHARS_PER_URL` and `ONYX_OPEN_URL_MAX_TOTAL_CHARS` override
   upstream truncation defaults.
+- `apply_coding_agent_repo_download_limit_patch()` makes
+  `ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB` the shared byte-oriented ceiling for
+  API-side GitHub tarball downloads and code-interpreter file uploads. It is
+  independent of the Open URL character budgets.
 - `apply_code_interpreter_network_description_patches()` updates tool
   descriptions when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`; it is not part of the
   `open_url` request path. It explains the local CRW/Firecrawl and SearXNG APIs
@@ -1103,11 +1108,11 @@ In this deployment the prefetch goes through the prefetch-blocking proxy:
   content. CRW hashes the bytes for change-tracking purposes but does not
   extract text. The response will have empty markdown content.
 
-### 2.3 OnyxWebCrawler Path (upstream fallback: direct HTTP, no CRW/obscura)
+### 2.3 OnyxWebCrawler Path (upstream fallback: helper-policy HTTP, no CRW/obscura)
 
 ```
 Onyx open_url → OnyxWebCrawler.contents(urls)
-  → ssrf_safe_get(url) (direct HTTP, through VPN)
+  → ssrf_safe_get(url) through http://127.0.0.1:3132
   → 4xx response? (403 or Cloudflare cf-ray/cf-mitigated headers)
     → if OPEN_URL_PLAYWRIGHT_FALLBACK_ENABLED:
         → fetch_rendered_html(url) (one-shot headless Chromium render)
@@ -1130,8 +1135,15 @@ PDF text extraction uses `extract_pdf_text(content)` which returns
 `(text, metadata)`. The text is truncated to `DEFAULT_MAX_PDF_SIZE_BYTES`
 (50 MB) and returned as `WebContent`.
 
-This path does **not** go through CRW, the CDP shim, or obscura. It's a
-direct HTTP fetch via `ssrf_safe_get()` (SSRF-validated `requests.get`).
+This path does **not** go through CRW, the CDP shim, or obscura. It is an
+in-process HTTP fetch via `ssrf_safe_get()` (SSRF-validated `requests.get`),
+and `requests` sends public targets through the loopback `onyx-helper` policy.
+That policy applies private/internal and cleartext URL rules and selects Myst,
+the configured upstream proxy, or explicit no-VPN egress. Onyx's internal
+dependencies bypass it only through the stack-owned `NO_PROXY` set in
+`onyx/helper-egress.env`. Playwright does not inherit that set; the helper
+policy permits only the
+local document server's exact loopback port 8091 as a direct internal target.
 The initial request uses a simple `OnyxWebCrawler/1.0 (+https://www.onyx.app)`
 user agent with no stealth. When the response is a 403 or carries Cloudflare
 headers (`cf-ray`, `cf-mitigated`, `Server: cloudflare`), and
@@ -1347,7 +1359,7 @@ the local Firecrawl provider**:
   Firecrawl (README: API Base URL
   `http://crw-service-gateway:3010/v1/scrape`, any
   non-empty API key placeholder) in Onyx Admin → Web Search. If no content
-  provider is configured, `open_url` uses `OnyxWebCrawler` (direct HTTP) and
+  provider is configured, `open_url` uses `OnyxWebCrawler` (helper-policy HTTP) and
   never touches CRW at all.
 - Symptom: "JS did not run on the page" — for a non-search URL, this can be
   expected. It means CRW returned usable HTTP-prefetch content without Obscura.
@@ -1480,7 +1492,8 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 |----------|---------|-------------|
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
-| `EGRESS_PROXY_ALLOWED_CLIENT_HOSTS` | required per policy instance | Comma-separated dedicated bridge service names allowed to connect; loopback remains allowed for health checks. |
+| `EGRESS_PROXY_ALLOWED_CLIENT_HOSTS` | required except for literal-loopback listeners | Comma-separated dedicated bridge service names allowed to connect; an empty list is valid only when `PREFETCH_PROXY_HOST` is a literal loopback address. |
+| `EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS` | empty; helper Compose sets exact loopback port 8091 authorities | Exact `host:port` authorities allowed to connect directly despite normal private/cleartext blocking. Valid only for `onyx-helper`; this is not a general bypass list. |
 | `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
 | `ONYX_AGENT_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs in the prefetch proxy and CDP shim. When false, HTTP fetches fail closed with a message telling the agent to use HTTPS. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
