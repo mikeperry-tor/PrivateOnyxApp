@@ -7,10 +7,11 @@ the Onyx agent external or internal network access. The model should replace
 broad shared-namespace reachability with narrow component networks and explicit
 egress/service gateways.
 
-This plan covers code-interpreter executors, Obscura, CRW, and SearXNG
-together. Code-interpreter executors are the highest-risk first delivery
-target because they run LLM-generated code, but the restricted-egress
-architecture is stack-wide.
+This plan covers code-interpreter executors, the Obscura CDP renderer, the
+separate agent-facing Obscura MCP server, CRW, and SearXNG together.
+Code-interpreter executors are the highest-risk first implementation target
+because they run LLM-generated code, but the restricted-egress architecture
+and deployment unit are stack-wide.
 
 The intended end state:
 
@@ -73,7 +74,8 @@ this file when any of these pins or their equivalent local overrides change.
 ## Non-Goals
 
 - Do not add a transparent firewall or general-purpose network sandbox in this
-  phase. The primary boundary is Docker network placement plus narrow gateways.
+  implementation. The primary boundary is Docker network placement plus narrow
+  gateways.
 - Do not preserve broad shared-namespace executor networking as an implicit
   compatibility mode. If needed for trusted debugging, add a separate explicit
   opt-in with clear warnings.
@@ -167,6 +169,7 @@ In scope:
 
 - code-interpreter executor pods;
 - Obscura browser renderer;
+- Obscura MCP browser server;
 - CRW scraper/API;
 - SearXNG search app.
 
@@ -228,7 +231,7 @@ At minimum the stack needs these policy modes:
 | --- | --- | --- | --- | --- |
 | `prefetch` | blocked | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` | CRW HTTP prefetch |
 | `executor` | blocked | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` | code-interpreter executors |
-| `browser` | allowed | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` | Obscura browser |
+| `browser` | allowed | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` | Obscura CDP and MCP browsers |
 | `searxng-external` | allowed or allowlisted | blocked | controlled by `ONYX_AGENT_ALLOW_HTTP_URLS` | optional non-CRW SearXNG features |
 
 The existing `prefetch-blocking-proxy` already implements most of the
@@ -257,6 +260,12 @@ Policy-enforcement preferences:
   proxy policies and in the CDP shim's browser navigation path. When true,
   non-search plain HTTP targets may be forwarded through the selected
   final-hop policy after the same internal/private destination validation.
+  When false, final-hop policies must also reject HTTP `CONNECT` requests to
+  destination port 80 so a caller cannot bypass the cleartext URL check by
+  opening an opaque tunnel and sending HTTP through it. `CONNECT` is otherwise
+  an opaque TCP tunnel: the proxy does not inspect tunneled TLS or promise that
+  traffic on other ports is semantically HTTP or HTTPS. Document that
+  limitation anywhere the restricted proxy capability is described.
 - `PREFETCH_BLOCK_HOSTS` is the configured search-host block list for the
   prefetch and executor policies. The browser policy must not use this list as
   a block list; it should use the corresponding host set only for search-aware
@@ -361,21 +370,31 @@ an upstream proxy is configured, see
 
 ## DNS Classification
 
-Final-hop proxy destination classification should keep the current behavior:
+Final-hop proxy destination classification should preserve the current routing
+semantics while closing the direct-mode resolution-to-connect race:
 
-- with no upstream proxy, resolve target hostnames locally and block any name
-  that resolves to loopback, private/RFC1918, link-local, reserved, or other
-  non-global addresses;
+- with no upstream proxy, resolve target hostnames locally, block any name that
+  resolves to loopback, private/RFC1918, link-local, reserved, or other
+  non-global addresses, and connect only to the exact validated IP addresses;
 - with an upstream proxy, avoid local target DNS resolution so target DNS does
   not leak outside the configured proxy path.
 
-That creates a deliberate residual risk in upstream-proxy mode: a
-public-looking hostname might resolve to a private address at the upstream
-proxy. The local final-hop proxy can still block IP literals, localhost names,
-`host.docker.internal`, single-label Docker-style names, and other syntactic
-private-target forms without opening a connection. Eliminating the remaining
-risk requires upstream-proxy-side policy, DNS-over-proxy classification, or
-explicit allowlists, and is out of scope for the first implementation.
+In direct mode, destination validation must return the validated address set to
+the connection code. The proxy must not validate a hostname and then pass that
+hostname to a second resolver call. Connect to a selected validated IP while
+retaining the original hostname for HTTP `Host` and TLS SNI, and retry only
+other addresses from the already-validated set. Add a deterministic rebinding
+test in which validation returns a public address and a later hostname lookup
+would return a private address; the later lookup must never occur.
+
+Remote target resolution creates a deliberate residual risk in upstream-proxy
+mode: a public-looking hostname might resolve to a private address at the
+upstream proxy. The local final-hop proxy can still block IP literals,
+localhost names, `host.docker.internal`, single-label Docker-style names, and
+other syntactic private-target forms without opening a connection. Eliminating
+the remaining risk requires upstream-proxy-side policy, DNS-over-proxy
+classification, or explicit allowlists, and is out of scope for the first
+implementation.
 
 Component bridges should not perform target DNS classification. Keep that
 logic centralized in the final-hop proxy policy.
@@ -569,6 +588,60 @@ For the current CRW-to-CDP-to-Obscura browser chain, wait strategy, cookie
 clearing, and CDP shim behavior, see
 [Request handling](../request_handling.md).
 
+### Obscura MCP Browser
+
+`obscura-mcp` is a second Obscura process, separate from the CDP renderer. It
+exposes unauthenticated browser-automation tools that Onyx chat agents can
+invoke directly, accepts attacker-influenced navigation and interaction input,
+and currently shares `netns-holder`. Restricting only the CDP renderer would
+leave an agent-facing browser with broad internal reachability, so the MCP
+process is an independent restricted component in this plan.
+
+Target shape:
+
+```text
+Onyx api_server in netns-holder
+  |
+  | MCP HTTP through a narrow service gateway
+  v
+obscura-mcp on an MCP-control network
+  |
+  | --proxy http://obscura-mcp-egress-bridge:3128
+  v
+obscura-mcp-egress-bridge
+  |
+  v
+browser final-hop proxy in netns-holder
+  |
+  v
+internet via selected routing matrix
+```
+
+Obscura MCP requirements:
+
+- `obscura-mcp` does not share `netns-holder` and does not share the CDP
+  renderer's browser-control network;
+- its control network contains only `obscura-mcp` and the narrow MCP service
+  gateway used by `api_server`;
+- its egress network contains only `obscura-mcp` and its browser egress bridge;
+- it uses the same search-allowed, private-target-blocking `browser` final-hop
+  policy as the CDP renderer, through its own bridge and failure domain;
+- only the Onyx-side service gateway may reach the unauthenticated MCP listener;
+  do not publish it to the host or make it reachable from executor, CRW,
+  SearXNG, CDP, data, or default networks;
+- migrate the configured Onyx MCP server URL away from shared loopback to the
+  Onyx-side gateway endpoint without requiring the operator to disable SSRF
+  protection globally;
+- preserve the documented separate-process and shared-session semantics of the
+  MCP server, while making clear that its browser state is separate from the
+  CRW-driven CDP renderer.
+
+The service gateway may be a raw TCP bridge because it exposes one dedicated
+MCP listener to one trusted caller namespace. It must follow the component
+bridge hardening rules and bind only on the Onyx-facing side. If later callers
+or authentication requirements expand, replace it with an authenticated HTTP
+gateway rather than broadening the control network.
+
 ### CRW
 
 CRW accepts untrusted target URLs, performs HTTP prefetch, controls the browser
@@ -669,6 +742,41 @@ assumptions, and SearXNG proxy overlay behavior, see
 [Request handling](../request_handling.md) and
 [Onyx patch information](../onyx_patch_info.md).
 
+## Service Ingress And Atomic Cutover Topology
+
+Moving request-path services out of `netns-holder` also removes the current
+loopback paths used by Onyx, CRW, the CDP shim, SearXNG, Obscura MCP, and host
+diagnostics. The implementation must define both sides of every replacement
+path; ordinary Compose networks cannot be attached directly to a service that
+uses `network_mode: service:netns-holder`.
+
+The atomic cutover must include these service gateways or equivalent narrow
+proxies:
+
+| Caller side | Restricted service side | Allowed listener/purpose |
+| --- | --- | --- |
+| `netns-holder` Onyx services | CRW API network | CRW Firecrawl-compatible API only |
+| `netns-holder` Onyx services | SearXNG API network | SearXNG HTTP API only |
+| `netns-holder` `api_server` | Obscura MCP control network | Obscura MCP HTTP listener only |
+| CRW CDP network | CDP shim | CDP shim listener only |
+| CDP shim | Obscura browser-control network | Obscura CDP listener only |
+| SearXNG search network | CRW API network | CRW scrape API; use an HTTP path allowlist if only `/v1/scrape` is intended |
+| CRW search network | SearXNG internal API | SearXNG search API only, if CRW `/v1/search` remains enabled |
+| host diagnostic bridge | CRW or SearXNG API network | Existing explicitly published diagnostic endpoint only |
+
+Prefer direct attachment when both peers are restricted services and the
+resulting peer/port surface matches the table. Use a dual-homed narrow gateway
+when one side is `netns-holder`, the host-facing default network, or when a
+path-level restriction is required. A gateway must not become a general router
+between its two networks.
+
+All loopback and service URLs must switch in the same deployment, including
+Onyx's CRW/Firecrawl and SearXNG endpoints, CRW's CDP and SearXNG endpoints,
+the SearXNG custom-engine CRW endpoint, the CDP shim's Obscura endpoint, the
+stored/configured Obscura MCP URL, healthchecks, and host diagnostic bridges.
+No intermediate topology that splits only Obscura, SearXNG, or CRW is a
+supported deployable state.
+
 ## Compose Layering
 
 Use network-focused names for restricted-egress overlays.
@@ -681,8 +789,9 @@ Recommended files and responsibilities:
 - `docker-compose.code-interpreter-network.yml`: executor-only network,
   executor bridge, executor Docker network selection, executor proxy URL,
   executor `NO_PROXY`, patch mount, and API-server prompt enablement;
-- `docker-compose.browser-network.yml`: Obscura/CDP restricted networks and
-  browser egress bridge;
+- `docker-compose.browser-network.yml`: Obscura CDP, Obscura MCP, their
+  separate control networks, browser egress bridges, and the Onyx-side MCP
+  service gateway;
 - `docker-compose.search-network.yml`: SearXNG/Valkey/CRW search networks and
   CRW scrape URL wiring;
 - `docker-compose.crw-network.yml`: CRW API/CDP/search/prefetch network
@@ -734,18 +843,26 @@ CODE_INTERPRETER_NETWORK_SUFFIX :=:docker-compose.code-interpreter-network.yml
 endif
 ```
 
-Add separate opt-in variables only when needed, for example:
+Add separate opt-in variables only for capabilities that genuinely expand the
+restricted baseline, for example:
 
 ```env
-ONYX_RESTRICT_OBSCURA_NETWORK=true
-ONYX_RESTRICT_SEARXNG_NETWORK=true
-ONYX_RESTRICT_CRW_NETWORK=true
 ONYX_CODE_INTERPRETER_ALLOW_LOCAL_WEB_SERVICES=false
 ```
 
-Prefer enabling the full restricted request path as a single documented mode
-after validation, rather than leaving many half-overlapping profiles as
-long-term user-facing options.
+Do not add per-component restriction switches for Obscura CDP, Obscura MCP,
+SearXNG, or CRW. Their complete restricted request path becomes the supported
+topology only after atomic validation, rather than leaving half-overlapping
+profiles as user-facing options.
+
+The Compose files may be developed and reviewed separately, but they must be
+selected as one request-path restricted-egress bundle. Do not expose individual
+Obscura, Obscura MCP, SearXNG, or CRW restriction toggles as independently
+deployable user modes. Code-interpreter executor isolation may remain
+separately controlled by `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` because its
+network is independent of the request-path service graph, but the repository
+release containing this plan must not be deployed until the complete
+restricted request path and executor behavior pass the atomic validation gate.
 
 ## Design Rules
 
@@ -753,7 +870,8 @@ long-term user-facing options.
 - `ONYX_AGENT_OUTBOUND_PROXY_URL` configures final-hop upstream proxying; it
   does not trigger executor proxy injection.
 - `ONYX_AGENT_ALLOW_HTTP_URLS` remains the single cleartext target URL
-  preference for proxy policy modes and CDP navigation blocking.
+  preference for proxy policy modes and CDP navigation blocking. When false,
+  proxy modes also reject `CONNECT` to destination port 80.
 - Preserve the documented policy preference surface; do not silently drop
   `PREFETCH_BLOCK_HOSTS`, `PREFETCH_BLOCK_INTERNAL_HOSTS`,
   `ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13`, executor proxy injection variables,
@@ -768,12 +886,26 @@ long-term user-facing options.
 - SearXNG custom engines use a configurable CRW endpoint.
 - Runtime topology uses named API, CDP, search, prefetch, browser-egress, and
   executor-egress networks instead of broad shared-namespace assumptions.
+- Direct-mode destination connections use the exact validated DNS address set;
+  they do not resolve the target hostname again after classification.
+- The Obscura CDP renderer and Obscura MCP server are separate restricted
+  components with separate control and egress networks.
+- Request-path network changes are deployed atomically; intermediate
+  workstream states are not supported runtime profiles.
 - Host-proxy LAN bypass and upstream-proxy DNS classification are documented
   residual risks for the relevant routing modes.
 
-## Implementation Phases
+## Implementation Workstreams And Atomic Deployment Gate
 
-### Phase 1: Shared Primitives
+The numbered workstreams below organize implementation, ownership, review, and
+commits. They are not deployment phases. They may be completed by sub-agents or
+piece-by-piece on a development branch, but no partial combination is a
+supported stack state and none may be deployed. One final integration change
+must select the full restricted request-path overlay bundle, remove the old
+shared-namespace paths, update all endpoint wiring, and pass the complete
+validation plan before deployment.
+
+### Workstream 1: Shared Primitives
 
 1. Add explicit proxy policy modes to the existing prefetch proxy
    implementation or an adjacent shared module:
@@ -786,12 +918,18 @@ long-term user-facing options.
    `PREFETCH_BLOCK_INTERNAL_HOSTS`, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and
    `ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13`.
 3. Keep destination validation strict and fail closed.
+   - reject `CONNECT` to port 80 when `ONYX_AGENT_ALLOW_HTTP_URLS=false`;
+   - in direct mode, connect to an address from the already-validated DNS set
+     without resolving the target hostname again;
+   - preserve the original hostname for `Host` and TLS SNI;
+   - document that other CONNECT ports are opaque TCP tunnels and are not
+     protocol-inspected.
 4. Add a minimal bridge service pattern that can expose one restricted-network
    port to one final-hop proxy port without host publishing.
 5. Add compose naming conventions and Makefile suffix names for restricted
    egress.
 
-### Phase 2: Code-Interpreter Executors
+### Workstream 2: Code-Interpreter Executors
 
 1. Add `docker-compose.code-interpreter-network.yml` for executor networking.
 2. Add the executor-only internal network with an explicit Docker network
@@ -803,20 +941,28 @@ long-term user-facing options.
 6. Tighten `sitecustomize_code_interpreter` as described above.
 7. Update API-server prompt/tool-description patches.
 
-### Phase 3: Obscura
+### Workstream 3: Obscura CDP And MCP
 
 1. Add a browser final-hop proxy policy that allows search hosts but blocks
    internal/private targets and plain HTTP by default unless
    `ONYX_AGENT_ALLOW_HTTP_URLS=true`.
-2. Move Obscura onto browser-control and browser-egress networks.
+2. Move the Obscura CDP renderer onto browser-control and browser-egress
+   networks.
 3. Retarget CDP shim to Obscura by DNS name on the control network.
 4. Point Obscura at the browser egress bridge through `--proxy` or
    `OBSCURA_PROXY`.
 5. Preserve CDP shim preferences for waitUntil selection, cookie clearing,
    trace redaction, proxy-server stripping, and HTTP URL blocking.
 6. Verify every custom SearXNG engine can still render SERPs through CRW.
+7. Move `obscura-mcp` onto separate MCP-control and MCP-egress networks.
+8. Point `obscura-mcp` at its browser egress bridge and the shared `browser`
+   final-hop policy.
+9. Add the narrow Onyx-side MCP service gateway and migrate the configured MCP
+   URL away from shared loopback.
+10. Verify agent-driven MCP navigation cannot reach stack, host, LAN, private,
+    link-local, or metadata targets.
 
-### Phase 4: SearXNG
+### Workstream 4: SearXNG
 
 1. Make the custom engine CRW scrape URL configurable.
 2. Move SearXNG and Valkey onto explicit search networks.
@@ -824,7 +970,7 @@ long-term user-facing options.
 4. Keep `docker-compose.proxy.yml` SearXNG proxy mutation only for intentional
    external-engine modes.
 
-### Phase 5: CRW
+### Workstream 5: CRW And Service Ingress
 
 1. Move CRW onto explicit API, CDP, search, and prefetch-egress networks.
 2. Retarget `CRW_RENDERER__CHROME__WS_URL` to the CDP shim DNS endpoint.
@@ -832,30 +978,52 @@ long-term user-facing options.
    `/v1/search` remains enabled.
 4. Point CRW `HTTP_PROXY` and `HTTPS_PROXY` at the CRW prefetch bridge.
 5. Update healthchecks and host diagnostic bridges.
-6. Re-test `web_search`, `open_url`, CRW `/v1/search`, PDF prefetch behavior,
-   and failure modes.
+6. Add the Onyx-to-CRW, Onyx-to-SearXNG, Onyx-to-Obscura-MCP, CRW-to-CDP,
+   CRW-to-SearXNG, SearXNG-to-CRW, and host diagnostic paths listed in
+   [Service Ingress And Atomic Cutover Topology](#service-ingress-and-atomic-cutover-topology).
+7. Re-test `web_search`, `open_url`, CRW `/v1/search`, Obscura MCP, PDF
+   prefetch behavior, and failure modes.
 
-This order is intentional:
+### Workstream 6: Atomic Integration And Deployment
+
+1. Select the complete restricted request-path overlay bundle in the Makefile
+   as one mode; do not select component overlays independently.
+2. Switch every loopback/service endpoint and stored MCP URL in the same
+   integration change.
+3. Remove obsolete shared-namespace placement and proxy injection for Obscura
+   CDP, Obscura MCP, SearXNG, and CRW.
+4. Inspect the effective Compose models for lite/full, VPN/no-VPN, and
+   upstream-proxy/no-upstream-proxy combinations.
+5. Run the complete static, topology, policy, request-path, MCP, and failure
+   validation below.
+6. Deploy only after the full gate passes. If any workstream is incomplete,
+   keep the currently documented topology rather than deploying a hybrid.
+
+This implementation order is intentional, but does not authorize partial
+deployment:
 
 | Component | Main risk reduced | Isolation value | Complexity | Order |
 | --- | --- | --- | --- | --- |
 | Code-interpreter executors | LLM-generated code bypassing proxy variables and reaching internal services | Very high | Medium to high | 1 |
-| Obscura browser | Untrusted page JS or browser/proxy bugs reaching internal services or bypassing configured egress | High | High | 2 |
+| Obscura CDP and MCP browsers | Untrusted page JS, direct agent browser control, or browser/proxy bugs reaching internal services or bypassing configured egress | High | High | 2 |
 | SearXNG | Accidental direct engines or plugin/network features bypassing CRW | Medium | Low to medium | 3 |
 | CRW | Scraper orchestration bugs or direct fetch paths bypassing configured proxy/CDP/search channels | Medium to high | High | 4 |
 
-The decision point for each component should be whether the added network
+The design decision for each component should be whether the added network
 surface remains smaller and clearer than the shared namespace it replaces.
 Prefer several narrow, named bridges over one broad dual-homed internal router.
 
 ## Documentation Updates
 
-Update docs in the same implementation phase as the related behavior.
+Prepare documentation alongside the related workstream, but publish all
+behavioral documentation with the same atomic deployment change.
 
 - `.env.wrapper.example`: describe the new meaning of
-  `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` and any restricted request-path
-  toggles. Keep `ONYX_AGENT_ALLOW_HTTP_URLS` documented as the cleartext URL
-  control for CRW prefetch, executor proxy use, and Obscura/CDP navigation.
+  `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`. Keep
+  `ONYX_AGENT_ALLOW_HTTP_URLS` documented as the cleartext URL control for CRW
+  prefetch, executor proxy use, and Obscura CDP/MCP navigation. State that
+  false also rejects proxy `CONNECT` to port 80, while other CONNECT tunnels
+  are opaque and are not protocol-inspected.
 - `README.md`: update user-facing code-interpreter networking, upstream proxy,
   host Tor, and caveat sections.
 - `.env.wrapper.example` and `README.md`: continue to tell host-Tor users that
@@ -871,11 +1039,16 @@ Update docs in the same implementation phase as the related behavior.
   upstream-proxy DNS caveat, and host-proxy LAN bypass distinction.
 - [Internal network security](../internal_network_security.md): replace the
   shared-namespace executor gap description with the resulting restricted
-  topology; document remaining bridge, DNS, and host-proxy risks.
+  topology; document remaining bridge, opaque-CONNECT, upstream-proxy DNS, and
+  host-proxy risks, and document direct-mode connection pinning to validated
+  DNS addresses.
 - [Request handling](../request_handling.md): describe restricted CRW, SearXNG,
-  Obscura, and executor paths as they land, including search-engine blocking
-  and the difference between no-upstream-proxy DNS classification and
-  upstream-proxy mode.
+  Obscura CDP, Obscura MCP, and executor paths as they land, including
+  search-engine blocking, the port-80 CONNECT rule, and the difference between
+  direct-mode pinned DNS classification and upstream-proxy mode.
+- `README.md`: replace the Obscura MCP shared-loopback instructions with the
+  narrow Onyx-side gateway URL and remove any instruction to disable SSRF
+  protection globally solely to reach the bundled MCP service.
 - [Onyx patch information](../onyx_patch_info.md) and
   [Onyx wrapper patches](../onyx_patches_upgrade.md): update code-interpreter
   prompt/proxy patch mechanics and upgrade checks.
@@ -934,7 +1107,11 @@ Compose shape checks:
    - No shared-namespace VPN connection is expected.
 
 6. Restricted request path enabled.
-   - Obscura has only browser-control and browser-egress networks.
+   - The complete request-path overlay bundle is selected; there is no
+     supported effective model containing only a subset of the Obscura CDP,
+     Obscura MCP, SearXNG, and CRW network changes.
+   - Obscura CDP has only browser-control and browser-egress networks.
+   - Obscura MCP has only its separate MCP-control and MCP-egress networks.
    - CRW has only API, CDP, search, and prefetch-egress networks.
    - SearXNG has only search API/internal and Valkey networks by default.
    - No restricted component has a route to broad default-network peers,
@@ -943,6 +1120,12 @@ Compose shape checks:
    - Proxy policy services and the CDP shim receive
      `ONYX_AGENT_ALLOW_HTTP_URLS`; the default false value is visible in the
      effective compose model.
+   - Obscura CDP, Obscura MCP, CRW, and SearXNG do not use
+     `network_mode: service:netns-holder`.
+   - Onyx-to-CRW, Onyx-to-SearXNG, Onyx-to-Obscura-MCP, CRW-to-CDP,
+     CDP-to-Obscura, CRW-to-SearXNG, SearXNG-to-CRW, and host diagnostic paths
+     each traverse only the gateway or peer network specified in the ingress
+     table.
 
 Runtime checks when safe:
 
@@ -952,6 +1135,11 @@ Runtime checks when safe:
 - with `ONYX_AGENT_ALLOW_HTTP_URLS=false`, proxied executor and CRW prefetch
   requests for `http://example.com` return the documented proxy `403`, and CDP
   HTTP navigations are rejected by the shim;
+- with `ONYX_AGENT_ALLOW_HTTP_URLS=false`, a raw
+  `CONNECT example.com:80` request returns `403` in every final-hop proxy mode;
+- with `ONYX_AGENT_ALLOW_HTTP_URLS=true`, `CONNECT` to port 80 follows the
+  documented destination policy; other CONNECT ports retain the documented
+  opaque-tunnel behavior in both settings;
 - with `ONYX_AGENT_ALLOW_HTTP_URLS=true`, non-search `http://example.com`
   requests are allowed only through the selected final-hop policy and still
   block internal/private targets;
@@ -965,9 +1153,17 @@ Runtime checks when safe:
 - executor proxied requests to internal/private targets return proxy `403`;
 - executor proxied requests to configured search-engine hosts return proxy
   `403`;
+- in direct mode, a deterministic DNS-rebinding test proves that the proxy
+  connects only to an address returned and approved by the validation lookup;
+  no second hostname resolution occurs between classification and connect;
 - executor prompts/tool descriptions mention restricted proxy access but do not
   advertise shared-namespace loopback CRW, SearXNG, or CDP endpoints;
-- Obscura can still render each configured search provider;
+- Obscura CDP can still render each configured search provider;
+- an Onyx chat agent can discover and invoke the bundled Obscura MCP tools
+  through the narrow MCP service gateway;
+- Obscura MCP direct and browser-mediated attempts to reach Onyx, CRW,
+  SearXNG, CDP, data stores, `myst-client`, host gateways, private/LAN ranges,
+  and link-local metadata fail;
 - CRW still blocks search prefetches and escalates to Obscura;
 - `open_url` still handles non-search HTTPS, PDF, and JS-required pages as
   documented;
@@ -981,7 +1177,11 @@ Runtime checks when safe:
 Expected improvements:
 
 - generated code does not share loopback or service aliases with the stack;
-- Obscura has a network backstop behind its private-network block;
+- both Obscura browser processes have network backstops behind their
+  private-network blocks;
+- the unauthenticated Obscura MCP listener is reachable only through the
+  Onyx-side service gateway, not from executors, unrelated stack networks, or
+  the host;
 - CRW can reach only its documented prefetch, CDP, search, and caller peers;
 - SearXNG default search has no general internet egress;
 - direct socket bypasses fail because restricted components have no route to
@@ -998,6 +1198,9 @@ Remaining risks:
 - a bridge that accepts clients on the wrong interface can create an
   undocumented proxy path;
 - TCP bridges rely on the selected final-hop proxy policy being correct;
+- CONNECT tunnels are opaque after establishment. Port 80 is blocked when
+  `ONYX_AGENT_ALLOW_HTTP_URLS=false`, but other allowed destination ports are
+  not protocol-inspected and may carry non-HTTP application traffic;
 - upstream-proxy mode intentionally skips local target DNS resolution, leaving
   the hostname-to-private-IP residual risk described above;
 - host-resident upstream proxies currently rely on
@@ -1019,10 +1222,15 @@ restricted component network
 ```
 
 Use the search-blocking `prefetch`/`executor` policy for code-interpreter
-executors and CRW HTTP prefetch. Add a separate search-allowed `browser`
-policy for Obscura. Give SearXNG no internet egress in the default CRW-backed
-configuration, and add `searxng-external` only for intentional external
-features.
+executors and CRW HTTP prefetch. Use the search-allowed `browser` policy for
+both the Obscura CDP renderer and the separate Obscura MCP browser. Give
+SearXNG no internet egress in the default CRW-backed configuration, and add
+`searxng-external` only for intentional external features. When cleartext
+target URLs are disabled, reject both ordinary plain-HTTP proxy requests and
+CONNECT to port 80. In direct mode, connect only to validated DNS addresses;
+retain the documented remote-DNS residual risk in upstream-proxy mode.
 
-Implement in phases, but design the names, proxy modes, network boundaries,
-and docs as one comprehensive restricted-egress model from the start.
+Implement through independently reviewable workstreams if useful, but deploy
+only the complete integrated topology. Obscura CDP, Obscura MCP, SearXNG, CRW,
+their service gateways, endpoint rewiring, policy changes, validation, and
+documentation form one atomic deployment gate.
