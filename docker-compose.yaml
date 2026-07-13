@@ -1,4 +1,5 @@
-## Wrapper stack for sharing one Mysterium VPN namespace across SearxNG + Onyx.
+## Private Onyx wrapper with a trusted Mysterium routing namespace and
+## restricted request-path component networks.
 ##
 ## Use stack.versions.env for image tags/source refs and .env.wrapper for
 ## local runtime configuration such as host ports, routing, and credentials.
@@ -8,10 +9,29 @@
 
 name: onyx
 
-## NOTE: The Makefile always layers docker-compose.restricted-egress.yml over
-## this file. The CRW/SearXNG/Obscura/CDP network_mode and loopback values below
-## are upstream-shaped base definitions only; the supported effective model
-## atomically replaces them with narrow internal networks and gateway URLs.
+x-tcp-gateway: &tcp-gateway
+  image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+x-policy-proxy: &policy-proxy
+  image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
+  restart: unless-stopped
+  network_mode: "service:netns-holder"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  volumes:
+    - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
+  command: ["python", "-u", "/app/prefetch_blocking_proxy.py"]
+  healthcheck:
+    test: ["CMD", "python", "-c", "import os,socket; s=socket.create_connection(('127.0.0.1', int(os.environ['PREFETCH_PROXY_PORT'])), 2); s.close()"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 5s
 
 services:
   # Stable owner for the shared network namespace.
@@ -30,6 +50,16 @@ services:
           - background
           - nginx
           - code-interpreter
+        gw_priority: 1
+      prefetch-policy-upstream:
+        aliases: [myst-client]
+      browser-policy-upstream:
+        aliases: [myst-client]
+      mcp-browser-policy-upstream:
+        aliases: [myst-client]
+      onyx-crw-ingress: {}
+      onyx-searxng-ingress: {}
+      onyx-mcp-ingress: {}
 
   # VPN gateway for SearxNG-routed workloads
   myst-client:
@@ -72,6 +102,7 @@ services:
       # providers such as bing2 are selected only when normal providers are
       # already suspended or unavailable.
       SEARXNG_ROUND_ROBIN: "${SEARXNG_ROUND_ROBIN:-true}"
+      CRW_SCRAPE_URL: "http://crw:3010/v1/scrape"
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/usr/local/searxng/wrapper-patches:${PYTHONPATH:-}"
       # Page load waiting is handled by the CDP shim's waitUntil injection
@@ -79,7 +110,7 @@ services:
       # OBSCURA_BROWSER_WAIT_UNTIL_WEB=load for web pages), not by a CRW
       # waitFor sleep. See docs/request_handling.md §1.6 for the full
       # wait strategy.
-    network_mode: "service:netns-holder"
+    networks: [searxng-api, crw-search, searxng-valkey]
     volumes: !override
       - ./searxng/core-config/:/etc/searxng/:Z
       - ./docker-data/searxng-cache:/var/cache/searxng
@@ -95,11 +126,8 @@ services:
       - ./searxng/engines/startpage2.py:/usr/local/searxng/searx/engines/startpage2.py:ro
       - ./searxng/engines/bing2.py:/usr/local/searxng/searx/engines/bing2.py:ro
     depends_on:
-      netns-holder:
+      searxng-valkey:
         condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
 
   searxng-valkey:
     extends:
@@ -107,6 +135,7 @@ services:
       service: valkey
     volumes: !override
       - ./docker-data/valkey:/data
+    networks: [searxng-valkey]
 
   # ── fastCRW (crw) + obscura stealth CDP browser ─────────────────────────
   # Self-hosted CRW scraper (available in both lite and full mode), routed
@@ -116,8 +145,8 @@ services:
   # The JS renderer tier is obscura (a Rust-native headless browser with
   # built-in stealth), replacing crw's upstream browserless/chrome-stealth
   # profile. obscura exposes a CDP WebSocket on port 9222 that crw drives via
-  # its `cdp` cargo feature. The required restricted-egress layer moves these
-  # services onto narrow networks and sends egress through policy bridges.
+  # its `cdp` cargo feature. These services use narrow internal networks and
+  # send egress through policy bridges in the trusted routing namespace.
   #
   # Both images are pulled from their upstream registries (no local builds):
   #   - obscura: h4ckf0r0day/obscura (release builds include the stealth feature)
@@ -132,7 +161,7 @@ services:
   obscura:
     image: ${OBSCURA_IMAGE:?OBSCURA_IMAGE must be set}
     restart: unless-stopped
-    network_mode: "service:netns-holder"
+    networks: [obscura-control, browser-egress]
     command:
       - "serve"
       - "--host"
@@ -169,6 +198,7 @@ services:
       # Request timeout for scripted fetch()/XHR/ES-module loads. Default
       # 30s; bump to 45000 for slow proxy paths.
       OBSCURA_FETCH_TIMEOUT_MS: "${OBSCURA_FETCH_TIMEOUT_MS:-45000}"
+      OBSCURA_PROXY: "http://obscura-egress-bridge:3128"
     volumes:
       - obscura-data:/data/obscura
     healthcheck:
@@ -185,11 +215,8 @@ services:
       retries: 5
       start_period: 15s
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
+      obscura-egress-bridge:
         condition: service_healthy
-        restart: true
 
   # Obscura MCP server: exposes obscura's browser automation tools
   # (browser_navigate, browser_snapshot, browser_click, browser_fill, etc.)
@@ -197,15 +224,14 @@ services:
   # directly. Runs a separate obscura process from the CDP `serve` instance
   # above so crw's browser driving is not disrupted.
   #
-  # The HTTP transport has no built-in auth. It binds 0.0.0.0 inside the
-  # The required restricted-egress layer exposes this listener only through a
-  # narrow Onyx-side gateway.
+  # The HTTP transport has no built-in auth. Its dedicated control network is
+  # exposed only through a narrow Onyx-side gateway.
   #
   # See: https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md
   obscura-mcp:
     image: ${OBSCURA_IMAGE:?OBSCURA_IMAGE must be set}
     restart: unless-stopped
-    network_mode: "service:netns-holder"
+    networks: [obscura-mcp-control, mcp-browser-egress]
     command:
       - "mcp"
       - "--http"
@@ -214,6 +240,8 @@ services:
       - "--port"
       - "9223"
       - "--stealth"
+      - "--proxy"
+      - "http://obscura-mcp-egress-bridge:3128"
     healthcheck:
       # The obscura image is distroless. Probe the MCP HTTP endpoint via the
       # obscura binary's own `fetch` subcommand. The MCP server responds to
@@ -225,11 +253,8 @@ services:
       retries: 5
       start_period: 15s
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
+      obscura-mcp-egress-bridge:
         condition: service_healthy
-        restart: true
 
   # CDP WebSocket proxy shim between CRW and obscura.
   #
@@ -250,8 +275,8 @@ services:
   #    crawler proxy that creates a per-request CDP browser context, the shim
   #    strips proxyServer so browser traffic uses obscura's own --proxy path.
   #
-  # CRW connects to ws://127.0.0.1:9224/devtools/browser (the shim) instead
-  # of ws://127.0.0.1:9222/devtools/browser (obscura directly). The shim
+  # CRW connects to ws://cdp-shim:9224/devtools/browser on the dedicated CDP
+  # network; the shim reaches ws://obscura:9222 on the control network. It
   # proxies all CDP traffic transparently except for the intercepted methods.
   #
   # See crw/cdp_shim.py for the implementation. No build step — the script is
@@ -261,11 +286,11 @@ services:
   cdp-shim:
     image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
     restart: unless-stopped
-    network_mode: "service:netns-holder"
+    networks: [crw-cdp, obscura-control]
     environment:
       CDP_SHIM_HOST: "0.0.0.0"
       CDP_SHIM_PORT: "9224"
-      OBSCURA_CDP_URL: "ws://127.0.0.1:9222/devtools/browser"
+      OBSCURA_CDP_URL: "ws://obscura:9222/devtools/browser"
       # Strip CRW's STEALTH_JS (1 = yes, 0 = no).
       CDP_SHIM_STRIP_STEALTH_JS: "1"
       CDP_SHIM_LOG_LEVEL: "info"
@@ -327,8 +352,6 @@ services:
       retries: 3
       start_period: 15s
     depends_on:
-      netns-holder:
-        condition: service_started
       obscura:
         condition: service_healthy
 
@@ -346,7 +369,7 @@ services:
   #  - Other plain HTTP URLs → 403 unless ONYX_AGENT_ALLOW_HTTP_URLS=true
   #  - Other HTTPS URLs → CONNECT tunnel through the configured egress path
   #
-  # CRW is configured with HTTP_PROXY/HTTPS_PROXY pointing at this proxy. We
+  # CRW points HTTP_PROXY/HTTPS_PROXY at a narrow bridge to this proxy. We
   # intentionally do not set CRW_CRAWLER__PROXY; if that path is used later,
   # the CDP shim strips proxyServer from Target.createBrowserContext so
   # obscura uses its own --proxy flag, not this proxy.
@@ -363,20 +386,26 @@ services:
     image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
     restart: unless-stopped
     network_mode: "service:netns-holder"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       PREFETCH_PROXY_HOST: "0.0.0.0"
       PREFETCH_PROXY_PORT: "3128"
       PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
+      EGRESS_PROXY_POLICY: prefetch
       # Upstream proxy (ONYX_AGENT_OUTBOUND_PROXY_URL from .env.wrapper). When set, the proxy
       # routes its own upstream requests through this upstream.
       # Supports http://, https://, socks5://, socks5h://
       ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
       # Cleartext http:// URL policy. The CDP shim enforces the same setting
       # for browser navigations after CRW escalates to Obscura.
       ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
       # Comma-separated list of search engine hostnames to block immediately
       # (return 403 without any network request).
       PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-localhost,host.docker.internal}"
     volumes:
       - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
     command:
@@ -394,21 +423,118 @@ services:
       netns-holder:
         condition: service_started
 
+  # Search-allowed browser policy instances. Both remain in the trusted
+  # routing namespace; restricted browser processes reach them only through
+  # dedicated bridges.
+  browser-egress-proxy:
+    <<: *policy-proxy
+    environment:
+      PREFETCH_PROXY_HOST: "0.0.0.0"
+      PREFETCH_PROXY_PORT: "3130"
+      EGRESS_PROXY_POLICY: browser
+      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
+      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
+      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
+      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-localhost,host.docker.internal}"
+    depends_on:
+      netns-holder:
+        condition: service_started
+
+  mcp-browser-egress-proxy:
+    <<: *policy-proxy
+    environment:
+      PREFETCH_PROXY_HOST: "0.0.0.0"
+      PREFETCH_PROXY_PORT: "3131"
+      EGRESS_PROXY_POLICY: browser
+      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
+      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
+      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
+      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-localhost,host.docker.internal}"
+    depends_on:
+      netns-holder:
+        condition: service_started
+
+  crw-prefetch-bridge:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3128"]
+    networks: [crw-prefetch-egress, prefetch-policy-upstream]
+    depends_on:
+      prefetch-blocking-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  obscura-egress-bridge:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3130"]
+    networks: [browser-egress, browser-policy-upstream]
+    depends_on:
+      browser-egress-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  obscura-mcp-egress-bridge:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3131"]
+    networks: [mcp-browser-egress, mcp-browser-policy-upstream]
+    depends_on:
+      mcp-browser-egress-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3128"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Narrow service ingress gateways from trusted Onyx callers to restricted
+  # request-path services.
+  crw-service-gateway:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3010,fork,reuseaddr", "tcp-connect:crw:3010"]
+    networks: [onyx-crw-ingress, crw-api]
+    depends_on:
+      crw:
+        condition: service_healthy
+
+  searxng-service-gateway:
+    <<: *tcp-gateway
+    command: ["tcp-listen:8888,fork,reuseaddr", "tcp-connect:searxng-core:8888"]
+    networks: [onyx-searxng-ingress, searxng-api]
+    depends_on:
+      searxng-core:
+        condition: service_started
+
+  obscura-mcp-gateway:
+    <<: *tcp-gateway
+    command: ["tcp-listen:9223,fork,reuseaddr", "tcp-connect:obscura-mcp:9223"]
+    networks: [onyx-mcp-ingress, obscura-mcp-control]
+    depends_on:
+      obscura-mcp:
+        condition: service_healthy
+
   # CRW API server. Configured entirely via CRW_* env vars
   # (no config file mount needed — env layer wins over the baked-in
-  # config.default.toml). CRW_SERVER__PORT moves it off 3000 (taken by
-  # web_server in the shared netns). CRW_RENDERER__CHROME__WS_URL points at
-  # the CDP shim (port 9224), which proxies to obscura (port 9222);
-  # CRW_SEARCH__SEARXNG_URL points /v1/search at the wrapper's bundled
-  # SearXNG sidecar (127.0.0.1:8888 in the netns).
+  # config.default.toml). CRW reaches only its API callers, CDP shim, SearXNG,
+  # and prefetch egress bridge on dedicated internal networks.
   crw:
     image: ${CRW_IMAGE:?CRW_IMAGE must be set}
     restart: unless-stopped
-    network_mode: "service:netns-holder"
+    networks: [crw-api, crw-cdp, crw-search, crw-prefetch-egress]
     environment:
       RUST_LOG: "info"
       # Override the baked-in config.default.toml via env vars (highest precedence).
-      # Move crw off port 3000 (taken by web_server in the shared netns).
+      # Keep the wrapper's established CRW API port for service gateways.
       CRW_SERVER__PORT: "3010"
       # Constrain CRW's JS renderer ladder to the chrome tier, which points at
       # obscura through the CDP shim. This does not force every request directly
@@ -437,7 +563,7 @@ services:
       # browser context.
       # The /devtools/ path makes crw skip /json/version discovery and
       # connect directly.
-      CRW_RENDERER__CHROME__WS_URL: "ws://127.0.0.1:9224/devtools/browser"
+      CRW_RENDERER__CHROME__WS_URL: "ws://cdp-shim:9224/devtools/browser"
       # Route CRW's HTTP prefetch through the prefetch-blocking proxy via
       # reqwest's env-var proxy support (HTTPS_PROXY/HTTP_PROXY). We do NOT
       # use CRW_CRAWLER__PROXY because that sets REQUEST_PROXY, which causes
@@ -451,14 +577,13 @@ services:
       # The proxy returns 403 for search engine URLs, forcing CRW to escalate
       # to the CDP renderer (obscura). Other HTTPS URLs are tunneled. Plain
       # HTTP URLs are blocked unless ONYX_AGENT_ALLOW_HTTP_URLS=true.
-      HTTPS_PROXY: "http://127.0.0.1:3128"
-      HTTP_PROXY: "http://127.0.0.1:3128"
-      # Exclude loopback from the proxy so CRW's CDP WebSocket connection
-      # to the shim (ws://127.0.0.1:9224) and health check (127.0.0.1:3010)
-      # go direct. The CDP connection uses the websockets crate (not
+      HTTPS_PROXY: "http://crw-prefetch-bridge:3128"
+      HTTP_PROXY: "http://crw-prefetch-bridge:3128"
+      # Exclude the explicit CDP and search peers from the prefetch proxy.
+      # The CDP connection uses the websockets crate (not
       # reqwest), so HTTPS_PROXY doesn't affect it, but NO_PROXY is set
       # for completeness.
-      NO_PROXY: "127.0.0.1,localhost,::1"
+      NO_PROXY: "127.0.0.1,localhost,::1,cdp-shim,searxng-core"
       # Per-page navigation timeout for the chrome (obscura) renderer tier.
       # CRW's default page_timeout_ms is 30s, but when ONYX_AGENT_OUTBOUND_PROXY_URL routes
       # through Tor or a slow VPN, obscura's waitUntil=networkidle2 can
@@ -497,7 +622,7 @@ services:
       # has a chance to complete.
       CRW_RENDERER__CHROME_NAV_BUDGET_MS: "${CRW_RENDERER__CHROME_NAV_BUDGET_MS:-48000}"
       # /v1/search backed by the wrapper's bundled SearXNG sidecar.
-      CRW_SEARCH__SEARXNG_URL: "http://127.0.0.1:8888"
+      CRW_SEARCH__SEARXNG_URL: "http://searxng-core:8888"
       # ── Per-host rate limiting (anti-429) ──────────────────────────────
       # CRW's host_limiter (crates/crw-renderer/src/host_limiter.rs) enforces
       # a minimum interval between requests to the same eTLD+1. The
@@ -545,19 +670,15 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
-      obscura:
+      crw-prefetch-bridge:
         condition: service_healthy
       cdp-shim:
         condition: service_healthy
+      searxng-core:
+        condition: service_started
 
-  # Host-facing TCP bridges. These run on the normal compose network and
-  # forward host traffic to services inside the shared netns-holder namespace
-  # (reachable through the myst-client alias on the default network).
+  # Host-facing TCP bridges. WebUI traffic targets the trusted namespace;
+  # SearXNG diagnostics target its restricted API network directly.
   host-web-proxy:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
@@ -574,15 +695,13 @@ services:
   host-searxng-proxy:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
-    command: tcp-listen:8888,fork,reuseaddr tcp-connect:myst-client:8888
+    command: tcp-listen:8888,fork,reuseaddr tcp-connect:searxng-core:8888
+    networks: [default, searxng-api]
     ports:
       - ${SEARXNG_HOST:+${SEARXNG_HOST}:}${HOST_PORT_SEARXNG:-8080}:8888
     depends_on:
-      netns-holder:
+      searxng-core:
         condition: service_started
-      myst-client:
-        condition: service_started
-        restart: true
 
   # Restarts containers marked with autoheal=true when Docker health is unhealthy.
   autoheal:
@@ -867,6 +986,24 @@ services:
       service: relational_db
     volumes: !override
       - ./docker-data/postgres:/var/lib/postgresql/data
+
+networks:
+  prefetch-policy-upstream: {internal: true}
+  browser-policy-upstream: {internal: true}
+  mcp-browser-policy-upstream: {internal: true}
+  onyx-crw-ingress: {internal: true}
+  onyx-searxng-ingress: {internal: true}
+  onyx-mcp-ingress: {internal: true}
+  crw-api: {internal: true}
+  crw-cdp: {internal: true}
+  crw-search: {internal: true}
+  crw-prefetch-egress: {internal: true}
+  searxng-api: {internal: true}
+  searxng-valkey: {internal: true}
+  obscura-control: {internal: true}
+  browser-egress: {internal: true}
+  obscura-mcp-control: {internal: true}
+  mcp-browser-egress: {internal: true}
 
 volumes:
   api_server_logs:

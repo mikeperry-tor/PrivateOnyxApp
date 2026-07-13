@@ -13,10 +13,8 @@ reachability and residual risks.
 
 `make up-lite` and `make up-full` assemble:
 
-- `docker-compose.yaml`;
+- `docker-compose.yaml`, including the atomic restricted request-path topology;
 - the lite or full Onyx mode;
-- `docker-compose.restricted-egress.yml`, always, as one atomic request-path
-  topology;
 - optional Podman, Teep-VPN, and Tailscale-VPN layers;
 - `docker-compose.code-interpreter-network.yml` only when
   `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`;

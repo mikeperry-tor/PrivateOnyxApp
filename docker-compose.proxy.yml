@@ -2,7 +2,7 @@
 ##
 ## Selected only when ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty. The actual
 ## URL is consumed exclusively by the final-hop policy proxies declared in the
-## base/restricted-egress layers. Restricted components always receive local
+## base stack. Restricted components always receive local
 ## bridge URLs, so applying this layer cannot expand an executor or browser
 ## network sandbox.
 

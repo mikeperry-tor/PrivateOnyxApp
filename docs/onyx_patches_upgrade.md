@@ -856,9 +856,8 @@ Local files:
 
 - `onyx/patches/sitecustomize_code_interpreter/sitecustomize.py`
 - `docker-compose.code-interpreter-network.yml`
-- `docker-compose.restricted-egress.yml`
-- `docker-compose.proxy.yml`
 - `docker-compose.yaml`
+- `docker-compose.proxy.yml`
 
 Related plan:
 
@@ -927,7 +926,7 @@ Wrapper compose assumptions:
   `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` plus
   `PYTHON_EXECUTOR_DOCKER_NETWORK=onyx-code-interpreter-executor`, the local
   bridge URL, and loopback-only executor `NO_PROXY`.
-- `docker-compose.restricted-egress.yml` and the executor overlay keep policy
+- `docker-compose.yaml` and the executor overlay keep policy
   proxies in `netns-holder` behind dedicated bridge-upstream networks.
 
 Security notes:
@@ -1343,7 +1342,6 @@ Local files:
 - `docker-compose.podman.yml`
 - `docker-compose.podman-full.yml`
 - `docker-compose.code-interpreter-network.yml`
-- `docker-compose.restricted-egress.yml`
 - `docker-compose.proxy.yml`
 
 Primary upstream reference:

@@ -5,7 +5,6 @@ FULL_OVERRIDE_FILE := docker-compose.full.yml
 LITE_OVERRIDE_FILE := docker-compose.lite.yml
 PODMAN_OVERRIDE_FILE := docker-compose.podman.yml
 PODMAN_FULL_OVERRIDE_FILE := docker-compose.podman-full.yml
-RESTRICTED_EGRESS_FILE := docker-compose.restricted-egress.yml
 
 env_value = $(strip $(shell for f in "$(ENV_FILE)" "$(VERSION_FILE)"; do [ -f "$$f" ] || continue; sed -n 's/^$(1)=//p' "$$f" | head -1 | sed 's/^"//; s/"$$//'; done | head -1))
 COMPOSE_ENV_FILES = --env-file "$(VERSION_FILE)" --env-file "$(ENV_FILE)"
@@ -153,8 +152,8 @@ CDP_SHIM_REQUIREMENTS_IN := crw/cdp-shim-requirements.in
 CDP_SHIM_REQUIREMENTS := crw/cdp-shim-requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE):$(RESTRICTED_EGRESS_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE):$(RESTRICTED_EGRESS_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
 .PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 

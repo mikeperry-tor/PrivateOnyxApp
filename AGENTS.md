@@ -45,10 +45,9 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 - `Makefile` - source of truth for stack targets, compose layering, generated local secrets, image builds, upgrades, Myst flows, and embedserv flows.
 - `stack.versions.env` - committed source of truth for stack image tags and source refs.
 - `.env.wrapper.example` - user-facing configuration surface for local runtime options, not routine image pins.
-- `docker-compose.yaml` - base wrapper stack.
+- `docker-compose.yaml` - base wrapper stack, including the atomic restricted CRW/SearXNG/CDP/Obscura topology, policy proxies, and service gateways.
 - `docker-compose.full.yml` - full Onyx/RAG mode.
 - `docker-compose.lite.yml` - lite mode.
-- `docker-compose.restricted-egress.yml` - always-on atomic CRW/SearXNG/CDP/Obscura restricted topology and service gateways.
 - `docker-compose.code-interpreter-network.yml` - optional executor-only internal network and proxy bridge.
 - `docker-compose.*-vpn.yml`, `docker-compose.proxy.yml`, and Podman overrides
   - optional routing/proxy/container-engine layers selected by the Makefile.

@@ -959,7 +959,6 @@ Local files:
 
 - `onyx/patches/sitecustomize_code_interpreter/sitecustomize.py`
 - `docker-compose.code-interpreter-network.yml`
-- `docker-compose.restricted-egress.yml`
 - `docker-compose.yaml`
 
 Python-sandbox source area:
@@ -1131,7 +1130,6 @@ Local files:
 - `docker-compose.podman.yml`
 - `docker-compose.podman-full.yml`
 - `docker-compose.code-interpreter-network.yml`
-- `docker-compose.restricted-egress.yml`
 - `docker-compose.proxy.yml`
 
 Onyx source area:
