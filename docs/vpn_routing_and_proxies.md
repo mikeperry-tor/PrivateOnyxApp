@@ -108,8 +108,16 @@ Public upstream-proxy hostnames themselves are bootstrapped through the Myst
 provider resolver when VPN mode is active, then connected by validated IP
 while retaining TLS SNI. Literal proxy IPs need no lookup. Explicit internal
 proxy endpoints such as `host.docker.internal`, and all proxy bootstrap in
-no-VPN mode, use the system resolver. Arbitrary browsing target names are
-never sent to Docker DNS in upstream-proxy mode.
+no-VPN mode, use the system resolver. The final-hop policy never sends
+arbitrary browsing target names to Docker DNS in upstream-proxy mode.
+
+CRW has a separate, mandatory local URL-safety lookup before it invokes its
+proxy. Docker's embedded resolver answers known internal peers normally and
+forwards unresolved public multi-label names to `crw-validation-dns`, which
+listens on loopback in CRW's network namespace. It returns a fixed global A
+record and never forwards the query. This synthetic answer only permits CRW
+to continue to the proxy; it is never used by the final-hop connection.
+Unknown single-label and host-local/Docker-internal suffixes receive NXDOMAIN.
 
 Upstream proxy URLs are validated before a policy listener starts. Supported
 schemes are `http`, `https`, `socks5`, and `socks5h`; malformed ports,
@@ -141,6 +149,12 @@ handshake (`OPTIONS *` for HTTP(S), greeting/auth for SOCKS5); no browsing
 target is locally resolved or opened. Egress bridges issue a blocked localhost
 CONNECT and require the policy's 403, proving the entire bridge-to-policy hop
 rather than merely checking that socat owns a port.
+
+CRW health additionally requires `crw-validation.test` to resolve through the
+loopback validation sidecar to its expected synthetic address, then checks the
+CRW API. `crw-service-gateway` waits for that combined health state. A missing
+or failed validation resolver therefore blocks Onyx's Firecrawl path instead
+of producing a nominally healthy CRW that rejects every public URL.
 
 Compose `depends_on: condition: service_healthy` gates initial startup only.
 It does not recursively change a running consumer's Docker health when a

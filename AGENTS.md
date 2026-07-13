@@ -36,6 +36,9 @@ At a high level:
 - CRW, SearXNG, both Obscura processes, CDP shim, and optional executor pods
   use narrow internal networks. Internet traffic crosses component bridges to
   final-hop policy proxies in the trusted Mysterium routing namespace.
+- CRW's mandatory local URL-safety lookup uses the loopback-only
+  `crw-validation-dns` sidecar. It never forwards target names; authoritative
+  destination DNS and address validation remain at the final-hop policy.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 
 Those bullets are only a map. Read the docs above before changing any runtime path.
@@ -51,7 +54,8 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 - `docker-compose.code-interpreter-network.yml` - optional executor-only internal network and proxy bridge.
 - `docker-compose.*-vpn.yml`, `docker-compose.proxy.yml`, and Podman overrides
   - optional routing/proxy/container-engine layers selected by the Makefile.
-- `crw/` - CDP shim and prefetch-blocking proxy around CRW/Obscura.
+- `crw/` - CDP shim, CRW validation-DNS sidecar, and prefetch-blocking proxy
+  around CRW/Obscura.
 - `searxng/` - custom CRW-backed engines and the minimal SearXNG overlay.
 - `myst/` - Mysterium image build file, entrypoint, signup compose, and helper CLI.
 - `teep/` - Teep image build file and entrypoint.

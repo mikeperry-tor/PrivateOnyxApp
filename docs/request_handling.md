@@ -652,9 +652,16 @@ CRW :3010 ──HTTP proxy──> crw-prefetch-bridge :3128
    `HTTPS_PROXY=http://crw-prefetch-bridge:3128` and the equivalent
    `HTTP_PROXY`. CRW has no direct internet route. Its CDP and SearXNG peers
    are explicit `NO_PROXY` names on separate internal networks.
-2. CRW uses auto mode (`RENDER_JS_DEFAULT` unset) so HTTP prefetch failure
+2. Before proxy use, CRW 0.23 requires a local DNS result for URL-safety
+   prevalidation. Docker resolves known internal services to their real
+   private addresses, which CRW rejects. Other public multi-label names are
+   forwarded only to `crw-validation-dns` on CRW's loopback; it returns a
+   fixed global A record without forwarding the query. This answer is not used
+   for the connection. The final-hop proxy performs authoritative DNS and
+   destination validation, and CRW has no direct internet route.
+3. CRW uses auto mode (`RENDER_JS_DEFAULT` unset) so HTTP prefetch failure
    or 403 status causes escalation to the CDP renderer.
-3. The proxy intercepts every HTTP request from CRW:
+4. The proxy intercepts every HTTP request from CRW:
    - **Search engine URLs** (`google.com`, `search.brave.com`,
      `html.duckduckgo.com`, `startpage.com`, `bing.com`): returns `403 Forbidden`
      immediately — no network request, no double-hit. CRW sees
@@ -696,7 +703,7 @@ CRW :3010 ──HTTP proxy──> crw-prefetch-bridge :3128
      and requires transfer codings to end in exactly one `chunked` coding.
      Valid fixed-length and chunked bodies, chunk extensions, and trailers are
      streamed without imposing a wrapper size cap.
-4. The CDP shim strips `proxyServer` from `Target.createBrowserContext` as a
+5. The CDP shim strips `proxyServer` from `Target.createBrowserContext` as a
    safety net. In the compose default, CRW uses `HTTP_PROXY`/`HTTPS_PROXY`
    rather than `CRW_CRAWLER__PROXY`, so `REQUEST_PROXY` is not set and CRW
    usually does not send `createBrowserContext` at all.
@@ -731,8 +738,13 @@ malformed ports, incomplete credentials, and path/query/fragment components
 fail startup. Logs show only a credential-free scheme/host/port description.
 In VPN mode, a public upstream-proxy hostname is bootstrapped through the Myst
 provider resolver and connected by IP. `host.docker.internal` and other
-explicit internal proxy endpoints use Docker service resolution. Browsing
-target hostnames are never sent to Docker DNS in upstream-proxy mode.
+explicit internal proxy endpoints use Docker service resolution. The
+final-hop policy never sends browsing target hostnames to Docker DNS in
+upstream-proxy mode. CRW's earlier synthetic preflight may pass through
+Docker's embedded resolver, but its only upstream is the loopback-only
+`crw-validation-dns` process and no target query leaves CRW's namespace.
+The sidecar uses only Python's standard library and does not install packages
+at startup.
 
 The CDP shim runs on internal-only networks from the prebuilt
 `CDP_SHIM_IMAGE`. Its hashed Python dependency is installed during
@@ -877,6 +889,7 @@ but that is not the recommended wrapper setup.
           ▼
 ┌──────────────────────────────────────────────────────┐
 │  CRW :3010                                            │
+│  ├─ URL preflight → loopback validation DNS           │
 │  ├─ HTTP prefetch via prefetch-blocking-proxy :3128   │
 │  ├─ Search → 403 → CDP                                │
 │  ├─ Non-search HTTPS → prefetch tunnel                │
@@ -1297,6 +1310,24 @@ browsing/search data.
 
 ### Diagnosing issues
 
+**Onyx says `API key validation failed: content fetch returned no results` for
+the local Firecrawl provider**:
+
+- Onyx validates by scraping `https://example.com`. The configured URL must be
+  the complete endpoint
+  `http://crw-service-gateway:3010/v1/scrape`; Onyx does not append
+  `/v1/scrape`.
+- Check that `crw-validation-dns`, `crw`, `crw-service-gateway`,
+  `crw-prefetch-bridge`, and the selected final-hop policy are healthy.
+- From the CRW container, `getent ahostsv4 crw-validation.test` must return
+  `93.184.216.34`. Known internal names must still return their private Docker
+  addresses and be rejected by CRW.
+- A CRW log error `Invalid request: DNS resolution failed` before any
+  final-hop request normally means the loopback validation resolver is absent
+  or CRW's Compose `dns` override was not applied. Do not work around this
+  with CRW's allow-loopback test flag; that disables the private-address check
+  for reachable internal peers.
+
 **Stealth JS not being stripped**:
 - Check that `CDP_SHIM_STRIP_STEALTH_JS=1` is set.
 - Check that CRW injects `STEALTH_JS` (look for
@@ -1413,6 +1444,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `CRW_RENDERER__RENDER_JS_DEFAULT` | (unset) | Auto mode: HTTP prefetch first, escalate to CDP on failure/403, blocked/thin content, or JS-required detection. The prefetch-blocking proxy returns 403 for configured search-engine hosts, forcing CRW to escalate to obscura for SERPs. Non-search HTTPS pages may return from the HTTP prefetch when usable; plain HTTP pages are blocked unless explicitly allowed. Do not set this to `true`; forced render-js mode propagates prefetch failures instead of using the auto-mode escalation path. |
 | `HTTPS_PROXY` / `HTTP_PROXY` | `http://crw-prefetch-bridge:3128` | Routes CRW's reqwest prefetch through the restricted bridge without setting `REQUEST_PROXY`. |
 | `NO_PROXY` | `127.0.0.1,localhost,::1,cdp-shim,searxng-core` | Keeps CRW health checks and its explicit CDP/search peers off the prefetch proxy. |
+| `dns` (Compose) | `127.0.0.1` via Docker embedded DNS | Sends CRW's otherwise-unresolvable public URL preflight only to the non-forwarding `crw-validation-dns` process in CRW's network namespace; Docker continues to answer known service names itself. |
 | `CRW_CRAWLER__PROXY` | (unset) | Intentionally not used for the prefetch-blocking proxy. Setting it would make CRW include `proxyServer` in `Target.createBrowserContext`; the shim can strip this as a safety net, but the compose default avoids that path entirely. |
 | `CRW_RENDERER__CHROME__WS_URL` | `ws://cdp-shim:9224/devtools/browser` | CDP shim endpoint on the dedicated network |
 | `CRW_RENDERER__CHROME_TIMEOUT_MS` | `50000` | Per-page navigation timeout for the chrome (obscura) renderer tier. Must be ≥ `OBSCURA_NAV_TIMEOUT_MS` so CRW's deadline doesn't fire before obscura's nav timeout. |

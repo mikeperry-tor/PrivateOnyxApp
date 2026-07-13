@@ -529,6 +529,35 @@ services:
       retries: 3
       start_period: 5s
 
+  # CRW 0.23 performs a local DNS lookup as URL-safety prevalidation before
+  # sending its actual request through HTTP_PROXY/HTTPS_PROXY. This
+  # loopback-only resolver shares CRW's otherwise internal-only network
+  # namespace and returns a synthetic global A record without forwarding the
+  # browsing hostname. Docker still answers known service names first, so CRW
+  # sees their real private addresses and rejects them. The final-hop policy
+  # proxy performs authoritative target DNS and destination validation.
+  crw-validation-dns:
+    image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
+    restart: unless-stopped
+    network_mode: "service:crw"
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./crw/validation_dns.py:/app/validation_dns.py:ro
+    command: ["python", "-u", "/app/validation_dns.py"]
+    healthcheck:
+      test: ["CMD", "python", "/app/validation_dns.py", "--check-ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      crw:
+        condition: service_started
+        restart: true
+
   searxng-service-gateway:
     <<: *tcp-gateway
     command: ["tcp-listen:8888,fork,reuseaddr", "tcp-connect:searxng-core:8888"]
@@ -564,6 +593,10 @@ services:
   crw:
     image: ${CRW_IMAGE:?CRW_IMAGE must be set}
     restart: unless-stopped
+    # Docker's embedded resolver continues to provide service discovery and
+    # forwards unresolved external names to the loopback validation resolver
+    # in this network namespace. No browsing name leaves CRW's namespace.
+    dns: [127.0.0.1]
     networks: [crw-api, crw-cdp, crw-search, crw-prefetch-egress]
     environment:
       RUST_LOG: "info"
@@ -693,12 +726,11 @@ services:
       CRW_CRAWLER__STEALTH__JITTER_FACTOR: "0.2"
     healthcheck:
       # The crw image (debian:bookworm-slim) has no wget/curl, but has
-      # /bin/sh + grep + the crw CLI. We scrape the server's own /health
-      # endpoint via the crw binary and grep for the status field. The crw
-      # CLI always exits 0, so the grep exit code is the real signal: when
-      # the server is down, the scrape produces no stdout (connection refused)
-      # and grep fails; when up, /health returns {"status":"ok",...}.
-      test: ["CMD-SHELL", "crw scrape http://127.0.0.1:3010/health --format json 2>/dev/null | grep -q status || exit 1"]
+      # /bin/sh + getent + grep + the crw CLI. First require the synthetic
+      # validation-DNS result, then scrape the server's own /health endpoint
+      # via the crw binary and grep for the status field. The crw CLI always
+      # exits 0, so the grep exit code is the real API signal.
+      test: ["CMD-SHELL", "getent ahostsv4 crw-validation.test | grep -q '93[.]184[.]216[.]34' && crw scrape http://127.0.0.1:3010/health --format json 2>/dev/null | grep -q status"]
       interval: 30s
       timeout: 15s
       retries: 5

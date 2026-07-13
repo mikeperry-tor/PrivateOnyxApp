@@ -52,8 +52,22 @@ It reaches:
 - CDP shim at `cdp-shim:9224`;
 - the prefetch policy through `crw-prefetch-bridge:3128`.
 
-CRW's own URL validation remains defense in depth. Its network placement also
-prevents raw direct fetches from reaching the internet or broader stack.
+CRW 0.23 also requires a local DNS result during its own URL-safety
+prevalidation, before it uses `HTTP_PROXY`/`HTTPS_PROXY`. The
+`crw-validation-dns` process shares CRW's network namespace, listens only on
+`127.0.0.1:53`, and never forwards queries. Docker's embedded resolver first
+answers known service names with their real private bridge addresses, so CRW
+rejects them. Unresolved public multi-label names are forwarded only to this
+loopback process, which supplies a fixed global IPv4 address. Unknown
+single-label and host-local/Docker-internal suffixes receive NXDOMAIN.
+
+That synthetic answer is not used to open the target connection and is not an
+authoritative private-address check. CRW has no direct internet route; its
+prefetch goes through the final-hop policy, while rendered navigation goes
+through Obscura and its final-hop policy. Those policies perform the real DNS
+and destination checks described below. CRW's syntax/IP-literal checks,
+Docker answers for known internal peers, and its network placement remain
+defense in depth.
 
 ### SearXNG
 
@@ -121,18 +135,20 @@ With Myst enabled, direct mode derives the provider DNS address from the
 The DNS sockets are source-bound to the IPv4 address assigned to `myst0`, and
 the provider resolver is on that interface's directly connected subnet.
 Failure to identify or bind that address fails the request closed without
-granting the proxy `CAP_NET_RAW`. Docker's `127.0.0.11` resolver is not used
-for browsing targets. Validation queries A records because IPv6 is disabled in
-the trusted routing namespace, then returns the exact approved address set.
+granting the proxy `CAP_NET_RAW`. Docker's `127.0.0.11` resolver is not used by
+the final-hop policy for browsing targets. CRW's separate synthetic preflight
+is described above and does not leave CRW's namespace. Validation queries A
+records because IPv6 is disabled in the trusted routing namespace, then
+returns the exact approved address set.
 Connection code retries only those addresses and never passes the hostname to
 a second resolver call. HTTP Host and TLS SNI retain the original hostname. The unit test
 `tests/test_restricted_egress_proxy.py` verifies resolver selection and
 connection pinning.
 
 When `MYST_VPN_ENABLED=false`, direct mode deliberately uses system/Docker DNS
-along with direct Docker egress. Docker DNS remains in use for internal service
-discovery and an explicitly configured internal upstream proxy such as
-`host.docker.internal`; those lookups contain no browsing target hostname.
+along with direct Docker egress. Docker DNS also remains in use for internal
+service discovery, CRW's non-forwarding synthetic preflight, and an explicitly
+configured internal upstream proxy such as `host.docker.internal`.
 Any VPN-switch value other than the exact strings `true` and `false` fails
 policy-proxy startup.
 

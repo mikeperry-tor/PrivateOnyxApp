@@ -408,8 +408,12 @@ classification, or explicit allowlists, and is out of scope for the first
 implementation.
 
 Docker's embedded resolver remains appropriate for internal bridge/service
-discovery and explicit internal upstream proxy endpoints, but it must not
-receive browsing target names in Myst direct mode or upstream-proxy mode.
+discovery and explicit internal upstream proxy endpoints. The final-hop policy
+must not send browsing target names to it in Myst direct or upstream-proxy
+mode. CRW 0.23 nevertheless requires an earlier local lookup: the implemented
+topology forwards that preflight only to the non-forwarding
+`crw-validation-dns` process on CRW's loopback. The synthetic answer is not
+used by the final-hop connection.
 
 Component bridges should not perform target DNS classification. Keep that
 logic centralized in the final-hop proxy policy.
@@ -707,6 +711,8 @@ This requires replacing current loopback assumptions:
 - SearXNG custom engines need configurable `CRW_SCRAPE_URL` instead of
   assuming `http://127.0.0.1:3010`;
 - healthchecks must stop assuming CRW can use shared loopback for all peers.
+- CRW health must cover its loopback validation resolver as well as the API,
+  because CRW 0.23 rejects public URLs before proxy use when that lookup fails.
 
 For CRW's Firecrawl-compatible scrape path, HTTP prefetch behavior,
 PDF/content-type handling, and `open_url` fallback caveats, see
@@ -1218,6 +1224,9 @@ Remaining risks:
   not protocol-inspected and may carry non-HTTP application traffic;
 - upstream-proxy mode intentionally skips local target DNS resolution, leaving
   the hostname-to-private-IP residual risk described above;
+- CRW's non-authoritative URL preflight uses a fixed synthetic public answer
+  from a loopback-only, non-forwarding sidecar; final-hop DNS remains selected
+  by the VPN/proxy/no-VPN mode;
 - explicit no-VPN mode uses system/Docker DNS by operator choice; Myst direct
   mode instead sends target queries to the provider resolver through `myst0`;
 - host-resident upstream proxies currently rely on

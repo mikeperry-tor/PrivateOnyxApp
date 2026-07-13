@@ -950,6 +950,12 @@ Upgrade notes:
   explicit no-VPN system-DNS selection, direct-mode DNS pinning, port-80
   CONNECT, search-host/private-target blocks, and upstream-proxy
   no-local-target-resolution checks.
+- Re-check whether the pinned CRW still performs local resolved URL-safety
+  validation before proxy use. If it does, verify `crw-validation-dns` remains
+  loopback-only/non-forwarding, known Docker names still resolve privately and
+  are rejected, and CRW health fails when the validation resolver is absent.
+  Remove the sidecar if CRW gains a safe proxy-aware validation mode that no
+  longer requires this synthetic preflight.
 
 ## Local embedding shim
 
