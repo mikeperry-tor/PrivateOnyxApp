@@ -101,6 +101,10 @@ Every final-hop policy rejects:
 - DNS names whose locally resolved answer contains any blocked address, when
   no upstream proxy is configured.
 
+Hostname comparisons normalize case, brackets, and a trailing DNS root dot
+before applying internal/search-host policy, so fully qualified spellings such
+as `www.google.com.` cannot bypass the executor or prefetch search block.
+
 `prefetch` and `executor` also block configured search hosts. `browser` allows
 those hosts because SERP rendering is its intended function.
 
@@ -132,6 +136,18 @@ mount. They are read-only, drop Linux capabilities, and use
 `no-new-privileges`. Each egress bridge has a dedicated upstream network shared
 only with `netns-holder`; service gateways attach only to their caller ingress
 and restricted service network. They are TCP forwarders, not IP routers.
+
+Final-hop listeners permit loopback health checks and only the resolved peer
+address of their configured bridge. This application-level source check is
+required because the policy processes share `netns-holder` and bind across its
+interfaces; unrelated default-network or ingress-network containers are
+rejected rather than receiving an undocumented proxy path.
+
+The HTTP proxy rejects ambiguous request framing: conflicting or malformed
+`Content-Length`, combined `Content-Length`/`Transfer-Encoding`, and transfer
+coding lists that do not end in exactly one `chunked` coding. Valid fixed and
+chunked bodies, extensions, and trailers are streamed without a wrapper size
+cap.
 
 Remaining bridge risks:
 

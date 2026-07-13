@@ -73,11 +73,12 @@ import asyncio
 import ipaddress
 import logging
 import os
+import re
 import socket
 import ssl
 import traceback
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 # ── Configuration ────────────────────────────────────────────────────────
 
@@ -94,6 +95,16 @@ BLOCK_SEARCH_ENGINES = POLICY_MODE in {"prefetch", "executor"}
 # http://, https://, socks5://, socks5h://
 # When empty, requests go direct (through the VPN namespace).
 UPSTREAM_PROXY = os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
+
+# Comma-separated Docker service names allowed to reach this policy listener.
+# Loopback is always allowed for the local healthcheck. Each policy instance
+# names only its dedicated bridge, preventing unrelated containers on another
+# netns-holder attachment from using the listener directly.
+ALLOWED_CLIENT_HOSTS = tuple(
+    host.strip()
+    for host in os.environ.get("EGRESS_PROXY_ALLOWED_CLIENT_HOSTS", "").split(",")
+    if host.strip()
+)
 
 # HTTPS upstream proxies use normal certificate verification and explicit SNI.
 # When the runtime supports TLS 1.3, require it for the proxy leg so
@@ -302,6 +313,32 @@ async def _blocked_destination_reason(host: str, port: int) -> str | None:
     return reason
 
 
+async def _allowed_client_reason(peer: Any) -> str | None:
+    """Return a rejection reason unless peer is loopback or an allowed bridge."""
+    if not isinstance(peer, tuple) or not peer:
+        return "missing client address"
+
+    peer_ip_text = str(peer[0]).split("%", 1)[0]
+    try:
+        peer_ip = ipaddress.ip_address(peer_ip_text)
+    except ValueError:
+        return "invalid client address"
+    if peer_ip.is_loopback:
+        return None
+    if not ALLOWED_CLIENT_HOSTS:
+        return "no allowed bridge service configured"
+
+    allowed_ips: set[str] = set()
+    for host in ALLOWED_CLIENT_HOSTS:
+        try:
+            allowed_ips.update(await _resolve_host(host, LISTEN_PORT))
+        except (socket.gaierror, OSError):
+            logger.warning("Unable to resolve allowed bridge service %s", host)
+    if peer_ip_text not in allowed_ips:
+        return "client is not an allowed bridge service"
+    return None
+
+
 async def _reject_blocked_destination(
     method: str,
     host: str,
@@ -353,10 +390,55 @@ def _parse_proxy_url(proxy_url: str) -> tuple[str, str, int, str | None, str | N
     parsed = urlparse(proxy_url)
     scheme = parsed.scheme.lower()
     host = parsed.hostname or ""
-    port = parsed.port or (1080 if "socks" in scheme else 8080)
-    username = parsed.username
-    password = parsed.password
+    default_ports = {"http": 80, "https": 443, "socks5": 1080, "socks5h": 1080}
+    port = parsed.port or default_ports.get(scheme, 0)
+    username = unquote(parsed.username) if parsed.username is not None else None
+    password = unquote(parsed.password) if parsed.password is not None else None
     return scheme, host, port, username, password
+
+
+def _validate_upstream_proxy_config() -> None:
+    """Reject unusable upstream proxy configuration before listening."""
+    if not UPSTREAM_PROXY:
+        return
+
+    try:
+        parsed = urlparse(UPSTREAM_PROXY)
+        scheme, host, port, username, password = _parse_proxy_url(UPSTREAM_PROXY)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid ONYX_AGENT_OUTBOUND_PROXY_URL: {exc}") from exc
+
+    if scheme not in {"http", "https", "socks5", "socks5h"}:
+        raise RuntimeError(
+            "ONYX_AGENT_OUTBOUND_PROXY_URL must use http, https, socks5, or "
+            f"socks5h, not {scheme or '(missing scheme)'}"
+        )
+    if not host:
+        raise RuntimeError("ONYX_AGENT_OUTBOUND_PROXY_URL must include a hostname")
+    if not 0 < port <= 65535:
+        raise RuntimeError("ONYX_AGENT_OUTBOUND_PROXY_URL has an invalid port")
+    if parsed.query or parsed.fragment or parsed.params:
+        raise RuntimeError(
+            "ONYX_AGENT_OUTBOUND_PROXY_URL must not include params, a query, or a fragment"
+        )
+    if parsed.path not in ("", "/"):
+        raise RuntimeError("ONYX_AGENT_OUTBOUND_PROXY_URL must not include a path")
+    if (username is None) != (password is None):
+        raise RuntimeError(
+            "ONYX_AGENT_OUTBOUND_PROXY_URL must provide both username and password"
+        )
+    if scheme in {"socks5", "socks5h"} and username is not None:
+        if len(username.encode("utf-8")) > 255 or len((password or "").encode("utf-8")) > 255:
+            raise RuntimeError("SOCKS5 proxy credentials must be at most 255 bytes each")
+
+
+def _sanitized_upstream_proxy() -> str:
+    """Return a credential-free proxy description for logs."""
+    if not UPSTREAM_PROXY:
+        return "(direct)"
+    scheme, host, port, _username, _password = _parse_proxy_url(UPSTREAM_PROXY)
+    display_host = f"[{host}]" if ":" in host else host
+    return f"{scheme}://{display_host}:{port}"
 
 
 def _https_proxy_ssl_context() -> ssl.SSLContext:
@@ -689,11 +771,134 @@ async def _open_origin_connection(
 
 def _is_search_engine(host: str) -> bool:
     """Check if the host matches a known search engine (by eTLD+1)."""
-    host = host.lower()
+    host = _normalize_host(host)
     for se_host in SEARCH_ENGINE_HOSTS:
-        if host == se_host or host.endswith("." + se_host):
+        normalized_search_host = _normalize_host(se_host)
+        if host == normalized_search_host or host.endswith("." + normalized_search_host):
             return True
     return False
+
+
+_TOKEN_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+
+def _header_values(headers: list[tuple[str, str]], name: str) -> list[str]:
+    return [value for header_name, value in headers if header_name == name]
+
+
+def _parse_request_framing(
+    headers: list[tuple[str, str]],
+) -> tuple[int | None, tuple[str, ...]]:
+    """Validate request framing and return content length / transfer codings."""
+    content_length_values: list[str] = []
+    for value in _header_values(headers, "content-length"):
+        content_length_values.extend(part.strip() for part in value.split(","))
+
+    content_length: int | None = None
+    if content_length_values:
+        if any(
+            not value or not value.isascii() or not value.isdecimal()
+            for value in content_length_values
+        ):
+            raise ValueError("invalid Content-Length")
+        parsed_lengths = {int(value, 10) for value in content_length_values}
+        if len(parsed_lengths) != 1:
+            raise ValueError("conflicting Content-Length values")
+        content_length = parsed_lengths.pop()
+
+    transfer_codings: list[str] = []
+    for value in _header_values(headers, "transfer-encoding"):
+        transfer_codings.extend(part.strip().lower() for part in value.split(","))
+    if transfer_codings:
+        if any(not coding or not _TOKEN_RE.fullmatch(coding) for coding in transfer_codings):
+            raise ValueError("invalid Transfer-Encoding")
+        if transfer_codings[-1] != "chunked" or transfer_codings.count("chunked") != 1:
+            raise ValueError("Transfer-Encoding must end in exactly one chunked coding")
+        if content_length is not None:
+            raise ValueError("Content-Length and Transfer-Encoding must not be combined")
+
+    return content_length, tuple(transfer_codings)
+
+
+async def _read_body_bytes(reader: asyncio.StreamReader, size: int) -> bytes:
+    try:
+        return await asyncio.wait_for(reader.readexactly(size), timeout=30)
+    except asyncio.IncompleteReadError as exc:
+        raise ValueError("request body ended before its declared framing") from exc
+
+
+async def _forward_request_body(
+    client_reader: asyncio.StreamReader,
+    upstream_writer: asyncio.StreamWriter,
+    content_length: int | None,
+    transfer_codings: tuple[str, ...],
+) -> None:
+    """Stream a validated fixed-length or chunked request body upstream."""
+    if content_length is not None:
+        remaining = content_length
+        while remaining:
+            data = await _read_body_bytes(client_reader, min(remaining, TUNNEL_BUFFER))
+            upstream_writer.write(data)
+            await upstream_writer.drain()
+            remaining -= len(data)
+        return
+
+    if not transfer_codings:
+        return
+
+    while True:
+        try:
+            size_line = await asyncio.wait_for(client_reader.readline(), timeout=30)
+        except asyncio.TimeoutError as exc:
+            raise ValueError("timed out reading chunk size") from exc
+        if not size_line.endswith(b"\r\n"):
+            raise ValueError("invalid chunk-size line ending")
+        size_token = size_line[:-2].split(b";", 1)[0].strip()
+        if not size_token or any(ch not in b"0123456789abcdefABCDEF" for ch in size_token):
+            raise ValueError("invalid chunk size")
+        chunk_size = int(size_token, 16)
+        upstream_writer.write(size_line)
+        await upstream_writer.drain()
+
+        if chunk_size == 0:
+            while True:
+                try:
+                    trailer_line = await asyncio.wait_for(client_reader.readline(), timeout=30)
+                except asyncio.TimeoutError as exc:
+                    raise ValueError("timed out reading chunk trailers") from exc
+                if trailer_line == b"\r\n":
+                    upstream_writer.write(trailer_line)
+                    await upstream_writer.drain()
+                    return
+                if not trailer_line.endswith(b"\r\n") or b":" not in trailer_line:
+                    raise ValueError("invalid chunk trailer")
+                trailer_name = trailer_line.split(b":", 1)[0].decode(
+                    "ascii", errors="strict"
+                ).lower()
+                if not _TOKEN_RE.fullmatch(trailer_name):
+                    raise ValueError("invalid chunk trailer name")
+                if trailer_name in {
+                    "connection",
+                    "content-length",
+                    "host",
+                    "trailer",
+                    "transfer-encoding",
+                }:
+                    raise ValueError("chunk trailer contains a forbidden field")
+                upstream_writer.write(trailer_line)
+                await upstream_writer.drain()
+
+        remaining = chunk_size
+        while remaining:
+            data = await _read_body_bytes(client_reader, min(remaining, TUNNEL_BUFFER))
+            upstream_writer.write(data)
+            await upstream_writer.drain()
+            remaining -= len(data)
+        terminator = await _read_body_bytes(client_reader, 2)
+        if terminator != b"\r\n":
+            raise ValueError("chunk data is not followed by CRLF")
+        upstream_writer.write(terminator)
+        await upstream_writer.drain()
 
 
 async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -726,8 +931,21 @@ async def handle_request(
         pass
 
     try:
+        client_rejection = await _allowed_client_reason(peer)
+        if client_rejection:
+            logger.warning("BLOCKED proxy client %s (%s)", peer, client_rejection)
+            await _write_text_response(
+                writer, 403, "Forbidden", "This policy listener accepts only its configured bridge."
+            )
+            return
+
         request_line = await asyncio.wait_for(reader.readline(), timeout=30)
         if not request_line:
+            return
+        if not request_line.endswith(b"\r\n"):
+            await _write_text_response(
+                writer, 400, "Bad Request", "HTTP request line must end with CRLF."
+            )
             return
 
         request_str = request_line.decode("utf-8", errors="replace").strip()
@@ -735,7 +953,7 @@ async def handle_request(
             return
 
         parts = request_str.split()
-        if len(parts) < 3:
+        if len(parts) != 3 or parts[2] not in {"HTTP/1.0", "HTTP/1.1"}:
             await _write_text_response(
                 writer,
                 400,
@@ -747,16 +965,38 @@ async def handle_request(
         method, target, _version = parts[0].upper(), parts[1], parts[2]
 
         # Read headers
-        headers: dict[str, str] = {}
+        headers: list[tuple[str, str]] = []
         while True:
             line = await asyncio.wait_for(reader.readline(), timeout=10)
-            if not line or line == b"\r\n":
+            if not line:
+                await _write_text_response(
+                    writer, 400, "Bad Request", "HTTP headers ended prematurely."
+                )
+                return
+            if line == b"\r\n":
                 break
+            if line[:1] in (b" ", b"\t"):
+                await _write_text_response(
+                    writer, 400, "Bad Request", "Obsolete folded headers are not accepted."
+                )
+                return
             try:
                 name, value = line.decode("utf-8", errors="replace").split(":", 1)
-                headers[name.strip().lower()] = value.strip()
+                normalized_name = name.strip().lower()
+                if not _TOKEN_RE.fullmatch(normalized_name):
+                    raise ValueError("invalid header name")
+                headers.append((normalized_name, value.strip()))
             except ValueError:
-                pass
+                await _write_text_response(
+                    writer, 400, "Bad Request", "Malformed HTTP request header."
+                )
+                return
+
+        try:
+            _parse_request_framing(headers)
+        except ValueError as exc:
+            await _write_text_response(writer, 400, "Bad Request", str(exc))
+            return
 
         if method == "CONNECT":
             await _handle_connect(target, reader, writer, peer)
@@ -888,7 +1128,7 @@ async def _handle_connect(
 async def _handle_forward_http(
     method: str,
     target: str,
-    headers: dict[str, str],
+    headers: list[tuple[str, str]],
     client_reader: asyncio.StreamReader,
     client_writer: asyncio.StreamWriter,
     peer: Any,
@@ -900,16 +1140,41 @@ async def _handle_forward_http(
     ONYX_AGENT_ALLOW_HTTP_URLS=true, they are forwarded after destination
     validation. Search-engine targets are still denied locally.
     """
-    if target.startswith("http://") or target.startswith("https://"):
-        parsed = urlparse(target)
+    parsed = urlparse(target)
+    if parsed.scheme:
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            await _write_text_response(
+                client_writer,
+                400,
+                "Bad Request",
+                "Absolute-form proxy targets must use http or https.",
+            )
+            return
         target_host = parsed.hostname or ""
-        target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        use_tls = parsed.scheme == "https"
+        try:
+            target_port = parsed.port or (
+                443 if parsed.scheme.lower() == "https" else 80
+            )
+        except ValueError:
+            await _write_text_response(
+                client_writer, 400, "Bad Request", "Invalid HTTP proxy target port."
+            )
+            return
+        use_tls = parsed.scheme.lower() == "https"
         path = parsed.path or "/"
         if parsed.query:
             path += "?" + parsed.query
     else:
-        host_header = headers.get("host", "")
+        host_values = _header_values(headers, "host")
+        if len(host_values) != 1:
+            await _write_text_response(
+                client_writer,
+                400,
+                "Bad Request",
+                "Origin-form proxy requests require exactly one Host header.",
+            )
+            return
+        host_header = host_values[0]
         try:
             target_host, target_port = _parse_authority(host_header, 80)
         except ValueError:
@@ -985,17 +1250,29 @@ async def _handle_forward_http(
                 _proxy_authorization_header() if use_absolute_uri else None
             )
 
+        content_length, transfer_codings = _parse_request_framing(headers)
         request = f"{method} {request_target} HTTP/1.1\r\n"
-        saw_host = False
-        for name, value in headers.items():
-            lower_name = name.lower()
-            if lower_name in ("connection", "proxy-connection", "proxy-authorization"):
+        for name, value in headers:
+            if name in (
+                "connection",
+                "proxy-connection",
+                "proxy-authorization",
+                "host",
+                "content-length",
+                "transfer-encoding",
+            ):
                 continue
-            if lower_name == "host":
-                saw_host = True
             request += f"{name}: {value}\r\n"
-        if not saw_host:
-            request += f"host: {target_host}\r\n"
+        default_port = 443 if use_tls else 80
+        display_host = f"[{target_host}]" if ":" in target_host else target_host
+        host_authority = (
+            display_host if target_port == default_port else f"{display_host}:{target_port}"
+        )
+        request += f"host: {host_authority}\r\n"
+        if content_length is not None:
+            request += f"content-length: {content_length}\r\n"
+        if transfer_codings:
+            request += f"transfer-encoding: {', '.join(transfer_codings)}\r\n"
         if proxy_authorization:
             request += f"proxy-authorization: {proxy_authorization}\r\n"
         request += "connection: close\r\n"
@@ -1004,11 +1281,12 @@ async def _handle_forward_http(
         upstream_writer.write(request.encode("utf-8"))
         await upstream_writer.drain()
 
-        content_length = int(headers.get("content-length", "0"))
-        if content_length > 0:
-            body = await client_reader.readexactly(content_length)
-            upstream_writer.write(body)
-            await upstream_writer.drain()
+        await _forward_request_body(
+            client_reader,
+            upstream_writer,
+            content_length,
+            transfer_codings,
+        )
 
         logger.debug(
             "FORWARD %s %s:%d%s through %s listener",
@@ -1042,12 +1320,19 @@ async def _handle_forward_http(
 
 
 async def main() -> None:
+    _validate_upstream_proxy_config()
+    if not ALLOWED_CLIENT_HOSTS:
+        raise RuntimeError("EGRESS_PROXY_ALLOWED_CLIENT_HOSTS must name the dedicated bridge")
     logger.info(
-        "Restricted egress proxy starting on %s:%d (policy: %s, upstream: %s, allow_http_urls: %s, block_hosts: %s, block_internal_hosts: %s, dns_internal_check: %s)",
+        "Restricted egress proxy starting on %s:%d "
+        "(policy: %s, upstream: %s, allowed_clients: %s, "
+        "allow_http_urls: %s, block_hosts: %s, block_internal_hosts: %s, "
+        "dns_internal_check: %s)",
         LISTEN_HOST,
         LISTEN_PORT,
         POLICY_MODE,
-        UPSTREAM_PROXY or "(direct)",
+        _sanitized_upstream_proxy(),
+        ", ".join(ALLOWED_CLIENT_HOSTS),
         ALLOW_HTTP_URLS,
         ", ".join(sorted(SEARCH_ENGINE_HOSTS)),
         ", ".join(sorted(BLOCKED_HOSTNAMES)),

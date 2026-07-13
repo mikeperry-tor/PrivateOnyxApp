@@ -100,7 +100,7 @@ def crw_scrape_request(
         # docs/request_handling.md §1.7.
         #
         # No `waitFor` field — page load waiting is handled by the CDP shim's
-        # waitUntil injection (OBSCURA_BROWSER_WAIT_UNTIL_SEARCH=networkidle2). CRW uses its
+        # waitUntil injection (the wrapper example uses load for search). CRW uses its
         # smart SPA selector poll + content stability heuristics for any
         # remaining post-navigate work instead of a blind fixed sleep.
     }

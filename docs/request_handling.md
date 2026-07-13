@@ -94,7 +94,7 @@ default SearXNG still has no general internet route. See
 │  CDP Shim :9224 (crw/cdp_shim.py)                    │
 │  ├─ Strips STEALTH_JS from addScriptToEvaluateOnNew  │
 │  ├─ Injects waitUntil into Page.navigate             │
-│  │  (networkidle2 for SERPs, load for web pages)     │
+│  │  (load for SERPs, domcontentloaded for web pages) │
 │  ├─ Strips proxyServer from createBrowserContext     │
 │  ├─ Periodic cookie clearing (every 60 min)          │
 │  ├─ Suppresses non-fatal CDP error logs              │
@@ -188,8 +188,8 @@ payload = {
     # while RENDER_JS_DEFAULT remains unset so a 403/error from the
     # prefetch-blocking proxy escalates to CDP instead of failing.
     # No waitFor field — page load waiting is handled by the CDP
-    # shim's waitUntil injection (networkidle2 for SERPs, load for
-    # web pages). CRW uses its smart SPA selector poll + content stability
+    # shim's waitUntil injection (load for SERPs, domcontentloaded for
+    # web pages by default). CRW uses its smart SPA selector poll + content stability
     # heuristics for any remaining post-navigate work.
 }
 params["method"] = "POST"
@@ -290,15 +290,15 @@ signal to escalate to the CDP renderer. The flow is:
    (`"Hide navigator.webdriver"`) and replaces the source with `";"` (no-op),
    letting obscura's own `--stealth` mode handle fingerprinting.
 
-5. **Navigation + render**: The shim injects `waitUntil: "networkidle2"`
+5. **Navigation + render**: The shim injects `waitUntil: "load"`
    into the `Page.navigate` call for search engine URLs (SERPs), or
-   `waitUntil: "load"` for other URLs that reach CDP. Obscura navigates to the
+   `waitUntil: "domcontentloaded"` for other URLs that reach CDP. Obscura navigates to the
    URL and adaptively waits for the specified lifecycle event before returning
-   the nav response, bounded by `OBSCURA_NAV_TIMEOUT_MS` (default 45s). For
-   SERPs, network idle (≤2 active connections for 500ms) ensures the results
-   have loaded. For web pages that CRW escalates to CDP, `load` (all
-   subresources finished) is sufficient and avoids waiting for long-polling
-   connections. No `waitFor` fixed sleep is used — see §1.6 for why. Obscura
+   the nav response, bounded by `OBSCURA_NAV_TIMEOUT_MS` (default 45s). The
+   wrapper example uses `load` for JS-heavy SERPs and `domcontentloaded` for
+   ordinary pages to avoid waiting on unnecessary subresources or long-polling
+   connections. Operators can select the stricter network-idle modes when a
+   provider needs them. No `waitFor` fixed sleep is used — see §1.6. Obscura
    renders the page with its stealth browser (browser-consistent TLS/HTTP
    fingerprinting, tracker blocking, and JS fingerprint spoofing via
    bootstrap.js) and returns the rendered HTML.
@@ -411,16 +411,16 @@ or waste time on fast ones.
 
 1. CRW sends `Page.navigate {url}` over CDP to the shim.
 2. The shim injects `waitUntil` into the navigate params based on the URL:
-   - **Search engine URLs** (SERPs): `networkidle2` (≤2 active connections
-     for 500ms) — SERPs are JS-heavy SPAs that load results via XHR
-   - **Other URLs that reach CDP** (`open_url` web pages): `load` (all
-     subresources finished) — content is ready at load; many modern sites keep
-     long-polling connections that prevent network idle
+   - **Search engine URLs** (SERPs): `load` by default, so scripts and ordinary
+     subresources complete without waiting for full network idleness
+   - **Other URLs that reach CDP** (`open_url` web pages): `domcontentloaded`
+     by default, so parsing and synchronous scripts finish without waiting for
+     unnecessary subresources or long-polling connections
 3. Obscura navigates to the URL and **adaptively waits** for the specified
    lifecycle event before returning the nav response, bounded by
-   `OBSCURA_NAV_TIMEOUT_MS` (default 45s). For `networkidle2`, the
-   network-idle quiet period is 500ms with a 5-second deadline (separate
-   from the nav timeout).
+   `OBSCURA_NAV_TIMEOUT_MS` (default 45s). If an operator selects
+   `networkidle2`, its quiet period is 500ms with a 5-second deadline separate
+   from the navigation timeout.
 4. CRW receives the nav response. No `waitFor` field is sent in the scrape
    payload, so CRW skips any blind fixed sleep and uses its smart heuristics
    (SPA selector poll, content stability, challenge retry) for any remaining
@@ -688,6 +688,11 @@ CRW :3010 ──HTTP proxy──> crw-prefetch-bridge :3128
      proxy. If the HTTP result is usable, CRW may return it without visiting
      the page in Obscura. If the result is blocked, thin, or JS-required, CRW
      may then escalate to CDP.
+   - **Request framing**: rejects conflicting or malformed `Content-Length`,
+     rejects requests that combine `Content-Length` with `Transfer-Encoding`,
+     and requires transfer codings to end in exactly one `chunked` coding.
+     Valid fixed-length and chunked bodies, chunk extensions, and trailers are
+     streamed without imposing a wrapper size cap.
 4. The CDP shim strips `proxyServer` from `Target.createBrowserContext` as a
    safety net. In the compose default, CRW uses `HTTP_PROXY`/`HTTPS_PROXY`
    rather than `CRW_CRAWLER__PROXY`, so `REQUEST_PROXY` is not set and CRW
@@ -699,11 +704,20 @@ When executor networking is enabled, executor pods live only on the internal
 Direct sockets have no internet or stack route; the bridge reaches a separate
 search-blocking `executor` policy in `netns-holder`.
 
+Each policy listener also resolves and accepts only its configured bridge
+service, plus loopback for its local healthcheck. Although the proxies share
+the trusted namespace and bind `0.0.0.0`, unrelated containers on another
+namespace attachment cannot use the listener directly. Failure to resolve the
+allowed bridge rejects the connection.
+
 **ONYX_AGENT_OUTBOUND_PROXY_URL usage:**
 
 When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set (e.g., Tor SOCKS proxy), the prefetch-blocking proxy
 routes its own upstream requests through `ONYX_AGENT_OUTBOUND_PROXY_URL`. This
 keeps all final-hop policy connections on the configured upstream path.
+The URL is validated before the listener starts; unsupported schemes,
+malformed ports, incomplete credentials, and path/query/fragment components
+fail startup. Logs show only a credential-free scheme/host/port description.
 
 For `https://` upstream proxies, the prefetch-blocking proxy verifies the
 proxy certificate, sends SNI for the proxy host, and requires TLS 1.3 by
@@ -1297,12 +1311,13 @@ browsing/search data.
 
 **waitUntil injection not working**:
 - Check that `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` and `OBSCURA_BROWSER_WAIT_UNTIL_WEB`
-  are set in the cdp-shim service environment (defaults: `networkidle2` and
-  `load`).
+  are set in the cdp-shim service environment (the wrapper example defaults
+  to `load` and `domcontentloaded`; Compose fallbacks are `networkidle2` and
+  `load` if no wrapper environment supplies them).
 - Look for `"Injected waitUntil="` log lines at DEBUG level
   (`CDP_SHIM_LOG_LEVEL=debug`).
-- Search engine URLs that reach CDP should show `waitUntil=networkidle2`;
-  other URLs that reach CDP should show `waitUntil=load`. Non-search
+- With the wrapper defaults, search engine URLs that reach CDP should show
+  `waitUntil=load`; other URLs should show `waitUntil=domcontentloaded`. Non-search
   `open_url` pages that CRW returns from HTTP prefetch will not have
   `waitUntil` logs.
 - If pages return too early (empty SERP, SPA shell), obscura
@@ -1377,7 +1392,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `CRW_RENDERER__MODE` | `chrome` | Selects which JS renderers are in the ladder (chrome only, not lightpanda). |
 | `CRW_RENDERER__RENDER_JS_DEFAULT` | (unset) | Auto mode: HTTP prefetch first, escalate to CDP on failure/403, blocked/thin content, or JS-required detection. The prefetch-blocking proxy returns 403 for configured search-engine hosts, forcing CRW to escalate to obscura for SERPs. Non-search HTTPS pages may return from the HTTP prefetch when usable; plain HTTP pages are blocked unless explicitly allowed. Do not set this to `true`; forced render-js mode propagates prefetch failures instead of using the auto-mode escalation path. |
 | `HTTPS_PROXY` / `HTTP_PROXY` | `http://crw-prefetch-bridge:3128` | Routes CRW's reqwest prefetch through the restricted bridge without setting `REQUEST_PROXY`. |
-| `NO_PROXY` | `127.0.0.1,localhost,::1` | Keeps CRW loopback traffic, including the CDP shim WebSocket and health checks, direct. |
+| `NO_PROXY` | `127.0.0.1,localhost,::1,cdp-shim,searxng-core` | Keeps CRW health checks and its explicit CDP/search peers off the prefetch proxy. |
 | `CRW_CRAWLER__PROXY` | (unset) | Intentionally not used for the prefetch-blocking proxy. Setting it would make CRW include `proxyServer` in `Target.createBrowserContext`; the shim can strip this as a safety net, but the compose default avoids that path entirely. |
 | `CRW_RENDERER__CHROME__WS_URL` | `ws://cdp-shim:9224/devtools/browser` | CDP shim endpoint on the dedicated network |
 | `CRW_RENDERER__CHROME_TIMEOUT_MS` | `50000` | Per-page navigation timeout for the chrome (obscura) renderer tier. Must be ≥ `OBSCURA_NAV_TIMEOUT_MS` so CRW's deadline doesn't fire before obscura's nav timeout. |
@@ -1396,8 +1411,8 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `CDP_SHIM_PORT` | `9224` | Listen port |
 | `OBSCURA_CDP_URL` | `ws://obscura:9222/devtools/browser` | Obscura CDP endpoint on the browser-control network |
 | `CDP_SHIM_STRIP_STEALTH_JS` | `1` | Strip CRW's STEALTH_JS (1=yes, 0=no) |
-| `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` | `networkidle2` | `waitUntil` for search engine URLs (SERPs). SERPs are JS-heavy SPAs that load results via XHR — network idle ensures results have loaded. Options: `domcontentloaded`, `load`, `networkidle0`, `networkidle2`. |
-| `OBSCURA_BROWSER_WAIT_UNTIL_WEB` | `load` | `waitUntil` for non-search URLs that CRW escalates to CDP (`open_url` web pages). Content is ready at `load`; many modern sites keep long-polling connections that prevent network idle. |
+| `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` | `load` in `.env.wrapper.example`; Compose fallback `networkidle2` | `waitUntil` for search engine URLs. Options: `domcontentloaded`, `load`, `networkidle0`, `networkidle2`. |
+| `OBSCURA_BROWSER_WAIT_UNTIL_WEB` | `domcontentloaded` in `.env.wrapper.example`; Compose fallback `load` | `waitUntil` for non-search URLs that CRW escalates to CDP. |
 | `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames for per-URL `waitUntil` selection. |
 | `CDP_SHIM_STRIP_PROXY_SERVER` | `1` | Strip `proxyServer` from `Target.createBrowserContext` (safety net — not needed with `HTTPS_PROXY` env vars since `REQUEST_PROXY` is not set). See §1.7. |
 | `CDP_SHIM_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
@@ -1413,6 +1428,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 |----------|---------|-------------|
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
+| `EGRESS_PROXY_ALLOWED_CLIENT_HOSTS` | required per policy instance | Comma-separated dedicated bridge service names allowed to connect; loopback remains allowed for health checks. |
 | `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
 | `ONYX_AGENT_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs in the prefetch proxy and CDP shim. When false, HTTP fetches fail closed with a message telling the agent to use HTTPS. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |

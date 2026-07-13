@@ -117,6 +117,13 @@ This stack protects private research, document contents, browsing behavior, infe
 
 There is no single test framework for this wrapper. Choose checks based on what changed:
 
+- Restricted-egress unit tests: run
+  `python3 -m unittest discover -s tests -p 'test_*.py' -v`. Add focused cases
+  under `tests/` when changing proxy destination policy, HTTP request framing,
+  bridge-client enforcement, executor network selection, or injected executor
+  environment. Tests must be deterministic and must not require live internet,
+  VPN credentials, or the private `.env.wrapper`.
+
 - Compose or Makefile changes: run `make help` and inspect the effective compose model for the affected mode using the Makefile's layering.
 - Stack startup changes: run the relevant `make up-lite` or `make up-full`, then `make ps-*` and targeted logs when practical.
 - Request path changes: test a real `web_search` query and a real `open_url` request; inspect SearXNG, CRW, CDP shim, and Obscura logs as needed.

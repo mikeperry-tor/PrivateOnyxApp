@@ -50,8 +50,9 @@ Architecture::
 
     CRW :3010 ──ws──> cdp-shim :9224 ──ws──> obscura :9222
 
-CRW's ``CRW_RENDERER__CHROME__WS_URL`` points at ``ws://127.0.0.1:9224``
-instead of ``ws://127.0.0.1:9222``.
+The wrapper Compose topology points CRW at
+``ws://cdp-shim:9224/devtools/browser`` and the shim at
+``ws://obscura:9222/devtools/browser`` on their dedicated internal networks.
 
 Other CDP traffic is forwarded transparently in both directions.
 All unexpected behavior is logged — no exceptions are silently swallowed.

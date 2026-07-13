@@ -15,16 +15,15 @@ Related implementation docs:
 - [Local document RAG search](local_docs_rag_search.md) describes the
   `doc-drop-web` connector path, local embedding shim, optional MLX embedding
   server, and RAG-specific diagnostics.
-- [Request handling](request_handling.md) describes how web search and
-  `open_url` requests flow through SearXNG, CRW, the prefetch proxy, and the
-  conditional CDP shim / Obscura browser path.
+- [Request handling](request_handling.md) describes how web search flows through
+  SearXNG and CRW, how `open_url` reaches CRW directly, and how both use the
+  prefetch policy plus the conditional CDP shim / Obscura browser path.
 - [VPN routing and proxies](vpn_routing_and_proxies.md) describes the
   Compose-level VPN namespace, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and optional teep, Tailscale, and
   code-interpreter routing modes.
-- [Internal network security](internal_network_security.md) records the tested
-  internal reachability of wrapper shims and services, including the
-  prefetch-proxy direct CONNECT risk and code-interpreter executor networking
-  gap.
+- [Internal network security](internal_network_security.md) records the
+  restricted component topology, final-hop validation, executor isolation,
+  and remaining CONNECT/upstream-proxy risks.
 
 Reference checkouts:
 

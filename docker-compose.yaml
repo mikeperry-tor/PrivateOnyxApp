@@ -106,8 +106,8 @@ services:
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/usr/local/searxng/wrapper-patches:${PYTHONPATH:-}"
       # Page load waiting is handled by the CDP shim's waitUntil injection
-      # (OBSCURA_BROWSER_WAIT_UNTIL_SEARCH=networkidle2 for SERPs,
-      # OBSCURA_BROWSER_WAIT_UNTIL_WEB=load for web pages), not by a CRW
+      # (the wrapper example uses load for SERPs and domcontentloaded for web
+      # pages), not by a CRW
       # waitFor sleep. See docs/request_handling.md §1.6 for the full
       # wait strategy.
     networks: [searxng-api, crw-search, searxng-valkey]
@@ -262,8 +262,8 @@ services:
   #
   # 1. waitUntil injection — CRW sends Page.navigate without waitUntil.
   #    Obscura's CDP default is domcontentloaded, which can return too early for
-  #    JS-heavy SERPs. The shim injects networkidle2 for configured search
-  #    hosts and load for ordinary web pages.
+  #    JS-heavy SERPs. The shim injects the configured per-URL lifecycle wait;
+  #    the wrapper example uses load for search and domcontentloaded for web.
   #
   # 2. STEALTH_JS stripping — CRW unconditionally injects its own stealth
   #    script via Page.addScriptToEvaluateOnNewDocument with Mac-specific
@@ -295,12 +295,10 @@ services:
       CDP_SHIM_STRIP_STEALTH_JS: "1"
       CDP_SHIM_LOG_LEVEL: "info"
       # Per-URL waitUntil injection into Page.navigate calls.
-      # Search engine URLs (SERPs) use networkidle2 (≤2 active connections
-      # for 500ms) — SERPs are JS-heavy SPAs that load results via XHR.
-      # All other URLs that CRW escalates to CDP (open_url web pages) use
-      # "load" (all subresources finished) — content is ready at load, and
-      # many modern sites keep long-polling connections that prevent network
-      # idle. Usable non-search HTTP-prefetch results can return before CDP.
+      # The wrapper example uses load for search URLs and domcontentloaded for
+      # other URLs that CRW escalates to CDP. Operators can select networkidle
+      # modes for providers that need them. Usable non-search HTTP-prefetch
+      # results can return before CDP.
       #
       # Obscura lifecycle event firing order (each implies the previous):
       #   1. domcontentloaded  — DOM parsed + scripts executed
@@ -394,6 +392,7 @@ services:
       PREFETCH_PROXY_PORT: "3128"
       PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
       EGRESS_PROXY_POLICY: prefetch
+      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: crw-prefetch-bridge
       # Upstream proxy (ONYX_AGENT_OUTBOUND_PROXY_URL from .env.wrapper). When set, the proxy
       # routes its own upstream requests through this upstream.
       # Supports http://, https://, socks5://, socks5h://
@@ -432,6 +431,7 @@ services:
       PREFETCH_PROXY_HOST: "0.0.0.0"
       PREFETCH_PROXY_PORT: "3130"
       EGRESS_PROXY_POLICY: browser
+      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: obscura-egress-bridge
       PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
       ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
       ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
@@ -448,6 +448,7 @@ services:
       PREFETCH_PROXY_HOST: "0.0.0.0"
       PREFETCH_PROXY_PORT: "3131"
       EGRESS_PROXY_POLICY: browser
+      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: obscura-mcp-egress-bridge
       PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
       ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
       ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"

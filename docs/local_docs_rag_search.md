@@ -126,7 +126,8 @@ server, MCP/OAuth endpoints may use private LAN or `host.docker.internal`
 addresses, and loopback MCP/OAuth endpoints such as `127.0.0.1` remain blocked.
 Setting `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` seeds the broader "Disabled"
 posture and should be reserved for cases that intentionally need loopback
-MCP/OAuth access, such as the internal Obscura MCP server.
+MCP/OAuth access. The bundled Obscura MCP server uses the non-loopback
+`http://obscura-mcp-gateway:9223/mcp` endpoint and does not require this.
 
 Once an admin saves Security Hardening settings in Onyx, the saved UI value is
 the effective runtime policy and these env vars only act as startup defaults.
@@ -140,10 +141,10 @@ that source. Do not point the doc-drop connector at arbitrary untrusted local
 services just because the SSRF setting allows the wrapper's document server.
 
 These settings do not govern the local embedding shim's upstream call and are
-not firewall rules for CRW or Obscura browser traffic. In particular, they do
-not stop JavaScript running in Obscura from attempting requests to internal
-network addresses that are reachable from the browser namespace; browser
-same-origin/CORS behavior is not a stack-internal access-control boundary.
+not firewall rules for CRW or Obscura browser traffic. The restricted Obscura
+networks and browser final-hop policy provide that path's private-target
+backstop. Browser same-origin/CORS behavior remains defense in depth, not a
+stack-internal access-control boundary.
 
 ## PDF Freshness Patch
 

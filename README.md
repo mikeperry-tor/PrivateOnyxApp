@@ -6,7 +6,7 @@ The stack is built around [Onyx](https://github.com/onyx-dot-app/onyx) using [te
 
 Search and web traffic is fetched via customized [SearXNG](https://github.com/searxng/searxng) and [fastCRW](https://github.com/us/crw) services connected to [Obscura Browser](https://github.com/h4ckf0r0day/obscura).
 
-All agent traffic egresses over a [Mysterium](https://github.com/mysteriumnetwork/node) VPN connection. Proxy support is also available either in addition to Mysterium, or instead of it.
+Agent web traffic uses the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, or explicit no-VPN routing mode. Proxy support is available either in addition to Mysterium or instead of it.
 
 [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere.
 
@@ -353,7 +353,7 @@ Restart the stack after changing this setting (`make down-lite && make up-lite`,
 
 Set `ONYX_AGENT_OUTBOUND_PROXY_URL` in `.env.wrapper` to give the final-hop policy proxies an upstream proxy. Restricted components continue to use local bridge URLs. This is orthogonal to Mysterium: if both are set, the upstream-proxy connection crosses the VPN.
 
-Accepts any scheme:
+Supported schemes:
 
 ```bash
 # HTTP proxy
@@ -370,6 +370,9 @@ ONYX_AGENT_OUTBOUND_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
 The local policy proxies block private/internal literals and names. With an upstream proxy, target DNS remains remote to avoid DNS leakage, so a public-looking hostname that the upstream resolves to a private address is a residual risk. Host Tor (`socks5h://host.docker.internal:9150`) also currently requires `MYST_VPN_ALLOW_LAN_BYPASS=true`; that is a broad LAN route exemption for the trusted final-hop proxy, not general LAN access for restricted components.
+
+Invalid upstream proxy URLs fail policy-proxy startup. Startup logs redact
+userinfo and show only the configured scheme, host, and port.
 
 The default SearXNG engines (`google2`, `brave2`, `duckduckgo2`, `startpage2`, `bing2`) POST only to `http://crw:3010/v1/scrape` on the internal search network. SearXNG has no general internet route. Intentionally enabling external engines requires a separately reviewed `searxng-external` proxy policy.
 
@@ -463,7 +466,9 @@ server does not require disabling Onyx SSRF protection globally.
 3. Select which tools to expose (or select all).
 4. Save the assistant.
 
-Chat agents using that assistant can drive a stealth browser to navigate, read, and interact with web pages — with all traffic egressing through the VPN.
+Chat agents using that assistant can drive a stealth browser to navigate, read,
+and interact with web pages. Browser traffic follows the configured
+Mysterium/upstream-proxy/no-VPN routing matrix.
 
 **Security notes:**
 

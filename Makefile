@@ -197,7 +197,7 @@ help:
 	@echo "Code interpreter network: set ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true in $(ENV_FILE)"
 	@echo "Disable VPN: set MYST_VPN_ENABLED=false in $(ENV_FILE) to idle myst-client without kill-switch/connect"
 	@echo "Proxy: set ONYX_AGENT_OUTBOUND_PROXY_URL in $(ENV_FILE) (http/https/socks5)"
-	@echo "       to route crw, obscura, SearXNG, code-interpreter, and code agent egress"
+	@echo "       to route CRW, Obscura, and network-enabled executor egress"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep pin: make teep-build TEEP_REF=<commit-sha>"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:<tag>"

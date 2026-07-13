@@ -45,7 +45,10 @@ ports:
 
 The final-hop proxies bind distinct ports in `netns-holder`. Their bridges use
 dedicated internal upstream networks, have no host ports, Docker socket, or
-writable mounts, and fail closed when the policy proxy is unavailable.
+writable mounts, and fail closed when the policy proxy is unavailable. Each
+proxy accepts non-loopback clients only when the peer address currently
+resolves to its configured bridge service, so listeners bound across the
+shared namespace are not usable from unrelated network attachments.
 
 ## Final-Hop Routing Matrix
 
@@ -89,6 +92,11 @@ The policy still rejects private IP literals, localhost and host-gateway names,
 single-label service names, and configured internal names. A public-looking
 hostname that the upstream proxy resolves to a private address remains a
 residual risk; eliminating it requires upstream-side policy or allowlisting.
+
+Upstream proxy URLs are validated before a policy listener starts. Supported
+schemes are `http`, `https`, `socks5`, and `socks5h`; malformed ports,
+incomplete credentials, and path/query/fragment components fail startup.
+Logs redact credentials.
 
 ## Code Interpreter
 

@@ -1482,7 +1482,7 @@ Upgrade notes:
 - Re-test Podman full mode after any upstream change to OpenSearch version,
   volume paths, or code-interpreter socket usage.
 
-### Code-interpreter VPN override
+### Code-interpreter network override
 
 See the code-interpreter section above. The compose layer is intentionally
 conditional via `Makefile`: it is only added when
@@ -1496,6 +1496,11 @@ Behavior:
 - Final-hop policy proxies consume `ONYX_AGENT_OUTBOUND_PROXY_URL` directly.
 - Restricted components and executor pods always receive local bridge URLs.
 - Default SearXNG remains without general internet egress.
+- Each policy listener accepts only loopback health checks and its configured
+  bridge service. Upstream proxy configuration is startup-validated and
+  credentials are redacted from logs.
+- HTTP forwarding rejects ambiguous `Content-Length`/`Transfer-Encoding`
+  framing and streams valid fixed-length and chunked bodies.
 
 Upgrade notes:
 
@@ -1506,7 +1511,10 @@ Upgrade notes:
 - Main Onyx source references are mostly indirect here: `api_server` prompt text
   must match executor network/proxy reality, and code-interpreter service wiring
   must still allow `PYTHONPATH` injection.
-- Re-test both HTTP and SOCKS proxy modes.
+- Run `python3 -m unittest discover -s tests -p 'test_*.py' -v`, then re-test
+  HTTP and SOCKS proxy modes. Keep deterministic regression cases for hostname
+  normalization, bridge-client enforcement, startup validation, credential
+  redaction, and request framing.
 
 ## Install and upgrade hooks
 
