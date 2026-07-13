@@ -173,6 +173,14 @@ required because the policy processes share `netns-holder` and bind across its
 interfaces; unrelated default-network or ingress-network containers are
 rejected rather than receiving an undocumented proxy path.
 
+The loopback policy health client validates the configured egress substrate,
+not an arbitrary destination: provider-DNS resolution in direct mode, or a
+target-free upstream-proxy protocol/authentication handshake in proxy mode.
+Bridge health sends a localhost CONNECT that policy must reject with 403, so a
+listening but disconnected socat process is not considered ready. Service and
+host gateways similarly make an HTTP request through their forwarding path.
+These probes do not grant another client or network access to a policy port.
+
 The HTTP proxy rejects ambiguous request framing: conflicting or malformed
 `Content-Length`, combined `Content-Length`/`Transfer-Encoding`, and transfer
 coding lists that do not end in exactly one `chunked` coding. Valid fixed and

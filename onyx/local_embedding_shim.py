@@ -326,6 +326,31 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._send_json(200, {"status": "ok"})
             return
+        if self.path == "/ready":
+            if not DEFAULT_MODEL:
+                log_line("embedding_readiness_failed reason=missing_default_model")
+                self._send_json(503, {"status": "not_ready"})
+                return
+            try:
+                embeddings, _, _ = request_local_embeddings(
+                    DEFAULT_MODEL, ["readiness"]
+                )
+                if len(embeddings) != 1 or not embeddings[0]:
+                    raise ValueError(
+                        "readiness embedding response did not contain one non-empty vector"
+                    )
+            except Exception as e:
+                # Do not return upstream bodies or configuration values from a
+                # health endpoint. The exception class is enough for operators
+                # to distinguish transport, HTTP, and response-shape failures.
+                log_line(
+                    "embedding_readiness_failed"
+                    f" reason_type={type(e).__name__}"
+                )
+                self._send_json(503, {"status": "not_ready"})
+                return
+            self._send_json(200, {"status": "ready"})
+            return
         if self.path == "/api/gpu-status":
             # Onyx startup probes this endpoint before indexing setup.
             self._send_json(200, {"gpu_available": GPU_AVAILABLE})

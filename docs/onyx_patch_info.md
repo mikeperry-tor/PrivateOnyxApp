@@ -1064,6 +1064,7 @@ The shim implements the endpoints Onyx needs for local embedding startup and
 embedding requests:
 
 - `GET /health`
+- `GET /ready` for a real fixed-text upstream/model readiness probe
 - `GET /api/gpu-status`
 - `POST /encoder/bi-encoder-embed`
 
@@ -1410,13 +1411,17 @@ The Makefile orchestrates upgrade and runtime flow:
 - `sync-onyx-env` pins `IMAGE_TAG` and `CODE_INTERPRETER_IMAGE_TAG`.
 - `onyx-build` uses the installer path to prepare or pull required Onyx images.
 - `upgrade-python-deps` upgrades the hashed runtime Python locks for
-  `embedserv`, `cdp-shim`, and code-interpreter SOCKS proxy support from their
+  `embedserv` and `cdp-shim` from their
   `requirements.in` files. Most package inputs are unconstrained so this target
   can move them forward; `embedserv/requirements.in` keeps
   `transformers<5.13` because transformers 5.13 breaks `mlx-lm` 0.31.3's
   tokenizer registration during embedserv handler startup, and keeps
   `typer==0.20.0` because newer Typer releases trigger a `sys.exit()` handler
   traceback in the local embedserv CLI path.
+- `cdp-shim-build` installs its hashed dependency into a dedicated image. The
+  internal-only CDP runtime never invokes pip. Myst, Teep, and CDP image builds
+  forward standard host proxy variables as Docker build arguments; these
+  pre-start build operations do not depend on Myst readiness.
 
 `install-with-container-bin.sh` wraps the upstream install script so it can run
 through the selected container engine instead of assuming `docker`. The local

@@ -713,6 +713,14 @@ the trusted namespace and bind `0.0.0.0`, unrelated containers on another
 namespace attachment cannot use the listener directly. Failure to resolve the
 allowed bridge rejects the connection.
 
+The local policy healthcheck is routing-aware. In direct VPN mode it verifies
+the fixed provider-DNS path; in explicit no-VPN mode it uses the explicitly
+selected system resolver; and in upstream-proxy mode it performs a target-free
+HTTP(S) or SOCKS protocol/authentication handshake without resolving a
+browsing hostname. Each egress bridge then sends a blocked localhost CONNECT
+and requires the policy's 403, distinguishing end-to-end forwarding from a
+mere listening socket.
+
 **ONYX_AGENT_OUTBOUND_PROXY_URL usage:**
 
 When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set (e.g., Tor SOCKS proxy), the prefetch-blocking proxy
@@ -725,6 +733,11 @@ In VPN mode, a public upstream-proxy hostname is bootstrapped through the Myst
 provider resolver and connected by IP. `host.docker.internal` and other
 explicit internal proxy endpoints use Docker service resolution. Browsing
 target hostnames are never sent to Docker DNS in upstream-proxy mode.
+
+The CDP shim runs on internal-only networks from the prebuilt
+`CDP_SHIM_IMAGE`. Its hashed Python dependency is installed during
+`make cdp-shim-build`, before stack startup; the runtime command performs no
+package installation and needs no temporary direct-egress path.
 
 For `https://` upstream proxies, the prefetch-blocking proxy verifies the
 proxy certificate, sends SNI for the proxy host, and requires TLS 1.3 by

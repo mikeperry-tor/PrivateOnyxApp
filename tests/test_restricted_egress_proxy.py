@@ -48,6 +48,9 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         def close(self) -> None:
             return None
 
+        async def wait_closed(self) -> None:
+            return None
+
     async def test_direct_connection_uses_only_validated_address(self) -> None:
         module = _load_module()
         fake_reader = object()
@@ -397,6 +400,64 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
         system_resolver.assert_awaited_once_with("host.docker.internal", 9150)
         vpn_resolver.assert_not_awaited()
+
+    async def test_direct_readiness_checks_vpn_dns_without_public_connection(self) -> None:
+        module = _load_module()
+        writer = self._Writer()
+        open_connection = AsyncMock(return_value=(object(), writer))
+        resolve = AsyncMock(return_value={"93.184.216.34"})
+        with patch.object(
+            module.asyncio, "open_connection", open_connection
+        ), patch.object(module, "_resolve_target_host", resolve):
+            await module._check_egress_readiness()
+
+        open_connection.assert_awaited_once_with("127.0.0.1", module.LISTEN_PORT)
+        resolve.assert_awaited_once_with("example.com", 443)
+
+    async def test_upstream_readiness_does_not_resolve_browsing_target(self) -> None:
+        module = _load_module(
+            env_overrides={
+                "ONYX_AGENT_OUTBOUND_PROXY_URL": (
+                    "https://user:secret@proxy.example:8443"
+                )
+            }
+        )
+        listener_writer = self._Writer()
+        probe = AsyncMock()
+        target_resolver = AsyncMock()
+        with patch.object(
+            module.asyncio,
+            "open_connection",
+            AsyncMock(return_value=(object(), listener_writer)),
+        ), patch.object(module, "_probe_http_proxy_endpoint", probe), patch.object(
+            module, "_resolve_target_host", target_resolver
+        ):
+            await module._check_egress_readiness()
+
+        probe.assert_awaited_once_with(
+            "proxy.example", 8443, "user", "secret", "https"
+        )
+        target_resolver.assert_not_awaited()
+
+    async def test_http_proxy_readiness_rejects_authentication_failure(self) -> None:
+        module = _load_module()
+        reader = module.asyncio.StreamReader()
+        reader.feed_data(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+        reader.feed_eof()
+        writer = self._Writer()
+        with patch.object(
+            module,
+            "_open_http_proxy_connection",
+            AsyncMock(return_value=(reader, writer)),
+        ):
+            with self.assertRaisesRegex(ConnectionError, "authentication failed"):
+                await module._probe_http_proxy_endpoint(
+                    "proxy.example", 8080, "user", "secret", "http"
+                )
+
+        self.assertIn(b"OPTIONS * HTTP/1.1\r\n", writer.data)
+        self.assertIn(b"Proxy-Authorization: Basic ", writer.data)
+        self.assertNotIn(b"secret", writer.data)
 
     def test_dns_a_response_parser(self) -> None:
         module = _load_module()

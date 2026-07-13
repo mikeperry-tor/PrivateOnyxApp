@@ -145,8 +145,16 @@ services:
       netns-holder:
         condition: service_started
       myst-client:
-        condition: service_started
+        condition: service_healthy
         restart: true
+      doc-drop-web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'GET / HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:8091,connect-timeout=5 | grep -q '^HTTP/1[.][01] 200'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
 
   # Read-only HTTP view of ONYX_RAG_DOC_SOURCE_DIR from inside the shared myst namespace.
   # Use with Onyx Web connector at http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/
@@ -197,11 +205,16 @@ services:
       myst-client:
         condition: service_healthy
         restart: true
-      # crw is optional for Onyx, but wiring
-      # the dependency avoids a first-request race if Onyx's Web Search
-      # connector is configured to point at crw's /v1/scrape endpoint.
+      # Gate Onyx on the complete wrapper request chain so it cannot report
+      # ready while configured Web Search/Open URL gateways are unavailable.
       crw:
-        condition: service_started
+        condition: service_healthy
+      crw-service-gateway:
+        condition: service_healthy
+      searxng-service-gateway:
+        condition: service_healthy
+      obscura-mcp-gateway:
+        condition: service_healthy
       local-embedding-shim:
         condition: service_healthy
 
@@ -224,9 +237,11 @@ services:
       - python
       - /app/local_embedding_shim.py
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:9101/health || exit 1"]
+      # /ready performs a fixed, non-user embedding request and therefore
+      # proves that both the shim and its configured upstream model are usable.
+      test: ["CMD-SHELL", "wget -q -T 35 -O /dev/null http://127.0.0.1:9101/ready || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 40s
       retries: 5
       start_period: 10s
     depends_on:

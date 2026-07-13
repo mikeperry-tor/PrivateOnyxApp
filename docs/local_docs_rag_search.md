@@ -242,6 +242,7 @@ That makes Onyx believe it is talking to its own model server. The shim exposes
 the endpoints Onyx expects for embedding-related paths:
 
 - `GET /health`
+- `GET /ready`
 - `GET /api/gpu-status`
 - `POST /encoder/bi-encoder-embed`
 - `POST /encoder/cross-encoder-scores`, as an intentional 501 stub
@@ -266,6 +267,12 @@ The 501 stubs are deliberate. This shim is an embedding bridge, not a reranker
 or query-analysis model server. If Onyx starts requiring reranking or
 query-analysis for the workflows you use, route those calls to a real Onyx
 model server or extend the shim with compatible implementations.
+
+`GET /health` is process liveness. Compose uses `GET /ready`, which sends the
+fixed text `readiness` to the configured default embedding model and requires
+one non-empty vector. Full-mode `api_server` and `background` therefore do not
+start while the host/LAN embedding endpoint, its route, or its model is
+unusable. The response and logs expose no API key or upstream response body.
 
 ## Why The Shim Exists
 
@@ -333,6 +340,11 @@ make embedserv-serve
 `make embedserv-install` installs from the hashed lock file with
 `--require-hashes`. To upgrade package versions during a stack upgrade, edit
 `embedserv/requirements.in` if needed and run `make upgrade-python-deps`.
+This host-side installation and model download occur before stack startup and
+do not depend on Myst readiness. They honor the standard host
+`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` environment when a download proxy is
+required; `ONYX_AGENT_OUTBOUND_PROXY_URL` is intentionally only a runtime
+final-hop policy setting.
 Most embedserv requirements are intentionally unconstrained so that target can
 float them forward. Two inputs are compatibility pins. `transformers<5.13`
 avoids a `mlx-lm` tokenizer-registration failure during handler startup:
@@ -363,8 +375,9 @@ MYST_VPN_ALLOW_LAN_BYPASS=true
 ```
 
 This lets local inference APIs bypass the Myst VPN firewall while preserving the
-fail-closed VPN behavior for other traffic. Without it, the shim may be healthy
-but embedding calls can fail with upstream connection errors.
+fail-closed VPN behavior for other traffic. Without it, `/ready` remains
+unhealthy and full-stack startup fails closed instead of accepting later
+embedding errors.
 
 The Makefile uses `mlx-embeddings` through `mlx-openai-server` because this
 stack expects an OpenAI-compatible embedding endpoint with stable vector output.

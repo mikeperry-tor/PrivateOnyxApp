@@ -187,12 +187,13 @@ services:
       - ../docker-data/myst-data:/var/lib/mysterium-node
       - ../docker-data/myst-data:/root/.mysterium
       - ./myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
+      - ./myst-readiness.sh:/usr/local/bin/myst-readiness.sh:ro
     environment:
       # Master switch for the Mysterium VPN. When "false", the entrypoint
       # starts the daemon in idle mode: no kill-switch is armed, no connect
-      # attempt is made, and the healthcheck reports healthy based on
-      # TequilAPI reachability. The container still joins netns-holder so
-      # namespace references stay valid. See myst/myst-client-entrypoint.sh.
+      # attempt is made, and readiness requires a direct eth0 default route
+      # with no stale myst0. The container still joins netns-holder so namespace
+      # references stay valid. See myst/myst-client-entrypoint.sh.
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
       MYST_AUTO_CONNECT: "${MYST_AUTO_CONNECT:-true}"
       # Optional WireGuard interface MTU override passed to the daemon.
@@ -258,18 +259,9 @@ services:
       # on-chain instead of getting a CoinGate order auto-created.
       MYST_SKIP_ORDER_CREATION: "${MYST_SKIP_ORDER_CREATION:-false}"
     healthcheck:
-      # When MYST_VPN_ENABLED=false the daemon idles without a tunnel, so we
-      # only require TequilAPI to respond (myst connection info exits 0 once
-      # the daemon is up, regardless of Connected status). Otherwise require
-      # Status: Connected (fail-closed semantics).
-      test:
-        - "CMD-SHELL"
-        - >
-          if [ "${MYST_VPN_ENABLED:-true}" = "false" ]; then
-            myst connection info >/dev/null 2>&1 || exit 1;
-          else
-            myst connection info 2>/dev/null | grep -Eiq '"status"[[:space:]]*:[[:space:]]*"Connected"|Status:[[:space:]]*Connected' || exit 1;
-          fi
+      # VPN mode requires Connected plus a usable myst0 IPv4 subnet. Explicit
+      # no-VPN mode instead requires the direct eth0 route and no stale myst0.
+      test: ["CMD", "/bin/sh", "/usr/local/bin/myst-readiness.sh"]
       interval: 15s
       timeout: 15s
       retries: 4

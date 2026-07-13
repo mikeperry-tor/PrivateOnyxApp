@@ -971,6 +971,8 @@ Patch behavior:
 - Runs a small threaded HTTP server on `0.0.0.0:9101`.
 - Exposes model-server-compatible endpoints used by Onyx:
   - `GET /health`
+  - `GET /ready`, which probes the configured default upstream model with
+    fixed non-user text and is used by the full-mode Compose healthcheck
   - `GET /api/gpu-status`
   - `POST /encoder/bi-encoder-embed`
   - `POST /encoder/cross-encoder-scores` as an intentional 501 stub
@@ -1057,7 +1059,8 @@ Upgrade notes:
   when local rerank/query-analysis are unused or when 501 failures are acceptable
   and visible.
 - Onyx v4.2.5's real `/api/health` lives under `/api/health`; the shim exposes
-  `/health` for its own compose healthcheck and `/api/gpu-status` for Onyx. If
+  `/health` for process liveness, `/ready` for its Compose upstream/model
+  healthcheck, and `/api/gpu-status` for Onyx. If
   Onyx starts probing `/api/health` through `MODEL_SERVER_HOST`, add that route.
 - If upstream changes `EmbedRequest` fields, especially `text_type`, prefix
   fields, `normalize_embeddings`, `max_context_length`, or response shape,
@@ -1562,6 +1565,11 @@ Behavior:
 - `upgrade-python-deps` upgrades the hashed Python lock files for
   `embedserv/requirements.txt` and `crw/cdp-shim-requirements.txt` from their
   corresponding `requirements.in` files.
+- `cdp-shim-build` installs the latter lock into `CDP_SHIM_IMAGE`; no package
+  manager runs in the internal-only shim container. Standard host proxy
+  variables are forwarded to Myst, Teep, and CDP Docker builds. Host-side
+  `uv`/model downloads also use standard proxy variables and are intentionally
+  independent of stack VPN readiness.
 
 Upgrade notes:
 

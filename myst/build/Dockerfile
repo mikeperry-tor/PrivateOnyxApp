@@ -22,7 +22,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH BUILD_STATIC=1 bin/build
 FROM alpine:3.22
 
 # Install packages
-RUN apk add --no-cache iptables ipset ca-certificates openvpn bash sudo openresolv
+RUN apk add --no-cache iptables ipset ca-certificates openvpn bash sudo openresolv bind-tools
 
 COPY --from=builder /go/src/github.com/mysteriumnetwork/node/bin/helpers/prepare-run-env.sh /usr/local/bin/prepare-run-env.sh
 COPY --from=builder /go/src/github.com/mysteriumnetwork/node/bin/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

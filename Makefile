@@ -15,7 +15,7 @@ MYST_NODE_BRANCH ?= docker_host_fixes_with_logs
 MYST_DOCKERFILE ?= myst/build/Dockerfile
 MYST_IMAGE ?= $(call env_value,MYST_IMAGE)
 ifeq ($(strip $(MYST_IMAGE)),)
-MYST_IMAGE := mysteriumnetwork/myst:docker_host_fixes_with_logs
+MYST_IMAGE := local/private-onyx-myst:20260713
 endif
 
 TEEP_REPO ?= https://github.com/13rac1/teep.git
@@ -33,6 +33,9 @@ TAILSCALE_IMAGE ?= $(call env_value,TAILSCALE_IMAGE)
 ifeq ($(strip $(TAILSCALE_IMAGE)),)
 TAILSCALE_IMAGE := tailscale/tailscale:stable
 endif
+PYTHON_SLIM_IMAGE ?= $(call env_value,PYTHON_SLIM_IMAGE)
+CDP_SHIM_IMAGE ?= $(call env_value,CDP_SHIM_IMAGE)
+CDP_SHIM_DOCKERFILE ?= crw/cdp-shim.Dockerfile
 OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
 ifeq ($(strip $(OBSCURA_IMAGE)),)
 OBSCURA_IMAGE := h4ckf0r0day/obscura:0.1.10
@@ -155,7 +158,7 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready tailscale-image-ready crw-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready tailscale-image-ready crw-image-ready cdp-shim-image-ready cdp-shim-build myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -203,7 +206,7 @@ help:
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:<tag>"
 	@echo "Override embedding model: make embedserv-install ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
 
-upgrade: upgrade-python-deps myst-build teep-build searxng-image-ready tailscale-image-ready crw-image-ready upgrade-onyx
+upgrade: upgrade-python-deps cdp-shim-build myst-build teep-build searxng-image-ready tailscale-image-ready crw-image-ready upgrade-onyx
 
 upgrade-python-deps:
 	@set -eu; \
@@ -224,14 +227,37 @@ crw-image-ready:
 	@echo "Pulling crw image: $(CRW_IMAGE)"; \
 	"$(CONTAINER_BIN)" pull "$(CRW_IMAGE)"
 
+cdp-shim-image-ready:
+	@if "$(CONTAINER_BIN)" image inspect "$(CDP_SHIM_IMAGE)" >/dev/null 2>&1; then \
+		echo "CDP shim image already present: $(CDP_SHIM_IMAGE)"; \
+	else \
+		echo "CDP shim image not found: $(CDP_SHIM_IMAGE). Building..."; \
+		$(MAKE) cdp-shim-build CDP_SHIM_IMAGE="$(CDP_SHIM_IMAGE)"; \
+	fi
+
+cdp-shim-build:
+	@echo "Building $(CDP_SHIM_IMAGE) using $(CDP_SHIM_DOCKERFILE)..."
+	@set -eu; set --; \
+	[ -z "$${HTTP_PROXY:-}" ] || set -- "$$@" --build-arg HTTP_PROXY; \
+	[ -z "$${HTTPS_PROXY:-}" ] || set -- "$$@" --build-arg HTTPS_PROXY; \
+	[ -z "$${NO_PROXY:-}" ] || set -- "$$@" --build-arg NO_PROXY; \
+	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
+	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
+	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
+	"$(CONTAINER_BIN)" build "$$@" \
+		--file "$(CDP_SHIM_DOCKERFILE)" \
+		--build-arg PYTHON_SLIM_IMAGE="$(PYTHON_SLIM_IMAGE)" \
+		--tag "$(CDP_SHIM_IMAGE)" \
+		.
+
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
-up-lite: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready
+up-lite: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready cdp-shim-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(ONYX_MODEL_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
-up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready
+up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready cdp-shim-image-ready
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 ensure-onyx-config:
@@ -390,7 +416,14 @@ myst-image-ready:
 
 myst-build:
 	@echo "Building $(MYST_IMAGE) using $(MYST_DOCKERFILE) (repo=$(MYST_NODE_REPO), branch=$(MYST_NODE_BRANCH))..."
-	@"$(CONTAINER_BIN)" build \
+	@set -eu; set --; \
+	[ -z "$${HTTP_PROXY:-}" ] || set -- "$$@" --build-arg HTTP_PROXY; \
+	[ -z "$${HTTPS_PROXY:-}" ] || set -- "$$@" --build-arg HTTPS_PROXY; \
+	[ -z "$${NO_PROXY:-}" ] || set -- "$$@" --build-arg NO_PROXY; \
+	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
+	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
+	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
+	"$(CONTAINER_BIN)" build "$$@" \
 		--file "$(MYST_DOCKERFILE)" \
 		--build-arg MYST_NODE_REPO="$(MYST_NODE_REPO)" \
 		--build-arg MYST_NODE_BRANCH="$(MYST_NODE_BRANCH)" \
@@ -407,7 +440,14 @@ teep-image-ready:
 
 teep-build:
 	@echo "Building $(TEEP_IMAGE) using $(TEEP_DOCKERFILE) (repo=$(TEEP_REPO), ref=$(TEEP_REF))..."
-	@"$(CONTAINER_BIN)" build \
+	@set -eu; set --; \
+	[ -z "$${HTTP_PROXY:-}" ] || set -- "$$@" --build-arg HTTP_PROXY; \
+	[ -z "$${HTTPS_PROXY:-}" ] || set -- "$$@" --build-arg HTTPS_PROXY; \
+	[ -z "$${NO_PROXY:-}" ] || set -- "$$@" --build-arg NO_PROXY; \
+	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
+	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
+	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
+	"$(CONTAINER_BIN)" build "$$@" \
 		--file "$(TEEP_DOCKERFILE)" \
 		--build-arg TEEP_REPO="$(TEEP_REPO)" \
 		--build-arg TEEP_REF="$(TEEP_REF)" \

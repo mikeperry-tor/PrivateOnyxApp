@@ -18,7 +18,13 @@ services:
       # the dependency avoids a first-request race if Onyx's Web Search
       # connector is configured to point at crw's /v1/scrape endpoint.
       crw:
-        condition: service_started
+        condition: service_healthy
+      crw-service-gateway:
+        condition: service_healthy
+      searxng-service-gateway:
+        condition: service_healthy
+      obscura-mcp-gateway:
+        condition: service_healthy
     environment:
       DISABLE_VECTOR_DB: "true"
       FILE_STORE_BACKEND: "postgres"

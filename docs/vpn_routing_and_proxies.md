@@ -116,6 +116,37 @@ schemes are `http`, `https`, `socks5`, and `socks5h`; malformed ports,
 incomplete credentials, and path/query/fragment components fail startup.
 Logs redact credentials.
 
+## Readiness And VPN Recovery
+
+In VPN mode, `myst-client` is healthy only when the daemon reports Connected,
+`myst0` has a non-/32 global IPv4 subnet and a route, and a fixed `example.com`
+A query succeeds against the derived provider resolver while source-bound to
+the `myst0` address. The fixed probe contains no user browsing hostname. It
+also ensures a stale control-plane Connected state makes the container
+unhealthy. In explicit no-VPN mode, readiness instead requires no `myst0` and
+a direct default route on `eth0`.
+
+Only `myst-client` has the `autoheal=true` label. Restarting it leaves the
+`netns-holder` namespace—and therefore every dependent service's namespace
+reference—intact. Policy proxies and bridges deliberately are not autohealed:
+their end-to-end health checks turn red while DNS, an upstream proxy, or Myst
+is unavailable and recover in place after Myst reconnects. Restarting those
+containers would not repair the tunnel and could create a restart storm.
+
+Policy readiness first checks its listener. Without an upstream proxy it also
+queries the fixed name through the selected Myst provider resolver (or system
+DNS in explicit no-VPN mode) and rejects non-global answers. With an upstream
+proxy it performs only endpoint bootstrap plus a target-free protocol/auth
+handshake (`OPTIONS *` for HTTP(S), greeting/auth for SOCKS5); no browsing
+target is locally resolved or opened. Egress bridges issue a blocked localhost
+CONNECT and require the policy's 403, proving the entire bridge-to-policy hop
+rather than merely checking that socat owns a port.
+
+Compose `depends_on: condition: service_healthy` gates initial startup only.
+It does not recursively change a running consumer's Docker health when a
+dependency later fails. Operators should inspect the specific Myst, policy,
+bridge, gateway, CRW, and Onyx health states when diagnosing a live outage.
+
 ## Code Interpreter
 
 The trusted `code-interpreter` control service remains in `netns-holder`

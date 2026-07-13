@@ -107,6 +107,11 @@ Most likely variables you want to change:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **Master VPN switch**:
   - Set `MYST_VPN_ENABLED=false` to run the entire stack without the Mysterium VPN. The `myst-client` container still starts and joins the shared `netns-holder` namespace (so all service wiring stays identical), but it idles the daemon without arming the kill-switch or attempting to connect. Traffic egresses directly via the Docker bridge. This skips the Myst wallet/funding requirement entirely.
+  - With the VPN enabled, Myst readiness requires a connected daemon, a usable
+    `myst0` subnet, and a source-bound query to the provider resolver. Docker
+    autoheal restarts only `myst-client` when that data-plane check fails; the
+    stable `netns-holder` namespace lets policy proxies and bridges recover in
+    place without acquiring a direct-egress fallback.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access** (for local inference APIs):
   - Set `MYST_VPN_ALLOW_LAN_BYPASS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
@@ -432,6 +437,11 @@ make embedserv-verify-model
 make embedserv-serve
 ```
 
+Installation and model download run on the host before the embedding shim is
+ready; they are not routed through the stack VPN. Standard `HTTP_PROXY`,
+`HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
+the download libraries when the host requires a build/download proxy.
+
 These rules use `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs), and LM Studio's is non-existent.
 
 You must also set `MYST_VPN_ALLOW_LAN_BYPASS=true` in `.env.wrapper`, so traffic can bypass the Myst VPN firewall to reach this embedding service.
@@ -506,7 +516,19 @@ The following endpoints are exposed to your docker host:
 
 This wrapper carries a few local Onyx runtime and install-time patches. For the rationale behind those patches, see [`docs/onyx_patch_info.md`](docs/onyx_patch_info.md).
 
-Image tags, source refs, and runtime Python lock files are consolidated in [`stack.versions.env`](stack.versions.env) plus the committed `requirements.in` / hashed `requirements.txt` files. `make upgrade` refreshes the Python locks through `make upgrade-python-deps` before rebuilding/pulling the stack components. When changing those pins or rebasing onto a new Onyx release, use [`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md).
+Image tags, source refs, and runtime Python lock files are consolidated in
+[`stack.versions.env`](stack.versions.env) plus the committed `requirements.in`
+/ hashed `requirements.txt` files. `make upgrade` refreshes the Python locks
+through `make upgrade-python-deps` before rebuilding/pulling the stack
+components. CDP-shim dependencies are installed from their hashed lock into
+`CDP_SHIM_IMAGE` at image-build time; the internal-only runtime container never
+downloads packages. Myst, Teep, and CDP-shim builds forward standard
+`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` build arguments when those
+variables are present. Image builds and host-side `embedserv` installation
+happen before stack readiness and therefore use the host/build network, not
+the Mysterium namespace or `ONYX_AGENT_OUTBOUND_PROXY_URL`. When changing pins
+or rebasing onto a new Onyx release, use
+[`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md).
 
 ## Privacy of this stack
 
