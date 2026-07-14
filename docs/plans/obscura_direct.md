@@ -2079,11 +2079,12 @@ sections rather than retaining a historical appendix.
 - Rename the cookie interval to
   `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL_SECONDS`, document the lack of
   first-party isolation and the periodic-clear tradeoff, and do not retain a
-  compatibility alias for the old name. Reject the stale name during startup.
+  compatibility alias for the old name. Remove the old name's consumer; a stale
+  value is simply ignored.
 - Remove `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` and
   `OBSCURA_BROWSER_WAIT_UNTIL_WEB`; the direct clients own explicit,
   call-site-specific waits and the CDP-shim-wide overrides no longer have a
-  coherent meaning. Reject stale values instead of ignoring them.
+  coherent meaning. Remove their consumers; stale values are simply ignored.
 - Retain `SEARXNG_ROUND_ROBIN`, but replace its CRW wording with the direct
   Obscura provider-selection semantics; it remains a real operator choice, not
   an egress-policy mode.
@@ -2334,7 +2335,7 @@ Parse effective Compose models structurally and assert:
 
 - `.env.wrapper.example` exposes the document-size and renamed cookie controls,
   not the removed CDP-shim wait names or stack-owned parser/CDP/scheduler
-  internals; startup rejects each stale renamed/removed option;
+  internals;
 - no CRW/CDP-shim service, image, secret, env, health dependency, network, or
   host port remains;
 - only the expected clients can reach Obscura control/CDP;

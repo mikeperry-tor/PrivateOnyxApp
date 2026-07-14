@@ -253,8 +253,8 @@ Delete the feature completely in this prerequisite. This includes
 environment and generated-secret handling, helper `NO_PROXY` entries, Make
 targets/help, tests, endpoints, and setup/upgrade documentation. Do not retain
 an off-by-default Compose profile, compatibility alias, saved setting, or
-policy exception. Treat an obsolete enablement setting as a migration error
-with a direct removal message rather than silently ignoring it.
+policy exception. Remove every consumer of obsolete enablement settings; stale
+values are simply unused and receive no compatibility or validation handling.
 
 ## Target Network Model
 
@@ -499,8 +499,8 @@ LAN capability rather than an endpoint-scoped sandbox guarantee.
 
 Remove `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL`,
 `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK`, and
-`ONYX_SECURITY_SSRF_ALLOW_LOOPBACK` from `.env.wrapper.example` and reject them
-as stale wrapper configuration. They are three legacy inputs to one saved Onyx
+`ONYX_SECURITY_SSRF_ALLOW_LOOPBACK` from `.env.wrapper.example` and stop reading
+them. They are three legacy inputs to one saved Onyx
 `SSRFProtectionLevel`, not independent network-policy controls.
 
 Seed Onyx to `ALLOW_PRIVATE_NETWORK` on a new installation, with open-URL
@@ -797,8 +797,7 @@ Isolation enables these reductions independently of CRW/Obscura removal:
     dual-homed Onyx peer.
 12. Remove the bundled Obscura MCP service and all of its gateway, network,
     policy-route, secret, environment, readiness, test, and documentation
-    artifacts. Reject stale enablement variables during migration so an old
-    configuration cannot appear to enable a removed feature.
+    artifacts, including every consumer of its obsolete enablement variables.
 13. Remove readiness checks and restart edges that exist only to coordinate
     unrelated services sharing one namespace.
 
@@ -954,8 +953,7 @@ an operator attaching new networks after startup.
    models and service counts.
 5. Lock current MCP streamable HTTP, SSE, OAuth, redirect, host, connector,
    local RAG, and inference behavior with tests.
-6. Inventory every bundled Obscura MCP artifact that must be deleted and add a
-   negative test that rejects stale enablement configuration.
+6. Inventory every bundled Obscura MCP artifact that must be deleted.
 
 ### Workstream 1: MCP and Policy Correctness
 
@@ -1118,10 +1116,10 @@ an operator attaching new networks after startup.
   `ONYX_AGENT_ALLOW_HTTP_URLS` to `EGRESS_ALLOW_HTTP_URLS`, with no
   compatibility aliases. Update Make/Compose selection, policy/broker inputs,
   executor injection, tests, help, examples, and current documentation
-  atomically. Reject either old name when found in `.env.wrapper` so an upgrade
-  cannot silently ignore a security-relevant value.
+  atomically. Remove all consumers of the old names; stale values are ignored.
 - Rename `MYST_VPN_ALLOW_LAN_BYPASS` to `EGRESS_ALLOW_RFC1918` as the single
-  explicit RFC1918 opt-in and reject the old name. Its example text must cover
+  explicit RFC1918 opt-in, with no consumer or validation for the old name. Its
+  example text must cover
   MCP, configured Web Connector, embedding, and inference endpoints; it is not
   required for an exact `host.docker.internal` upstream proxy or other exact
   host exception.
@@ -1165,10 +1163,8 @@ an operator attaching new networks after startup.
 
 Add focused cases under `tests/` for:
 
-- `EGRESS_UPSTREAM_PROXY_URL`/`EGRESS_ALLOW_HTTP_URLS` propagation and explicit
-  rejection of both former `ONYX_AGENT_*` names;
-- `EGRESS_ALLOW_RFC1918` propagation and rejection of its former Myst-specific
-  name and all three removed wrapper SSRF names;
+- `EGRESS_UPSTREAM_PROXY_URL`/`EGRESS_ALLOW_HTTP_URLS` propagation;
+- `EGRESS_ALLOW_RFC1918` propagation;
 - fixed `ALLOW_PRIVATE_NETWORK` seeding only when no Admin override is saved;
 - exact public/host MCP and Web Connector proxy URL validation and invalid
   values;
@@ -1207,7 +1203,7 @@ Add focused cases under `tests/` for:
   and strict failure when an SDK bypasses the injected transport;
 - internal doc-drop identity/display-link rewriting, path normalization,
   encoding, and strict source-shape failure;
-- rejection of every removed bundled Obscura MCP setting or route; and
+- absence of every removed bundled Obscura MCP route; and
 - stack-owned `NO_PROXY` content and executor non-propagation.
 
 Use fake DNS, proxy, and HTTP transports. Unit tests must not require Internet,
@@ -1236,8 +1232,8 @@ Parse effective models structurally and assert:
   restricted service network, expose one fixed destination, and cannot relay
   to another gateway's service;
 - `host.docker.internal` is absent from generic helper `NO_PROXY`;
-- `.env.wrapper.example` omits all three legacy SSRF flags, Compose supplies the
-  fixed internal seed values, and stale wrapper values fail validation;
+- `.env.wrapper.example` omits all three legacy SSRF flags and Compose supplies
+  the fixed internal seed values;
 - code-interpreter control uses service port `8000`, while executor networking
   remains separately selected and restricted;
 - host WebUI/doc ports bind only as configured and obsolete host publishers are
@@ -1351,14 +1347,13 @@ for any URL that must change; Compose cannot rewrite stored records.
   stays local, and never traverses the external upstream proxy.
 - New installs seed Onyx `ALLOW_PRIVATE_NETWORK` with loopback disabled; saved
   Admin overrides still select public/host routing, and no legacy wrapper SSRF
-  flag remains accepted.
+  flag remains consumed.
 - RFC1918 MCP, configured Web Connector, embedding, and inference endpoints
   work only when `EGRESS_ALLOW_RFC1918=true`, only through the host-capable
   namespace and broker, and never become reachable from `open_url`, generic
   public, browser, or executor paths.
 - The bundled Obscura MCP service and all of its configuration, secrets,
-  routes, networks, tests, and documentation are absent; stale enablement
-  configuration is rejected explicitly.
+  routes, networks, tests, and documentation are absent.
 - Loopback, link-local metadata, other Docker-internal names, private IPs at
   strict levels, and redirect bypasses remain denied.
 - Browser and executor bridges are separate and cannot reach either Onyx
