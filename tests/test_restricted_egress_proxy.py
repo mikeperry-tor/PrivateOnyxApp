@@ -549,6 +549,23 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bytes(writer.data), encoded)
 
+    async def test_request_body_streaming_has_no_proxy_deadline(self) -> None:
+        module = _load_module()
+        encoded = b"5\r\nhello\r\n0\r\n\r\n"
+        reader = module.asyncio.StreamReader()
+        reader.feed_data(encoded)
+        reader.feed_eof()
+        writer = self._Writer()
+
+        with patch.object(
+            module.asyncio,
+            "wait_for",
+            side_effect=AssertionError("body streaming installed a deadline"),
+        ):
+            await module._forward_request_body(reader, writer, None, ("chunked",))
+
+        self.assertEqual(bytes(writer.data), encoded)
+
     async def test_chunked_request_rejects_framing_trailer(self) -> None:
         module = _load_module()
         reader = module.asyncio.StreamReader()

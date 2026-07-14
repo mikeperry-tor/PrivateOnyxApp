@@ -1491,7 +1491,7 @@ def _parse_request_framing(
 
 async def _read_body_bytes(reader: asyncio.StreamReader, size: int) -> bytes:
     try:
-        return await asyncio.wait_for(reader.readexactly(size), timeout=30)
+        return await reader.readexactly(size)
     except asyncio.IncompleteReadError as exc:
         raise ValueError("request body ended before its declared framing") from exc
 
@@ -1516,10 +1516,7 @@ async def _forward_request_body(
         return
 
     while True:
-        try:
-            size_line = await asyncio.wait_for(client_reader.readline(), timeout=30)
-        except asyncio.TimeoutError as exc:
-            raise ValueError("timed out reading chunk size") from exc
+        size_line = await client_reader.readline()
         if not size_line.endswith(b"\r\n"):
             raise ValueError("invalid chunk-size line ending")
         size_token = size_line[:-2].split(b";", 1)[0].strip()
@@ -1531,10 +1528,7 @@ async def _forward_request_body(
 
         if chunk_size == 0:
             while True:
-                try:
-                    trailer_line = await asyncio.wait_for(client_reader.readline(), timeout=30)
-                except asyncio.TimeoutError as exc:
-                    raise ValueError("timed out reading chunk trailers") from exc
+                trailer_line = await client_reader.readline()
                 if trailer_line == b"\r\n":
                     upstream_writer.write(trailer_line)
                     await upstream_writer.drain()

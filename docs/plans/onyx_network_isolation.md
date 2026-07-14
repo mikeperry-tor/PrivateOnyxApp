@@ -140,8 +140,11 @@ Current request/setup bounds are:
 - target/provider DNS operation: 10 seconds;
 - TCP connection to a direct target or configured upstream proxy: 15 seconds;
 - initial client proxy request line: 30 seconds;
-- each client proxy header line: 10 seconds; and
-- each framed request-body/chunk read: 30 seconds.
+- each client proxy header line: 10 seconds.
+
+Framed request bodies, chunk-size lines, trailers, and established tunnel
+relay have no proxy-imposed deadline. Framing validation still rejects
+ambiguous, malformed, or prematurely closed bodies.
 
 The 15-second timer covers reaching the configured proxy endpoint, not the
 remote circuit construction performed after a connection to a local Tor
