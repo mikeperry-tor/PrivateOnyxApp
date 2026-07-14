@@ -63,7 +63,10 @@ aliases, and single-label service names. The host route alone permits:
 
 Mixed private/global DNS answers fail. Public-only, browser, and executor
 policies never receive these exceptions. Exact host and RFC1918 traffic does
-not traverse an external upstream proxy.
+not traverse an external upstream proxy. Exact `host.docker.internal` is the
+only fixed cleartext exception when `EGRESS_ALLOW_HTTP_URLS=false`; this keeps
+the host HTTP inference/embedding defaults usable without permitting public or
+general RFC1918 HTTP targets.
 
 ## SSRF interaction
 
@@ -85,8 +88,10 @@ document identity remains the internal crawl URL.
 
 Executor, prefetch, and browser policies retain the same destination floor.
 Prefetch and executor also reject search-engine hosts. Cleartext targets are
-rejected unless `EGRESS_ALLOW_HTTP_URLS=true`. CONNECT on another allowed port
-is an opaque TCP stream and is not application-protocol inspected.
+rejected unless `EGRESS_ALLOW_HTTP_URLS=true`; only the host route's exact
+`host.docker.internal` identity has the fixed exception described above.
+CONNECT on another allowed port is an opaque TCP stream and is not
+application-protocol inspected.
 
 CRW's mandatory URL-safety preflight uses `crw-validation-dns` on loopback.
 The sidecar returns a synthetic global address for unresolved public

@@ -488,9 +488,10 @@ the download libraries when the host requires a build/download proxy.
 
 These rules use `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs), and LM Studio's is non-existent.
 
-The default `host.docker.internal` endpoint uses the exact host route and does
-not require `EGRESS_ALLOW_RFC1918`. Set it only when the embedding endpoint is
-an RFC1918 host or LAN name.
+The default plain-HTTP `host.docker.internal` endpoint uses the exact host
+route, remains usable when public HTTP URLs are disabled, and does not require
+`EGRESS_ALLOW_RFC1918`. Set it only when the embedding endpoint is an RFC1918
+host or LAN name.
 
 ### Optional: Using Teep for Embeddings
 

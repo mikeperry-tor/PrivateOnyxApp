@@ -164,7 +164,9 @@ HTTPS_PROXY_REQUIRE_TLS13 = (
 # Plain HTTP URLs are blocked by default. This is intentionally separate from
 # destination validation: even public HTTP hosts leak path/query contents in
 # cleartext and should not be fetched by an LLM web tool unless the operator
-# explicitly opts in.
+# explicitly opts in. The host route's exact ``host.docker.internal`` identity
+# is the narrow exception needed by local HTTP inference and embedding servers;
+# it remains broker-resolved, address-pinned, and unavailable to public routes.
 ALLOW_HTTP_URLS = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in (
     "1",
     "true",
@@ -395,6 +397,14 @@ TRUSTED_INTERNAL_DESTINATIONS = _parse_trusted_internal_destinations()
 
 def _is_trusted_internal_destination(host: str, port: int) -> bool:
     return (_normalize_host(host), port) in TRUSTED_INTERNAL_DESTINATIONS
+
+
+def _plain_http_allowed(host: str, port: int) -> bool:
+    return (
+        ALLOW_HTTP_URLS
+        or _is_trusted_internal_destination(host, port)
+        or _is_exact_host_exception(host)
+    )
 
 
 async def _resolve_system_host(host: str, port: int) -> set[str]:
@@ -1780,8 +1790,7 @@ async def _handle_connect(
 
     if (
         target_port == 80
-        and not ALLOW_HTTP_URLS
-        and not _is_trusted_internal_destination(target_host, target_port)
+        and not _plain_http_allowed(target_host, target_port)
     ):
         await _write_text_response(
             client_writer, 403, "Forbidden", HTTP_URL_BLOCK_MESSAGE
@@ -1895,8 +1904,7 @@ async def _handle_forward_http(
 
     if (
         not use_tls
-        and not ALLOW_HTTP_URLS
-        and not _is_trusted_internal_destination(target_host, target_port)
+        and not _plain_http_allowed(target_host, target_port)
     ):
         logger.info(
             "BLOCKED FORWARD %s http://%s:%d%s (HTTP URLs disabled) -> 403",

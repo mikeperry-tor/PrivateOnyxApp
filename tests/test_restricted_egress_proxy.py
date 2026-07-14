@@ -116,6 +116,31 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(addresses, ())
         resolve.assert_not_awaited()
 
+    def test_plain_http_exact_host_exception_is_host_route_only(self) -> None:
+        host_module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_POLICY_DEFER_DNS": "true",
+            },
+        )
+        self.assertTrue(
+            host_module._plain_http_allowed("host.docker.internal", 3210)
+        )
+        self.assertFalse(host_module._plain_http_allowed("192.168.1.20", 3210))
+        self.assertFalse(host_module._plain_http_allowed("public.example", 80))
+
+        public_module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "public",
+                "EGRESS_POLICY_DEFER_DNS": "true",
+            },
+        )
+        self.assertFalse(
+            public_module._plain_http_allowed("host.docker.internal", 3210)
+        )
+
     async def test_rfc1918_requires_host_route_and_explicit_opt_in(self) -> None:
         for route_class, enabled, allowed in (
             ("public", "true", False),

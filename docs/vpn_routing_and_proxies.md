@@ -74,7 +74,9 @@ names. The host route adds only:
 Mixed private/global answers fail closed. Loopback, link-local, other Docker
 aliases, and metadata remain blocked even on the host route. Exact
 `host.docker.internal` does not require the RFC1918 option and never traverses
-an external upstream proxy.
+an external upstream proxy. It is also the only plain-HTTP destination allowed
+when `EGRESS_ALLOW_HTTP_URLS=false`, preserving the default local inference and
+embedding endpoints without enabling cleartext public or general LAN targets.
 
 New installs seed Onyx SSRF protection to Allow Private Network with loopback
 disabled. A saved Admin Security Hardening value remains authoritative and is

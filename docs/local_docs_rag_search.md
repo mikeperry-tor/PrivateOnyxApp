@@ -269,6 +269,9 @@ fixed text `readiness` to the configured default embedding model and requires
 one non-empty vector. Full-mode `api_server` and `background` therefore do not
 start while the host/LAN embedding endpoint, its route, or its model is
 unusable. The response and logs expose no API key or upstream response body.
+The default plain-HTTP `host.docker.internal` endpoint uses the host route's
+fixed exact-host exception even when public cleartext URLs are disabled;
+arbitrary public and RFC1918 HTTP destinations remain blocked.
 
 ## Why The Shim Exists
 
