@@ -72,8 +72,9 @@ The stack intentionally avoids ``CRW_CRAWLER__PROXY``; the CDP shim still
 strips ``proxyServer`` from ``Target.createBrowserContext`` as a safety net if
 that path is enabled later.
 
-Code-interpreter executor pods use a separate ``executor`` policy instance and
-always see an ordinary local HTTP proxy, regardless of upstream proxy scheme.
+Code-interpreter executor pods use their own bridge into the same
+search-blocking policy process as CRW prefetch. They always see an ordinary
+local HTTP proxy, regardless of upstream proxy scheme.
 
 See ``docs/request_handling.md`` §1.6 for the full wait strategy and §1.7
 for the prefetch-blocking proxy design.
@@ -135,8 +136,9 @@ DNS_QUERY_TIMEOUT = int(os.environ.get("EGRESS_DNS_QUERY_TIMEOUT", "10"))
 
 # Comma-separated Docker service names allowed to reach this policy listener.
 # Loopback is always allowed for the local healthcheck. Each policy instance
-# names only its dedicated bridge, preventing unrelated containers on another
-# netns-holder attachment from using the listener directly.
+# names only the fixed bridge peer or peers that share its exact policy,
+# preventing unrelated containers on another netns-holder attachment from
+# using the listener directly.
 ALLOWED_CLIENT_HOSTS = tuple(
     host.strip()
     for host in os.environ.get("EGRESS_PROXY_ALLOWED_CLIENT_HOSTS", "").split(",")
@@ -1997,7 +1999,7 @@ async def main() -> None:
     _validate_upstream_proxy_config()
     if not ALLOWED_CLIENT_HOSTS and not _listener_is_loopback_only():
         raise RuntimeError(
-            "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS must name the dedicated bridge "
+            "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS must name at least one fixed bridge peer "
             "unless PREFETCH_PROXY_HOST is a literal loopback address"
         )
     logger.info(

@@ -47,7 +47,9 @@ At a high level:
 - Onyx applications use internal-only networks. Generic helpers use a fixed
   public bridge; saved-level MCP/Web Connector traffic and configured
   chat inference plus the dedicated embedding shim use separate public or
-  host-capable bridges and distinct final-hop policy proxy listeners. Direct
+  host-capable bridges and route-class-specific final-hop policy listeners.
+  Identical public policies share a proxy process but keep distinct bridges
+  and caller networks. Direct
   sockets have no external route; executor pods never inherit
   Onyx exceptions. The exact internal Teep chat base is a startup-validated
   direct-service exception, and doc-drop Web Connector traffic uses an exact

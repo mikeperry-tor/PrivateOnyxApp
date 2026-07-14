@@ -744,14 +744,15 @@ When executor networking is enabled, executor pods live only on the internal
 `onyx-code-interpreter-executor` network and receive
 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY=http://executor-egress-bridge:3128`.
 Direct sockets have no internet or stack route; the bridge reaches a separate
-search-blocking `executor` policy. Only its final-hop route owner shares the
-trusted routing namespace.
+caller network and the shared search-blocking public policy. Only its
+final-hop route owner shares the trusted routing namespace.
 
 Each final-hop proxy listener resolves and accepts only its configured bridge
-service, plus loopback for its local healthcheck. Onyx public and host
-listeners use separate policy-side networks and immutable route classes;
-browser, prefetch, and executor listeners remain inaccessible from application
-networks.
+peers, plus loopback for its local healthcheck. Generic Onyx and Obscura
+bridges share the same public listener; CRW prefetch and optional executor
+bridges share the search-blocking listener. Their caller and policy-side
+networks remain separate. The host listener has an immutable host route class
+and is inaccessible to browser, prefetch, and executor bridges.
 
 The local policy healthcheck is routing-aware. In direct VPN mode it verifies
 the fixed provider-DNS path; in explicit no-VPN mode it uses the explicitly
@@ -796,12 +797,12 @@ generation and code-interpreter executor pod caveats, is documented in
 
 | Component | Proxy used | How |
 |-----------|-----------|-----|
-| **Obscura (CDP browser)** | browser policy | `OBSCURA_PROXY=http://obscura-egress-bridge:3128`; `OBSCURA_ALLOW_PRIVATE_NETWORK=true` lets Obscura's own resolver reach that private proxy name |
+| **Obscura (CDP browser)** | shared public policy | `OBSCURA_PROXY=http://obscura-egress-bridge:3128`; `OBSCURA_ALLOW_PRIVATE_NETWORK=true` lets Obscura's own resolver reach that private proxy name |
 | **Prefetch-blocking proxy (HTTP/CONNECT)** | `EGRESS_UPSTREAM_PROXY_URL` | `EGRESS_UPSTREAM_PROXY_URL` env var → upstream connection |
 | **CRW HTTP prefetch** | prefetch-blocking proxy | `HTTPS_PROXY` / `HTTP_PROXY` env vars on the CRW container |
 | **CRW CDP (obscura)** | `EGRESS_UPSTREAM_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
 | **SearXNG** | none by default | CRW-backed engines use only the internal CRW peer network |
-| **Code-interpreter HTTP clients** | executor policy | local executor bridge; search-engine and private/internal targets are blocked |
+| **Code-interpreter HTTP clients** | shared search-blocking public policy | local executor bridge; search-engine and private/internal targets are blocked |
 | **Onyx API/background HTTP helpers** | public-only Onyx bridge/final-hop proxy | Environment-aware `requests`, `httpx`, and `urllib` clients use `HTTP_PROXY`/`HTTPS_PROXY=http://onyx-public-egress-bridge:3128`; stack-owned internal bypasses come from `onyx/helper-egress.env` |
 | **MCP/OAuth and configured Web Connector** | saved-level-selected public or host route | Explicit transports leave target enforcement and public DNS to the selected final-hop proxy; doc-drop uses one exact host-proxy gateway |
 | **Configured chat inference / embedding shim** | host-capable Onyx route | Explicit clients preserve exact-host and opt-in RFC1918 policy; the exact internal Teep chat base remains direct on `onyx-teep` |

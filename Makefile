@@ -127,7 +127,6 @@ $(error ONYX_IMAGE_TAG is not set. Add ONYX_IMAGE_TAG=... to $(VERSION_FILE), ov
 endif
 ONYX_BACKEND_IMAGE ?= onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
 ONYX_WEB_SERVER_IMAGE ?= onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
-ONYX_MODEL_SERVER_IMAGE ?= onyxdotapp/onyx-model-server:$(ONYX_IMAGE_TAG)
 SEARXNG_IMAGE_TAG ?= $(call env_value,SEARXNG_IMAGE_TAG)
 ifeq ($(strip $(SEARXNG_IMAGE_TAG)),)
 $(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass SEARXNG_IMAGE_TAG=... on the make command line)
@@ -136,7 +135,6 @@ SEARXNG_IMAGE ?= docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)
 export SEARXNG_IMAGE_TAG
 SEARXNG_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
 USER_AUTH_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
-CRW_ONYX_API_KEY := crw-$(strip $(shell openssl rand -hex 16 2>/dev/null))
 MINIO_ROOT_USER := $(strip $(shell openssl rand -hex 16 2>/dev/null))
 MINIO_ROOT_PASSWORD := $(strip $(shell openssl rand -hex 32 2>/dev/null))
 S3_AWS_ACCESS_KEY_ID := $(MINIO_ROOT_USER)
@@ -146,7 +144,6 @@ $(error openssl is required to generate ephemeral local stack secrets)
 endif
 export SEARXNG_SECRET
 export USER_AUTH_SECRET
-export CRW_ONYX_API_KEY
 export MINIO_ROOT_USER
 export MINIO_ROOT_PASSWORD
 export S3_AWS_ACCESS_KEY_ID
@@ -277,7 +274,7 @@ up-lite: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready my
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
-up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(ONYX_MODEL_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
+up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
 up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready cdp-shim-image-ready
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 

@@ -55,10 +55,13 @@ are not supported; see [Onyx patches](onyx_patch_info.md).
 Each bridge is a hardened numeric-nonroot TCP forwarder with exactly two
 internal networks: one application-side network and one dedicated
 policy-upstream network. The public and host bridges forward to distinct
-listeners on distinct final-hop proxy processes in `netns-holder`. Each proxy
-resolves its configured bridge name at startup and rejects every other source
-address. Browser and executor bridges are separate and cannot reach either
-Onyx listener.
+final-hop listeners in `netns-holder`. Each proxy resolves its configured
+bridge peers at startup and rejects every other source address. The public
+proxy is shared by the generic Onyx and Obscura bridges because they enforce
+the same policy; their caller networks remain separate. The search-blocking
+proxy is likewise shared by the CRW prefetch and optional executor bridges.
+The host-capable proxy remains separate and neither shared public proxy
+receives its exceptions.
 
 The public and host final-hop proxies directly parse HTTP proxy requests,
 validate destinations, select DNS/upstream behavior, pin direct addresses,
@@ -159,7 +162,9 @@ Final-hop proxy readiness checks configuration plus the selected DNS/proxy
 substrate without opening a user target. Bridges require a fixed blocked-target
 denial from their proxy, proving the full hop. Loss of Myst, a final-hop proxy,
 or bridge makes only the corresponding route fail; there is no public/host
-cross-class or direct fallback.
+cross-class or direct fallback. Core Onyx startup does not wait for optional
+browsing paths; a dependent feature fails closed when invoked. Full mode still
+waits for its required embedding shim and upstream route.
 
 CRW retains its loopback-only synthetic validation DNS sidecar. That sidecar
 never forwards target names; authoritative browser destination validation is

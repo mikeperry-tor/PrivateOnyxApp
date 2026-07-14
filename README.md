@@ -116,6 +116,10 @@ Most likely variables you want to change:
     stable `netns-holder` namespace contains only final-hop route owners and
     proxies; application containers do not share it.
     Explicit no-VPN models omit `autoheal` and its Docker socket entirely.
+  - Core Onyx startup is independent of optional browsing and unrelated egress
+    health. If CRW, SearXNG, Obscura, or their route is unavailable, that
+    feature fails closed when invoked. Full mode still requires its embedding
+    shim and the shim's configured upstream route.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
   - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, dedicated embedding-shim upstream, and supported configured chat inference destinations through the host-capable final-hop proxy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.

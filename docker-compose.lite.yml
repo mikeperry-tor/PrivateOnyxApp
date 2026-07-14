@@ -3,25 +3,10 @@
 
 services:
   api_server:
-    # !override (not !reset) replaces the inherited upstream depends_on. The
-    # upstream Onyx compose pulls in a dependency on `cache` via `extends`,
-    # which only exists in full mode; overriding here drops it while keeping
-    # request-path gateways and both egress bridges. (!reset collapses the mapping in this
-    # compose version, so !override is used for a clean full replacement.)
-    depends_on: !override
-      # crw is optional for Onyx, but wiring
-      # the dependency avoids a first-request race if Onyx's Web Search
-      # connector is configured to point at crw's /v1/scrape endpoint.
-      crw:
-        condition: service_healthy
-      crw-service-gateway:
-        condition: service_healthy
-      searxng-service-gateway:
-        condition: service_healthy
-      onyx-public-egress-bridge:
-        condition: service_healthy
-      onyx-host-egress-bridge:
-        condition: service_healthy
+    # Replace inherited full-stack dependencies. Lite core startup does not
+    # wait for optional browsing or outbound-route services; those features
+    # fail closed when invoked while their path is unavailable.
+    depends_on: !override {}
     environment:
       DISABLE_VECTOR_DB: "true"
       FILE_STORE_BACKEND: "postgres"

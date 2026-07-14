@@ -12,8 +12,11 @@ that ignores them has no external or host-gateway route.
 
 Only Myst, final-hop policy proxies, and explicitly selected VPN-side services
 share `netns-holder`. Each hardened TCP bridge has exactly one caller network
-and its matching policy-side network. Public and host bridges reach distinct
-listeners with distinct source allowlists and route-class configuration.
+and its matching policy-side network. Public and host bridges reach
+route-class-specific listeners with explicit source allowlists. Identical
+policies share a process: generic Onyx and Obscura use the public proxy, while
+CRW prefetch and optional executors use the search-blocking proxy. Their caller
+networks and hardened bridges remain separate; the host proxy is not shared.
 
 ## Reachability
 
@@ -91,9 +94,9 @@ identity remains the internal crawl URL.
 
 ## Other restricted components
 
-Executor, prefetch, and browser policies explicitly use the public route class
-and retain the same destination floor.
-Prefetch and executor also reject search-engine hosts. Cleartext targets are
+Browser and generic Onyx traffic share the same public policy process.
+Prefetch and executor traffic share the public, search-blocking policy process.
+All retain the same destination floor. Cleartext targets are
 rejected unless `EGRESS_ALLOW_HTTP_URLS=true`; the host route additionally
 allows exact `host.docker.internal` and RFC1918 destinations explicitly
 enabled by `EGRESS_ALLOW_RFC1918`, as described above.
@@ -146,7 +149,10 @@ isolation does not make that socket safe. Likewise, the trusted final-hop proxie
 are security-critical because they own final-hop DNS and connectivity.
 
 Failure is intentionally closed: stopping a final-hop proxy, bridge, Myst, or
-upstream disables its route without cross-class or direct fallback. Only Myst
-is autohealed in VPN-enabled models, preventing dependency restart storms
-while internal application health remains independent. Explicit no-VPN models
-omit autoheal and its Docker socket.
+upstream disables its route without cross-class or direct fallback. Core Onyx
+startup does not wait for optional browsing health; a missing browsing route
+fails when that feature is invoked. Full mode still waits for its required
+embedding shim and upstream route. Only Myst is autohealed in
+VPN-enabled models, preventing dependency restart storms while internal
+application health remains independent. Explicit no-VPN models omit autoheal
+and its Docker socket.

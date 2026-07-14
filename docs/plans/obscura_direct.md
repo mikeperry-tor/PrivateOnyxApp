@@ -56,8 +56,9 @@ alias remains.
   local embedding, optional Tailscale, and optional executor semantics.
 - Remove CRW, its validation DNS, the CDP shim, obsolete networks, secrets,
   images, builds, configuration, health dependencies, tests, and docs.
-- Remove SearXNG Valkey and the bypassed full-mode Onyx model-server services
-  after proving they have no remaining consumers.
+- Build on the already simplified prerequisite: unused SearXNG Valkey,
+  bypassed full-mode Onyx model servers, the fake CRW credential, and duplicate
+  identical-policy proxy processes have already been removed.
 
 ## Non-goals
 
@@ -70,7 +71,7 @@ alias remains.
   bridges.
 - Do not make document byte limits unlimited.
 - Do not imply per-user browser isolation: at the pinned Obscura version the
-  CDP clients and state clearer share one browser trust domain.
+  CDP clients share one browser trust domain.
 
 ## Version and source audit
 
@@ -133,13 +134,13 @@ legacy `crw/` path to a neutral location and rename `PREFETCH_*` vocabulary.
 Remove named search-host policy modes: after CRW prefetch is gone, search
 engines are ordinary public destinations.
 
-Prefer one public final-hop proxy process with separate fixed listeners and
-bridge-peer allowlists for generic Onyx, browser, and optional executor
-traffic. Retain a separate host-capable final-hop proxy process for exact host
-and opt-in RFC1918 Onyx traffic. Both run hardened in `netns-holder`. This
-process split is defense in depth and operational separation, not a sandbox:
-arbitrary code execution in either trusted proxy compromises the shared
-namespace.
+After CRW prefetch is removed, use the existing shared public final-hop proxy
+for generic Onyx, browser, and optional executor bridges. Each bridge remains
+on a distinct caller network and the proxy keeps an explicit peer allowlist.
+Retain the separate host-capable proxy for exact host and opt-in RFC1918 Onyx
+traffic. Both run hardened in `netns-holder`. This process split is defense in
+depth and operational separation, not a sandbox: arbitrary code execution in
+either trusted proxy compromises the shared namespace.
 
 Do not introduce an intermediate request-policy process. Do not duplicate
 destination parsing across two custom daemons. Do not add a custom stream
@@ -160,8 +161,8 @@ control port.
 
 ## Direct Obscura client
 
-Create a shared in-process CDP client used by Onyx and SearXNG with typed
-results for:
+Create one shared CDP client library, embedded independently in the Onyx and
+SearXNG processes, with typed results for:
 
 - rendered HTML;
 - retained binary main-resource bytes;
@@ -173,21 +174,24 @@ results for:
 - cancellation/timeout/protocol incompatibility.
 
 For binary-classified PDFs and supported documents, read the retained body
-from the same navigation and pass exact bytes to the networkless parser. For
-HTML, use the rendered DOM and Onyx's existing cleanup pipeline. Treat
+from the same navigation and pass exact bytes to Onyx's existing in-process
+document extraction pipeline. For HTML, use the rendered DOM and Onyx's
+existing cleanup pipeline. Treat
 misleading content types, non-UTF-8 text conversion, and unavailable body
 identity as explicit limitations or typed failures; never silently refetch.
 
 Use one positive finite user-facing document byte limit, default 50 MiB.
-Propagate it to navigation retention, body streaming, IPC framing, parser
-input, and diagnostics. Count actual bytes even when `Content-Length` is
+Propagate it to navigation retention, body streaming, parser input, and
+diagnostics. Count actual bytes even when `Content-Length` is
 missing, false, duplicated, compressed, or combined unsafely with transfer
 encoding. Reject ambiguous framing.
 
-Run document parsing in a networkless, resource-bounded service connected to
-Onyx only by a private Unix socket. The protocol must be versioned, length
-bounded, streaming, cancellation-aware, and free of paths, URLs, proxy
-credentials, or arbitrary commands.
+Do not add a parser service, Unix socket, private volume, IPC protocol, or
+parser readiness dependency. Parsing already occurs inside the trusted Onyx
+API process; retain its existing parser libraries and process/container
+limits, and enforce the byte cap before invoking them. Reconsider separate
+parser isolation only if a concrete parser threat or reliability result
+justifies the added service boundary.
 
 ## SearXNG scheduling and cancellation
 
@@ -203,33 +207,38 @@ that tradeoff is documented rather than hidden behind a global scheduler.
 
 ## Browser state and trust
 
-Use one stable Obscura fingerprint and explicit navigation waits. A small
-state-clearer sidecar periodically clears shared cookies/storage through CDP
-and publishes only a bounded readiness epoch/result record on a private
-volume. A stale or failed clear blocks new navigation until recovery.
+Use one stable Obscura fingerprint and explicit navigation waits. Clear the
+relevant cookies and storage at the request/navigation boundary, or use a
+disposable browser context if the pinned Obscura release supports it reliably.
+A clearing failure fails that request. Do not add a state-clearer sidecar,
+readiness epoch, shared state volume, or stack-wide health gate.
 
-Onyx, SearXNG, and the clearer share full CDP authority at the pinned version.
-Network placement excludes other services but does not provide confidentiality
-or integrity isolation among those three clients. Document this residual risk.
+Request-boundary clearing is not cross-process isolation: concurrent Onyx and
+SearXNG navigations may still share or perturb browser state. Keep that
+limitation explicit. If tests show it is unacceptable, prefer separate
+Obscura instances or upstream-supported isolated contexts over a custom
+cross-process lock/coordination service.
+
+Onyx and SearXNG share full CDP authority at the pinned version. Network
+placement excludes other services but does not provide confidentiality or
+integrity isolation between those clients. Document this residual risk.
 
 ## Readiness and failure behavior
 
-Readiness order is:
+Optional browsing readiness is local and does not gate core Onyx startup:
 
 ```text
-selected routing substrate
-  -> public/host final-hop proxies
-  -> fixed component bridges
-  -> Obscura and state clearer
-  -> CDP gateway and SearXNG
-  -> Onyx API
+selected routing substrate -> final-hop proxy -> fixed bridge
+Obscura local CDP -> CDP gateway and SearXNG
+Onyx API does not wait for the browsing chain
 ```
 
 Proxy readiness validates configuration and DNS/upstream substrate without an
 arbitrary public fetch. Bridge readiness traverses the fixed hop and expects a
-blocked-target denial. Obscura health checks local CDP shape; state-clearer
-health checks its last successful epoch. SearXNG and Onyx verify local CDP
-capabilities without generating periodic public traffic.
+blocked-target denial. Obscura health checks local CDP shape. SearXNG may wait
+for its browser dependency; Onyx verifies CDP capabilities when `open_url` is
+invoked, without generating periodic public traffic or blocking core startup.
+Mode-required data and embedding dependencies remain unchanged.
 
 Failure of Obscura, a bridge, final-hop proxy, Myst, or configured upstream
 fails the dependent request path. There is no direct, cross-listener,
@@ -246,7 +255,8 @@ Add deterministic unit and effective-Compose tests for:
 - SearXNG provider serialization, minimum start interval, deadline
   cancellation, target cleanup, suspension, and single-worker enforcement;
 - CDP method/version compatibility, wait semantics, target selection, stable
-  fingerprint, state clearing, stale readiness, and shared trust boundaries;
+  fingerprint, request-boundary state clearing, clearing failure, and shared
+  trust boundaries;
 - internal/Docker/Podman/metadata and every non-public address class, IDNA,
   trailing dots, redirects, mixed DNS answers, and upstream remote-DNS modes;
 - public listener equivalence for generic Onyx/browser/executor traffic and
@@ -259,8 +269,9 @@ Add deterministic unit and effective-Compose tests for:
   route packets between caller networks;
 - explicit public/host route classes, host-only trusted authorities, combined
   optional-overlay Compose models, and deadline-free framed body streaming;
-- removal of CRW, validation DNS, CDP shim, Valkey, obsolete model servers,
-  legacy env names, images, networks, secrets, health dependencies, and docs;
+- removal of CRW, validation DNS, CDP shim, legacy env names, images, networks,
+  secrets, health dependencies, and docs; continued absence of Valkey and
+  obsolete model servers;
 - lite/full startup, real `open_url`, every custom search engine, local RAG,
   configured inference, embedding, VPN/no-VPN/upstream modes, Tailscale, and
   executor modes when external dependencies are available.
@@ -277,8 +288,8 @@ The migration is complete only when:
 5. Final-hop proxies are the only custom egress enforcement processes; no
    broker or isolated duplicate policy stage exists.
 6. Long-lived CONNECT tunnels have no arbitrary proxy total lifetime.
-7. Document byte limits, parser isolation, cancellation, and error reporting
-   are bounded and tested.
+7. Document byte limits, in-process parsing, cancellation, and error reporting
+   are bounded and tested without a parser sidecar or IPC protocol.
 8. Search rate/concurrency behavior and shared browser-state risks are explicit
    and tested.
 9. All obsolete services, pins, files, settings, tests, and documentation are

@@ -7,40 +7,12 @@ services:
       executor-policy-upstream:
         aliases: [myst-client]
 
-  executor-egress-proxy:
-    image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
-    restart: unless-stopped
-    network_mode: "service:netns-holder"
-    user: "65534:65534"
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
+  # Executor and CRW prefetch traffic have the same public, search-blocking
+  # policy. Extend the existing final-hop process with the optional executor
+  # bridge peer instead of starting a duplicate proxy service.
+  prefetch-blocking-proxy:
     environment:
-      PREFETCH_PROXY_HOST: "0.0.0.0"
-      PREFETCH_PROXY_PORT: "3129"
-      EGRESS_PROXY_POLICY: executor
-      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: executor-egress-bridge
-      EGRESS_ROUTE_CLASS: public
-      EGRESS_ALLOW_RFC1918: "false"
-      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
-      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
-      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
-      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
-      EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
-      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
-      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
-    volumes:
-      - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
-    command: ["python", "-u", "/app/prefetch_blocking_proxy.py"]
-    healthcheck:
-      test: ["CMD", "python", "/app/prefetch_blocking_proxy.py", "--check-ready"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-      start_period: 10s
-    depends_on:
-      netns-holder: {condition: service_started}
-      myst-client: {condition: service_healthy, restart: true}
+      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: "crw-prefetch-bridge,executor-egress-bridge"
 
   executor-egress-bridge:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
@@ -52,10 +24,10 @@ services:
     sysctls:
       net.ipv4.ip_forward: "0"
       net.ipv6.conf.all.forwarding: "0"
-    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3129"]
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3128"]
     networks: [executor-egress, executor-policy-upstream]
     depends_on:
-      executor-egress-proxy: {condition: service_healthy}
+      prefetch-blocking-proxy: {condition: service_healthy}
     healthcheck:
       test: ["CMD-SHELL", "printf 'CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n' | socat -T 3 STDIO,ignoreeof TCP:127.0.0.1:3128,connect-timeout=3 | grep -q '^HTTP/1.1 403'"]
       interval: 30s

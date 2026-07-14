@@ -44,11 +44,6 @@ CRW_SCRAPE_URL = os.environ.get(
 if not CRW_SCRAPE_URL:
     raise RuntimeError("CRW_SCRAPE_URL must not be empty")
 
-# The wrapper deploy runs crw with the default self-host auth bypass, so any
-# non-empty bearer token works. The Makefile supplies an ephemeral placeholder
-# to keep this header present without making it operator-managed config.
-CRW_API_KEY = os.environ["CRW_ONYX_API_KEY"]
-
 logger = logging.getLogger("searx.engines._crw")
 
 # Page load waiting is handled by the CDP shim (crw/cdp_shim.py), which
@@ -79,7 +74,9 @@ def crw_scrape_request(
     SearXNG hands the raw response body to the engine's ``response()``; we
     decode the JSON there and pull out ``data.html`` (the rendered DOM).
     """
-    headers = {"Content-Type": "application/json", "Authorization": "Bearer " + CRW_API_KEY}
+    # Self-hosted CRW runs with its auth bypass, so do not manufacture or send
+    # a bearer credential that provides no authentication.
+    headers = {"Content-Type": "application/json"}
     if extra_headers:
         # Extra headers are passed *into the crw scrape payload* (forwarded to
         # the target by obscura), NOT added to the SearXNG->crw HTTP request.

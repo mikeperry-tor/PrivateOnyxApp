@@ -75,12 +75,14 @@ services:
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
     extra_hosts: !reset []
-    depends_on:
+    depends_on: !override
+      cache:
+        condition: service_started
+      opensearch:
+        condition: service_started
+      relational_db:
+        condition: service_started
       local-embedding-shim:
-        condition: service_healthy
-      onyx-public-egress-bridge:
-        condition: service_healthy
-      onyx-host-egress-bridge:
         condition: service_healthy
     volumes: !override
       - ./docker-data/file-system:/app/file-system
@@ -91,36 +93,6 @@ services:
       - background_logs:/var/log/onyx
 
   # Onyx internal/data services (full mode only)
-  inference_model_server:
-    extends:
-      file: ./onyx/onyx_data/deployment/docker-compose.yml
-      service: inference_model_server
-    image: onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
-    build: !reset null
-    environment:
-      SENTRY_DSN: ""
-      SENTRY_TRACES_SAMPLE_RATE: "0"
-    extra_hosts: !reset []
-    networks: [onyx-data]
-    volumes: !override
-      - ./docker-data/model-cache:/app/.cache/huggingface
-      - inference_model_server_logs:/var/log/onyx
-
-  indexing_model_server:
-    extends:
-      file: ./onyx/onyx_data/deployment/docker-compose.yml
-      service: indexing_model_server
-    image: onyxdotapp/onyx-model-server:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
-    build: !reset null
-    environment:
-      SENTRY_DSN: ""
-      SENTRY_TRACES_SAMPLE_RATE: "0"
-    extra_hosts: !reset []
-    networks: [onyx-data]
-    volumes: !override
-      - ./docker-data/indexing-model-cache:/app/.cache/huggingface
-      - indexing_model_server_logs:/var/log/onyx
-
   opensearch:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
@@ -243,21 +215,18 @@ services:
       INDEXING_MODEL_SERVER_HOST: "local-embedding-shim"
       INDEXING_MODEL_SERVER_PORT: "9101"
       WRAPPER_PATCH_STRICT: "true"
-    depends_on:
-      # Gate Onyx on the complete wrapper request chain so it cannot report
-      # ready while configured Web Search/Open URL gateways are unavailable.
-      crw:
-        condition: service_healthy
-      crw-service-gateway:
-        condition: service_healthy
-      searxng-service-gateway:
-        condition: service_healthy
+    depends_on: !override
+      cache:
+        condition: service_started
       local-embedding-shim:
         condition: service_healthy
-      onyx-public-egress-bridge:
-        condition: service_healthy
-      onyx-host-egress-bridge:
-        condition: service_healthy
+      minio:
+        condition: service_started
+        required: false
+      opensearch:
+        condition: service_started
+      relational_db:
+        condition: service_started
 
   # Model-server-compatible embedding shim for local OpenAI-compatible
   # /v1/embeddings endpoints.

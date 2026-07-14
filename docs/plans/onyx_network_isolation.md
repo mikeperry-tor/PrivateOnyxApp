@@ -30,10 +30,12 @@ Onyx application explicitly authorized for private destinations
 ```
 
 Each bridge is a fixed numeric-nonroot TCP forwarder with one caller network
-and one dedicated policy-side network. `netns-holder` joins both policy-side
-networks under the `myst-client` alias. The two final-hop proxy processes share
-that trusted namespace but use different listeners, bridge source allowlists,
-and immutable route-class configuration.
+and one dedicated policy-side network. `netns-holder` joins the required
+policy-side networks under the `myst-client` alias. The host-capable proxy is separate.
+Identical public policies share a process: generic Onyx and Obscura use one
+listener, while CRW prefetch and optional executors use the search-blocking
+listener. Each listener has an explicit bridge-peer allowlist and immutable
+route-class configuration; the caller networks remain separate.
 
 The final-hop proxy itself performs HTTP framing checks, destination policy,
 authoritative target DNS, address pinning for direct connections, upstream
@@ -57,7 +59,7 @@ framing, capacity, timeout, cancellation, and half-close state. It did not
 protect against compromise of the final trusted process and was not needed to
 stop application direct sockets. Collapsing the stages removes those risks.
 
-The deliberate residual tradeoff is that both Onyx final-hop proxies share
+The deliberate residual tradeoff is that the final-hop proxies share
 `netns-holder`. A process-level compromise of either proxy is therefore a
 trusted-namespace compromise. Public-versus-host separation is configuration,
 listener, and bridge reachability defense in depth; it is not a sandbox
@@ -159,13 +161,18 @@ substrate without opening an arbitrary user target. Bridge health traverses
 the bridge and expects the proxy to deny a fixed forbidden target. Stopping a
 bridge, matching proxy, Myst, or configured upstream disables only that route.
 There is no cross-class or direct fallback. Only Myst is autohealed in VPN
-models; explicit no-VPN models omit autoheal and its Docker socket.
+models; explicit no-VPN models omit autoheal and its Docker socket. Core Onyx
+startup does not wait for optional browsing health; the affected feature fails
+closed when invoked. Full mode still waits for its required embedding shim and
+upstream route.
 
 ## Removed scope
 
-The implementation also removed the bundled Obscura MCP service and its
-gateway, policy, secrets, networks, and settings. Existing saved MCP records
-that reference it are invalid. Executor pods remain networkless by default;
+The implementation also removed the bundled Obscura MCP service, unused
+SearXNG Valkey, bypassed upstream Onyx model-server services, fake CRW API
+credential, and duplicate browser/executor proxy processes. Existing saved MCP
+records that reference the removed service are invalid. Executor pods remain
+networkless by default;
 when enabled, they use their own restricted bridge and final-hop policy and do
 not inherit Onyx host/RFC1918 exceptions.
 
@@ -178,7 +185,7 @@ The implementation is accepted only while tests prove:
 - public and host bridges have distinct caller/policy-side networks and fixed
   destination ports;
 - final-hop proxies share only the trusted namespace, run hardened, enforce
-  distinct bridge source allowlists and route classes, and expose no host port;
+  explicit bridge-peer allowlists and route classes, and expose no host port;
 - application, browser, and executor networks cannot reach alternate route
   listeners or trusted namespace networks;
 - public/private destination classification, mixed-answer rejection, exact
@@ -192,13 +199,14 @@ The implementation is accepted only while tests prove:
   Myst-routed Teep, and Myst-routed Tailscale overlays preserve route isolation;
 - Makefile selection adds each optional network layer only when its documented
   switch is enabled;
-- every optional executor proxy/bridge is numeric-nonroot, read-only,
+- every optional executor bridge and its shared proxy are numeric-nonroot, read-only,
   capability-free, source-restricted, public-only, and packet-forwarding-disabled;
 - framed request bodies and chunks retain strict structural validation without
   a proxy-imposed read deadline;
 - removal of broker files, credentials, services, protocol tests, and networks
   is enforced; and
-- lite/full stack startup plus representative helper, MCP, Web Connector,
+- core lite/full startup remains independent of optional browsing
+  health, plus representative helper, MCP, Web Connector,
   `open_url`, search, inference, embedding, RAG, and executor paths are tested
   when their external dependencies are available.
 

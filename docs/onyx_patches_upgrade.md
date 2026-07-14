@@ -1512,9 +1512,10 @@ Patched Onyx services:
 Additional wrapper services:
 
 - `netns-holder` owns only the trusted final-hop routing namespace.
-- Separate public/host final-hop proxy listeners and hardened bridges enforce
-  Onyx application egress.
-- `myst-client`, `searxng-core`, `searxng-valkey`, `obscura`, `cdp-shim`,
+- Route-class-specific final-hop proxy listeners and hardened bridges enforce
+  application egress. Identical public policies share a proxy process while
+  retaining separate caller networks and bridges.
+- `myst-client`, `searxng-core`, `obscura`, `cdp-shim`,
   `prefetch-blocking-proxy`, `crw`, `host-searxng-proxy`, VPN-only `autoheal`,
   optional Tailscale gateways, and `teep` are wrapper-side services around
   Onyx.
@@ -1555,9 +1556,8 @@ Patched Onyx services:
   `sitecustomize`, and depends on `local-embedding-shim`.
 - `api_server`: adds model-server env pointing to the shim, forwards optional
   internal-search content cap env vars, and depends on the shim.
-- `inference_model_server` and `indexing_model_server`: still extend upstream
-  and mount caches/logs, but API/background model-server traffic is routed to
-  the shim instead.
+- The upstream inference and indexing model-server services are omitted;
+  API/background model-server traffic is routed to the shim.
 - `opensearch`, `cache`, and `minio`: provide full-mode data services. MinIO is
   defined locally so inherited upstream dependencies are satisfied.
 
@@ -1579,8 +1579,8 @@ Wrapper additions:
 Upgrade notes:
 
 - Update [Restricted egress network plan](plans/implemented/restricted_egress.md) if
-  full-mode service placement changes doc-drop, embedding-shim, model-server,
-  MinIO, Valkey, or local document RAG reachability.
+  full-mode service placement changes doc-drop, embedding-shim, MinIO, or
+  local document RAG reachability.
 - Confirm upstream `background` still accepts `MODEL_SERVER_HOST`,
   `MODEL_SERVER_PORT`, `INDEXING_MODEL_SERVER_HOST`, and
   `INDEXING_MODEL_SERVER_PORT`.
@@ -1694,10 +1694,10 @@ Behavior:
 - Requires `ONYX_IMAGE_TAG`, `SEARXNG_IMAGE_TAG`, and
   `CODE_INTERPRETER_IMAGE_TAG` from `stack.versions.env`, `.env.wrapper`
   overrides, or make CLI overrides.
-  `ONYX_IMAGE_TAG` remains the source of truth for Onyx backend/web/model
-  image tags.
+  `ONYX_IMAGE_TAG` remains the source of truth for Onyx backend and web image
+  tags.
 - Generates local stack auth material (`SEARXNG_SECRET`, `USER_AUTH_SECRET`,
-  `CRW_ONYX_API_KEY`, and MinIO/S3 credentials) ephemerally for each Makefile
+  and MinIO/S3 credentials) ephemerally for each Makefile
   invocation.
 - Builds `COMPOSE_FILE` layer lists for lite/full mode, Podman mode, optional
   teep/tailscale/code-interpreter VPN routing, and optional proxy routing.

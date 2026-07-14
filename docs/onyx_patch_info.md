@@ -1519,7 +1519,7 @@ workflow:
 - Require wrapper image tags and source refs from `stack.versions.env`, with
   `.env.wrapper` and make CLI values available as explicit local overrides.
 - Generate local stack auth material (`SEARXNG_SECRET`, `USER_AUTH_SECRET`,
-  `CRW_ONYX_API_KEY`, and MinIO/S3 credentials) ephemerally for each Makefile
+  and MinIO/S3 credentials) ephemerally for each Makefile
   invocation.
 - Support Docker or Podman through `CONTAINER_BIN`.
 - Refresh upstream deployment files for a chosen config ref.

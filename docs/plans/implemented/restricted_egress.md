@@ -5,7 +5,10 @@
 > Onyx applications from `netns-holder`, replaced the helper loopback route
 > with separate public/host bridges and final-hop proxy listeners, renamed the
 > egress settings, and removed bundled Obscura MCP. Names and topology below
-> describe the earlier milestone, not the current runtime.
+> describe the earlier milestone, not the current runtime. The later
+> simplification also removed the unused SearXNG Valkey, bypassed Onyx
+> model-server services, fake CRW credential, and duplicate browser and
+> executor final-hop proxy processes. References below remain historical only.
 
 > **Status: implemented (2026-07-13).** The normative runtime documentation is
 > now [VPN routing and restricted egress](../../vpn_routing_and_proxies.md),

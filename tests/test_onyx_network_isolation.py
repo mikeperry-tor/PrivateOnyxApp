@@ -12,7 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SECRET_ENV = {
     "SEARXNG_SECRET": "test",
     "USER_AUTH_SECRET": "test",
-    "CRW_ONYX_API_KEY": "test",
     "MINIO_ROOT_USER": "test",
     "MINIO_ROOT_PASSWORD": "test",
     "S3_AWS_ACCESS_KEY_ID": "test",
@@ -85,6 +84,45 @@ def _make_compose_files(
 
 @unittest.skipUnless(shutil.which("docker"), "docker compose is required")
 class OnyxNetworkIsolationComposeTests(unittest.TestCase):
+    def test_core_startup_does_not_wait_for_optional_browsing(self) -> None:
+        lite = _compose_model("lite")
+        self.assertFalse(lite["services"]["api_server"].get("depends_on"))
+
+        full = _compose_model("full")
+        self.assertEqual(
+            set(full["services"]["api_server"].get("depends_on", {})),
+            {"cache", "local-embedding-shim", "minio", "opensearch", "relational_db"},
+        )
+        self.assertEqual(
+            set(full["services"]["background"].get("depends_on", {})),
+            {"cache", "local-embedding-shim", "opensearch", "relational_db"},
+        )
+        optional = {
+            "crw",
+            "searxng-core",
+            "obscura",
+            "onyx-public-egress-bridge",
+        }
+        for service_name in ("api_server", "background"):
+            self.assertFalse(
+                optional & set(full["services"][service_name].get("depends_on", {}))
+            )
+
+    def test_removed_valkey_and_fake_crw_credential_stay_absent(self) -> None:
+        model = _compose_model("full")
+        self.assertNotIn("searxng-valkey", model["services"])
+        self.assertNotIn("searxng-valkey", model["networks"])
+        self.assertNotIn(
+            "CRW_ONYX_API_KEY",
+            model["services"]["searxng-core"]["environment"],
+        )
+        self.assertNotIn("CRW_ONYX_API_KEY", (ROOT / "Makefile").read_text())
+        self.assertNotIn("ONYX_MODEL_SERVER_IMAGE", (ROOT / "Makefile").read_text())
+        self.assertNotIn("VALKEY_IMAGE", (ROOT / "stack.versions.env").read_text())
+        self.assertNotIn(
+            "Authorization", (ROOT / "searxng" / "engines" / "_crw.py").read_text()
+        )
+
     def test_makefile_selects_autoheal_only_for_vpn_models(self) -> None:
         vpn_files = _make_compose_files(vpn_enabled=True)
         self.assertIn("docker-compose.vpn-autoheal.yml", vpn_files)
@@ -177,10 +215,20 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             self.assertEqual(proxy["network_mode"], "service:netns-holder")
             self.assertEqual(proxy["environment"]["EGRESS_ROUTE_CLASS"], route_class)
             self.assertEqual(proxy["environment"]["PREFETCH_PROXY_PORT"], port)
-            self.assertEqual(
-                proxy["environment"]["EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"],
-                f"onyx-{route_class}-egress-bridge",
-            )
+        self.assertEqual(
+            set(
+                services["onyx-public-egress-proxy"]["environment"][
+                    "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"
+                ].split(",")
+            ),
+            {"onyx-public-egress-bridge", "obscura-egress-bridge"},
+        )
+        self.assertEqual(
+            services["onyx-host-egress-proxy"]["environment"][
+                "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"
+            ],
+            "onyx-host-egress-bridge",
+        )
 
         public = services["onyx-public-egress-proxy"]["environment"]
         host = services["onyx-host-egress-proxy"]["environment"]
@@ -197,19 +245,24 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         services = model["services"]
         expected = {
-            "prefetch-blocking-proxy": ("public", "crw-prefetch-bridge"),
-            "browser-egress-proxy": ("public", "obscura-egress-bridge"),
-            "executor-egress-proxy": ("public", "executor-egress-bridge"),
-            "onyx-public-egress-proxy": ("public", "onyx-public-egress-bridge"),
-            "onyx-host-egress-proxy": ("host", "onyx-host-egress-bridge"),
+            "prefetch-blocking-proxy": (
+                "public",
+                {"crw-prefetch-bridge", "executor-egress-bridge"},
+            ),
+            "onyx-public-egress-proxy": (
+                "public",
+                {"onyx-public-egress-bridge", "obscura-egress-bridge"},
+            ),
+            "onyx-host-egress-proxy": ("host", {"onyx-host-egress-bridge"}),
         }
         ports: set[str] = set()
-        for service_name, (route_class, bridge_name) in expected.items():
+        for service_name, (route_class, bridge_names) in expected.items():
             service = services[service_name]
             environment = service["environment"]
             self.assertEqual(environment["EGRESS_ROUTE_CLASS"], route_class)
             self.assertEqual(
-                environment["EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"], bridge_name
+                set(environment["EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"].split(",")),
+                bridge_names,
             )
             self.assertEqual(service["network_mode"], "service:netns-holder")
             self.assertEqual(service["user"], "65534:65534")
@@ -239,7 +292,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             bridge["command"],
             [
                 "tcp-listen:3128,fork,reuseaddr",
-                "tcp-connect:myst-client:3129",
+                "tcp-connect:myst-client:3128",
             ],
         )
         self.assertEqual(bridge["user"], "65534:65534")
@@ -259,8 +312,9 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         self.assertNotIn(
             "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS",
-            services["executor-egress-proxy"]["environment"],
+            services["prefetch-blocking-proxy"]["environment"],
         )
+        self.assertNotIn("executor-egress-proxy", services)
 
     def test_optional_overlay_matrix_preserves_application_isolation(self) -> None:
         model = _compose_model(
@@ -478,6 +532,11 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 "onyx-host-egress-policy",
                 "onyx-public-route-broker",
                 "onyx-host-route-broker",
+                "browser-egress-proxy",
+                "executor-egress-proxy",
+                "searxng-valkey",
+                "inference_model_server",
+                "indexing_model_server",
             }
         )
         self.assertFalse((ROOT / "crw" / "route_broker.py").exists())
