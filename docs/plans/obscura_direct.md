@@ -18,13 +18,15 @@ renderer for both of these flows:
 OnyxWebCrawler
   -> direct CDP client
   -> Obscura
-  -> browser final-hop policy proxy
+  -> narrow egress bridge
+  -> shared restricted-egress policy
   -> VPN, configured upstream proxy, or explicit no-VPN route
 
 SearXNG custom search engine
   -> direct Playwright/CDP client
   -> the same Obscura instance
-  -> browser final-hop policy proxy
+  -> narrow egress bridge
+  -> shared restricted-egress policy
   -> VPN, configured upstream proxy, or explicit no-VPN route
 ```
 
@@ -125,24 +127,28 @@ running modified source.
    prefetch bridge and policy instance, and the CDP shim.
 4. Remove CRW-specific networks, secrets, images, configuration, build targets,
    health dependencies, documentation, and tests.
-5. Retain only the gateways and policy proxies that still establish a real
-   security boundary or serve another request path.
-6. Provide one user-facing PDF byte limit, defaulting to 50 MiB and allowing
+5. Replace browser, MCP-browser, Onyx-helper, and optional executor policy
+   processes with one source-aware restricted-egress listener. All public
+   hosts, including search engines, receive the same destination policy.
+6. Retain only gateways and bridges that still establish a real network
+   boundary. Do not retain separate policy processes merely to label callers.
+7. Provide one user-facing PDF byte limit, defaulting to 50 MiB and allowing
    deliberate values above 50 MiB, and propagate it correctly to both Onyx and
    Obscura.
-7. Keep actual byte counts authoritative when `Content-Length` is absent,
+8. Keep actual byte counts authoritative when `Content-Length` is absent,
    false, duplicated, incompatible with `Transfer-Encoding`, or describes a
    compressed representation.
-8. Preserve exact main-resource bytes for PDFs and supported non-HTML
+9. Preserve exact main-resource bytes for PDFs and supported non-HTML
    documents, without a second network hit.
-9. Preserve search-result quality, engine retry/suspension behavior, waits,
+10. Preserve search-result quality, engine retry/suspension behavior, waits,
    challenge visibility, and cross-client rate controls.
-10. Preserve final-hop destination validation and resolver selection without
+11. Preserve final-hop destination validation and resolver selection without
     sending user target hostnames to Docker's embedded resolver.
-11. Make patch drift, missing dependencies, CDP incompatibility, oversized
+12. Make patch drift, missing dependencies, CDP incompatibility, oversized
     content, and unavailable bodies loud and diagnosable.
-12. Leave full-mode local document ingestion and optional executor networking
-    behavior unchanged.
+13. Leave full-mode local document ingestion unchanged. Preserve optional
+    executor network isolation and explicit enablement while intentionally
+    allowing its proxy path to reach public search engines.
 
 ## Non-Goals
 
@@ -160,6 +166,16 @@ running modified source.
   control and egress networks remain security boundaries.
 - Do not expose CDP on a host port or to executor, MCP, data, or general Onyx
   networks.
+- Do not retain search-engine deny lists in the egress policy. Executor code,
+  Onyx helpers, and `open_url` may contact a public search engine just like any
+  other public destination. Direct executor/helper traffic does not receive
+  Obscura's browser fingerprint or navigation rate scheduler, so 403/429
+  responses remain visible to the caller rather than triggering a hidden
+  fallback.
+- Do not merge the Obscura, MCP, and executor component-side egress bridges or
+  networks. Their fixed-port bridges prevent restricted components from seeing
+  the trusted routing namespace or each other; identical destination rules do
+  not make those network boundaries obsolete.
 - Do not make the PDF byte limit unlimited. Values above 50 MiB are supported,
   but the value must remain a positive finite integer.
 - Do not claim that increasing Obscura's retained-body limit bounds its initial
@@ -167,9 +183,11 @@ running modified source.
   deciding whether to retain it.
 - Do not change the full-mode local-document Web connector, doc-drop server,
   embedding shim, or PDF freshness patch as part of this migration.
-- Do not remove the Onyx helper egress proxy merely because the
+- Do not remove Onyx helper **egress routing** merely because the
   `OnyxWebCrawler` no longer uses local Chromium. Other Onyx helper downloads,
-  the Web connector, Highspot, and upstream Playwright paths still require it.
+  the Web connector, Highspot, and upstream Playwright paths still use the
+  shared policy through loopback; only the dedicated helper proxy process is
+  removed.
 - Do not preserve obsolete CRW names as compatibility aliases.
 
 ## Current State and Why It Is Too Complex
@@ -288,7 +306,8 @@ SearXNG                              |        +-> browser-egress       |
   direct CDP client -----------------+            bridge              |
                                      +----------------|---------------+
                                                       v
-                                              browser policy proxy
+                                             shared restricted-
+                                               egress policy
                                                       |
                                       Myst / upstream proxy / no-VPN
 
@@ -318,11 +337,19 @@ fetched, size-bounded bytes through the private Unix socket described below.
 - the restricted Obscura browser-egress network;
 - a narrow Onyx-to-CDP ingress network for the CDP gateway;
 - the current SearXNG/Valkey and SearXNG service-ingress networks;
-- the browser egress bridge and browser final-hop policy proxy networks;
-- the Onyx helper proxy network;
+- distinct Obscura-renderer, Obscura-MCP, and optional executor egress
+  networks and their narrow bridge containers;
+- one shared internal policy-side upstream network used only by those fixed
+  bridges and `netns-holder`;
+- one shared restricted-egress policy service in the trusted namespace;
 - the separate Obscura MCP control/egress/gateway networks;
 - optional executor networks; and
 - full-mode data and local-RAG networks.
+
+The Onyx helper path no longer has its own proxy service or network: trusted
+Onyx processes in the shared namespace use the shared listener through
+`127.0.0.1`. Existing stack-owned `NO_PROXY` rules remain necessary for
+trusted internal services.
 
 Also add one private Unix-socket volume shared only by the Onyx API service and
 the networkless PDF parser. It is an IPC boundary, not a Docker network or a
@@ -338,6 +365,11 @@ Delete every CRW-only bridge after verifying no other service is attached:
 - CRW-to-CDP-shim network;
 - CRW prefetch-egress network; and
 - prefetch-policy upstream network.
+
+Also replace `browser-policy-upstream`, `mcp-browser-policy-upstream`, and the
+optional `executor-policy-upstream` with the single
+`restricted-policy-upstream` network. Preserve their component-side egress
+networks.
 
 Use the current names in [`docker-compose.yaml`](../../docker-compose.yaml) as
 the deletion checklist; do not retain empty networks for compatibility.
@@ -526,7 +558,7 @@ The shared client performs syntax and obvious-literal rejection only:
   must not cause a second fetch.
 
 Do **not** resolve the user target hostname in Onyx, SearXNG, a validation DNS
-sidecar, or Docker's embedded resolver. The browser final-hop policy proxy is
+sidecar, or Docker's embedded resolver. The shared restricted-egress policy is
 the authoritative destination validator for domain names and redirects. It
 must perform resolution through the resolver appropriate to the selected
 route, as documented in
@@ -936,7 +968,7 @@ separate processes, so local semaphores alone cannot preserve that global
 rule.
 
 Do **not** try to implement navigation rate limiting by counting connections in
-the browser final-hop policy proxy. HTTPS CONNECT payloads are opaque there,
+the shared restricted-egress policy. HTTPS CONNECT payloads are opaque there,
 and Obscura's HTTP client may reuse or multiplex a tunnel. A tunnel count is
 therefore neither a request count nor a reliable navigation-start clock.
 
@@ -971,19 +1003,20 @@ result rather than guessing during implementation. Add explicit Obscura
 settings for concurrency, rate/interval, queue timeout, and jitter. These are
 stack policy, not routine user-facing options.
 
-Continue deriving the final-hop proxy's search allow/deny list from the one
-canonical `EGRESS_SEARCH_HOSTS` source. That list is a destination-policy
-classification and must not be confused with the scheduler's public-suffix
-rate key.
+Remove search-host classification from the egress proxy completely. The
+Obscura scheduler's public-suffix rate key is unrelated to destination
+authorization. Search engines are ordinary public targets for Obscura,
+Obscura MCP, Onyx helpers, and network-enabled executors.
 
-The final-hop policy must continue to:
+The shared final-hop policy must continue to:
 
-- permit search hosts for browser policy;
-- deny them for executor policy;
-- deny internal names and resolved non-public addresses for all untrusted
-  policies;
-- apply the configured plain-HTTP rule; and
-- enforce the allowed source client set.
+- deny internal names and resolved non-public addresses for every caller;
+- apply the configured plain-HTTP rule uniformly;
+- enforce the allowed bridge-source client set;
+- allow the exact local document-server destination only for a real loopback
+  peer, never for a bridge peer; and
+- preserve selected resolver, upstream-proxy, request-framing, TLS, logging,
+  and credential-redaction behavior.
 
 The policy proxy remains the security boundary for destination and resolver
 selection. Obscura's scheduler is an operational/anti-blocking control and
@@ -991,15 +1024,46 @@ must not be described as an SSRF boundary. Direct-client local semaphores may
 also bound each caller's resource use, but must not be the only cross-client
 per-host control.
 
-The current generic proxy implementation lives under `crw/` even though it now
-serves browser, MCP, helper, and executor policies. Move it to a neutral path,
-for example `egress/restricted_egress_proxy.py`, and rename legacy
-`PREFETCH_*` environment vocabulary to `EGRESS_*`. Update imports, Compose,
-locks, tests, and documentation atomically. Do not keep legacy aliases.
+The current generic proxy implementation lives under `crw/`. Move it to a
+neutral path such as `egress/restricted_egress_proxy.py`, rename all legacy
+`PREFETCH_*` environment vocabulary to `EGRESS_*`, and remove
+`EGRESS_PROXY_POLICY`, `PREFETCH_BLOCK_HOSTS`, the search matcher, and every
+named mode (`prefetch`, `executor`, `browser`, `onyx-helper`, and
+`searxng-external`). Update imports, Compose, locks, tests, and documentation
+atomically. Do not keep compatibility aliases.
 
-Remove the unused `prefetch` policy mode and the CRW prefetch policy instance.
-Retain browser, MCP, Onyx-helper, executor, and any documented optional SearXNG
-external-feature policies.
+Run exactly one `restricted-egress-proxy` process in the trusted namespace on
+one port. Its base allowed-client list contains `obscura-egress-bridge` and
+`obscura-mcp-egress-bridge`; the executor overlay appends
+`executor-egress-bridge`. Loopback is accepted for trusted Onyx helpers and
+health probes. Resolve bridge identities through Docker service discovery for
+source-IP comparison, reject ambiguous identity matches, and re-resolve after
+bridge replacement without ever treating those names as browsing targets.
+
+Rename the helper's internal exception to an explicitly source-scoped setting,
+for example `EGRESS_PROXY_LOOPBACK_TRUSTED_DESTINATIONS`. The implementation
+must pass the actual socket peer classification into HTTP, CONNECT,
+destination-validation, and cleartext-policy decisions. A bridge cannot obtain
+the local-document exception with headers, target syntax, or proxy chaining.
+
+Because an executor can deliberately open many tunnels, add bounded per-source
+active-connection quotas and a global ceiling sized below the process/OS file
+descriptor limit. Reserve independent capacity for loopback, renderer, MCP,
+and executor identities, reject excess work promptly with a typed 503, and
+release counters on every close/cancellation path. These limits protect shared
+availability; they are stack-owned defaults, not a destination allowlist or a
+user-facing search policy.
+
+Keep each component's existing narrow bridge and component-side egress
+network. Point every bridge at the one shared listener through one common
+`restricted-policy-upstream` internal network. Bridge identity comes from its
+unique peer IP/service name on that network. Delete the separate browser,
+MCP-browser, and optional executor policy-upstream networks. This does not make
+restricted components peers: only their fixed dual-homed bridge containers
+share the policy side. Never attach a restricted component directly to that
+network or to `netns-holder`. The executor override attaches its bridge to the
+base shared upstream network and must not add another `netns-holder` network or
+policy service.
 
 ## Readiness, Health, VPN Liveness, and Autoheal
 
@@ -1009,8 +1073,8 @@ The target startup chain is:
 
 ```text
 myst-client-vpn (VPN mode) or explicit no-VPN-ready namespace
-  -> browser final-hop policy proxy
-  -> Obscura egress bridge
+  -> shared restricted-egress policy
+  -> Obscura / MCP / optional executor egress bridges
   -> Obscura CDP server
   -> obscura-cdp-gateway
   -> Onyx API readiness
@@ -1029,10 +1093,12 @@ Implement health checks as follows:
 
 - Mysterium health remains data-plane-aware in VPN mode and immediately
   well-defined in explicit no-VPN mode. Re-test both forms.
-- Browser final-hop policy health verifies its listener and selected final-hop
-  routing prerequisites without resolving or fetching an arbitrary public
-  user target.
-- The egress bridge verifies its exact upstream policy listener.
+- Shared restricted-egress policy health verifies its listener and selected
+  final-hop routing prerequisites without resolving or fetching an arbitrary
+  public user target.
+- Each egress bridge verifies the same upstream policy listener from its own
+  component boundary and receives the expected denial for a blocked local
+  target.
 - Obscura health verifies local `/json/version` and the expected cookie-clear
   capability/configuration, but does not make a public probe on every health
   interval.
@@ -1042,9 +1108,10 @@ Implement health checks as follows:
   and local CDP connectivity without executing a public search.
 - PDF parser health uses a bounded Unix-socket protocol ping and verifies the
   expected parser/protocol version without parsing an external document.
-- Onyx API depends on the CDP gateway, SearXNG service gateway, Onyx helper
-  proxy, Obscura MCP gateway, networkless PDF parser, and its other existing
-  required services. Remove all CRW health dependencies.
+- Onyx API depends on the CDP gateway, SearXNG service gateway, shared
+  restricted-egress listener, Obscura MCP gateway, networkless PDF parser, and
+  its other existing required services. Remove all CRW and dedicated
+  helper-policy health dependencies.
 
 Compose `depends_on` establishes startup order, not permanent runtime
 supervision. A failed downstream request after startup must remain a visible
@@ -1064,13 +1131,13 @@ Validate these sequences:
 2. VPN disabled, Myst health reaches the documented ready state without a
    nonexistent tunnel.
 3. VPN enabled, tunnel drops after the stack is healthy, Myst becomes
-   unhealthy, autoheal/reconnect occurs, and policy proxies do not permit
+   unhealthy, autoheal/reconnect occurs, and the shared policy does not permit
    direct egress during the gap.
 4. Upstream proxy configured, VPN enabled or disabled as supported, and target
    DNS remains at the upstream proxy.
 5. Obscura restarts while clients remain up; clients reconnect on the next
    request and do not reuse a stale body/target.
-6. Browser policy is unavailable; Obscura and clients fail closed and report
+6. Shared policy is unavailable; Obscura and clients fail closed and report
    the dependency rather than switching routes.
 
 Health scripts and shim containers must use preinstalled tools. No `apk add`,
@@ -1086,13 +1153,16 @@ may occur in health checks, entrypoints, or runtime patch initialization.
 - CDP is unauthenticated and therefore remains confined to internal networks
   and one narrow gateway; it is never host-published.
 - Obscura cannot reach the broad trusted namespace. Its only internet route is
-  the egress bridge to the browser policy proxy.
+  its egress bridge to the shared restricted-egress listener.
 - The bridge cannot select arbitrary trusted-namespace ports.
-- The policy proxy accepts only the expected bridge source and enforces
-  destination policy.
-- The separate MCP Obscura instance and its policy remain independent.
+- The policy accepts only loopback or an expected bridge source, applies the
+  loopback-only internal exception after peer classification, enforces
+  per-source quotas, and applies one public-destination policy.
+- The separate MCP Obscura instance and component-side bridge remain
+  independent even though the final policy process is shared.
 - Executors cannot reach CDP, SearXNG control, Obscura control, Docker socket,
-  data stores, or host services.
+  data stores, or host services. Their bridge reaches only the shared policy
+  port.
 - Untrusted PDF native parsing occurs in a networkless, read-only,
   resource-bounded service that can receive only the private Unix socket and
   an anonymous bounded body descriptor.
@@ -1133,7 +1203,7 @@ adapter either bypasses the DNS-resolving helper or patches its use at this
 narrow boundary while retaining syntax/literal checks.
 
 Saved Onyx SSRF settings are not authorization for Obscura to access private
-targets. The final-hop browser policy remains authoritative for all hostnames
+targets. The shared final-hop policy remains authoritative for all hostnames
 and redirects. `ONYX_AGENT_ALLOW_HTTP_URLS` must be enforced both before
 navigation and at the final hop.
 
@@ -1152,6 +1222,14 @@ Document these honestly after implementation:
 - Browser subresources intentionally create additional requests; single-fetch
   means one main-document navigation, not one TCP/HTTP request total.
 - Some sites may fingerprint Obscura or challenge shared browser state.
+- Direct executor/helper search-engine requests do not use Obscura's
+  fingerprint or per-domain scheduler and may receive or contribute to 403/429
+  responses from the shared exit IP. This is accepted behavior, not a reason
+  to restore a hidden search deny list or browser fallback.
+- One policy process is a shared failure and resource-contention domain for
+  browser, MCP, helper, and executor egress. Per-source quotas prevent a caller
+  from consuming unbounded connections, but a process crash temporarily
+  affects every path until the normal restart policy recovers it.
 - Explicit no-VPN mode intentionally permits system-routed internet egress
   through the same destination policy.
 
@@ -1165,25 +1243,30 @@ Remove these current services from Compose and all dependency graphs:
 - `crw-validation-dns`;
 - `crw-service-gateway`;
 - `crw-prefetch-bridge`;
-- `prefetch-blocking-proxy`; and
-- `cdp-shim`.
+- `prefetch-blocking-proxy`;
+- `cdp-shim`;
+- `mcp-browser-egress-proxy`;
+- `onyx-helper-egress-proxy`; and
+- optional `executor-egress-proxy` whenever executor networking is enabled.
 
 Add `obscura-cdp-gateway` if the existing generic gateway cannot be
 instantiated safely, plus the networkless `onyx-open-url-pdf-parser` security
-boundary. Removing six services and adding these two produces a net reduction
-of at least four always-on containers. Do not add another fetch, validation,
-rate-limit, or body-conversion sidecar.
+boundary. Rename `browser-egress-proxy` to the one
+`restricted-egress-proxy`. Relative to the current base stack, removing eight
+services and adding two produces a net reduction of at least six always-on
+containers; enabling executor networking no longer adds a policy container.
+Do not add another fetch, validation, rate-limit, or body-conversion sidecar.
 
 Do **not** remove:
 
 - `obscura`;
 - `obscura-egress-bridge`;
-- `browser-egress-proxy`;
+- `obscura-mcp-egress-bridge`;
+- the renamed shared `restricted-egress-proxy`;
 - `searxng-core`, Valkey, or `searxng-service-gateway`;
-- `onyx-helper-egress-proxy`;
 - `onyx-open-url-pdf-parser` after it is added;
-- the separate Obscura MCP server/bridge/policy/gateway;
-- executor bridge/policy services; or
+- the separate Obscura MCP server/control/gateway;
+- the optional executor egress bridge and component network; or
 - full-mode local document services.
 
 ### Files and Patches to Delete or Move
@@ -1215,7 +1298,7 @@ unnecessary:
 - per-context `proxyServer` stripping: callers use the default Obscura context;
 - shim-owned periodic cookie clearing: Obscura owns it;
 - shim-specific target selection/wait-for-search-host coordination: the shared
-  client and central policy own it; and
+  client and Obscura scheduler own it; and
 - CDP-shim trace configuration: neutral client diagnostics replace it.
 
 Retain and update these Onyx/runtime patches because this migration does not
@@ -1224,7 +1307,7 @@ obsolete them:
 - lite-mode `open_url` availability;
 - `ONYX_OPEN_URL_MAX_CHARS_PER_URL` and total-character limit propagation;
 - Onyx helper proxy routing for helper downloads and remaining local Chromium
-  users;
+  users, retargeted to the shared loopback listener;
 - full-mode local-document PDF freshness/reindexing;
 - SearXNG round-robin and last-resort scoring, adapted to offline engines;
 - code-interpreter capability/network/upload patches; and
@@ -1237,8 +1320,10 @@ For completeness, the current patch inventory has this migration impact:
 | CRW Firecrawl-compatible content/search adapter | Delete. Built-in `OnyxWebCrawler` and direct SearXNG engines replace it. |
 | CRW validation DNS and Onyx validation workaround | Delete. The shared client performs non-resolving syntax/literal checks and the final hop resolves/validates names. |
 | CDP shim wait injection, stealth/proxy stripping, cookie clearing, target selection, and tracing | Delete only after direct explicit waits, default-context use, Obscura cookie ownership, and neutral tracing pass their gates. |
-| CRW prefetch-blocking policy instance | Delete. There is no raw search prefetch after every search engine navigates directly through Obscura. Keep the generic final-hop proxy code for other policies. |
-| Onyx helper HTTP/Playwright proxy patch | Retain. Remove `OnyxWebCrawler` reliance on its local-Chromium/requests path, but keep it for Web connector, Highspot, helper downloads, and other upstream callers. |
+| CRW prefetch-blocking policy instance | Delete. There is no raw search prefetch after every search engine navigates directly through Obscura. Move the generic final-hop implementation and run one shared instance. |
+| Named egress modes and search-host deny list | Delete. Public search hosts use the same policy as every other public destination, including for executors. |
+| Dedicated browser/MCP/helper/executor policy processes | Collapse into one source-aware listener. Retain separate component bridges and add per-source quotas plus a loopback-only internal exception. |
+| Onyx helper HTTP/Playwright proxy patch | Retain. Remove `OnyxWebCrawler` reliance on its local-Chromium/requests path, but keep it for Web connector, Highspot, helper downloads, and other upstream callers; point it at the shared loopback listener. |
 | Lite `open_url` availability | Retain and make it activate the direct crawler patch. |
 | Open URL/web-search character budgets | Retain. Add the separate PDF byte cap; do not merge byte and character semantics. |
 | SearXNG CRW-backed engine adapter | Replace with direct offline Playwright/CDP engines. |
@@ -1250,7 +1335,7 @@ For completeness, the current patch inventory has this migration impact:
 | Coding-agent final-answer synthesis and saved tool-result preservation | Retain unchanged. |
 | Coding-agent repository/code-interpreter upload alignment | Retain unchanged. |
 | Internal-search content caps | Retain unchanged. |
-| Code-interpreter capability descriptions and executor network/proxy patch | Retain unchanged; exercise as a routing regression. |
+| Code-interpreter capability descriptions and executor network/proxy patch | Retain the restricted executor network and bridge, but point it at the shared policy and remove claims that search hosts are blocked. Exercise as a routing regression. |
 | Background Web-connector PDF freshness | Retain unchanged; it is not the LLM `open_url` PDF path. |
 | Local embedding shim | Retain unchanged. |
 | Compose wrapper, Podman, external proxy, and install/upgrade hooks | Modify only where service/image/network names change; preserve their existing semantics and strict validation. |
@@ -1268,6 +1353,12 @@ Remove:
 - CRW API, render, PDF, prefetch, validation DNS, and timeout variables;
 - `OBSCURA_CDP_URL` values used only by the CDP shim;
 - `CDP_SHIM_*`, `STRIP_PROXY_SERVER`, and shim trace variables;
+- `EGRESS_PROXY_POLICY`, `PREFETCH_BLOCK_HOSTS`, and every search-blocking mode
+  or message;
+- dedicated MCP/helper/executor policy ports, service names, and health
+  dependencies;
+- `browser-policy-upstream`, `mcp-browser-policy-upstream`, and optional
+  `executor-policy-upstream` in favor of one `restricted-policy-upstream`;
 - `crw-image-ready`, `cdp-shim-image-ready`, and `cdp-shim-build` targets;
 - CRW/CDP-shim prerequisites from `up-lite`, `up-full`, `upgrade`, and Python
   dependency upgrade flows; and
@@ -1283,6 +1374,10 @@ Add or rename:
   concurrency `1`, rate `0.33`, queue timeout, and the characterized jitter
   profile;
 - neutral restricted-egress policy variables;
+- one shared listener port, a base/optional-overlay bridge allowlist,
+  peer-scoped connection quotas/global ceiling, and
+  `EGRESS_PROXY_LOOPBACK_TRUSTED_DESTINATIONS`;
+- Onyx helper and every component bridge URLs retargeted to that listener;
 - Obscura cookie-clear ownership setting;
 - the derived SearXNG image pin and build target; and
 - any Obscura source ref required by the capability gate.
@@ -1324,12 +1419,16 @@ tests remain ambiguous.
 
 1. Move the generic policy proxy out of `crw/`.
 2. Rename configuration without compatibility aliases.
-3. Preserve resolver selection, internal blocklists, source allowlists, and
-   HTTP policy.
-4. Keep every remaining policy instance's search-host classification derived
-   from one stack-owned configuration.
-5. Update every remaining proxy instance and test.
-6. Delete the prefetch policy mode only after no Compose reference remains.
+3. Delete search-host classification and all named modes.
+4. Make the loopback internal exception depend on the actual socket peer.
+5. Add unambiguous bridge identity mapping and bounded per-source/global
+   connection accounting.
+6. Preserve resolver selection, internal blocklists, request framing, upstream
+   proxy handling, source allowlists, HTTP policy, and redaction.
+7. Replace the dedicated browser/MCP/helper/executor services with one shared
+   listener, one shared policy-side upstream network, and retarget each
+   retained bridge/helper client.
+8. Prove no removed service, port, policy env, or search-block message remains.
 
 ### Workstream 3: Shared CDP Client
 
@@ -1366,10 +1465,12 @@ tests remain ambiguous.
 2. Attach SearXNG to Obscura control.
 3. Add the networkless PDF parser and private Unix-socket volume to lite and
    full API services.
-4. Apply new health dependencies.
-5. Remove all CRW/shim services, networks, secrets, pins, and build targets.
-6. Render and inspect effective lite/full Compose models.
-7. Start each routing-mode matrix from a clean supported state.
+4. Add the shared policy listener, retarget the retained component bridges and
+   Onyx helper URL, and remove dedicated policy services/ports.
+5. Apply new health dependencies and optional-executor allowlist overlay.
+6. Remove all CRW/shim services, networks, secrets, pins, and build targets.
+7. Render and inspect effective lite/full Compose models.
+8. Start each routing-mode matrix from a clean supported state.
 
 ### Workstream 7: Documentation and Cleanup
 
@@ -1393,6 +1494,8 @@ Documentation changes are part of implementation, not a follow-up.
 - List the networkless Onyx PDF parser as the one new security sidecar and
   explain why it is not a downloader.
 - Keep Obscura MCP configuration separate from Onyx content fetching.
+- Explain that executors and helpers may contact public search engines directly,
+  while Obscura-rendered search retains browser fingerprinting and scheduling.
 - Preserve local-RAG, executor, upstream proxy, VPN, and Tailscale guidance.
 
 ### `docs/request_handling.md`
@@ -1407,6 +1510,9 @@ Rewrite the current CRW-centric diagrams and prose. Document:
   semantics;
 - waits, default context, stealth, cookie clearing, rate controls, and trace
   redaction;
+- uniform public-destination policy with no search-host special case, including
+  the distinction between Obscura-scheduled navigation and unscheduled direct
+  executor/helper HTTP;
 - byte versus character limits;
 - expected failures and no-direct-fallback behavior;
 - one main navigation versus redirects/subresources;
@@ -1422,6 +1528,11 @@ sections rather than retaining a historical appendix.
   direct SearXNG client.
 - Update all network attachments, proxy policies, health URLs, readiness edges,
   and `NO_PROXY` ownership.
+- Replace the policy-mode matrix with one source-aware policy, one loopback-only
+  internal exception, per-source quotas, retained narrow bridges, and one
+  shared policy-side upstream network.
+- Delete search-engine destination blocking and document the accepted direct
+  executor/helper behavior and shared-policy failure domain.
 - Document the parser's `network_mode: none` and private Unix IPC readiness
   separately from VPN/egress dependencies.
 - Preserve the full VPN/upstream/no-VPN routing and DNS matrix.
@@ -1434,6 +1545,8 @@ sections rather than retaining a historical appendix.
 - Remove CRW and validation-DNS reachability sections.
 - Document CDP client reachability, CDP gateway risk, Obscura isolation,
   SearXNG's control-network attachment, and the separate MCP boundary.
+- Explain why policy processes are shared but component-side bridges/networks
+  remain separate, including executor resource-quota behavior.
 - Document parser socket peer checks, FD/size validation, container hardening,
   and its lack of network attachment.
 - Update canonical Docker/Podman/internal hostname coverage.
@@ -1446,9 +1559,13 @@ sections rather than retaining a historical appendix.
 - Add the strict direct-Obscura `OnyxWebCrawler` patch, content dispatch, PDF
   parser boundary, and limit propagation.
 - Describe the parser protocol/worker implementation and strict version check.
-- Clarify that the helper proxy remains for other helper downloads and local
-  Chromium users, not the patched Onyx Web Crawler.
+- Clarify that helper proxy routing remains for other helper downloads and
+  local Chromium users, but uses the shared loopback policy listener rather
+  than a dedicated helper service.
 - Update the SearXNG patch section for offline direct engines and derived image.
+- Update code-interpreter capability text: network-enabled executors may reach
+  public search engines through the shared policy, while internal/private
+  destinations and direct sockets remain unavailable.
 - Delete CRW/CDP-shim patch and configuration descriptions.
 - Retain and accurately scope every unaffected patch.
 
@@ -1463,19 +1580,24 @@ sections rather than retaining a historical appendix.
 - Add byte-exact PDF/body and one-fetch upgrade tests.
 - Replace CRW/CDP-shim/validation-DNS upgrade steps with deletion assertions so
   they cannot accidentally return.
-- Cover the new SearXNG lock/image build and neutral egress proxy.
+- Cover the new SearXNG lock/image build and shared neutral egress proxy,
+  including peer classification, loopback-only exceptions, quotas, and absence
+  of named/search-block policy modes.
+- Revalidate executor environment injection and LLM-facing capability text
+  against the search-allowed shared policy.
 
 ### `docs/local_docs_rag_search.md`
 
-- State explicitly that local document Web-connector ingestion, PDF freshness,
-  and helper/local-Chromium routing are unchanged.
+- State explicitly that local document Web-connector ingestion and PDF
+  freshness are unchanged, while helper/local-Chromium external routing keeps
+  the same semantics through the shared listener.
 - Prevent readers from assuming local doc-drop URLs are sent through Obscura.
 - Retest and update only references made stale by component-name changes.
 
 ### `.env.wrapper.example`
 
 - Add the PDF size and advanced parse/concurrency settings with memory warnings.
-- Remove CRW and CDP-shim user settings.
+- Remove CRW, CDP-shim, search-block-host, and policy-mode user settings.
 - Do not expose stack-owned CDP URLs or helper `NO_PROXY` values.
 - Keep immutable image/source pins in `stack.versions.env`.
 
@@ -1485,6 +1607,8 @@ sections rather than retaining a historical appendix.
   Onyx/SearXNG -> Obscura paths.
 - Add the new shared client, neutral egress proxy, and derived SearXNG image to
   key locations, along with the networkless parser service/protocol module.
+- Replace instructions that require blocking executor search traffic with the
+  uniform public-destination policy and retained bridge isolation invariant.
 - Remove obsolete CRW/CDP-shim build commands.
 - Add concise commands for running all unit tests and a single test module, and
   explain that new regression tests belong under `tests/` as
@@ -1605,7 +1729,17 @@ Retain and extend tests for:
 - remote DNS for `socks5h` upstreams;
 - source-client enforcement;
 - HTTP port policy;
-- browser versus executor search-host policy;
+- successful public search-host CONNECT/forward behavior from simulated
+  renderer, MCP, loopback-helper, and executor peers;
+- absence of `EGRESS_PROXY_POLICY`, search-host lists, and search-specific
+  denial messages;
+- loopback-only trusted destination success and identical bridge-peer denial,
+  including attempts to spoof identity with headers/targets;
+- bridge hostname re-resolution after replacement and fail-closed rejection
+  of missing or ambiguous peer identity;
+- independent per-source connection quotas, global ceiling, typed 503,
+  cancellation/close counter release, and reserved loopback/browser capacity
+  under executor saturation;
 - `Content-Length`/`Transfer-Encoding` request-smuggling defenses already
   present in the proxy; and
 - no legacy prefetch mode/env names.
@@ -1670,6 +1804,18 @@ Parse effective Compose models structurally and assert:
 - the CDP gateway exposes only the intended port and no host binding;
 - SearXNG has Obscura-control and Valkey/service networks but no direct egress;
 - Onyx has the gateway and helper paths required by each mode;
+- exactly one `restricted-egress-proxy` service exists, with no dedicated
+  browser/MCP/helper/executor policy services or legacy policy ports;
+- all retained component bridges point only to the shared listener while
+  renderer, MCP, and executor component-side networks remain distinct;
+- bridge policy-side interfaces share only one
+  `restricted-policy-upstream` network, with no restricted application
+  attached to it and no legacy per-policy upstream networks;
+- Onyx helper proxy variables point to the shared loopback listener and the
+  trusted internal exception is configured as loopback-only;
+- the optional executor overlay adds its bridge identity/quota and no policy
+  container;
+- no policy mode or search-host blocklist environment remains;
 - the PDF parser has `network_mode: none`, no ports/networks/secrets/proxies,
   the expected hardening/resource limits, and a socket volume shared only with
   the API service;
@@ -1690,7 +1836,7 @@ Test at least:
 | lite | enabled or documented supported form | `socks5h` | upstream proxy handles target DNS; no direct fallback |
 | full | enabled | none | same browser route plus local RAG regression passes |
 | full | disabled | none | explicit no-VPN route plus local RAG passes |
-| full | supported | upstream proxy | browser/helper routes obey their policies; local services stay local |
+| full | supported | upstream proxy | browser/helper routes obey the shared policy; local services stay local |
 
 For each practical matrix entry:
 
@@ -1699,7 +1845,14 @@ For each practical matrix entry:
 - exercise a real custom `web_search` query;
 - exercise `open_url` on HTML, JS-rendered HTML, PDF, text, and an oversized
   response;
-- inspect SearXNG, Obscura, browser-policy, gateway, and Onyx logs;
+- exercise `open_url` on a public search-engine URL and verify any failure is
+  the real rendered upstream status/challenge, not a local egress-policy 403;
+- when executor networking is enabled, contact a public search engine from an
+  executor and verify it reaches the selected route rather than receiving a
+  local search-policy 403;
+- verify simultaneous executor saturation cannot consume the reserved
+  renderer/MCP/loopback proxy capacity;
+- inspect SearXNG, Obscura, shared-policy, gateway, and Onyx logs;
 - verify target DNS did not reach Docker's embedded resolver;
 - verify public egress identity matches the chosen route;
 - attempt representative internal/Docker/metadata destinations and redirects;
@@ -1712,7 +1865,8 @@ For each practical matrix entry:
   `internal_search`.
 - Obscura MCP `open_url`/`browser_navigate` behavior and its separate SSRF
   policy.
-- Code-interpreter network disabled/enabled and proxy capability text.
+- Code-interpreter network disabled/enabled, shared-policy routing, public
+  search access, and matching proxy capability text.
 - Remaining Onyx helper downloads and local Chromium consumers in lite and
   full modes.
 - Teep inference, WebUI, auth, MinIO, and optional Tailscale exposure.
@@ -1783,7 +1937,13 @@ The plan is complete only when all of the following are true:
   absent from runtime, builds, secrets, networks, health dependencies, and
   current documentation.
 - The generic restricted-egress proxy is neutrally named and still protects
-  browser, MCP, helper, and executor paths.
+  browser, MCP, helper, and executor paths through one listener with separate
+  source quotas and a loopback-only internal exception.
+- Public search engines are not special-cased by egress policy; renderer, MCP,
+  helper, and executor peers receive the same allow/deny result for the same
+  public destination.
+- Dedicated MCP/helper/executor policy services and named policy modes are
+  absent, while their narrow component bridges/networks remain.
 - Cookie clearing, fingerprint, explicit waits, diagnostics, and challenge
   visibility have named owners and passing tests.
 - VPN enabled/disabled/upstream-proxy startup and reconnection work without a
@@ -1812,7 +1972,8 @@ each necessary behavior to its natural owner:
 | browser fingerprint/proxy | Obscura |
 | shared cookie clearing | Obscura server |
 | cross-client per-host/search rate control | Obscura top-level navigation scheduler |
-| internal destination and redirect denial | final-hop policy, with Obscura defense in depth |
+| uniform public-destination policy, peer quotas, and loopback-only exception | one shared restricted-egress proxy |
+| internal destination and redirect denial | shared final-hop policy, with Obscura defense in depth |
 | target DNS routing | selected final hop |
 | CDP reachability | internal networks and narrow gateway |
 | strict upgrade/source validation | runtime patches, image builds, and upgrade tests |
