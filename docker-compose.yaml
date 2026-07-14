@@ -24,6 +24,7 @@ x-policy-proxy: &policy-proxy
   image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
   restart: unless-stopped
   network_mode: "service:netns-holder"
+  user: "65534:65534"
   read_only: true
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
@@ -55,10 +56,10 @@ services:
         aliases: [myst-client]
       browser-policy-upstream:
         aliases: [myst-client]
-      onyx-public-broker:
-        aliases: [onyx-public-route-broker]
-      onyx-host-broker:
-        aliases: [onyx-host-route-broker]
+      onyx-public-policy-upstream:
+        aliases: [myst-client]
+      onyx-host-policy-upstream:
+        aliases: [myst-client]
 
   # VPN gateway for SearxNG-routed workloads
   myst-client:
@@ -419,115 +420,45 @@ services:
         condition: service_healthy
         restart: true
 
-  # Authoritative final connections remain in the trusted routing namespace.
-  # These are authenticated stream brokers, not HTTP/SOCKS proxies.
-  onyx-public-route-broker:
-    image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
-    restart: unless-stopped
-    network_mode: "service:netns-holder"
-    user: "65534:65534"
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    environment:
-      EGRESS_BROKER_HOST: onyx-public-route-broker
-      EGRESS_BROKER_PORT: "3140"
-      EGRESS_BROKER_ALLOWED_CLIENT_HOST: onyx-public-egress-policy
-      EGRESS_ROUTE_BROKER_CREDENTIAL: "${ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL:?ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL must be set}"
-      EGRESS_ROUTE_CLASS: public
-      EGRESS_ALLOW_RFC1918: "false"
-      EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
-      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
-      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
-      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
-      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
-    volumes:
-      - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
-      - ./crw/route_broker.py:/app/route_broker.py:ro
-    command: ["python", "-u", "/app/route_broker.py"]
-    healthcheck:
-      test: ["CMD", "python", "/app/route_broker.py", "--check-ready"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-      start_period: 10s
-    depends_on:
-      myst-client: {condition: service_healthy}
-
-  onyx-host-route-broker:
-    extends: onyx-public-route-broker
-    environment:
-      EGRESS_BROKER_HOST: onyx-host-route-broker
-      EGRESS_BROKER_PORT: "3141"
-      EGRESS_BROKER_ALLOWED_CLIENT_HOST: onyx-host-egress-policy
-      EGRESS_ROUTE_BROKER_CREDENTIAL: "${ONYX_HOST_ROUTE_BROKER_CREDENTIAL:?ONYX_HOST_ROUTE_BROKER_CREDENTIAL must be set}"
-      EGRESS_ROUTE_CLASS: host
-      EGRESS_PROXY_POLICY: onyx-helper
-      EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS: "doc-drop-web:8091"
-      EGRESS_ALLOW_RFC1918: "${EGRESS_ALLOW_RFC1918:-false}"
-      EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
-      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
-      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
-      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
-      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
-
-  # Separate policy namespaces preserve the public/host security boundary.
-  onyx-public-egress-policy:
-    image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
-    restart: unless-stopped
-    user: "65534:65534"
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    sysctls:
-      net.ipv4.ip_forward: "0"
-      net.ipv6.conf.all.forwarding: "0"
-    networks: [onyx-public-policy-upstream, onyx-public-broker]
+  # Final-hop Onyx proxies combine request policy, target DNS/address
+  # validation, and connection establishment in the trusted routing namespace.
+  # Separate listeners and fixed bridges retain public versus host route classes.
+  onyx-public-egress-proxy:
+    <<: *policy-proxy
     environment:
       PREFETCH_PROXY_HOST: "0.0.0.0"
-      PREFETCH_PROXY_PORT: "3128"
+      PREFETCH_PROXY_PORT: "3132"
       EGRESS_PROXY_POLICY: onyx-helper
       EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: onyx-public-egress-bridge
       EGRESS_ROUTE_CLASS: public
-      EGRESS_POLICY_DEFER_DNS: "true"
-      EGRESS_ROUTE_BROKER_HOST: onyx-public-route-broker
-      EGRESS_ROUTE_BROKER_PORT: "3140"
-      EGRESS_ROUTE_BROKER_CREDENTIAL: "${ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL:?ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL must be set}"
-      MYST_VPN_ENABLED: "false"
+      EGRESS_ALLOW_RFC1918: "false"
+      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
+      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
       EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
       PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
-    volumes:
-      - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
-    command: ["python", "-u", "/app/prefetch_blocking_proxy.py"]
-    healthcheck:
-      test: ["CMD", "python", "/app/prefetch_blocking_proxy.py", "--check-ready"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-      start_period: 10s
     depends_on:
-      onyx-public-route-broker: {condition: service_healthy}
+      netns-holder: {condition: service_started}
+      myst-client: {condition: service_healthy, restart: true}
 
-  onyx-host-egress-policy:
-    extends: onyx-public-egress-policy
-    networks: !override [onyx-host-policy-upstream, onyx-host-broker]
+  onyx-host-egress-proxy:
+    <<: *policy-proxy
     environment:
       PREFETCH_PROXY_HOST: "0.0.0.0"
-      PREFETCH_PROXY_PORT: "3128"
+      PREFETCH_PROXY_PORT: "3133"
       EGRESS_PROXY_POLICY: onyx-helper
       EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: onyx-host-egress-bridge
       EGRESS_ROUTE_CLASS: host
       EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS: "doc-drop-web:8091"
-      EGRESS_POLICY_DEFER_DNS: "true"
-      EGRESS_ROUTE_BROKER_HOST: onyx-host-route-broker
-      EGRESS_ROUTE_BROKER_PORT: "3141"
-      EGRESS_ROUTE_BROKER_CREDENTIAL: "${ONYX_HOST_ROUTE_BROKER_CREDENTIAL:?ONYX_HOST_ROUTE_BROKER_CREDENTIAL must be set}"
       EGRESS_ALLOW_RFC1918: "${EGRESS_ALLOW_RFC1918:-false}"
-      MYST_VPN_ENABLED: "false"
+      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
+      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
       EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
       PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
-    depends_on: !override
-      onyx-host-route-broker: {condition: service_healthy}
+    depends_on:
+      netns-holder: {condition: service_started}
+      myst-client: {condition: service_healthy, restart: true}
 
   crw-prefetch-bridge:
     <<: *tcp-gateway
@@ -557,10 +488,10 @@ services:
 
   onyx-public-egress-bridge:
     <<: *tcp-gateway
-    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:onyx-public-egress-policy:3128"]
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3132"]
     networks: [onyx-public-egress, onyx-public-policy-upstream]
     depends_on:
-      onyx-public-egress-policy:
+      onyx-public-egress-proxy:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "printf 'CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n' | socat -T 3 STDIO,ignoreeof TCP:127.0.0.1:3128,connect-timeout=3 | grep -q '^HTTP/1.1 403'"]
@@ -570,10 +501,10 @@ services:
 
   onyx-host-egress-bridge:
     <<: *tcp-gateway
-    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:onyx-host-egress-policy:3128"]
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3133"]
     networks: [onyx-host-egress, onyx-host-policy-upstream]
     depends_on:
-      onyx-host-egress-policy:
+      onyx-host-egress-proxy:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "printf 'CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n' | socat -T 3 STDIO,ignoreeof TCP:127.0.0.1:3128,connect-timeout=3 | grep -q '^HTTP/1.1 403'"]
@@ -1151,8 +1082,6 @@ networks:
   onyx-host-egress: {internal: true}
   onyx-public-policy-upstream: {internal: true}
   onyx-host-policy-upstream: {internal: true}
-  onyx-public-broker: {internal: true}
-  onyx-host-broker: {internal: true}
   prefetch-policy-upstream: {internal: true}
   browser-policy-upstream: {internal: true}
   crw-api: {internal: true}

@@ -17,8 +17,6 @@ SECRET_ENV = {
     "MINIO_ROOT_PASSWORD": "test",
     "S3_AWS_ACCESS_KEY_ID": "test",
     "S3_AWS_SECRET_ACCESS_KEY": "test",
-    "ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL": "0" * 64,
-    "ONYX_HOST_ROUTE_BROKER_CREDENTIAL": "1" * 64,
 }
 
 
@@ -132,17 +130,9 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 for network in networks:
                     self.assertTrue(model["networks"][network].get("internal"))
 
-    def test_public_and_host_policy_boundaries_are_distinct(self) -> None:
+    def test_public_and_host_final_hop_listeners_are_distinct(self) -> None:
         model = _compose_model("full")
         services = model["services"]
-        self.assertEqual(
-            set(services["onyx-public-egress-policy"]["networks"]),
-            {"onyx-public-policy-upstream", "onyx-public-broker"},
-        )
-        self.assertEqual(
-            set(services["onyx-host-egress-policy"]["networks"]),
-            {"onyx-host-policy-upstream", "onyx-host-broker"},
-        )
         self.assertEqual(
             set(services["onyx-public-egress-bridge"]["networks"]),
             {"onyx-public-egress", "onyx-public-policy-upstream"},
@@ -151,39 +141,25 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             set(services["onyx-host-egress-bridge"]["networks"]),
             {"onyx-host-egress", "onyx-host-policy-upstream"},
         )
-        self.assertNotIn("network_mode", services["onyx-public-egress-policy"])
-        self.assertNotIn("network_mode", services["onyx-host-egress-policy"])
-        self.assertEqual(
-            services["onyx-public-egress-policy"]["environment"][
-                "EGRESS_ROUTE_BROKER_CREDENTIAL"
-            ],
-            "0" * 64,
-        )
-        self.assertEqual(
-            services["onyx-host-egress-policy"]["environment"][
-                "EGRESS_ROUTE_BROKER_CREDENTIAL"
-            ],
-            "1" * 64,
-        )
-        self.assertNotEqual(
-            services["onyx-public-egress-policy"]["environment"][
-                "EGRESS_ROUTE_BROKER_HOST"
-            ],
-            services["onyx-host-egress-policy"]["environment"][
-                "EGRESS_ROUTE_BROKER_HOST"
-            ],
-        )
+        for route_class, port in (("public", "3132"), ("host", "3133")):
+            proxy = services[f"onyx-{route_class}-egress-proxy"]
+            self.assertEqual(proxy["network_mode"], "service:netns-holder")
+            self.assertEqual(proxy["environment"]["EGRESS_ROUTE_CLASS"], route_class)
+            self.assertEqual(proxy["environment"]["PREFETCH_PROXY_PORT"], port)
+            self.assertEqual(
+                proxy["environment"]["EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"],
+                f"onyx-{route_class}-egress-bridge",
+            )
 
-    def test_brokers_and_bridges_are_narrow_and_hardened(self) -> None:
+    def test_final_hop_proxies_and_bridges_are_narrow_and_hardened(self) -> None:
         model = _compose_model("full")
         services = model["services"]
         for route_class in ("public", "host"):
-            broker = services[f"onyx-{route_class}-route-broker"]
-            self.assertEqual(broker["user"], "65534:65534")
-            self.assertEqual(
-                broker["environment"]["EGRESS_BROKER_HOST"],
-                f"onyx-{route_class}-route-broker",
-            )
+            proxy = services[f"onyx-{route_class}-egress-proxy"]
+            self.assertEqual(proxy["user"], "65534:65534")
+            self.assertTrue(proxy["read_only"])
+            self.assertEqual(proxy["cap_drop"], ["ALL"])
+            self.assertIn("no-new-privileges:true", proxy["security_opt"])
             bridge = services[f"onyx-{route_class}-egress-bridge"]
             self.assertEqual(bridge["user"], "65534:65534")
             self.assertTrue(bridge["read_only"])
@@ -198,8 +174,8 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             )
 
         netns_networks = set(services["netns-holder"]["networks"])
-        self.assertIn("onyx-public-broker", netns_networks)
-        self.assertIn("onyx-host-broker", netns_networks)
+        self.assertIn("onyx-public-policy-upstream", netns_networks)
+        self.assertIn("onyx-host-policy-upstream", netns_networks)
         myst_sysctls = services["myst-client"].get("sysctls", {})
         self.assertEqual(str(myst_sysctls.get("net.ipv4.ip_forward")), "0")
         self.assertEqual(
@@ -211,8 +187,6 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 networks
                 & {
                     "routing-uplink",
-                    "onyx-public-broker",
-                    "onyx-host-broker",
                     "onyx-public-policy-upstream",
                     "onyx-host-policy-upstream",
                     "browser-egress",
@@ -308,7 +282,8 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         services = model["services"]
         gateway = services["doc-drop-route-gateway"]
         self.assertEqual(
-            set(gateway["networks"]), {"doc-drop-route", "onyx-host-broker"}
+            set(gateway["networks"]),
+            {"doc-drop-route", "onyx-host-policy-upstream"},
         )
         self.assertEqual(
             set(services["doc-drop-web"]["networks"]),
@@ -321,13 +296,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertEqual(gateway["cap_drop"], ["ALL"])
         self.assertFalse(gateway.get("ports"))
         self.assertEqual(
-            services["onyx-host-egress-policy"]["environment"][
-                "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS"
-            ],
-            "doc-drop-web:8091",
-        )
-        self.assertEqual(
-            services["onyx-host-route-broker"]["environment"][
+            services["onyx-host-egress-proxy"]["environment"][
                 "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS"
             ],
             "doc-drop-web:8091",
@@ -351,8 +320,17 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 "host-web-proxy",
                 "host-doc-drop-web-proxy",
                 "onyx-helper-egress-proxy",
+                "onyx-public-egress-policy",
+                "onyx-host-egress-policy",
+                "onyx-public-route-broker",
+                "onyx-host-route-broker",
             }
         )
+        self.assertFalse((ROOT / "crw" / "route_broker.py").exists())
+        makefile = (ROOT / "Makefile").read_text()
+        self.assertNotIn("ROUTE_BROKER", makefile)
+        self.assertNotIn("onyx-public-broker", model["networks"])
+        self.assertNotIn("onyx-host-broker", model["networks"])
         for service in ("api_server", "background", "web_server", "nginx", "code-interpreter"):
             self.assertNotEqual(
                 model["services"][service].get("network_mode"),

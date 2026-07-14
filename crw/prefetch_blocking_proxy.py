@@ -23,7 +23,7 @@ For prefetch traffic this proxy:
 
 2. **For plain HTTP URLs**: returns ``403 Forbidden`` by default with a clear
    explanatory message. The host route retains narrow exceptions for exact
-   ``host.docker.internal``, RFC1918 literals, and opt-in broker-validated
+   ``host.docker.internal``, RFC1918 literals, and opt-in proxy-validated
    ``.local``/``.internal``/``.home.arpa`` destinations. Set
    ``EGRESS_ALLOW_HTTP_URLS=true`` only when general cleartext HTTP fetches are
    intentionally required.
@@ -84,7 +84,6 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import ipaddress
-import json
 import logging
 import os
 import re
@@ -113,23 +112,12 @@ if POLICY_MODE not in {
     raise RuntimeError(f"Unsupported EGRESS_PROXY_POLICY={POLICY_MODE!r}")
 BLOCK_SEARCH_ENGINES = POLICY_MODE in {"prefetch", "executor"}
 
-# Onyx application egress policies run outside the trusted routing namespace.
-# They perform HTTP/framing and structural destination checks, then ask one
-# fixed authenticated route broker to make the authoritative DNS/upstream
-# connection. Existing browser/executor/prefetch policies leave these unset
-# and retain their direct final-hop behavior.
+# The public and host Onyx listeners are complete final-hop proxies in the
+# trusted routing namespace. ROUTE_CLASS selects whether the listener has only
+# public destination policy or the additional exact-host/opt-in RFC1918 rules.
 ROUTE_CLASS = os.environ.get("EGRESS_ROUTE_CLASS", "public").strip().lower()
 if ROUTE_CLASS not in {"public", "host"}:
     raise RuntimeError("EGRESS_ROUTE_CLASS must be exactly 'public' or 'host'")
-DEFER_DNS_TO_BROKER = os.environ.get(
-    "EGRESS_POLICY_DEFER_DNS", "false"
-).strip().lower() == "true"
-ROUTE_BROKER_HOST = os.environ.get("EGRESS_ROUTE_BROKER_HOST", "").strip()
-ROUTE_BROKER_PORT_RAW = os.environ.get("EGRESS_ROUTE_BROKER_PORT", "").strip()
-ROUTE_BROKER_CREDENTIAL = os.environ.get(
-    "EGRESS_ROUTE_BROKER_CREDENTIAL", ""
-).strip()
-ROUTE_BROKER_PORT = int(ROUTE_BROKER_PORT_RAW) if ROUTE_BROKER_PORT_RAW else 0
 ALLOW_RFC1918 = os.environ.get("EGRESS_ALLOW_RFC1918", "false").strip() == "true"
 RFC1918_SYSTEM_DNS_SUFFIXES = (".local", ".internal", ".home.arpa")
 
@@ -177,7 +165,7 @@ HTTPS_PROXY_REQUIRE_TLS13 = (
 # cleartext and should not be fetched by an LLM web tool unless the operator
 # explicitly opts in. The host route's exact ``host.docker.internal`` identity
 # is the narrow exception needed by local HTTP inference and embedding servers;
-# it remains broker-resolved, address-pinned, and unavailable to public routes.
+# it remains proxy-resolved, address-pinned, and unavailable to public routes.
 ALLOW_HTTP_URLS = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in (
     "1",
     "true",
@@ -422,7 +410,6 @@ def _plain_http_allowed(
     validated_rfc1918 = bool(validated_ips) and all(
         _is_rfc1918(ip) for ip in validated_ips
     )
-    broker_will_validate = bool(ROUTE_BROKER_HOST and DEFER_DNS_TO_BROKER)
     return (
         ALLOW_HTTP_URLS
         or _is_trusted_internal_destination(host, port)
@@ -430,7 +417,7 @@ def _plain_http_allowed(
         or (
             ROUTE_CLASS == "host"
             and ALLOW_RFC1918
-            and (validated_rfc1918 or broker_will_validate)
+            and validated_rfc1918
         )
     )
 
@@ -747,28 +734,6 @@ async def _check_egress_readiness() -> None:
     writer.close()
     await writer.wait_closed()
 
-    if ROUTE_BROKER_HOST:
-        try:
-            broker_reader, broker_writer = await _connect_via_route_broker(
-                "localhost", 443
-            )
-        except ConnectionError as exc:
-            if not any(
-                marker in str(exc)
-                for marker in (
-                    "loopback",
-                    "blocked hostname",
-                    "blocked internal hostname",
-                    "single-label",
-                )
-            ):
-                raise
-        else:
-            broker_writer.close()
-            await broker_writer.wait_closed()
-            raise RuntimeError("route broker unexpectedly allowed localhost")
-        return
-
     if not UPSTREAM_PROXY:
         addresses = await _resolve_target_host("example.com", 443)
         if not addresses:
@@ -810,10 +775,8 @@ async def _validate_destination(
 
     # The host-capable route has one always-available Docker-host identity.
     # It is deliberately exact (not a suffix rule) and is resolved only by the
-    # authoritative broker in the trusted namespace.
+    # host-capable final-hop proxy in the trusted namespace.
     if _is_exact_host_exception(host):
-        if DEFER_DNS_TO_BROKER:
-            return None, ()
         try:
             resolved_ips = await _resolve_system_host(host, port)
         except (socket.gaierror, OSError, ValueError) as e:
@@ -847,7 +810,7 @@ async def _validate_destination(
         and ALLOW_RFC1918
         and _is_rfc1918(host)
     ):
-        return None, () if DEFER_DNS_TO_BROKER else (host,)
+        return None, (host,)
 
     if _parse_ip_literal(host) and not _ip_block_reason(host):
         return None, (host,)
@@ -866,13 +829,8 @@ async def _validate_destination(
     if hostname_reason:
         return hostname_reason, ()
 
-    # Isolated request-policy namespaces must not resolve target names. Their
-    # matching route broker repeats this function with authoritative routing.
-    if DEFER_DNS_TO_BROKER:
-        return None, ()
-
-    # The LAN option exists only on the host broker. To avoid leaking every
-    # host-route name to system/Docker DNS, classify only operator-local names
+    # The LAN option exists only on the host final-hop proxy. To avoid leaking
+    # every host-route name to system/Docker DNS, classify only operator-local names
     # with an explicitly supported suffix. Mixed answers fail closed.
     # All-global answers are discarded and follow the normal selected final
     # route below. Arbitrary names never reach system DNS in VPN mode.
@@ -1052,8 +1010,6 @@ def _sanitized_upstream_proxy() -> str:
 
 
 def _target_dns_mode() -> str:
-    if ROUTE_BROKER_HOST:
-        return "route-broker"
     if UPSTREAM_PROXY:
         return "upstream-proxy"
     if MYST_VPN_ENABLED:
@@ -1079,18 +1035,12 @@ async def _connect_via_upstream(
     target_host: str,
     target_port: int,
     validated_ips: tuple[str, ...] = (),
-    transport: str = "opaque",
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Connect to target_host:target_port through UPSTREAM_PROXY.
 
     Supports HTTP CONNECT, SOCKS5, and SOCKS5h proxies.
     Returns (reader, writer) for the established tunnel.
     """
-    if ROUTE_BROKER_HOST:
-        return await _connect_via_route_broker(
-            target_host, target_port, transport=transport
-        )
-
     if _is_trusted_internal_destination(target_host, target_port):
         return await _open_validated_direct_connection(validated_ips, target_port)
 
@@ -1132,53 +1082,6 @@ async def _connect_via_upstream(
         )
     else:
         raise ValueError(f"Unsupported proxy scheme: {scheme}")
-
-
-async def _connect_via_route_broker(
-    target_host: str, target_port: int, transport: str = "opaque"
-) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    """Open one authenticated bounded stream through the fixed route broker."""
-    if not ROUTE_BROKER_HOST or not 0 < ROUTE_BROKER_PORT <= 65535:
-        raise RuntimeError("route broker host and port are required")
-    if (
-        len(ROUTE_BROKER_CREDENTIAL) != 64
-        or any(c not in "0123456789abcdef" for c in ROUTE_BROKER_CREDENTIAL)
-    ):
-        raise RuntimeError("route broker credential is invalid")
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(ROUTE_BROKER_HOST, ROUTE_BROKER_PORT),
-        timeout=TUNNEL_CONNECT_TIMEOUT,
-    )
-    if transport not in {"opaque", "cleartext"}:
-        writer.close()
-        raise ValueError("invalid route broker transport")
-    request = {
-        "version": "onyx-route-broker-v2",
-        "credential": ROUTE_BROKER_CREDENTIAL,
-        "route_class": ROUTE_CLASS,
-        "transport": transport,
-        "host": _normalize_host(target_host),
-        "port": target_port,
-    }
-    encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
-    if len(encoded) > 4096:
-        writer.close()
-        raise ConnectionError("route broker request is too large")
-    writer.write(encoded)
-    await writer.drain()
-    raw_response = await asyncio.wait_for(reader.readline(), TUNNEL_CONNECT_TIMEOUT)
-    if not raw_response or len(raw_response) > 1024:
-        writer.close()
-        raise ConnectionError("route broker returned invalid framing")
-    try:
-        response = json.loads(raw_response)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        writer.close()
-        raise ConnectionError("route broker returned invalid response") from exc
-    if response.get("status") != "ok":
-        writer.close()
-        raise ConnectionError(str(response.get("reason", "route denied"))[:512])
-    return reader, writer
 
 
 async def _open_validated_direct_connection(
@@ -1456,13 +1359,16 @@ async def _open_plain_http_forward_connection(
     expect absolute-form request targets for plain HTTP forwarding; direct and
     SOCKS paths expect origin-form.
     """
-    if ROUTE_BROKER_HOST:
-        reader, writer = await _connect_via_route_broker(
-            target_host, target_port, transport="cleartext"
+    if (
+        _is_trusted_internal_destination(target_host, target_port)
+        or _is_exact_host_exception(target_host)
+        or (
+            ROUTE_CLASS == "host"
+            and ALLOW_RFC1918
+            and validated_ips
+            and all(_is_rfc1918(ip) for ip in validated_ips)
         )
-        return reader, writer, False
-
-    if _is_trusted_internal_destination(target_host, target_port):
+    ):
         reader, writer = await _open_validated_direct_connection(
             validated_ips, target_port
         )
@@ -1860,7 +1766,6 @@ async def _handle_connect(
             target_host,
             target_port,
             validated_ips,
-            transport="cleartext" if target_port == 80 else "opaque",
         )
     except Exception as e:
         logger.warning(
@@ -2091,22 +1996,6 @@ async def _handle_forward_http(
 
 async def main() -> None:
     _validate_upstream_proxy_config()
-    if ROUTE_BROKER_HOST:
-        if UPSTREAM_PROXY:
-            raise RuntimeError(
-                "isolated policy must not receive EGRESS_UPSTREAM_PROXY_URL"
-            )
-        if not DEFER_DNS_TO_BROKER:
-            raise RuntimeError(
-                "isolated policy with a route broker must defer target DNS"
-            )
-        if not 0 < ROUTE_BROKER_PORT <= 65535:
-            raise RuntimeError("EGRESS_ROUTE_BROKER_PORT is invalid")
-        if (
-            len(ROUTE_BROKER_CREDENTIAL) != 64
-            or any(c not in "0123456789abcdef" for c in ROUTE_BROKER_CREDENTIAL)
-        ):
-            raise RuntimeError("EGRESS_ROUTE_BROKER_CREDENTIAL is invalid")
     if not ALLOWED_CLIENT_HOSTS and not _listener_is_loopback_only():
         raise RuntimeError(
             "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS must name the dedicated bridge "

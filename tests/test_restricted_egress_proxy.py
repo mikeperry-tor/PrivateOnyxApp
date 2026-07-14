@@ -89,10 +89,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_public_route_rejects_exact_host_exception(self) -> None:
         module = _load_module(
             "onyx-helper",
-            {
-                "EGRESS_ROUTE_CLASS": "public",
-                "EGRESS_POLICY_DEFER_DNS": "true",
-            },
+            {"EGRESS_ROUTE_CLASS": "public"},
         )
         reason, addresses = await module._validate_destination(
             "host.docker.internal", 9150
@@ -100,28 +97,28 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(reason)
         self.assertEqual(addresses, ())
 
-    async def test_host_policy_defers_exact_host_resolution_to_broker(self) -> None:
+    async def test_host_proxy_resolves_exact_host_itself(self) -> None:
         module = _load_module(
             "onyx-helper",
-            {
-                "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_POLICY_DEFER_DNS": "true",
-            },
+            {"EGRESS_ROUTE_CLASS": "host"},
         )
-        with patch.object(module, "_resolve_system_host", AsyncMock()) as resolve:
+        with patch.object(
+            module,
+            "_resolve_system_host",
+            AsyncMock(return_value={"192.168.65.2"}),
+        ) as resolve:
             reason, addresses = await module._validate_destination(
                 "host.docker.internal", 9150
             )
         self.assertIsNone(reason)
-        self.assertEqual(addresses, ())
-        resolve.assert_not_awaited()
+        self.assertEqual(addresses, ("192.168.65.2",))
+        resolve.assert_awaited_once_with("host.docker.internal", 9150)
 
     async def test_exact_host_exception_rejects_non_unicast_answers(self) -> None:
         module = _load_module(
             "onyx-helper",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_POLICY_DEFER_DNS": "false",
             },
         )
         forbidden_addresses = (
@@ -150,7 +147,6 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "onyx-helper",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_POLICY_DEFER_DNS": "false",
             },
         )
         with patch.object(
@@ -169,55 +165,63 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "onyx-helper",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_POLICY_DEFER_DNS": "true",
-                "EGRESS_ROUTE_BROKER_HOST": "host-route-broker",
-                "EGRESS_ROUTE_BROKER_CREDENTIAL": "a" * 64,
                 "EGRESS_ALLOW_RFC1918": "true",
             },
         )
         self.assertTrue(
             host_module._plain_http_allowed("host.docker.internal", 3210)
         )
-        self.assertTrue(host_module._plain_http_allowed("192.168.1.20", 3210))
-        self.assertTrue(host_module._plain_http_allowed("inference.internal", 8080))
-        # The isolated policy deliberately defers DNS classification. It may
-        # send the cleartext request to the authenticated broker, which must
-        # reject a public or mixed answer before opening the destination.
-        self.assertTrue(host_module._plain_http_allowed("public.example", 80))
-
-        broker_module = _load_module(
-            "onyx-helper",
-            {
-                "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_ALLOW_RFC1918": "true",
-            },
+        self.assertTrue(
+            host_module._plain_http_allowed(
+                "192.168.1.20", 3210, ("192.168.1.20",)
+            )
         )
         self.assertTrue(
-            broker_module._plain_http_allowed(
+            host_module._plain_http_allowed(
                 "inference.internal", 8080, ("192.168.1.20",)
             )
         )
         self.assertFalse(
-            broker_module._plain_http_allowed(
+            host_module._plain_http_allowed(
                 "public.example", 80, ("93.184.216.34",)
             )
         )
         self.assertFalse(
-            broker_module._plain_http_allowed(
+            host_module._plain_http_allowed(
                 "mixed.example", 80, ("192.168.1.20", "93.184.216.34")
             )
         )
 
         public_module = _load_module(
             "onyx-helper",
-            {
-                "EGRESS_ROUTE_CLASS": "public",
-                "EGRESS_POLICY_DEFER_DNS": "true",
-            },
+            {"EGRESS_ROUTE_CLASS": "public"},
         )
         self.assertFalse(
             public_module._plain_http_allowed("host.docker.internal", 3210)
         )
+
+    async def test_plain_http_host_exception_bypasses_external_upstream(self) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_ALLOW_RFC1918": "true",
+                "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080",
+            },
+        )
+        direct = AsyncMock(return_value=(object(), object()))
+        with (
+            patch.object(module, "_open_validated_direct_connection", direct),
+            patch.object(
+                module,
+                "_parse_proxy_url",
+                side_effect=AssertionError("host exception reached external proxy"),
+            ),
+        ):
+            await module._open_plain_http_forward_connection(
+                "inference.internal", 8080, ("192.168.1.20",)
+            )
+        direct.assert_awaited_once_with(("192.168.1.20",), 8080)
 
     async def test_rfc1918_requires_host_route_and_explicit_opt_in(self) -> None:
         for route_class, enabled, allowed in (
@@ -239,7 +243,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(reason is None, allowed)
                 self.assertEqual(addresses, ("192.168.10.20",) if allowed else ())
 
-    async def test_host_broker_rejects_mixed_private_public_dns(self) -> None:
+    async def test_host_proxy_rejects_mixed_private_public_dns(self) -> None:
         module = _load_module(
             "onyx-helper",
             {

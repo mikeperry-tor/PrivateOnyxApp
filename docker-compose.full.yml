@@ -185,7 +185,7 @@ services:
 
   # The Web Connector always uses its selected request policy, including for
   # the stack-owned doc-drop origin. This fixed gateway exposes that origin
-  # only on the host policy/broker path; it is not a general backend relay.
+  # only on the host final-hop proxy path; it is not a general backend relay.
   doc-drop-route-gateway:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
@@ -198,7 +198,7 @@ services:
       net.ipv6.conf.all.forwarding: "0"
     command: ["tcp-listen:8091,fork,reuseaddr", "tcp-connect:doc-drop-origin:8091"]
     networks:
-      onyx-host-broker:
+      onyx-host-policy-upstream:
         aliases: [doc-drop-web]
       doc-drop-route: {}
     depends_on:

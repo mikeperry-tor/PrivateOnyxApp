@@ -10,15 +10,15 @@ control, and RAG network is `internal: true`. Onyx applications do not share
 `netns-holder`; proxy variables are route selectors, not the sandbox. A client
 that ignores them has no external or host-gateway route.
 
-Only Myst, the two minimal Onyx route brokers, and explicitly selected
-VPN-side services share `netns-holder`. Public and host request-policy
-processes use separate namespaces and separate broker networks. Each hardened
-TCP bridge has exactly one caller network and its matching policy network.
+Only Myst, final-hop policy proxies, and explicitly selected VPN-side services
+share `netns-holder`. Each hardened TCP bridge has exactly one caller network
+and its matching policy-side network. Public and host bridges reach distinct
+listeners with distinct source allowlists and route-class configuration.
 
 ## Reachability
 
 - API/background reach explicit backend/data/Teep networks and the public and
-  host egress bridges. They cannot reach routing, broker, browser, executor, or
+  host egress bridges. They cannot reach routing, policy-side, browser, executor, or
   restricted-service control networks.
 - Web/nginx use only `onyx-frontend`; a fixed hardened publisher exposes nginx
   through a non-masqueraded host edge required by Docker Desktop.
@@ -27,7 +27,7 @@ TCP bridge has exactly one caller network and its matching policy network.
 - Code-interpreter control is on `onyx-backend` and serves port 8000. Spawned
   executors use `none` or their dedicated internal network and executor bridge.
 - Full-mode data services use `onyx-data`. `doc-drop-web` is reached only by a
-  fixed gateway from the host broker; a separate fixed display publisher uses
+  fixed gateway from the host proxy; a separate fixed display publisher uses
   a dedicated internal peer network. The embedding shim reaches its configured
   upstream only through the host bridge.
 - Optional Tailscale reaches nginx only through a fixed HTTP gateway and never
@@ -48,18 +48,17 @@ ignore environment proxy variables. Other private configured provider endpoint
 types are intentionally unsupported rather than given an unverified direct or
 environment-proxy path.
 
-The policy processes validate HTTP framing and structural destinations but do
-not resolve public targets. They send a bounded authenticated request to their
-matching broker. The broker repeats validation, selects the fixed final route,
-resolves where required, pins the approved address, and streams with idle,
-total, and concurrency limits. Route class, resolver, upstream, and source
-address are not caller-selectable.
+Each final-hop proxy validates HTTP framing and destinations, selects its fixed
+route class, resolves where required, pins approved direct addresses, and
+streams the connection. Route class, resolver, upstream, and source address
+are not caller-selectable. There is no intermediate broker protocol or second
+policy process.
 
 Both routes always reject loopback, link-local, metadata, multicast,
 unspecified/reserved addresses, Docker/Podman internal suffixes and legacy
 aliases, and single-label service names. The host route alone permits:
 
-- exact `host.docker.internal`, resolved and pinned by the host broker; and
+- exact `host.docker.internal`, resolved and pinned by the host proxy; and
 - RFC1918 literals or all-RFC1918 answers for `.local`, `.internal`, and
   `.home.arpa` names when `EGRESS_ALLOW_RFC1918=true`.
 
@@ -67,7 +66,7 @@ Mixed private/global DNS answers fail. Public-only, browser, and executor
 policies never receive these exceptions. Exact host and RFC1918 traffic does
 not traverse an external upstream proxy. Exact `host.docker.internal` and
 opt-in, fully validated RFC1918 destinations are the cleartext exceptions when
-`EGRESS_ALLOW_HTTP_URLS=false`. The host broker classifies DNS answers before
+`EGRESS_ALLOW_HTTP_URLS=false`. The host proxy classifies DNS answers before
 opening the connection, so these support local inference, embedding, Web
 Connector, and MCP endpoints without permitting public HTTP targets.
 
@@ -79,13 +78,13 @@ Compose seeds `OPEN_URL_VALIDATE_SSRF=true`,
 precedence and is read for each new MCP client or Web crawl. Strict levels
 select the public route; levels that permit private networks may select the
 host route. The MCP wrapper transport does not duplicate destination policy:
-the selected policy/broker validates initial and SDK-derived requests and the
-broker remains the authoritative resolver.
+the selected final-hop proxy validates initial and SDK-derived requests and
+remains the authoritative resolver.
 
 The Web connector sends the stack-owned `http://doc-drop-web:8091/` origin
-through the host policy. The host broker recognizes that exact authority and
+through the host final-hop proxy. The proxy recognizes that exact authority and
 can reach only its hardened fixed gateway to the real doc-drop service. Browser
-subresources and redirects remain on the selected policy instead of inheriting
+subresources and redirects remain on the selected final-hop proxy instead of inheriting
 a direct backend route. Display links are rewritten to the configured host
 doc-drop origin only in returned search sections, while stored document
 identity remains the internal crawl URL.
@@ -142,10 +141,10 @@ Compose tests.
 
 The code-interpreter control service retains Docker socket access. Compromise
 of that service is compromise of the Docker control plane; executor network
-isolation does not make that socket safe. Likewise, the trusted route brokers
+isolation does not make that socket safe. Likewise, the trusted final-hop proxies
 are security-critical because they own final-hop DNS and connectivity.
 
-Failure is intentionally closed: stopping a policy, bridge, broker, Myst, or
+Failure is intentionally closed: stopping a final-hop proxy, bridge, Myst, or
 upstream disables its route without cross-class or direct fallback. Only Myst
 is autohealed in VPN-enabled models, preventing dependency restart storms
 while internal application health remains independent. Explicit no-VPN models

@@ -744,14 +744,14 @@ Upgrade notes:
   exact `http://doc-drop-web:8091/` route must traverse only the fixed host
   gateway, and every other unapproved private target must be rejected.
 
-### MCP, Web Connector, configured inference, and route brokers
+### MCP, Web Connector, configured inference, and final-hop proxies
 
 Patch behavior:
 
 - `apply_mcp_egress_proxy_patch()` validates the stack-owned public/host proxy
   URLs, preserves the saved SSRF level, and constructs HTTPX with an explicit
   proxy plus `trust_env=False`. It deliberately leaves initial and
-  SDK-derived destination enforcement to the selected policy/broker instead
+  SDK-derived destination enforcement to the selected final-hop proxy instead
   of installing a second transport-level validator.
 - The background patch selects the public/host requests and Playwright route
   during construction and per Web crawl, preserves the exact internal
@@ -761,9 +761,11 @@ Patch behavior:
   Teep base with a direct `trust_env=False` client, and fails on an unsupported
   configured chat-provider transport shape. Private image, speech, arbitrary
   embedding/reranking, and provider-discovery endpoints remain unsupported.
-- `crw/route_broker.py` accepts only the matching policy address, protocol
-  version, route class, and generated credential; repeats destination checks;
-  and applies framing, connect, idle, total, and concurrency bounds.
+- The public and host final-hop proxy processes accept only their configured
+  bridge peers, use fixed route classes, perform destination/DNS validation,
+  and establish the authoritative connection. There is no intermediate stream
+  protocol, generated route credential, admission lease, or fixed total
+  CONNECT lifetime.
 
 Upgrade checks:
 
@@ -779,12 +781,11 @@ Upgrade checks:
   `.local`/`.internal`/`.home.arpa` classification, arbitrary-name non-use of
   system DNS, mixed DNS answers, loopback/link-local/metadata denial, and a
   saved-level change between new clients or crawls.
-- Test wrong broker version, credential, route class, peer network, oversized
-  frame, cancellation/half-close, capacity, and deadline behavior. Public and
-  host policies must not share a namespace, broker network, or credential.
-- Verify no public target DNS query occurs in an Onyx application or policy
-  namespace and no cross-class fallback exists when one bridge/policy/broker
-  is stopped.
+- Test wrong bridge peer, route class, peer network, malformed/oversized HTTP
+  framing, cancellation, and half-close behavior. Public and host bridges must
+  remain on distinct caller and policy-side networks and fixed listener ports.
+- Verify no public target DNS query occurs in an Onyx application namespace
+  and no cross-class fallback exists when one bridge/final-hop proxy is stopped.
 - Verify HTTP, HTTPS, `socks5`, and `socks5h` upstreams all receive ordinary
   target names directly without preliminary system or Myst resolution.
 
@@ -1128,7 +1129,7 @@ Compose wiring:
 - `local-embedding-shim` runs on the internal backend and host-egress networks.
   It uses explicit absolute-form HTTP or HTTPS CONNECT through the host bridge;
   it has no direct external route. When `EGRESS_ALLOW_HTTP_URLS=false`, the
-  host policy permits plain HTTP only for exact `host.docker.internal` and for
+  host final-hop proxy permits plain HTTP only for exact `host.docker.internal` and for
   RFC1918 literals or `.local`, `.internal`, and `.home.arpa` names whose
   complete answer set is RFC1918 when `EGRESS_ALLOW_RFC1918=true`; public
   cleartext destinations must remain denied.
@@ -1511,8 +1512,8 @@ Patched Onyx services:
 Additional wrapper services:
 
 - `netns-holder` owns only the trusted final-hop routing namespace.
-- Separate public/host policy namespaces, authenticated route brokers, and
-  hardened bridges enforce Onyx application egress.
+- Separate public/host final-hop proxy listeners and hardened bridges enforce
+  Onyx application egress.
 - `myst-client`, `searxng-core`, `searxng-valkey`, `obscura`, `cdp-shim`,
   `prefetch-blocking-proxy`, `crw`, `host-searxng-proxy`, VPN-only `autoheal`,
   optional Tailscale gateways, and `teep` are wrapper-side services around
@@ -1563,8 +1564,8 @@ Patched Onyx services:
 Wrapper additions:
 
 - `doc-drop-web` exposes a local read-only docs directory on dedicated route
-  and publisher networks. `doc-drop-route-gateway` gives the authenticated
-  host policy an exact route to that origin, while
+  and publisher networks. `doc-drop-route-gateway` gives the host final-hop
+  proxy an exact route to that origin, while
   `host-doc-display-publisher` exposes only that listener on the configured
   host bind. `doc-drop-web` runs
   `onyx/doc_drop_webserver.py`, a small `http.server` wrapper that hides hidden
@@ -1645,9 +1646,10 @@ Behavior:
 - Restricted components and executor pods always receive local bridge URLs.
 - Default SearXNG remains without general internet egress.
 - Each policy listener accepts only loopback health checks and its configured
-  bridge service. Onyx public/host listeners use separate namespaces and
-  authenticated matching brokers. Upstream proxy configuration is startup-validated and
-  credentials are redacted from logs.
+  bridge service. Onyx public/host routes use distinct bridge networks,
+  listener ports, source allowlists, and final-hop proxy processes. Upstream
+  proxy configuration is startup-validated and credentials are redacted from
+  logs.
 - HTTP forwarding rejects ambiguous `Content-Length`/`Transfer-Encoding`
   framing and streams valid fixed-length and chunked bodies.
 

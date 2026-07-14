@@ -139,11 +139,9 @@ USER_AUTH_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
 CRW_ONYX_API_KEY := crw-$(strip $(shell openssl rand -hex 16 2>/dev/null))
 MINIO_ROOT_USER := $(strip $(shell openssl rand -hex 16 2>/dev/null))
 MINIO_ROOT_PASSWORD := $(strip $(shell openssl rand -hex 32 2>/dev/null))
-ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL := $(strip $(shell openssl rand -hex 32 2>/dev/null))
-ONYX_HOST_ROUTE_BROKER_CREDENTIAL := $(strip $(shell openssl rand -hex 32 2>/dev/null))
 S3_AWS_ACCESS_KEY_ID := $(MINIO_ROOT_USER)
 S3_AWS_SECRET_ACCESS_KEY := $(MINIO_ROOT_PASSWORD)
-ifeq ($(strip $(SEARXNG_SECRET)$(USER_AUTH_SECRET)$(MINIO_ROOT_PASSWORD)$(ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL)$(ONYX_HOST_ROUTE_BROKER_CREDENTIAL)),)
+ifeq ($(strip $(SEARXNG_SECRET)$(USER_AUTH_SECRET)$(MINIO_ROOT_PASSWORD)),)
 $(error openssl is required to generate ephemeral local stack secrets)
 endif
 export SEARXNG_SECRET
@@ -153,8 +151,6 @@ export MINIO_ROOT_USER
 export MINIO_ROOT_PASSWORD
 export S3_AWS_ACCESS_KEY_ID
 export S3_AWS_SECRET_ACCESS_KEY
-export ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL
-export ONYX_HOST_ROUTE_BROKER_CREDENTIAL
 CODE_INTERPRETER_IMAGE_TAG ?= $(call env_value,CODE_INTERPRETER_IMAGE_TAG)
 ifeq ($(strip $(CODE_INTERPRETER_IMAGE_TAG)),)
 $(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass CODE_INTERPRETER_IMAGE_TAG=... on the make command line)

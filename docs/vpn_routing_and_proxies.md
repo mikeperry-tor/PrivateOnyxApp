@@ -15,14 +15,14 @@ mode, optional Podman/Teep/Tailscale layers, the executor-network layer when
 enabled, and `docker-compose.proxy.yml` when `EGRESS_UPSTREAM_PROXY_URL` is
 non-empty. `EGRESS_ALLOW_HTTP_URLS` controls cleartext target URLs.
 
-The Makefile generates different 256-bit credentials for the public and host
-route brokers on every start. They are stack secrets, not wrapper settings.
+No application-to-proxy credential or custom stream protocol is used. Network
+placement and each proxy's resolved bridge-peer allowlist authenticate callers.
 
 ## Network-enforced application isolation
 
 `api_server`, `background`, `web_server`, `nginx`, code-interpreter control,
 and local RAG helpers use only explicit `internal: true` networks. They do not
-share `netns-holder`, any broker/policy-upstream network, or a Docker network
+share `netns-holder`, any policy-upstream network, or a Docker network
 with a usable default egress route. A direct public or host-gateway socket from
 an application therefore fails even if a client ignores proxy configuration.
 
@@ -54,17 +54,20 @@ are not supported; see [Onyx patches](onyx_patch_info.md).
 
 Each bridge is a hardened numeric-nonroot TCP forwarder with exactly two
 internal networks: one application-side network and one dedicated
-policy-upstream network. Public and host request-policy processes have
-separate namespaces and separate authenticated broker networks. They cannot
-use each other's broker or credential. Browser and executor bridges are also
-separate and cannot reach either Onyx policy or broker.
+policy-upstream network. The public and host bridges forward to distinct
+listeners on distinct final-hop proxy processes in `netns-holder`. Each proxy
+resolves its configured bridge name at startup and rejects every other source
+address. Browser and executor bridges are separate and cannot reach either
+Onyx listener.
 
-The minimal public and host route brokers run in `netns-holder`, repeat
-destination validation, and make the authoritative DNS/upstream connection.
-They accept only a bounded, versioned, authenticated request from their
-matching policy address. Broker requests cannot select a resolver, upstream,
-source address, or route class. Streams have connection, idle, total, and
-concurrency limits.
+The public and host final-hop proxies directly parse HTTP proxy requests,
+validate destinations, select DNS/upstream behavior, pin direct addresses,
+and open the authoritative connection. There is no intermediate request-policy
+process, custom broker protocol, admission counter, or proxy-imposed total
+lifetime for an established CONNECT tunnel. Request parsing, DNS, and TCP
+socket setup use bounded timeouts; upstream proxy negotiation and established
+tunnel relay have no proxy-wide idle or total deadline. Their lifetime is
+driven by the client, upstream, endpoint, and protocol activity.
 
 ## Destination classes
 
@@ -72,7 +75,7 @@ The public route rejects private, loopback, link-local, multicast, metadata,
 unspecified/reserved addresses, Docker/Podman internal names, legacy host
 aliases, and single-label service names. The host route adds only:
 
-- exact `host.docker.internal`, resolved and pinned by the host broker; and
+- exact `host.docker.internal`, resolved and pinned by the host proxy; and
 - RFC1918 literals or `.local`, `.internal`, and `.home.arpa` names whose
   complete answer set is RFC1918, only when `EGRESS_ALLOW_RFC1918=true`.
 
@@ -82,26 +85,26 @@ on the host route. Exact
 `host.docker.internal` does not require the RFC1918 option and never traverses
 an external upstream proxy. When `EGRESS_ALLOW_HTTP_URLS=false`, the host route
 still permits plain HTTP to that exact host and to destinations whose complete
-answer set is RFC1918 when `EGRESS_ALLOW_RFC1918=true`. The policy marks the
-connection as cleartext and the broker enforces that classification after its
-authoritative DNS validation, without enabling public HTTP.
+answer set is RFC1918 when `EGRESS_ALLOW_RFC1918=true`. The final-hop proxy
+makes that decision after authoritative DNS validation, without enabling
+public HTTP.
 
 New installs seed Onyx SSRF protection to Allow Private Network with loopback
 disabled. A saved Admin Security Hardening value remains authoritative and is
 read when a new MCP client or Web crawl is created. `open_url` remains strict.
-The internal doc-drop origin uses the host policy and an exact fixed gateway;
+The internal doc-drop origin uses the host final-hop proxy and an exact fixed gateway;
 it is not a direct crawl bypass.
 
 ## Final-hop routing and DNS
 
-| `MYST_VPN_ENABLED` | `EGRESS_UPSTREAM_PROXY_URL` | Broker final route |
+| `MYST_VPN_ENABLED` | `EGRESS_UPSTREAM_PROXY_URL` | Final route |
 | --- | --- | --- |
 | `true` | empty | Mysterium |
 | `true` | set | upstream proxy reached through Mysterium |
 | `false` | empty | explicit direct Docker route in `netns-holder` |
 | `false` | set | upstream proxy reached directly |
 
-No-VPN mode changes only the broker's selected final route; application
+No-VPN mode changes only the proxy's selected final route; application
 isolation is identical. Myst readiness requires a working `myst0` route and a
 source-bound provider-DNS probe. No-VPN readiness requires no stale `myst0`
 and a usable non-Myst default route. In VPN-enabled models only `myst-client`
@@ -110,7 +113,7 @@ is autohealed; explicit no-VPN models omit autoheal and its Docker socket.
 With an upstream proxy, HTTP, HTTPS, `socks5`, and `socks5h` all send ordinary
 target names directly to that proxy without a preliminary system or Myst DNS
 lookup. Without an upstream proxy, public names are resolved and pinned at the
-broker through Myst provider DNS or explicit no-VPN system DNS. Upstream
+final-hop proxy through Myst provider DNS or explicit no-VPN system DNS. Upstream
 credentials are never logged.
 
 The upstream proxy endpoint is bootstrap routing, not a target-policy
@@ -146,15 +149,14 @@ limited to exact stack-owned internal destinations and
 `host.docker.internal`. Ordinary names go to the configured proxy without
 local resolution, use Myst provider DNS without a proxy, or use system DNS
 only in explicit no-VPN mode. Docker service-name resolution used to
-authenticate fixed bridge/policy/broker peers is control-plane resolution, not
+authenticate fixed bridge/final-hop proxy peers is control-plane resolution, not
 user-target resolution.
 
 ## Readiness and failure behavior
 
-Policy readiness checks the listener and authenticated broker denial of a
-fixed blocked destination. Broker readiness checks its listener plus the
-selected DNS/proxy substrate without opening a user target. Bridges require a
-policy denial response, proving the full hop. Loss of Myst, a broker, policy,
+Final-hop proxy readiness checks configuration plus the selected DNS/proxy
+substrate without opening a user target. Bridges require a fixed blocked-target
+denial from their proxy, proving the full hop. Loss of Myst, a final-hop proxy,
 or bridge makes only the corresponding route fail; there is no public/host
 cross-class or direct fallback.
 
@@ -177,7 +179,7 @@ sharing the Onyx caller network with `netns-holder`.
 recovery role. Explicit no-VPN models omit the service and Docker socket mount.
 
 Executor pods remain `none` by default. When enabled, they use their own
-internal network and executor bridge/policy, receive no Onyx broker credential
+internal network and executor bridge/policy, receive no Onyx host-route access
 or trusted-service bypass, and cannot use host/RFC1918 exceptions.
 
 For a host Tor proxy, use:

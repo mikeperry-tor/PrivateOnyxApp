@@ -47,8 +47,8 @@ At a high level:
 - Onyx applications use internal-only networks. Generic helpers use a fixed
   public bridge; saved-level MCP/Web Connector traffic and configured
   chat inference plus the dedicated embedding shim use separate public or
-  host-capable bridges, isolated policy namespaces, and authenticated route
-  brokers. Direct sockets have no external route; executor pods never inherit
+  host-capable bridges and distinct final-hop policy proxy listeners. Direct
+  sockets have no external route; executor pods never inherit
   Onyx exceptions. The exact internal Teep chat base is a startup-validated
   direct-service exception, and doc-drop Web Connector traffic uses an exact
   host-policy gateway rather than a process-wide direct crawl.
@@ -68,8 +68,8 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 - `docker-compose.*-vpn.yml`, `docker-compose.vpn-autoheal.yml`,
   `docker-compose.proxy.yml`, and Podman overrides
   - optional routing/proxy/container-engine layers selected by the Makefile.
-- `crw/` - CDP shim, CRW validation-DNS sidecar, prefetch-blocking policy, and
-  authenticated Onyx route broker.
+- `crw/` - CDP shim, CRW validation-DNS sidecar, and the shared final-hop
+  policy-proxy implementation.
 - `searxng/` - custom CRW-backed engines and the minimal SearXNG overlay.
 - `myst/` - Mysterium image build file, entrypoint, signup compose, and helper CLI.
 - `teep/` - Teep image build file and entrypoint.
@@ -136,7 +136,7 @@ This stack protects private research, document contents, browsing behavior, infe
   their documented narrow route exceptions, while named operator-local
   proxies require the RFC1918 opt-in. Onyx
   applications must never rejoin `netns-holder` or gain direct fallback when
-  VPN, policy, broker, or proxy connectivity fails.
+  VPN, policy-proxy, or bridge connectivity fails.
 - Request handling: keep supported search engines routed through the custom CRW/SearXNG path; preserve CRW/Obscura rendering, prefetch blocking, per-host rate control, anti-bot visibility, and the documented CDP shim behavior. Do not replace this path with plain HTTP fetching or fixed sleeps.
 - Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
 - Patch upgrades: before changing Onyx, code-interpreter, SearXNG, CRW, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
@@ -149,7 +149,7 @@ There is no single test framework for this wrapper. Choose checks based on what 
 - Restricted-egress unit tests: run
   `python3 -m unittest discover -s tests -p 'test_*.py' -v`. Add focused cases
   under `tests/` when changing proxy destination/DNS policy, HTTP request
-  framing, bridge/broker authentication and route-class enforcement, executor
+  framing, bridge-peer authentication and route-class enforcement, executor
   network selection, or injected executor environment. Runtime-limit patches should get focused signature,
   configured-value, and invalid-value cases. Tests must be deterministic and
   must not require live internet, VPN credentials, or the private

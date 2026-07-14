@@ -59,9 +59,9 @@ boundary.
    at `http://doc-drop-web:8091/`.
 5. The Onyx `background` worker crawls the directory listing and downloads
    documents through the Web connector. The exact stack-owned origin uses the
-   host policy, an authenticated route broker, and a fixed gateway into the
+   host final-hop proxy and a fixed gateway into the
    dedicated doc-drop route network. User-defined connector targets use the
-   public or host policy selected from saved Admin SSRF state.
+   public or host final-hop proxy selected from saved Admin SSRF state.
 6. During indexing, `background` calls `MODEL_SERVER_HOST:MODEL_SERVER_PORT`.
    In full mode the wrapper points that to `local-embedding-shim:9101` on the
    internal backend network.
@@ -439,13 +439,13 @@ Common failure modes:
 
 - The Web connector cannot crawl `http://doc-drop-web:8091/`: check that full
   mode, `doc-drop-web`, `doc-drop-route-gateway`, and the host egress
-  policy/broker are healthy and that the connector was recreated after the
+  final-hop proxy are healthy and that the connector was recreated after the
   network-isolation migration. Test the display link separately at
   `http://localhost:8091/`.
 - Directory listings work but hidden files are missing: this is expected.
 - Indexing starts but embedding fails with connection errors: confirm the host
   embedding server is running at `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`,
-  `onyx-host-egress-bridge` and its policy/broker are healthy,
+  `onyx-host-egress-bridge` and its final-hop proxy are healthy,
   `EGRESS_ALLOW_RFC1918=true` is set only when an RFC1918 endpoint needs it,
   and the URL uses a container-reachable host name.
 - Search returns weak results after successful indexing: verify query prefix

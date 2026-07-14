@@ -114,11 +114,11 @@ Most likely variables you want to change:
     `myst0` subnet, and a source-bound query to the provider resolver. Docker
     autoheal restarts only `myst-client` when that data-plane check fails; the
     stable `netns-holder` namespace contains only final-hop route owners and
-    brokers; application and request-policy containers do not share it.
+    proxies; application containers do not share it.
     Explicit no-VPN models omit `autoheal` and its Docker socket entirely.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
-  - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, dedicated embedding-shim upstream, and supported configured chat inference destinations through the host-capable policy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
+  - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, dedicated embedding-shim upstream, and supported configured chat inference destinations through the host-capable final-hop proxy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
   - Use an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`. Only those operator-local suffixes are queried through system/Docker DNS for complete-answer-set RFC1918 classification. Arbitrary names are never sent to system DNS merely because this option is enabled.
   - With an upstream proxy, all other target names are given directly to that proxy. Without one, Myst provider DNS resolves them; explicit no-VPN mode uses system DNS.
   - Exact `host.docker.internal` is a narrower host-route exception and does not require the RFC1918 option. New installs seed Onyx SSRF protection to **Allow Private Network**, with loopback disabled; saved Admin Security Hardening settings remain authoritative and select the public or host-capable route for new MCP clients and Web crawls.
@@ -390,12 +390,17 @@ Restart the stack after changing this setting (`make down-lite && make up-lite`,
 ### Optional: Outbound Proxy (`EGRESS_UPSTREAM_PROXY_URL`)
 
 Set `EGRESS_UPSTREAM_PROXY_URL` in `.env.wrapper` to give the final-hop
-policy proxies an upstream proxy. This includes the fixed public-only policy
+policy proxies an upstream proxy. This includes the fixed public-only proxy
 used by environment-aware HTTP clients in the Onyx API and background workers, so
 coding-agent repository downloads, Web connector downloads, and similar
 helpers follow the same routing matrix. Restricted components continue to use
 local bridge URLs. This is orthogonal to Mysterium: if both are set, the
 upstream-proxy connection crosses the VPN.
+
+The Onyx route has no intermediate stream broker, admission counter, or fixed
+total CONNECT lifetime. Established tunnels remain open until a peer closes or
+I/O fails. The optional Tailscale frontend does not traverse these outbound
+proxies; it reaches nginx through its own fixed internal gateway.
 
 The proxy endpoint itself follows the same routing boundary. In VPN mode,
 public proxy names use the Myst provider resolver and public proxy addresses
@@ -520,7 +525,7 @@ The default plain-HTTP `host.docker.internal` endpoint uses the exact host
 route, remains usable when public HTTP URLs are disabled, and does not require
 `EGRESS_ALLOW_RFC1918`. Enable that option only when the embedding endpoint is
 an RFC1918 literal or uses a `.local`, `.internal`, or `.home.arpa` name. Such
-opt-in RFC1918 endpoints may also use plain HTTP; the host route broker permits
+opt-in RFC1918 endpoints may also use plain HTTP; the host final-hop proxy permits
 it only after the complete DNS answer set validates as RFC1918.
 
 ### Optional: Using Teep for Embeddings
@@ -548,7 +553,7 @@ The former bundled Obscura MCP browser has been removed intentionally. Add
 only MCP servers you operate or trust through Onyx Admin. Their streamable
 HTTP, SSE, redirects, discovery, registration, OAuth, token, refresh, and tool
 traffic use an explicit public or host-capable proxy transport. The selected
-egress policy and broker, rather than a second HTTPX validator, enforce every
+egress final-hop proxy, rather than a second HTTPX validator, enforces every
 initial and SDK-derived destination. Public servers may use nonstandard TCP
 ports; RFC1918 destinations require `EGRESS_ALLOW_RFC1918=true` and the host
 route, while exact `host.docker.internal` uses the existing narrower host

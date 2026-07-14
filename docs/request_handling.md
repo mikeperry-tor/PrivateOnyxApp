@@ -8,16 +8,16 @@ open direct Internet or host-gateway sockets. Generic public HTTP clients use
 embedding shim use `onyx-host-egress-bridge`, except that the exact internal
 Teep chat base stays direct on `onyx-teep`. MCP/OAuth and configured Web
 Connector clients choose between them from the saved Admin SSRF level for each
-new client or crawl. Public and host policies have separate namespaces,
-authenticated route brokers, and credentials; browser and executor policies
-are separate.
+new client or crawl. Public and host routes use distinct bridges, policy-side
+networks, listener ports, bridge-peer allowlists, and final-hop proxy
+processes; browser and executor paths are separate.
 
 The MCP runtime patch supplies an explicit `trust_env=False` HTTPX proxy
 transport for initial URLs, redirects, discovery, registration,
 authorization, token, refresh, SSE, and streamable HTTP traffic. The wrapper
 does not add a second per-request destination validator inside HTTPX: the
-selected request policy and broker enforce every initial and SDK-derived
-destination consistently, and the broker resolves and pins the target. Exact
+selected final-hop proxy enforces every initial and SDK-derived
+destination consistently, and the proxy resolves and pins the target. Exact
 `host.docker.internal` is host-route-only. RFC1918 targets additionally require
 `EGRESS_ALLOW_RFC1918=true`; named RFC1918 targets must end in `.local`,
 `.internal`, or `.home.arpa`. Loopback, link-local, metadata, and other Docker
@@ -27,7 +27,7 @@ mode uses system DNS for ordinary names.
 
 The Web connector uses the same saved-level selection for requests and
 Playwright fallback, including sitemap construction. The exact full-mode
-internal origin `http://doc-drop-web:8091/` uses the host policy plus a fixed
+internal origin `http://doc-drop-web:8091/` uses the host final-hop proxy plus a fixed
 gateway; it is not a crawl-wide direct exception. The former bundled Obscura
 MCP server was removed intentionally; user-configured MCP servers use the
 guarded paths above.
@@ -747,10 +747,11 @@ Direct sockets have no internet or stack route; the bridge reaches a separate
 search-blocking `executor` policy. Only its final-hop route owner shares the
 trusted routing namespace.
 
-Each policy listener resolves and accepts only its configured bridge service,
-plus loopback for its local healthcheck. Onyx public and host policies use
-separate namespaces and authenticated route-broker networks; browser,
-prefetch, and executor policies remain inaccessible from application networks.
+Each final-hop proxy listener resolves and accepts only its configured bridge
+service, plus loopback for its local healthcheck. Onyx public and host
+listeners use separate policy-side networks and immutable route classes;
+browser, prefetch, and executor listeners remain inaccessible from application
+networks.
 
 The local policy healthcheck is routing-aware. In direct VPN mode it verifies
 the fixed provider-DNS path; in explicit no-VPN mode it uses the explicitly
@@ -801,8 +802,8 @@ generation and code-interpreter executor pod caveats, is documented in
 | **CRW CDP (obscura)** | `EGRESS_UPSTREAM_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
 | **SearXNG** | none by default | CRW-backed engines use only the internal CRW peer network |
 | **Code-interpreter HTTP clients** | executor policy | local executor bridge; search-engine and private/internal targets are blocked |
-| **Onyx API/background HTTP helpers** | public-only Onyx bridge/policy/broker | Environment-aware `requests`, `httpx`, and `urllib` clients use `HTTP_PROXY`/`HTTPS_PROXY=http://onyx-public-egress-bridge:3128`; stack-owned internal bypasses come from `onyx/helper-egress.env` |
-| **MCP/OAuth and configured Web Connector** | saved-level-selected public or host route | Explicit transports leave target enforcement and public DNS to the selected policy/broker; doc-drop uses one exact host-broker gateway |
+| **Onyx API/background HTTP helpers** | public-only Onyx bridge/final-hop proxy | Environment-aware `requests`, `httpx`, and `urllib` clients use `HTTP_PROXY`/`HTTPS_PROXY=http://onyx-public-egress-bridge:3128`; stack-owned internal bypasses come from `onyx/helper-egress.env` |
+| **MCP/OAuth and configured Web Connector** | saved-level-selected public or host route | Explicit transports leave target enforcement and public DNS to the selected final-hop proxy; doc-drop uses one exact host-proxy gateway |
 | **Configured chat inference / embedding shim** | host-capable Onyx route | Explicit clients preserve exact-host and opt-in RFC1918 policy; the exact internal Teep chat base remains direct on `onyx-teep` |
 | **OnyxWebCrawler** | selected Onyx bridge | Does not go through CRW/Obscura; its SSRF-validated request and Playwright fallback use explicit public/host routing |
 
@@ -1174,14 +1175,14 @@ PDF text extraction uses `extract_pdf_text(content)` which returns
 This path does **not** go through CRW, the CDP shim, or obscura. It is an
 in-process HTTP fetch via `ssrf_safe_get()` (SSRF-validated `requests.get`),
 and `requests` sends public targets through `onyx-public-egress-bridge` to the
-public policy and route broker. That path applies private/internal and
+public final-hop proxy. That path applies private/internal and
 cleartext URL rules and selects Myst, the configured upstream proxy, or
 explicit no-VPN egress. Onyx's internal
 dependencies bypass it only through the stack-owned `NO_PROXY` set in
 `onyx/helper-egress.env`. Playwright does not inherit that set; the helper
 path has no private-target exception. The separate full-mode Web Connector
-reaches the exact `doc-drop-web:8091` identity through the host policy, route
-broker, and fixed doc-drop gateway.
+reaches the exact `doc-drop-web:8091` identity through the host final-hop proxy
+and fixed doc-drop gateway.
 The initial request uses a simple `OnyxWebCrawler/1.0 (+https://www.onyx.app)`
 user agent with no stealth. When the response is a 403 or carries Cloudflare
 headers (`cf-ray`, `cf-mitigated`, `Server: cloudflare`), and
@@ -1531,7 +1532,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `EGRESS_PROXY_ALLOWED_CLIENT_HOSTS` | required except for literal-loopback listeners | Comma-separated dedicated bridge service names allowed to connect; an empty list is valid only when `PREFETCH_PROXY_HOST` is a literal loopback address. |
-| `EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS` | empty; the full stack sets exact `doc-drop-web:8091` authority on the host policy and broker | Exact stack-owned `host:port` authorities allowed through their fixed internal gateway despite normal private/cleartext blocking. Valid only for `onyx-helper`; this is not a general bypass list. |
+| `EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS` | empty; the full stack sets exact `doc-drop-web:8091` authority on the host final-hop proxy | Exact stack-owned `host:port` authorities allowed through their fixed internal gateway despite normal private/cleartext blocking. Valid only for `onyx-helper`; this is not a general bypass list. |
 | `EGRESS_UPSTREAM_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
 | `EGRESS_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs in the prefetch proxy and CDP shim. When false, HTTP fetches fail closed with a message telling the agent to use HTTPS. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
