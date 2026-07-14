@@ -23,9 +23,10 @@ For prefetch traffic this proxy:
 
 2. **For plain HTTP URLs**: returns ``403 Forbidden`` by default with a clear
    explanatory message. The host route retains narrow exceptions for exact
-   ``host.docker.internal`` and opt-in, broker-validated RFC1918 destinations.
-   Set ``EGRESS_ALLOW_HTTP_URLS=true`` only when general cleartext HTTP fetches
-   are intentionally required.
+   ``host.docker.internal``, RFC1918 literals, and opt-in broker-validated
+   ``.local``/``.internal``/``.home.arpa`` destinations. Set
+   ``EGRESS_ALLOW_HTTP_URLS=true`` only when general cleartext HTTP fetches are
+   intentionally required.
 
 3. **For HTTPS URLs, and explicitly allowed plain HTTP URLs**: forwards the
    request to the target, through ``EGRESS_UPSTREAM_PROXY_URL`` if set.
@@ -38,8 +39,12 @@ single-label Docker-style hostnames. When
 ``EGRESS_UPSTREAM_PROXY_URL`` is empty, DNS names are resolved directly
 through the Mysterium provider resolver when VPN routing is enabled, or through
 system DNS only in explicit no-VPN mode; all returned addresses are classified.
-When an upstream proxy is set, target DNS resolution is skipped so the target
-hostname is sent only through the proxy protocol.
+When an upstream proxy is set, target DNS resolution is skipped for HTTP,
+HTTPS, ``socks5``, and ``socks5h`` so the target hostname is sent only through
+the proxy protocol. The host route consults system/Docker DNS for arbitrary
+targets only when explicit no-VPN mode is selected. With RFC1918 access
+enabled, VPN mode additionally permits classification of names ending in
+``.local``, ``.internal``, or ``.home.arpa``.
 
 When ``EGRESS_UPSTREAM_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
 routes its own upstream requests through that proxy. Restricted components
@@ -122,6 +127,7 @@ ROUTE_BROKER_CREDENTIAL = os.environ.get(
 ).strip()
 ROUTE_BROKER_PORT = int(ROUTE_BROKER_PORT_RAW) if ROUTE_BROKER_PORT_RAW else 0
 ALLOW_RFC1918 = os.environ.get("EGRESS_ALLOW_RFC1918", "false").strip() == "true"
+RFC1918_SYSTEM_DNS_SUFFIXES = (".local", ".internal", ".home.arpa")
 
 # Upstream proxy (EGRESS_UPSTREAM_PROXY_URL from .env.wrapper). When set,
 # the proxy routes its own requests through this upstream. Supports:
@@ -303,6 +309,12 @@ def _is_rfc1918(ip_text: str) -> bool:
 
 def _is_exact_host_exception(host: str) -> bool:
     return ROUTE_CLASS == "host" and _normalize_host(host) == "host.docker.internal"
+
+
+def _is_rfc1918_system_dns_name(host: str) -> bool:
+    """Return whether an operator-local name may use system DNS classification."""
+    normalized = _normalize_host(host)
+    return any(normalized.endswith(suffix) for suffix in RFC1918_SYSTEM_DNS_SUFFIXES)
 
 
 def _loose_ipv4_literal(host: str) -> str | None:
@@ -848,11 +860,16 @@ async def _validate_destination(
     if DEFER_DNS_TO_BROKER:
         return None, ()
 
-    # The broad LAN option exists only on the host broker. Resolve once with
-    # trusted system DNS to classify a private-capable name. Mixed answers fail
-    # closed. All-global answers are discarded and resolved again through the
-    # normal VPN/upstream/no-VPN public route below.
-    if ROUTE_CLASS == "host" and ALLOW_RFC1918:
+    # The LAN option exists only on the host broker. To avoid leaking every
+    # host-route name to system/Docker DNS, classify only operator-local names
+    # with an explicitly supported suffix. Mixed answers fail closed.
+    # All-global answers are discarded and follow the normal selected final
+    # route below. Arbitrary names never reach system DNS in VPN mode.
+    if (
+        ROUTE_CLASS == "host"
+        and ALLOW_RFC1918
+        and _is_rfc1918_system_dns_name(host)
+    ):
         try:
             candidate_ips = await _resolve_system_host(host, port)
         except (socket.gaierror, OSError, ValueError):
@@ -867,26 +884,11 @@ async def _validate_destination(
                 return "DNS returned mixed RFC1918 and non-RFC1918 addresses", ()
 
     if UPSTREAM_PROXY:
-        scheme, _proxy_host, _proxy_port, _username, _password = _parse_proxy_url(
-            UPSTREAM_PROXY
-        )
-        if scheme != "socks5":
-            return None, ()
-
-        # socks5 performs target DNS at the selected final hop. Resolve and pin
-        # the validated address here. socks5h, HTTP, and HTTPS deliberately
-        # leave target DNS to the configured upstream proxy.
-        try:
-            resolved_ips = await _resolve_target_host(host, port)
-        except (socket.gaierror, OSError, RuntimeError, ValueError) as e:
-            return f"DNS resolution failed: {e}", ()
-        if not resolved_ips:
-            return "DNS resolution returned no addresses", ()
-        for resolved_ip in sorted(resolved_ips):
-            resolved_reason = _ip_block_reason(resolved_ip)
-            if resolved_reason:
-                return f"DNS resolved to blocked {resolved_ip} ({resolved_reason})", ()
-        return None, tuple(sorted(resolved_ips))
+        # Every supported proxy protocol can carry a target hostname. Keep
+        # target DNS at the configured proxy instead of resolving locally or
+        # through Myst first. Exact host and validated RFC1918 exceptions have
+        # already returned above and never traverse the upstream proxy.
+        return None, ()
 
     try:
         resolved_ips = await _resolve_target_host(host, port)
@@ -1042,10 +1044,7 @@ def _target_dns_mode() -> str:
     if ROUTE_BROKER_HOST:
         return "route-broker"
     if UPSTREAM_PROXY:
-        scheme, _host, _port, _username, _password = _parse_proxy_url(
-            UPSTREAM_PROXY
-        )
-        return "selected-final-hop" if scheme == "socks5" else "upstream-proxy"
+        return "upstream-proxy"
     if MYST_VPN_ENABLED:
         return f"myst-provider-via-{MYST_VPN_INTERFACE}"
     return "system-explicit-no-vpn"
@@ -1246,22 +1245,16 @@ async def _connect_via_socks5(
             writer.close()
             raise ConnectionError("SOCKS5: auth failed")
 
-    # socks5 uses the address resolved and validated through the selected
-    # final-hop resolver; socks5h deliberately sends the hostname upstream.
+    # Both accepted SOCKS URL spellings keep target-name resolution at the
+    # configured proxy. Literal targets remain literals.
     normalized_host = _normalize_host(target_host)
     literal_ip = _parse_ip_literal(normalized_host)
     loose_ip = _loose_ipv4_literal(normalized_host)
-    if scheme == "socks5" and literal_ip is None and loose_ip is None:
-        if not validated_ips:
-            writer.close()
-            raise ConnectionError("SOCKS5: missing validated target address")
-        normalized_host = validated_ips[0]
-        literal_ip = _parse_ip_literal(normalized_host)
-    if scheme == "socks5h" and literal_ip is None and loose_ip is None:
+    if literal_ip is None and loose_ip is None:
         host_bytes = target_host.encode("utf-8")
         if not host_bytes or len(host_bytes) > 255:
             writer.close()
-            raise ConnectionError("SOCKS5h: invalid target hostname length")
+            raise ConnectionError("SOCKS5: invalid target hostname length")
         writer.write(
             b"\x05\x01\x00\x03"
             + bytes([len(host_bytes)])
@@ -1364,7 +1357,35 @@ async def _open_http_proxy_connection(
     hostname_reason = _hostname_block_reason(normalized_host)
     if literal_ip is not None:
         proxy_addresses = (normalized_host,)
-    elif MYST_VPN_ENABLED and hostname_reason is None:
+    elif not MYST_VPN_ENABLED:
+        # Explicit no-VPN mode uses the operator-selected system resolver for
+        # the configured proxy endpoint as well as ordinary destinations.
+        proxy_addresses = tuple(
+            sorted(await _resolve_system_host(proxy_host, proxy_port))
+        )
+        if not proxy_addresses:
+            raise ConnectionError("system DNS returned no upstream proxy addresses")
+    elif normalized_host == "host.docker.internal":
+        proxy_addresses = tuple(
+            sorted(await _resolve_system_host(proxy_host, proxy_port))
+        )
+        if not proxy_addresses:
+            raise ConnectionError(
+                "system DNS returned no Docker-host proxy addresses"
+            )
+    elif ALLOW_RFC1918 and _is_rfc1918_system_dns_name(normalized_host):
+        candidate_ips = await _resolve_system_host(proxy_host, proxy_port)
+        if not candidate_ips:
+            raise ConnectionError(
+                "system DNS returned no operator-local proxy addresses"
+            )
+        if not all(_is_rfc1918(ip) for ip in candidate_ips):
+            raise ConnectionError(
+                "operator-local upstream proxy name did not resolve entirely "
+                "to RFC1918 addresses"
+            )
+        proxy_addresses = tuple(sorted(candidate_ips))
+    elif hostname_reason is None:
         resolved = await _resolve_target_host(normalized_host, proxy_port)
         if not resolved:
             raise ConnectionError("VPN DNS returned no upstream proxy addresses")
@@ -1372,17 +1393,16 @@ async def _open_http_proxy_connection(
             reason = _ip_block_reason(resolved_ip)
             if reason:
                 raise ConnectionError(
-                    f"VPN DNS resolved upstream proxy to blocked {resolved_ip} ({reason})"
+                    "VPN DNS resolved upstream proxy to blocked "
+                    f"{resolved_ip} ({reason})"
                 )
         proxy_addresses = tuple(sorted(resolved))
     else:
-        # Explicit no-VPN mode and configured internal proxy endpoints use the
-        # container resolver. Arbitrary target names never reach this branch.
-        proxy_addresses = tuple(
-            sorted(await _resolve_system_host(proxy_host, proxy_port))
+        raise ConnectionError(
+            "upstream proxy hostname requires exact host.docker.internal, an "
+            "RFC1918 literal, or an operator-local suffix with "
+            "EGRESS_ALLOW_RFC1918=true"
         )
-        if not proxy_addresses:
-            raise ConnectionError("system DNS returned no upstream proxy addresses")
 
     failures: list[str] = []
     for address in proxy_addresses:

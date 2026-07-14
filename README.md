@@ -118,7 +118,8 @@ Most likely variables you want to change:
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
   - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, dedicated embedding-shim upstream, and supported configured chat inference destinations through the host-capable policy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
-  - Enabling it lets the host broker query configured host-route names through system/Docker DNS to determine whether their complete answer set is RFC1918. Public answers are discarded and resolved again through the selected final hop, but the initial system-DNS query is an intentional DNS-privacy tradeoff.
+  - Use an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`. Only those operator-local suffixes are queried through system/Docker DNS for complete-answer-set RFC1918 classification. Arbitrary names are never sent to system DNS merely because this option is enabled.
+  - With an upstream proxy, all other target names are given directly to that proxy. Without one, Myst provider DNS resolves them; explicit no-VPN mode uses system DNS.
   - Exact `host.docker.internal` is a narrower host-route exception and does not require the RFC1918 option. New installs seed Onyx SSRF protection to **Allow Private Network**, with loopback disabled; saved Admin Security Hardening settings remain authoritative and select the public or host-capable route for new MCP clients and Web crawls.
 
 ### Initial VPN Connection (Myst Payment)
@@ -267,8 +268,9 @@ The best privacy preserving providers supported by teep are currently `neardirec
 
 This stack can also use a local OpenAI-compatible, LM Studio, or Ollama chat
 endpoint through `host.docker.internal` or an explicitly enabled RFC1918
-address. The fixed host route covers chat inference after a provider and model
-have been saved. Onyx's separate model-discovery endpoints are not patched for
+IP address. RFC1918 names must end in `.local`, `.internal`, or `.home.arpa`.
+The fixed host route covers chat inference after a provider and model have
+been saved. Onyx's separate model-discovery endpoints are not patched for
 private routing in this wrapper version; if the Admin UI cannot enumerate a
 private endpoint, configure the model identifier explicitly where the UI
 permits it. Configured private image-generation, speech, and arbitrary
@@ -406,17 +408,16 @@ EGRESS_UPSTREAM_PROXY_URL="https://user:pass@proxy.example.com:8443"
 # SOCKS5 proxy
 EGRESS_UPSTREAM_PROXY_URL="socks5://proxy.example.com:1080"
 
-# SOCKS5 with remote DNS resolution
+# SOCKS5 alias; target names are still resolved by the proxy
 EGRESS_UPSTREAM_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
 The local policy proxies block private/internal literals, all
 `*.docker.internal` names, known legacy Docker Desktop host/gateway names, and
 single-label Docker service/container names. These built-in blocks cannot be
-removed by configuration. HTTP, HTTPS, and `socks5h` leave target DNS at the
-upstream proxy, so a public-looking hostname that it resolves to a private
-address is a residual risk. Plain `socks5` uses the selected final-hop resolver
-and sends a validated pinned address. Exact host Tor
+removed by configuration. HTTP, HTTPS, `socks5`, and `socks5h` all leave target
+DNS at the upstream proxy, so a public-looking hostname that it resolves to a
+private address is a residual risk. Exact host Tor
 (`socks5h://host.docker.internal:9150`) uses the narrow host exception and
 does not require `EGRESS_ALLOW_RFC1918=true`.
 
@@ -505,10 +506,10 @@ These rules use `mlx-embeddings` because llama.cpp embeddings support is very bu
 
 The default plain-HTTP `host.docker.internal` endpoint uses the exact host
 route, remains usable when public HTTP URLs are disabled, and does not require
-`EGRESS_ALLOW_RFC1918`. Set it only when the embedding endpoint is an RFC1918
-host or LAN name. Such opt-in RFC1918 endpoints may also use plain HTTP; the
-host route broker permits it only after the complete DNS answer set validates
-as RFC1918.
+`EGRESS_ALLOW_RFC1918`. Enable that option only when the embedding endpoint is
+an RFC1918 literal or uses a `.local`, `.internal`, or `.home.arpa` name. Such
+opt-in RFC1918 endpoints may also use plain HTTP; the host route broker permits
+it only after the complete DNS answer set validates as RFC1918.
 
 ### Optional: Using Teep for Embeddings
 

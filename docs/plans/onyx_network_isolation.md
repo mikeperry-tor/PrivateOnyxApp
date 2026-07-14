@@ -435,9 +435,10 @@ authoritative final connection:
 - internal and Docker-name rejection;
 - VPN provider DNS and address pinning in the route broker when VPN is enabled
   without an upstream proxy;
-- upstream-proxy DNS semantics selected by scheme (`socks5h` and HTTP CONNECT
-  keep target DNS remote; plain `socks5` uses the documented local resolver);
-- explicit system/Docker DNS only in documented no-VPN direct mode; and
+- upstream-proxy target DNS remains remote for HTTP, HTTPS, `socks5`, and
+  `socks5h`;
+- explicit system/Docker target DNS only for fixed stack identities,
+  operator-local RFC1918 classification, or documented no-VPN direct mode; and
 - credential-safe logging.
 
 Only the host-capable request-policy namespace and route broker additionally
@@ -501,7 +502,9 @@ The opt-in includes plain HTTP to the permitted RFC1918 destinations even when
 `EGRESS_ALLOW_HTTP_URLS=false`; it does not enable plain HTTP to public targets.
 
 When disabled, RFC1918 literals and names resolving only to RFC1918 addresses
-fail closed. When enabled:
+fail closed. When enabled, named RFC1918 targets must end in `.local`,
+`.internal`, or `.home.arpa`; other private targets must use an IP literal.
+Additionally:
 
 - Onyx MCP still applies the saved Admin SSRF level on every initial and
   derived URL; strict levels reject private destinations before proxying.
@@ -514,26 +517,26 @@ fail closed. When enabled:
   inference base URL use an explicit host-capable proxy transport rather than
   generic environment routing. Default provider endpoints with no configured
   base URL may remain on the generic public path.
-- The host route broker resolves private-capable hostnames with the trusted
-  system resolver, requires every selected address to be RFC1918, pins the
-  connection, and never sends it through Myst provider DNS or an external
-  upstream proxy. For requests classified as `cleartext`, it applies the HTTP
-  exemption only after this complete-answer validation. All-global and mixed
-  answers remain ineligible for the RFC1918 cleartext exemption.
+- The host route broker resolves only `.local`, `.internal`, and `.home.arpa`
+  private-capable names with the trusted system resolver, requires every
+  selected address to be RFC1918, pins the connection, and never sends it
+  through Myst provider DNS or an external upstream proxy. For requests
+  classified as `cleartext`, it applies the HTTP exemption only after this
+  complete-answer validation. All-global and mixed answers remain ineligible
+  for the RFC1918 cleartext exemption.
 - Loopback, link-local, metadata, multicast, unspecified, Docker-internal names
   other than the exact host exception, and IPv4-mapped bypass forms remain
   blocked even when the switch is enabled.
 
-Supporting arbitrary private MCP, Web Connector, and configured endpoint hostnames necessarily
-means that, while this opt-in is enabled, host-capable target names may be
-queried through the trusted system resolver before the broker can determine
-that they are private. An all-RFC1918 answer may use the pinned private route;
-a mixed private/global answer is rejected; and an all-global answer is
-discarded and resolved again through the normal selected public-target route.
-Document the resulting DNS-privacy tradeoff. A compromised
-API/background process that can use the host-capable bridge can probe RFC1918
-services while the switch is enabled, so this remains a broad operator-approved
-LAN capability rather than an endpoint-scoped sandbox guarantee.
+The suffix restriction prevents arbitrary public target names from reaching
+system/Docker DNS merely because the opt-in is enabled. A qualifying
+all-RFC1918 answer may use the pinned private route; a mixed private/global
+answer is rejected; and an all-global answer is discarded and follows the
+normal selected public-target route. A compromised API/background process
+that can use the host-capable bridge can still probe RFC1918 services by IP or
+through these suffixes while the switch is enabled, so this remains a broad
+operator-approved LAN capability rather than an endpoint-scoped sandbox
+guarantee.
 
 ## MCP, OAuth, and Target DNS
 
@@ -611,14 +614,14 @@ Split validation responsibilities:
 
 - Onyx performs scheme, credential, syntax, normalized-hostname, IP-literal,
   always-blocked-name, Admin SSRF-level, and exact trusted-host checks without
-  resolving arbitrary public names when the RFC1918 option is disabled.
+  resolving arbitrary public names.
 - The matching route broker resolves and validates public names using the
   selected VPN/upstream/no-VPN mode and rechecks every CONNECT/forward request.
 - Exact `host.docker.internal` destinations are resolved only by their
   authorized host-broker exception.
 - When `EGRESS_ALLOW_RFC1918=true`, the host-capable path follows the
-  explicit RFC1918 resolution and pinning rules above; the public path remains
-  unchanged.
+  explicit IP-literal or `.local`/`.internal`/`.home.arpa` resolution and
+  pinning rules above; the public path remains unchanged.
 
 At strict SSRF levels, `host.docker.internal` must be rejected structurally
 even without DNS. At `ALLOW_PRIVATE_NETWORK`, allow that exact non-loopback
@@ -660,8 +663,9 @@ rendering behavior, and apply URL syntax plus saved-level validation to the
 initial URL, discovered crawl URLs, redirects, sitemap entries, and browser
 navigations. Public connector targets work through either selected broker's
 normal public route. RFC1918 targets require both an Admin level that permits
-connector-private access and `EGRESS_ALLOW_RFC1918=true`; loopback,
-link-local/metadata, and unapproved Docker names remain blocked.
+connector-private access and `EGRESS_ALLOW_RFC1918=true`; named targets must
+use `.local`, `.internal`, or `.home.arpa`. Loopback, link-local/metadata, and
+unapproved Docker names remain blocked.
 
 The exact configured local doc-drop connector keeps the fixed internal
 `http://doc-drop-web:8091/` service identity, with the narrow identity/display-
@@ -693,9 +697,10 @@ providers onto the host-capable path.
 Validate the configured endpoint URL before client construction and on every
 SDK-derived redirect or discovery URL where the SDK permits them. The route
 broker remains authoritative for DNS/address selection: RFC1918 succeeds only
-with `EGRESS_ALLOW_RFC1918=true`, while public configured endpoints use
-the normal public final route through the host broker. Startup/source-shape
-checks must fail loudly if an SDK upgrade stops using the injected client.
+with `EGRESS_ALLOW_RFC1918=true` and either an IP literal or a supported
+operator-local suffix, while public configured endpoints use the normal public
+final route through the host broker. Startup/source-shape checks must fail
+loudly if an SDK upgrade stops using the injected client.
 
 ## Internal Service URL Migration
 
@@ -749,9 +754,10 @@ Move `local-embedding-shim` to an internal network and patch its owned
 host-capable Onyx proxy URL. The current client is not environment-proxy aware,
 so this is a required implementation change rather than an optional fallback. The
 default `host.docker.internal` upstream must use the exact host exception.
-RFC1918 upstreams require `EGRESS_ALLOW_RFC1918=true`; public embedding
-upstreams use normal final-hop policy. API/background reach only
-`local-embedding-shim:9101`, never its upstream directly.
+RFC1918 upstreams require `EGRESS_ALLOW_RFC1918=true` and either an IP literal
+or `.local`/`.internal`/`.home.arpa`; public embedding upstreams use normal
+final-hop policy. API/background reach only `local-embedding-shim:9101`, never
+its upstream directly.
 
 Both the exact host default and opt-in RFC1918 embedding upstreams may use
 plain HTTP when general cleartext URLs are disabled. The shim sends
@@ -983,7 +989,8 @@ Residual risks to document:
   host services listen on those ports to an SSRF-permitted Onyx MCP/helper
   request; and
 - enabling `EGRESS_ALLOW_RFC1918` intentionally gives host-capable Onyx
-  callers broad RFC1918 reach and weakens target-DNS confinement for that class;
+  callers broad RFC1918 reach by IP and through the three operator-local
+  suffixes;
 - required internal peers remain laterally reachable according to the selected
   application/data network grouping.
 
@@ -1095,8 +1102,9 @@ an operator attaching new networks after startup.
 - Remove the three legacy wrapper SSRF flags; document the fixed
   `ALLOW_PRIVATE_NETWORK` seed, saved Admin override, and network-policy ceiling.
 - Explain that `EGRESS_ALLOW_RFC1918` gates RFC1918 MCP, configured Web
-  Connector, embedding, and inference targets, while provider-default
-  inference, `open_url`, and all browser/executor traffic remain public-only.
+  Connector, embedding, and inference targets; named targets must use
+  `.local`, `.internal`, or `.home.arpa`, while provider-default inference,
+  `open_url`, and all browser/executor traffic remain public-only.
 - Update host endpoints, local RAG URLs, Tailscale behavior, troubleshooting,
   and service counts.
 - Remove shared-namespace and port-7000 instructions.
@@ -1244,12 +1252,13 @@ Add focused cases under `tests/` for:
 - required broker `cleartext`/`opaque` classification, with missing, unknown,
   or malformed classifications rejected before a destination connection;
 - `EGRESS_ALLOW_RFC1918` disabled/enabled behavior, RFC1918-only answer
-  validation, mixed-answer rejection, all-global public-route handoff, and the
+  validation for `.local`/`.internal`/`.home.arpa`, arbitrary-name non-use of
+  system DNS, mixed-answer rejection, all-global public-route handoff, and the
   unchanged public-only denial;
 - plain HTTP exact-host success without the RFC1918 option; plain HTTP
-  all-RFC1918 success only on the host route with
-  `EGRESS_ALLOW_RFC1918=true`; and public or mixed-answer cleartext denial when
-  general HTTP is disabled;
+  RFC1918-literal or supported-suffix all-RFC1918 success only on the host
+  route with `EGRESS_ALLOW_RFC1918=true`; and public or mixed-answer cleartext
+  denial when general HTTP is disabled;
 - normal VPN/upstream/no-VPN public resolver selection;
 - HTTP framing and credential redaction regression;
 - generic-helper failure when the public bridge/policy is unavailable, MCP
@@ -1324,13 +1333,13 @@ Test at least:
 | lite, VPN | remote MCP, helper download, Playwright helper, search/open URL, Teep, direct-socket denial, Myst reconnect |
 | lite, no VPN | same functional paths through explicit no-VPN policy; no stalled Myst readiness or direct application route |
 | lite, upstream HTTP/HTTPS proxy | remote MCP/helper target DNS stays at upstream; exact host MCP remains local |
-| lite, upstream SOCKS5/SOCKS5h | target DNS behavior matches scheme and no direct fallback occurs |
+| lite, upstream SOCKS5/SOCKS5h | target names remain at the upstream proxy and no direct fallback occurs |
 | full, VPN/no VPN | all lite checks plus doc-drop crawl, source links, PDF freshness, embeddings, indexing, and `internal_search` |
 | MCP strict SSRF | host MCP rejected; remote public MCP succeeds through policy |
 | MCP allow-private, RFC1918 off | exact host MCP, including plain HTTP, succeeds; RFC1918, loopback, link-local, and other Docker names remain denied |
-| MCP allow-private, RFC1918 on | exact host and all-RFC1918 MCP, including plain HTTP, succeed through the host route; public HTTP still requires `EGRESS_ALLOW_HTTP_URLS=true`; mixed answers and loopback/link-local/other Docker names remain denied |
-| Web Connector, strict/allow-private | strict connector traffic uses the public bridge; permitted private connector traffic uses the host bridge and RFC1918, including plain HTTP, succeeds only with `EGRESS_ALLOW_RFC1918`; configured doc-drop remains internal |
-| supported configured chat inference, RFC1918 off/on | configured public endpoints use the host bridge and normal public final route; RFC1918 endpoints, including plain HTTP, fail when off and succeed through the pinned private route when on; public HTTP requires the general HTTP option; provider-default endpoints remain on the public bridge |
+| MCP allow-private, RFC1918 on | exact host, RFC1918 literals, and all-RFC1918 `.local`/`.internal`/`.home.arpa` MCP, including plain HTTP, succeed through the host route; public HTTP still requires `EGRESS_ALLOW_HTTP_URLS=true`; mixed answers and loopback/link-local/other Docker names remain denied |
+| Web Connector, strict/allow-private | strict connector traffic uses the public bridge; permitted RFC1918 literals and `.local`/`.internal`/`.home.arpa` names use the host bridge and succeed only with `EGRESS_ALLOW_RFC1918`; configured doc-drop remains internal |
+| supported configured chat inference, RFC1918 off/on | configured public endpoints use the host bridge and normal public final route; RFC1918 literals and supported operator-local names fail when off and use the pinned private route when on; public HTTP requires the general HTTP option; provider-default endpoints remain on the public bridge |
 | executor network off/on | control plane works; pods remain `none` or on the dedicated executor network and never inherit Onyx exceptions |
 | Tailscale off/on and routed/unrouted | disabled services absent; enabled ingress reaches nginx without adding application egress |
 
@@ -1412,11 +1421,12 @@ for any URL that must change; Compose cannot rewrite stored records.
   Admin overrides still select public/host routing, and no legacy wrapper SSRF
   flag remains consumed.
 - RFC1918 MCP, configured Web Connector, embedding, and inference endpoints
-  work only when `EGRESS_ALLOW_RFC1918=true`, only through the host-capable
+  work only when `EGRESS_ALLOW_RFC1918=true`, use IP literals or
+  `.local`/`.internal`/`.home.arpa` names, traverse only the host-capable
   namespace and broker, and never become reachable from `open_url`, generic
   public, browser, or executor paths. Their plain-HTTP forms receive the same
-  exception only after the host broker validates an all-RFC1918 answer set;
-  public or mixed answers remain denied when general HTTP is disabled.
+  exception only after broker validation; public or mixed answers remain
+  denied when general HTTP is disabled.
 - Every policy-to-broker request carries a valid `cleartext` or `opaque`
   classification. Both brokers reject missing or invalid classifications, and
   the host broker makes the final cleartext exception decision only after

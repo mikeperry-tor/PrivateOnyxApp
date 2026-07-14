@@ -128,9 +128,10 @@ This stack protects private research, document contents, browsing behavior, infe
 - Compose layering: the Makefile assembles `COMPOSE_FILE`. Keep optional behavior in override files, keep Docker and Podman behavior separated, and preserve generated local secret flow plus Compose `${VAR:?message}` checks.
 - VPN/proxy routing: preserve explicit VPN/no-VPN behavior, the separate
   public/host Onyx route classes, exact host and opt-in RFC1918 policy,
-  optional routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY`
-  handling. Onyx applications must never rejoin `netns-holder` or gain direct
-  fallback when VPN, policy, broker, or proxy connectivity fails.
+  operator-local `.local`/`.internal`/`.home.arpa` DNS restriction, optional
+  routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY` handling. Onyx
+  applications must never rejoin `netns-holder` or gain direct fallback when
+  VPN, policy, broker, or proxy connectivity fails.
 - Request handling: keep supported search engines routed through the custom CRW/SearXNG path; preserve CRW/Obscura rendering, prefetch blocking, per-host rate control, anti-bot visibility, and the documented CDP shim behavior. Do not replace this path with plain HTTP fetching or fixed sleeps.
 - Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
 - Patch upgrades: before changing Onyx, code-interpreter, SearXNG, CRW, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.

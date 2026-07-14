@@ -131,7 +131,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             host_module._plain_http_allowed("host.docker.internal", 3210)
         )
         self.assertTrue(host_module._plain_http_allowed("192.168.1.20", 3210))
-        self.assertTrue(host_module._plain_http_allowed("inference.lan", 8080))
+        self.assertTrue(host_module._plain_http_allowed("inference.internal", 8080))
         # The isolated policy deliberately defers DNS classification. It may
         # send the cleartext request to the authenticated broker, which must
         # reject a public or mixed answer before opening the destination.
@@ -146,7 +146,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             broker_module._plain_http_allowed(
-                "inference.lan", 8080, ("192.168.1.20",)
+                "inference.internal", 8080, ("192.168.1.20",)
             )
         )
         self.assertFalse(
@@ -205,10 +205,104 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             AsyncMock(return_value={"192.168.1.4", "93.184.216.34"}),
         ):
             reason, addresses = await module._validate_destination(
-                "mixed.example", 443
+                "mixed.internal", 443
             )
         self.assertIn("mixed RFC1918", reason or "")
         self.assertEqual(addresses, ())
+
+    def test_rfc1918_system_dns_names_are_suffix_limited(self) -> None:
+        module = _load_module()
+        for host in (
+            "printer.local",
+            "api.internal",
+            "router.home.arpa",
+            "ROUTER.HOME.ARPA.",
+        ):
+            with self.subTest(host=host):
+                self.assertTrue(module._is_rfc1918_system_dns_name(host))
+        for host in (
+            "local",
+            "internal",
+            "home.arpa",
+            "printer.local.example",
+            "api.example",
+        ):
+            with self.subTest(host=host):
+                self.assertFalse(module._is_rfc1918_system_dns_name(host))
+
+    async def test_rfc1918_suffix_name_uses_system_dns_and_pins_private_set(
+        self,
+    ) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_ALLOW_RFC1918": "true",
+            },
+        )
+        system_resolver = AsyncMock(
+            return_value={"192.168.1.20", "192.168.1.21"}
+        )
+        myst_resolver = AsyncMock()
+        with patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module, "_resolve_target_host", myst_resolver):
+            reason, addresses = await module._validate_destination(
+                "inference.internal", 443
+            )
+
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("192.168.1.20", "192.168.1.21"))
+        system_resolver.assert_awaited_once_with("inference.internal", 443)
+        myst_resolver.assert_not_awaited()
+
+    async def test_rfc1918_enabled_does_not_system_resolve_arbitrary_name(
+        self,
+    ) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_ALLOW_RFC1918": "true",
+            },
+        )
+        system_resolver = AsyncMock(return_value={"192.168.1.20"})
+        myst_resolver = AsyncMock(return_value={"93.184.216.34"})
+        with patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module, "_resolve_target_host", myst_resolver):
+            reason, addresses = await module._validate_destination(
+                "private.example", 443
+            )
+
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("93.184.216.34",))
+        system_resolver.assert_not_awaited()
+        myst_resolver.assert_awaited_once_with("private.example", 443)
+
+    async def test_rfc1918_disabled_does_not_system_resolve_local_suffix(
+        self,
+    ) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_ALLOW_RFC1918": "false",
+            },
+        )
+        system_resolver = AsyncMock()
+        myst_resolver = AsyncMock(return_value={"93.184.216.34"})
+        with patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module, "_resolve_target_host", myst_resolver):
+            reason, addresses = await module._validate_destination(
+                "inference.internal", 443
+            )
+
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("93.184.216.34",))
+        system_resolver.assert_not_awaited()
+        myst_resolver.assert_awaited_once_with("inference.internal", 443)
 
     def test_browser_policy_allows_search_hosts(self) -> None:
         module = _load_module("browser")
@@ -534,55 +628,68 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "must be exactly"):
             _load_module(env_overrides={"MYST_VPN_ENABLED": "flase"})
 
-    async def test_upstream_mode_does_not_resolve_target_hostname(self) -> None:
-        module = _load_module(
-            env_overrides={
-                "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080"
-            }
+    async def test_every_upstream_proxy_scheme_receives_target_hostname(self) -> None:
+        for scheme in ("http", "https", "socks5", "socks5h"):
+            with self.subTest(scheme=scheme):
+                module = _load_module(
+                    env_overrides={
+                        "EGRESS_UPSTREAM_PROXY_URL": (
+                            f"{scheme}://proxy.example:1080"
+                        ),
+                        "EGRESS_ROUTE_CLASS": "host",
+                        "EGRESS_ALLOW_RFC1918": "true",
+                    }
+                )
+                target_resolver = AsyncMock()
+                system_resolver = AsyncMock()
+                with patch.object(
+                    module, "_resolve_target_host", target_resolver
+                ), patch.object(module, "_resolve_system_host", system_resolver):
+                    reason, addresses = await module._validate_destination(
+                        "target.example", 443
+                    )
+
+                self.assertIsNone(reason)
+                self.assertEqual(addresses, ())
+                target_resolver.assert_not_awaited()
+                system_resolver.assert_not_awaited()
+
+    async def test_both_socks_schemes_send_domain_name_to_proxy(self) -> None:
+        target = "target.example"
+        expected_request = (
+            b"\x05\x01\x00\x03"
+            + bytes([len(target)])
+            + target.encode()
+            + (443).to_bytes(2, "big")
         )
-        target_resolver = AsyncMock()
-        with patch.object(module, "_resolve_target_host", target_resolver):
-            reason, addresses = await module._validate_destination(
-                "target.example", 443
-            )
+        for scheme in ("socks5", "socks5h"):
+            with self.subTest(scheme=scheme):
+                module = _load_module()
+                reader = module.asyncio.StreamReader()
+                reader.feed_data(
+                    b"\x05\x00"  # no-auth greeting response
+                    b"\x05\x00\x00\x01"  # successful IPv4 connect response
+                    b"\x00\x00\x00\x00\x00\x00"  # bound address and port
+                )
+                reader.feed_eof()
+                writer = self._Writer()
+                with patch.object(
+                    module,
+                    "_open_http_proxy_connection",
+                    AsyncMock(return_value=(reader, writer)),
+                ):
+                    await module._connect_via_socks5(
+                        "proxy.example",
+                        1080,
+                        target,
+                        443,
+                        None,
+                        None,
+                        scheme,
+                    )
 
-        self.assertIsNone(reason)
-        self.assertEqual(addresses, ())
-        target_resolver.assert_not_awaited()
-
-    async def test_socks5_uses_selected_final_hop_dns_and_pins_answer(self) -> None:
-        module = _load_module(
-            env_overrides={
-                "EGRESS_UPSTREAM_PROXY_URL": "socks5://proxy.example:1080"
-            }
-        )
-        target_resolver = AsyncMock(return_value={"93.184.216.34"})
-        with patch.object(module, "_resolve_target_host", target_resolver):
-            reason, addresses = await module._validate_destination(
-                "target.example", 443
-            )
-
-        self.assertIsNone(reason)
-        self.assertEqual(addresses, ("93.184.216.34",))
-        target_resolver.assert_awaited_once_with("target.example", 443)
-
-    async def test_socks5_local_dns_rejects_private_answer(self) -> None:
-        module = _load_module(
-            env_overrides={
-                "EGRESS_UPSTREAM_PROXY_URL": "socks5://proxy.example:1080"
-            }
-        )
-        with patch.object(
-            module,
-            "_resolve_target_host",
-            AsyncMock(return_value={"192.168.1.20"}),
-        ):
-            reason, addresses = await module._validate_destination(
-                "target.example", 443
-            )
-
-        self.assertIn("blocked", reason or "")
-        self.assertEqual(addresses, ())
+                self.assertTrue(writer.data.startswith(b"\x05\x01\x00"))
+                self.assertIn(expected_request, writer.data)
 
     async def test_public_upstream_proxy_bootstrap_uses_myst_dns(self) -> None:
         module = _load_module(
@@ -626,6 +733,47 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
         system_resolver.assert_awaited_once_with("host.docker.internal", 9150)
         vpn_resolver.assert_not_awaited()
+
+    async def test_unknown_internal_proxy_name_never_reaches_system_dns(self) -> None:
+        module = _load_module()
+        system_resolver = AsyncMock()
+        vpn_resolver = AsyncMock()
+        with patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module, "_resolve_target_host", vpn_resolver):
+            with self.assertRaisesRegex(
+                ConnectionError, "upstream proxy hostname requires"
+            ):
+                await module._open_http_proxy_connection(
+                    "unknown-proxy", 1080, "socks5"
+                )
+
+        system_resolver.assert_not_awaited()
+        vpn_resolver.assert_not_awaited()
+
+    async def test_operator_local_proxy_name_requires_all_rfc1918_answers(
+        self,
+    ) -> None:
+        module = _load_module(
+            env_overrides={"EGRESS_ALLOW_RFC1918": "true"}
+        )
+        system_resolver = AsyncMock(return_value={"192.168.1.20"})
+        vpn_resolver = AsyncMock()
+        open_connection = AsyncMock(return_value=(object(), object()))
+        with patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module, "_resolve_target_host", vpn_resolver), patch.object(
+            module.asyncio, "open_connection", open_connection
+        ):
+            await module._open_http_proxy_connection(
+                "proxy.internal", 1080, "socks5"
+            )
+
+        system_resolver.assert_awaited_once_with("proxy.internal", 1080)
+        vpn_resolver.assert_not_awaited()
+        open_connection.assert_awaited_once_with(
+            "192.168.1.20", 1080, ssl=None, server_hostname=None
+        )
 
     async def test_direct_readiness_checks_vpn_dns_without_public_connection(self) -> None:
         module = _load_module()

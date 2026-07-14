@@ -60,8 +60,8 @@ unspecified/reserved addresses, Docker/Podman internal suffixes and legacy
 aliases, and single-label service names. The host route alone permits:
 
 - exact `host.docker.internal`, resolved and pinned by the host broker; and
-- RFC1918 literals or all-RFC1918 DNS answers when
-  `EGRESS_ALLOW_RFC1918=true`.
+- RFC1918 literals or all-RFC1918 answers for `.local`, `.internal`, and
+  `.home.arpa` names when `EGRESS_ALLOW_RFC1918=true`.
 
 Mixed private/global DNS answers fail. Public-only, browser, and executor
 policies never receive these exceptions. Exact host and RFC1918 traffic does
@@ -111,9 +111,11 @@ browser final-hop policy remains authoritative for navigation targets.
 ## DNS and upstream proxies
 
 Direct VPN mode uses the source-bound Myst provider resolver; explicit no-VPN
-mode uses the trusted routing namespace's system DNS. HTTP, HTTPS, and
-`socks5h` upstream proxies receive target hostnames. Plain `socks5` uses the
-selected final-hop resolver and a validated pinned address.
+mode uses the trusted routing namespace's system DNS. HTTP, HTTPS, `socks5`,
+and `socks5h` upstream proxies receive target hostnames without a preliminary
+target lookup. With RFC1918 access enabled, system DNS classification is
+limited to `.local`, `.internal`, and `.home.arpa`; other names never reach
+system DNS in VPN mode.
 
 Remote-DNS proxy schemes cannot locally prove what address an upstream will
 choose. A malicious or misconfigured upstream can resolve a public-looking

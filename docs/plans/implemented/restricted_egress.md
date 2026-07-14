@@ -390,7 +390,9 @@ semantics while closing the direct-mode resolution-to-connect race:
 
 - with no upstream proxy, use the Mysterium provider resolver directly through
   sockets source-bound to the `myst0` address when VPN mode is active, or
-  system DNS only in explicit no-VPN mode;
+  system DNS in explicit no-VPN mode. The later host-route layer additionally
+  permits system resolution only for fixed stack identities and opt-in
+  `.local`/`.internal`/`.home.arpa` RFC1918 classification;
   block any answer containing loopback, private/RFC1918, link-local, reserved,
   or other non-global addresses, and connect only to the exact validated IPs;
 - with an upstream proxy, avoid local target DNS resolution so target DNS does
@@ -1235,7 +1237,9 @@ Remaining risks:
   from a loopback-only, non-forwarding sidecar; final-hop DNS remains selected
   by the VPN/proxy/no-VPN mode;
 - explicit no-VPN mode uses system/Docker DNS by operator choice; Myst direct
-  mode instead sends target queries to the provider resolver through `myst0`;
+  mode instead sends ordinary target queries to the provider resolver through
+  `myst0`, with only the fixed and operator-local host-route exceptions noted
+  above;
 - host-resident upstream proxies currently rely on
   `MYST_VPN_ALLOW_LAN_BYPASS=true`, which is broader than endpoint-scoped host
   proxy access;

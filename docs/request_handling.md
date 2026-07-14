@@ -18,8 +18,11 @@ discovery, registration, authorization, token, refresh, SSE, and streamable
 HTTP traffic. Onyx performs structural validation without public target DNS;
 the selected broker resolves and pins the target. Exact
 `host.docker.internal` is host-route-only. RFC1918 targets additionally require
-`EGRESS_ALLOW_RFC1918=true`; loopback, link-local, metadata, and other Docker
-aliases remain denied.
+`EGRESS_ALLOW_RFC1918=true`; named RFC1918 targets must end in `.local`,
+`.internal`, or `.home.arpa`. Loopback, link-local, metadata, and other Docker
+aliases remain denied. Other names go directly to a configured upstream proxy,
+or use Myst provider DNS when no upstream is configured; only explicit no-VPN
+mode uses system DNS for ordinary names.
 
 The Web connector uses the same saved-level selection for requests and
 Playwright fallback, including sitemap construction. The exact full-mode

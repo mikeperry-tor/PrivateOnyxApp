@@ -1171,10 +1171,13 @@ network. Its explicit HTTP absolute-form / HTTPS CONNECT implementation reaches
 the configured upstream through `onyx-host-egress-bridge`; it disables ambient
 proxy discovery. When general cleartext URLs are disabled, the host policy
 permits plain HTTP for exact, broker-resolved `host.docker.internal` and for
-destinations whose complete broker-validated answer set is RFC1918 when
-`EGRESS_ALLOW_RFC1918=true`. This supports host and explicitly allowed LAN
-embedding endpoints without opening public HTTP destinations. The shim
-verifies upstream TLS, reuses connections, and fails closed.
+RFC1918 literals or `.local`, `.internal`, and `.home.arpa` names whose
+complete broker-validated answer set is RFC1918 when
+`EGRESS_ALLOW_RFC1918=true`. Other target names never use system DNS in VPN
+mode: they go directly to a configured upstream proxy or use Myst provider
+DNS. This supports host and explicitly allowed LAN embedding endpoints without
+opening public HTTP destinations. The shim verifies upstream TLS, reuses
+connections, and fails closed.
 
 The shim implements the endpoints Onyx needs for local embedding startup and
 embedding requests:

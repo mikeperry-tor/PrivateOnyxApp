@@ -273,8 +273,9 @@ unusable. The response and logs expose no API key or upstream response body.
 The default plain-HTTP `host.docker.internal` endpoint uses the host route's
 fixed exact-host exception even when public cleartext URLs are disabled;
 arbitrary public HTTP destinations remain blocked. RFC1918 HTTP destinations
-are allowed only on the host route when `EGRESS_ALLOW_RFC1918=true` and the
-broker validates the complete DNS answer set as RFC1918.
+are allowed only on the host route when `EGRESS_ALLOW_RFC1918=true`. Use an
+RFC1918 literal or a `.local`, `.internal`, or `.home.arpa` name whose complete
+DNS answer set validates as RFC1918.
 
 ## Why The Shim Exists
 
@@ -371,8 +372,8 @@ configured host is `host.docker.internal`. The Docker-side shim reaches that
 host service through `host.docker.internal`.
 
 Exact `host.docker.internal` uses the narrow host exception without another
-setting. If the embedding service instead uses an RFC1918 literal or LAN name,
-set:
+setting. If the embedding service instead uses an RFC1918 literal or a
+`.local`, `.internal`, or `.home.arpa` LAN name, set:
 
 ```env
 EGRESS_ALLOW_RFC1918=true

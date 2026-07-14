@@ -73,8 +73,8 @@ Docker/Podman internal names, legacy host aliases, and single-label service
 names. The host route adds only:
 
 - exact `host.docker.internal`, resolved and pinned by the host broker; and
-- RFC1918 literals or names whose complete answer set is RFC1918, only when
-  `EGRESS_ALLOW_RFC1918=true`.
+- RFC1918 literals or `.local`, `.internal`, and `.home.arpa` names whose
+  complete answer set is RFC1918, only when `EGRESS_ALLOW_RFC1918=true`.
 
 Mixed private/global answers fail closed. Loopback, link-local, other Docker
 aliases, and metadata remain blocked even on the host route. Exact
@@ -105,21 +105,39 @@ isolation is identical. Myst readiness requires a working `myst0` route and a
 source-bound provider-DNS probe. No-VPN readiness requires no stale `myst0`
 and a usable non-Myst default route. Only `myst-client` is autohealed.
 
-Without an upstream proxy, public names are resolved and pinned at the broker
-through Myst provider DNS or explicit no-VPN system DNS. HTTP, HTTPS, and
-`socks5h` upstream schemes leave target DNS to the upstream proxy. Plain
-`socks5` resolves through the selected final-hop resolver and sends the
-validated pinned address. Upstream credentials are never logged.
+With an upstream proxy, HTTP, HTTPS, `socks5`, and `socks5h` all send ordinary
+target names directly to that proxy without a preliminary system or Myst DNS
+lookup. Without an upstream proxy, public names are resolved and pinned at the
+broker through Myst provider DNS or explicit no-VPN system DNS. Upstream
+credentials are never logged.
 
 An upstream that resolves a public-looking hostname to a private address is a
 residual risk for remote-DNS schemes; enforce equivalent policy at that
 upstream. Exact host and RFC1918 exceptions are never sent through it.
 
-When `EGRESS_ALLOW_RFC1918=true`, the host broker first queries configured
-host-route names through system/Docker DNS to identify complete RFC1918 answer
-sets. All-global answers are discarded and resolved again through the normal
-selected final hop. This initial system-DNS query is the explicit privacy
-tradeoff for supporting operator-approved LAN names.
+When `EGRESS_ALLOW_RFC1918=true`, only names ending in `.local`, `.internal`,
+or `.home.arpa` are queried through system/Docker DNS for RFC1918
+classification. All-global answers are discarded and follow the normal
+selected final hop; mixed private/global answers fail closed. All other names
+remain private from the system resolver: they go directly to the configured
+upstream proxy, or through Myst provider DNS when no upstream is set. Users
+must use one of these operator-local suffixes or an RFC1918 IP literal for LAN
+destinations.
+
+The suffix allowlist follows `.local` from
+[RFC 6762](https://www.rfc-editor.org/rfc/rfc6762), `.home.arpa` from
+[RFC 8375](https://www.rfc-editor.org/rfc/rfc8375), and the current IETF DNSOP
+[`.internal` work](https://datatracker.ietf.org/doc/draft-ietf-dnsop-internal/).
+It is a routing/privacy allowlist, not a claim that all three namespaces have
+identical DNS resolution semantics.
+
+When `EGRESS_ALLOW_RFC1918=false`, target-related system/Docker resolution is
+limited to exact stack-owned internal destinations and
+`host.docker.internal`. Ordinary names go to the configured proxy without
+local resolution, use Myst provider DNS without a proxy, or use system DNS
+only in explicit no-VPN mode. Docker service-name resolution used to
+authenticate fixed bridge/policy/broker peers is control-plane resolution, not
+user-target resolution.
 
 ## Readiness and failure behavior
 

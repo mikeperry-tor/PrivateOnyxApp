@@ -1363,9 +1363,10 @@ only the exact host and `EGRESS_ALLOW_RFC1918`-gated RFC1918 behavior. Preserve
 the authenticated policy-to-broker protocol's explicit `cleartext` versus
 `opaque` transport classification. After authoritative DNS resolution, the
 host broker permits cleartext only for exact `host.docker.internal`, for an
-all-RFC1918 answer set when `EGRESS_ALLOW_RFC1918=true`, or when general HTTP
-is explicitly enabled. The public broker permits cleartext only when general
-HTTP is explicitly enabled. Missing or invalid transport classification must
+RFC1918 literal or all-RFC1918 `.local`/`.internal`/`.home.arpa` answer set when
+`EGRESS_ALLOW_RFC1918=true`, or when general HTTP is explicitly enabled. The
+public broker permits cleartext only when general HTTP is explicitly enabled.
+Missing or invalid transport classification must
 fail closed. A policy process cannot address the other broker network, and
 neither broker accepts raw client HTTP proxy traffic or an
 operator/client-selected upstream.
@@ -1565,11 +1566,12 @@ including at least:
   IPv6 and alternate textual forms.
 
 Retain the prerequisite's exact `host.docker.internal` exception and its
-`EGRESS_ALLOW_RFC1918`-gated, all-RFC1918 destination exception only on the
-host-capable Onyx policy listener and broker. Both exceptions include plain
-HTTP when general cleartext URLs are disabled, with the broker enforcing the
-decision after authoritative DNS validation. Retain the existing host-only
-upstream-proxy bootstrap exception only for the configured proxy endpoint.
+`EGRESS_ALLOW_RFC1918`-gated exception for RFC1918 literals and all-RFC1918
+`.local`/`.internal`/`.home.arpa` names only on the host-capable Onyx policy
+listener and broker. Both exceptions include plain HTTP when general cleartext
+URLs are disabled, with the broker enforcing the decision after authoritative
+DNS validation. Retain the existing host-only upstream-proxy bootstrap
+exception only for the configured proxy endpoint.
 Never add any of these exceptions to the public Onyx, browser, or executor
 destination policy.
 
@@ -1775,7 +1777,7 @@ For completeness, the current patch inventory has this migration impact:
 | Internal-search content caps | Retain unchanged. |
 | Code-interpreter capability descriptions and executor network/proxy patch | Retain the restricted executor network and its separate bridge when enabled, and remove claims that search hosts are blocked. Exercise as a routing regression. |
 | Background Web-connector PDF freshness | Retain unchanged; it is not the LLM `open_url` PDF path. |
-| Local embedding shim | Retain its current explicit host-capable HTTP/HTTPS proxy behavior, including cleartext access to exact `host.docker.internal` and to broker-validated RFC1918 destinations when `EGRESS_ALLOW_RFC1918=true`. |
+| Local embedding shim | Retain its current explicit host-capable HTTP/HTTPS proxy behavior, including cleartext access to exact `host.docker.internal`, RFC1918 literals, and broker-validated `.local`/`.internal`/`.home.arpa` destinations when `EGRESS_ALLOW_RFC1918=true`. |
 | Compose wrapper, Podman, external proxy, and install/upgrade hooks | Modify only where service/image/network names change; preserve their existing semantics and strict validation. |
 
 Update this table during implementation if the current inventory in
@@ -1878,8 +1880,8 @@ corruption.
 5. Preserve resolver selection, internal blocklists, request framing, upstream
    proxy handling, HTTP policy, redaction, and the authenticated broker
    protocol's required `cleartext`/`opaque` classification. Preserve final-hop
-   broker enforcement of public HTTP denial and the host route's exact-host
-   and opt-in, all-RFC1918 cleartext exceptions.
+   broker enforcement of public HTTP denial and the host route's exact-host,
+   RFC1918-literal, and supported operator-local cleartext exceptions.
 6. Use one public-only policy namespace with generic-Onyx/browser/executor
    listeners and one separate host-capable namespace; retain all four distinct
    bridges/upstreams and both route brokers.
@@ -2288,8 +2290,10 @@ Retain and extend tests for:
 - separation of the public and host policy namespaces and broker networks,
   repeated broker validation, and `EGRESS_ALLOW_RFC1918` behavior inherited
   from the isolation prerequisite;
-- plain HTTP to an all-RFC1918 answer set succeeds only through the host route
-  with `EGRESS_ALLOW_RFC1918=true`, while public and mixed answer sets fail;
+- plain HTTP to an RFC1918 literal or all-RFC1918
+  `.local`/`.internal`/`.home.arpa` answer set succeeds only through the host
+  route with `EGRESS_ALLOW_RFC1918=true`, while public and mixed answer sets
+  fail;
 - public Onyx, browser, and executor listeners cannot obtain either host-route
   cleartext exception through headers, target syntax, proxy chaining, or an
   alternate broker; and

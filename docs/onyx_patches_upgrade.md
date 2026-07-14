@@ -773,15 +773,18 @@ Upgrade checks:
   embedding, reranking, image, speech, and discovery calls. Add explicit
   injection before supporting a new configured provider; never rely on
   application direct egress.
-- Test every saved SSRF level, exact host, RFC1918 off/on, mixed DNS answers,
-  loopback/link-local/metadata denial, and a saved-level change between new
-  clients or crawls.
+- Test every saved SSRF level, exact host, RFC1918 off/on, literal targets,
+  `.local`/`.internal`/`.home.arpa` classification, arbitrary-name non-use of
+  system DNS, mixed DNS answers, loopback/link-local/metadata denial, and a
+  saved-level change between new clients or crawls.
 - Test wrong broker version, credential, route class, peer network, oversized
   frame, cancellation/half-close, capacity, and deadline behavior. Public and
   host policies must not share a namespace, broker network, or credential.
 - Verify no public target DNS query occurs in an Onyx application or policy
   namespace and no cross-class fallback exists when one bridge/policy/broker
   is stopped.
+- Verify HTTP, HTTPS, `socks5`, and `socks5h` upstreams all receive ordinary
+  target names directly without preliminary system or Myst resolution.
 
 ### Internal search content caps
 
@@ -1124,9 +1127,9 @@ Compose wiring:
   It uses explicit absolute-form HTTP or HTTPS CONNECT through the host bridge;
   it has no direct external route. When `EGRESS_ALLOW_HTTP_URLS=false`, the
   host policy permits plain HTTP only for exact `host.docker.internal` and for
-  destinations whose complete answer set is RFC1918 when
-  `EGRESS_ALLOW_RFC1918=true`; public cleartext destinations must remain
-  denied.
+  RFC1918 literals or `.local`, `.internal`, and `.home.arpa` names whose
+  complete answer set is RFC1918 when `EGRESS_ALLOW_RFC1918=true`; public
+  cleartext destinations must remain denied.
 - `make embedserv-install`, `make embedserv-verify-model`, and
   `make embedserv-serve` install and run `mlx-openai-server` on the host-side
   `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` (default `http://host.docker.internal:1234/v1/embeddings`).

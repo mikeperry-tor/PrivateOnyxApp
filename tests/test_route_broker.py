@@ -158,7 +158,7 @@ class RouteBrokerTests(unittest.IsolatedAsyncioTestCase):
             "credential": CREDENTIAL,
             "route_class": "host",
             "transport": "cleartext",
-            "host": "inference.lan.example",
+            "host": "inference.internal",
             "port": 8080,
         }
         writer = _Writer()
@@ -173,7 +173,7 @@ class RouteBrokerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(writer.data.startswith(b'{"status":"ok"}\n'))
         connect.assert_awaited_once_with(
-            "inference.lan.example", 8080, ("192.168.1.20",)
+            "inference.internal", 8080, ("192.168.1.20",)
         )
 
     async def test_host_route_denies_cleartext_to_global_answer(self) -> None:
