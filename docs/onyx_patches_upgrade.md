@@ -1651,7 +1651,8 @@ Behavior:
   proxy configuration is startup-validated and credentials are redacted from
   logs.
 - HTTP forwarding rejects ambiguous `Content-Length`/`Transfer-Encoding`
-  framing and streams valid fixed-length and chunked bodies.
+  framing and streams valid fixed-length and chunked bodies without a
+  proxy-imposed body/chunk deadline.
 
 Upgrade notes:
 
@@ -1664,9 +1665,12 @@ Upgrade notes:
   must still allow `PYTHONPATH` injection.
 - Run `python3 -m unittest discover -s tests -p 'test_*.py' -v`, then re-test
   HTTP and SOCKS proxy modes. Keep deterministic regression cases for hostname
-  normalization, bridge-client enforcement, startup validation, credential
-  redaction, request framing, provider-DNS use for public proxy names, VPN
-  routing for public proxy addresses, and the endpoint-scoped RFC1918 route.
+  normalization, bridge-client enforcement, explicit public/host route classes,
+  host-only trusted authorities, startup validation, credential redaction,
+  request framing and deadline-free body streaming, provider-DNS use for public
+  proxy names, no-VPN system-DNS bootstrap, VPN routing for public proxy
+  addresses, the optional-overlay Compose matrix, and the endpoint-scoped
+  RFC1918 route.
 
 ## Install and upgrade hooks
 

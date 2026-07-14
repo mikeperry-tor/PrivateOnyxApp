@@ -11,6 +11,7 @@ services:
     image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
     restart: unless-stopped
     network_mode: "service:netns-holder"
+    user: "65534:65534"
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -19,6 +20,8 @@ services:
       PREFETCH_PROXY_PORT: "3129"
       EGRESS_PROXY_POLICY: executor
       EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: executor-egress-bridge
+      EGRESS_ROUTE_CLASS: public
+      EGRESS_ALLOW_RFC1918: "false"
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
       PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
       EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
@@ -42,9 +45,13 @@ services:
   executor-egress-bridge:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
+    user: "65534:65534"
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.forwarding: "0"
     command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3129"]
     networks: [executor-egress, executor-policy-upstream]
     depends_on:

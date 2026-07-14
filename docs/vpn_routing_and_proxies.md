@@ -92,8 +92,9 @@ public HTTP.
 New installs seed Onyx SSRF protection to Allow Private Network with loopback
 disabled. A saved Admin Security Hardening value remains authoritative and is
 read when a new MCP client or Web crawl is created. `open_url` remains strict.
-The internal doc-drop origin uses the host final-hop proxy and an exact fixed gateway;
-it is not a direct crawl bypass.
+The internal doc-drop origin uses the host final-hop proxy and an exact fixed
+gateway; configuring its trusted authority on any public route fails startup.
+It is not a direct crawl bypass.
 
 ## Final-hop routing and DNS
 

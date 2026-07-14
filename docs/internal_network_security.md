@@ -84,14 +84,15 @@ remains the authoritative resolver.
 The Web connector sends the stack-owned `http://doc-drop-web:8091/` origin
 through the host final-hop proxy. The proxy recognizes that exact authority and
 can reach only its hardened fixed gateway to the real doc-drop service. Browser
-subresources and redirects remain on the selected final-hop proxy instead of inheriting
-a direct backend route. Display links are rewritten to the configured host
+subresources and redirects remain on the selected final-hop proxy instead of
+inheriting a direct backend route. Display links are rewritten to the configured host
 doc-drop origin only in returned search sections, while stored document
 identity remains the internal crawl URL.
 
 ## Other restricted components
 
-Executor, prefetch, and browser policies retain the same destination floor.
+Executor, prefetch, and browser policies explicitly use the public route class
+and retain the same destination floor.
 Prefetch and executor also reject search-engine hosts. Cleartext targets are
 rejected unless `EGRESS_ALLOW_HTTP_URLS=true`; the host route additionally
 allows exact `host.docker.internal` and RFC1918 destinations explicitly

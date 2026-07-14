@@ -354,6 +354,7 @@ services:
     image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
     restart: unless-stopped
     network_mode: "service:netns-holder"
+    user: "65534:65534"
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -363,6 +364,8 @@ services:
       PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
       EGRESS_PROXY_POLICY: prefetch
       EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: crw-prefetch-bridge
+      EGRESS_ROUTE_CLASS: public
+      EGRESS_ALLOW_RFC1918: "false"
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
       # Upstream proxy (EGRESS_UPSTREAM_PROXY_URL from .env.wrapper). When set, the proxy
       # routes its own upstream requests through this upstream.
@@ -406,6 +409,8 @@ services:
       PREFETCH_PROXY_PORT: "3130"
       EGRESS_PROXY_POLICY: browser
       EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: obscura-egress-bridge
+      EGRESS_ROUTE_CLASS: public
+      EGRESS_ALLOW_RFC1918: "false"
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
       PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
       EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"

@@ -360,7 +360,12 @@ def _parse_trusted_internal_destinations() -> frozenset[tuple[str, int]]:
     if POLICY_MODE != "onyx-helper":
         raise RuntimeError(
             "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS is allowed only for "
-            "the loopback-only onyx-helper policy"
+            "the onyx-helper policy"
+        )
+    if ROUTE_CLASS != "host":
+        raise RuntimeError(
+            "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS is allowed only for "
+            "the host route class"
         )
 
     destinations: set[tuple[str, int]] = set()

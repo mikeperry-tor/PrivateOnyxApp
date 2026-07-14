@@ -20,7 +20,9 @@ SECRET_ENV = {
 }
 
 
-def _compose_model(mode: str, *extra_files: str) -> dict:
+def _compose_model(
+    mode: str, *extra_files: str, profiles: tuple[str, ...] = ()
+) -> dict:
     command = [
         "docker",
         "compose",
@@ -35,6 +37,8 @@ def _compose_model(mode: str, *extra_files: str) -> dict:
     ]
     for compose_file in extra_files:
         command.extend(("-f", compose_file))
+    for profile in profiles:
+        command.extend(("--profile", profile))
     command.extend([
         "config",
         "--no-env-resolution",
@@ -52,7 +56,12 @@ def _compose_model(mode: str, *extra_files: str) -> dict:
     return json.loads(completed.stdout)
 
 
-def _make_compose_files(vpn_enabled: bool, container_bin: str = "docker") -> str:
+def _make_compose_files(
+    vpn_enabled: bool,
+    container_bin: str = "docker",
+    **overrides: str,
+) -> str:
+    override_args = [f"{name}={value}" for name, value in overrides.items()]
     completed = subprocess.run(
         [
             "make",
@@ -60,6 +69,7 @@ def _make_compose_files(vpn_enabled: bool, container_bin: str = "docker") -> str
             "ENV_FILE=.env.wrapper.example",
             f"MYST_VPN_ENABLED={'true' if vpn_enabled else 'false'}",
             f"CONTAINER_BIN={container_bin}",
+            *override_args,
         ],
         cwd=ROOT,
         check=True,
@@ -93,6 +103,27 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         self.assertNotIn("docker-compose.vpn-autoheal.yml", podman_no_vpn_files)
         self.assertNotIn("docker-compose.podman-vpn.yml", podman_no_vpn_files)
+
+    def test_makefile_selects_every_optional_network_layer(self) -> None:
+        default_files = _make_compose_files(vpn_enabled=True)
+        optional_files = (
+            "docker-compose.proxy.yml",
+            "docker-compose.code-interpreter-network.yml",
+            "docker-compose.teep-vpn.yml",
+            "docker-compose.tailscale-vpn.yml",
+        )
+        for compose_file in optional_files:
+            self.assertNotIn(compose_file, default_files)
+
+        enabled_files = _make_compose_files(
+            vpn_enabled=True,
+            EGRESS_UPSTREAM_PROXY_URL="socks5h://host.docker.internal:9150",
+            ONYX_CODE_INTERPRETER_ENABLE_NETWORK="true",
+            TEEP_ROUTE_THROUGH_MYST_VPN="true",
+            TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN="true",
+        )
+        for compose_file in optional_files:
+            self.assertIn(compose_file, enabled_files)
 
     def test_autoheal_is_present_only_in_vpn_models(self) -> None:
         for mode in ("lite", "full"):
@@ -150,6 +181,129 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 proxy["environment"]["EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"],
                 f"onyx-{route_class}-egress-bridge",
             )
+
+        public = services["onyx-public-egress-proxy"]["environment"]
+        host = services["onyx-host-egress-proxy"]["environment"]
+        self.assertEqual(public["EGRESS_ALLOW_RFC1918"], "false")
+        self.assertNotIn("EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS", public)
+        self.assertEqual(
+            host["EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS"],
+            "doc-drop-web:8091",
+        )
+
+    def test_every_restricted_listener_has_an_explicit_route_class(self) -> None:
+        model = _compose_model(
+            "full", "docker-compose.code-interpreter-network.yml"
+        )
+        services = model["services"]
+        expected = {
+            "prefetch-blocking-proxy": ("public", "crw-prefetch-bridge"),
+            "browser-egress-proxy": ("public", "obscura-egress-bridge"),
+            "executor-egress-proxy": ("public", "executor-egress-bridge"),
+            "onyx-public-egress-proxy": ("public", "onyx-public-egress-bridge"),
+            "onyx-host-egress-proxy": ("host", "onyx-host-egress-bridge"),
+        }
+        ports: set[str] = set()
+        for service_name, (route_class, bridge_name) in expected.items():
+            service = services[service_name]
+            environment = service["environment"]
+            self.assertEqual(environment["EGRESS_ROUTE_CLASS"], route_class)
+            self.assertEqual(
+                environment["EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"], bridge_name
+            )
+            self.assertEqual(service["network_mode"], "service:netns-holder")
+            self.assertEqual(service["user"], "65534:65534")
+            port = environment["PREFETCH_PROXY_PORT"]
+            self.assertNotIn(port, ports)
+            ports.add(port)
+
+        for service_name in expected:
+            if service_name != "onyx-host-egress-proxy":
+                environment = services[service_name]["environment"]
+                self.assertEqual(environment["EGRESS_ALLOW_RFC1918"], "false")
+                self.assertNotIn(
+                    "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS", environment
+                )
+
+    def test_optional_executor_route_is_isolated_and_hardened(self) -> None:
+        model = _compose_model(
+            "full", "docker-compose.code-interpreter-network.yml"
+        )
+        services = model["services"]
+        bridge = services["executor-egress-bridge"]
+        self.assertEqual(
+            set(bridge["networks"]),
+            {"executor-egress", "executor-policy-upstream"},
+        )
+        self.assertEqual(
+            bridge["command"],
+            [
+                "tcp-listen:3128,fork,reuseaddr",
+                "tcp-connect:myst-client:3129",
+            ],
+        )
+        self.assertEqual(bridge["user"], "65534:65534")
+        self.assertTrue(bridge["read_only"])
+        self.assertEqual(bridge["cap_drop"], ["ALL"])
+        self.assertIn("no-new-privileges:true", bridge["security_opt"])
+        self.assertEqual(
+            bridge["sysctls"],
+            {
+                "net.ipv4.ip_forward": "0",
+                "net.ipv6.conf.all.forwarding": "0",
+            },
+        )
+        self.assertNotIn("ports", bridge)
+        self.assertEqual(
+            set(services["code-interpreter"]["networks"]), {"onyx-backend"}
+        )
+        self.assertNotIn(
+            "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS",
+            services["executor-egress-proxy"]["environment"],
+        )
+
+    def test_optional_overlay_matrix_preserves_application_isolation(self) -> None:
+        model = _compose_model(
+            "full",
+            "docker-compose.proxy.yml",
+            "docker-compose.code-interpreter-network.yml",
+            "docker-compose.teep-vpn.yml",
+            "docker-compose.tailscale-vpn.yml",
+            profiles=("tailscale",),
+        )
+        services = model["services"]
+        for service_name in (
+            "api_server",
+            "background",
+            "web_server",
+            "nginx",
+            "code-interpreter",
+            "tailscale-frontend-gateway",
+        ):
+            service = services[service_name]
+            self.assertNotEqual(
+                service.get("network_mode"), "service:netns-holder"
+            )
+            for network in service.get("networks", {}):
+                self.assertTrue(model["networks"][network].get("internal"))
+
+        self.assertEqual(
+            services["tailscale-funnel"]["network_mode"],
+            "service:netns-holder",
+        )
+        self.assertEqual(
+            services["tailscale-funnel"]["environment"][
+                "TAILSCALE_FUNNEL_TARGET_HOST"
+            ],
+            "tailscale-frontend-gateway",
+        )
+        self.assertEqual(services["teep"]["network_mode"], "service:netns-holder")
+        self.assertFalse(services["teep"].get("ports"))
+        self.assertIn(
+            "executor-policy-upstream", services["netns-holder"]["networks"]
+        )
+        self.assertIn("tailscale-ingress", services["netns-holder"]["networks"])
+        self.assertIn("teep-vpn-ingress", services["netns-holder"]["networks"])
 
     def test_final_hop_proxies_and_bridges_are_narrow_and_hardened(self) -> None:
         model = _compose_model("full")

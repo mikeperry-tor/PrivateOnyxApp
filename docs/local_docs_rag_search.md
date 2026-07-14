@@ -124,7 +124,7 @@ MCP_SERVER_ALLOW_LOOPBACK=false
 This maps to Allow Private Network when no Admin value is saved. Saved state
 selects the public or host route for external Web Connector/MCP requests;
 loopback remains blocked. The exact internal doc-drop origin is a separate
-stack-owned host-policy gateway and does not depend on broad loopback access.
+stack-owned host final-hop gateway and does not depend on broad loopback access.
 
 Once an admin saves Security Hardening settings in Onyx, the saved UI value is
 the effective runtime policy and these env vars only act as startup defaults.

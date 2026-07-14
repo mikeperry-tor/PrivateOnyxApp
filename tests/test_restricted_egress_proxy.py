@@ -308,6 +308,28 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         system_resolver.assert_awaited_once_with("inference.internal", 443)
         myst_resolver.assert_not_awaited()
 
+    async def test_global_operator_local_answer_returns_to_selected_dns(self) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_ALLOW_RFC1918": "true",
+            },
+        )
+        system_resolver = AsyncMock(return_value={"93.184.216.34"})
+        myst_resolver = AsyncMock(return_value={"93.184.216.35"})
+        with patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module, "_resolve_target_host", myst_resolver):
+            reason, addresses = await module._validate_destination(
+                "public.internal", 443
+            )
+
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("93.184.216.35",))
+        system_resolver.assert_awaited_once_with("public.internal", 443)
+        myst_resolver.assert_awaited_once_with("public.internal", 443)
+
     async def test_rfc1918_enabled_does_not_system_resolve_arbitrary_name(
         self,
     ) -> None:
@@ -391,6 +413,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             {
                 "PREFETCH_PROXY_HOST": "127.0.0.1",
                 "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "",
+                "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS": "localhost:8091",
                 "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080",
             },
@@ -426,6 +449,18 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 "browser",
                 {
                     "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS": "localhost:8091"
+                },
+            )
+
+    def test_trusted_internal_destination_rejected_for_public_route(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "host route class"):
+            _load_module(
+                "onyx-helper",
+                {
+                    "EGRESS_ROUTE_CLASS": "public",
+                    "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS": (
+                        "doc-drop-web:8091"
+                    ),
                 },
             )
 
@@ -776,6 +811,31 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             )
 
         vpn_resolver.assert_awaited_once_with("proxy.example", 8080)
+        open_connection.assert_awaited_once_with(
+            "93.184.216.34", 8080, ssl=None, server_hostname=None
+        )
+
+    async def test_no_vpn_upstream_proxy_bootstrap_uses_system_dns(self) -> None:
+        module = _load_module(
+            env_overrides={
+                "MYST_VPN_ENABLED": "false",
+                "EGRESS_UPSTREAM_PROXY_URL": "http://proxy.example:8080",
+            }
+        )
+        system_resolver = AsyncMock(return_value={"93.184.216.34"})
+        vpn_resolver = AsyncMock()
+        open_connection = AsyncMock(return_value=(object(), object()))
+        with patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(
+            module, "_resolve_target_host", vpn_resolver
+        ), patch.object(module.asyncio, "open_connection", open_connection):
+            await module._open_http_proxy_connection(
+                "proxy.example", 8080, "http"
+            )
+
+        system_resolver.assert_awaited_once_with("proxy.example", 8080)
+        vpn_resolver.assert_not_awaited()
         open_connection.assert_awaited_once_with(
             "93.184.216.34", 8080, ssl=None, server_hostname=None
         )

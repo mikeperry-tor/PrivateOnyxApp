@@ -643,8 +643,8 @@ configured-inference component patches.
 Playwright receives an explicit public or host bridge and no generic host
 bypass. The full-mode Web Connector patch recognizes only the exact internal
 `http://doc-drop-web:8091/` origin and sends it through an exact fixed gateway
-owned by the host final-hop proxy. All browser subresources, redirects, and other
-private targets remain subject to host-policy rules.
+owned by the host final-hop proxy. All browser subresources, redirects, and
+other private targets remain subject to host final-hop rules.
 
 ### MCP/OAuth, Web Connector, and configured inference
 

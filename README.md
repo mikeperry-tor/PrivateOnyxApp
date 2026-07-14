@@ -447,7 +447,7 @@ generic helper route and require component-specific routing; the bundled
 GitHub downloader and normal `requests`, `httpx`, and `urllib` helpers honor it.
 Playwright does not inherit the backend bypass set; every external browser
 navigation uses an explicit selected proxy. The full-mode Web connector has
-one exact host-policy route for the internal `http://doc-drop-web:8091/` crawl
+one exact host final-hop route for the internal `http://doc-drop-web:8091/` crawl
 origin through a fixed gateway; no host or public name is added to generic
 `NO_PROXY`, and doc-drop browser subresources remain policy mediated.
 

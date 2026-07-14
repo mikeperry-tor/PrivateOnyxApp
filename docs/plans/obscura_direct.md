@@ -257,6 +257,8 @@ Add deterministic unit and effective-Compose tests for:
   deadline;
 - bridge hardening, fixed destinations, network separation, and inability to
   route packets between caller networks;
+- explicit public/host route classes, host-only trusted authorities, combined
+  optional-overlay Compose models, and deadline-free framed body streaming;
 - removal of CRW, validation DNS, CDP shim, Valkey, obsolete model servers,
   legacy env names, images, networks, secrets, health dependencies, and docs;
 - lite/full startup, real `open_url`, every custom search engine, local RAG,

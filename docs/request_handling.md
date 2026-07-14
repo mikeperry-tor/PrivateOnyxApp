@@ -27,8 +27,8 @@ mode uses system DNS for ordinary names.
 
 The Web connector uses the same saved-level selection for requests and
 Playwright fallback, including sitemap construction. The exact full-mode
-internal origin `http://doc-drop-web:8091/` uses the host final-hop proxy plus a fixed
-gateway; it is not a crawl-wide direct exception. The former bundled Obscura
+internal origin `http://doc-drop-web:8091/` uses the host final-hop proxy plus
+a fixed gateway; it is not a crawl-wide direct exception. The former bundled Obscura
 MCP server was removed intentionally; user-configured MCP servers use the
 guarded paths above.
 
@@ -895,7 +895,7 @@ This is critical for two reasons:
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_BLOCK_INTERNAL_HOSTS` | empty | Optional comma-separated additional internal hostnames to block by name without opening an upstream request. It cannot remove the built-in localhost, `*.docker.internal`, legacy Docker Desktop, or single-label Docker-name blocks. Subdomains of configured names are blocked too. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
-| `PREFETCH_TUNNEL_TIMEOUT` | `15` | Timeout for establishing tunnel connections (seconds) |
+| `PREFETCH_TUNNEL_TIMEOUT` | `15` | Timeout for the TCP socket connection to a validated target or configured upstream-proxy endpoint; it does not bound proxy negotiation or established streams. |
 | `CDP_SHIM_STRIP_PROXY_SERVER` | `1` | Strip `proxyServer` from `Target.createBrowserContext` in the CDP shim (safety net — not needed with `HTTPS_PROXY` env vars since `REQUEST_PROXY` is not set) |
 
 ---
@@ -1532,13 +1532,15 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `EGRESS_PROXY_ALLOWED_CLIENT_HOSTS` | required except for literal-loopback listeners | Comma-separated dedicated bridge service names allowed to connect; an empty list is valid only when `PREFETCH_PROXY_HOST` is a literal loopback address. |
-| `EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS` | empty; the full stack sets exact `doc-drop-web:8091` authority on the host final-hop proxy | Exact stack-owned `host:port` authorities allowed through their fixed internal gateway despite normal private/cleartext blocking. Valid only for `onyx-helper`; this is not a general bypass list. |
+| `EGRESS_ROUTE_CLASS` | `public` | Fixed listener route class: `public` or `host`. Compose sets it explicitly on every restricted listener; it is not a user-selected request field. |
+| `EGRESS_ALLOW_RFC1918` | `false` | Enables the documented RFC1918 literal/operator-local-name exceptions only when `EGRESS_ROUTE_CLASS=host`; public listeners set it explicitly to `false`. |
+| `EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS` | empty; the full stack sets exact `doc-drop-web:8091` authority on the host final-hop proxy | Exact stack-owned `host:port` authorities allowed through their fixed internal gateway despite normal private/cleartext blocking. Valid only for the `onyx-helper` host route; configuring it on a public route or another policy fails startup. This is not a general bypass list. |
 | `EGRESS_UPSTREAM_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
 | `EGRESS_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs in the prefetch proxy and CDP shim. When false, HTTP fetches fail closed with a message telling the agent to use HTTPS. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_BLOCK_INTERNAL_HOSTS` | empty | Optional comma-separated additional internal hostnames to block by name without opening an upstream request. It cannot remove the built-in localhost, `*.docker.internal`, legacy Docker Desktop, or single-label Docker-name blocks. Subdomains of configured names are blocked too. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
-| `PREFETCH_TUNNEL_TIMEOUT` | `15` | Timeout for establishing tunnel connections (seconds) |
+| `PREFETCH_TUNNEL_TIMEOUT` | `15` | Timeout for the TCP socket connection to a validated direct target or configured upstream-proxy endpoint. It does not bound SOCKS/HTTP proxy negotiation or an established tunnel. |
 
 ### Obscura environment variables
 

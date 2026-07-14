@@ -183,8 +183,19 @@ The implementation is accepted only while tests prove:
   listeners or trusted namespace networks;
 - public/private destination classification, mixed-answer rejection, exact
   host behavior, RFC1918 opt-in, upstream modes, and HTTP framing fail closed;
+- every restricted listener declares its public or host route class explicitly,
+  and exact trusted internal authorities fail startup outside the host route;
+- VPN and no-VPN upstream-proxy bootstrap use their documented resolvers, and
+  all-global operator-local answers return to the selected final-hop resolver;
 - doc-drop uses only its exact host proxy gateway;
-- VPN/no-VPN Compose models preserve route isolation and VPN-only autoheal;
+- VPN/no-VPN Compose models and the combined upstream-proxy, executor-network,
+  Myst-routed Teep, and Myst-routed Tailscale overlays preserve route isolation;
+- Makefile selection adds each optional network layer only when its documented
+  switch is enabled;
+- every optional executor proxy/bridge is numeric-nonroot, read-only,
+  capability-free, source-restricted, public-only, and packet-forwarding-disabled;
+- framed request bodies and chunks retain strict structural validation without
+  a proxy-imposed read deadline;
 - removal of broker files, credentials, services, protocol tests, and networks
   is enforced; and
 - lite/full stack startup plus representative helper, MCP, Web Connector,
