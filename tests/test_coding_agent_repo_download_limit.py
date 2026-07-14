@@ -218,5 +218,137 @@ class PlaywrightHelperProxyTests(unittest.TestCase):
                 )
 
 
+class ConfiguredInferenceProxyTests(unittest.TestCase):
+    @staticmethod
+    def _fake_modules():
+        onyx_module = ModuleType("onyx")
+        llm_package = ModuleType("onyx.llm")
+        multi_llm_module = ModuleType("onyx.llm.multi_llm")
+        constants_module = ModuleType("onyx.llm.constants")
+        utils_module = ModuleType("onyx.utils")
+        url_module = ModuleType("onyx.utils.url")
+        httpx_module = ModuleType("httpx")
+        openai_module = ModuleType("openai")
+        clients: list[dict] = []
+
+        class Client:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                clients.append(kwargs)
+
+        class OpenAI:
+            def __init__(self, **kwargs):
+                self.base_url = kwargs["base_url"]
+                self.http_client = kwargs["http_client"]
+
+        class LlmProviderNames:
+            OPENAI = "openai"
+            OPENAI_COMPATIBLE = "openai_compatible"
+            BIFROST = "bifrost"
+            LITELLM_PROXY = "litellm_proxy"
+            LM_STUDIO = "lm_studio"
+            OLLAMA_CHAT = "ollama_chat"
+
+        class LitellmLLM:
+            def __init__(
+                self,
+                api_key,
+                model_provider,
+                model_name,
+                max_input_tokens,
+                timeout=30,
+                api_base=None,
+            ):
+                del model_name, max_input_tokens
+                self._api_key = api_key
+                self._model_provider = model_provider
+                self._timeout = timeout
+                self._api_base = api_base
+
+            def _completion(self, prompt, client=None):
+                return prompt, client
+
+        def validate_outbound_http_url(url, **kwargs):
+            del kwargs
+            return url
+
+        httpx_module.Client = Client
+        openai_module.OpenAI = OpenAI
+        constants_module.LlmProviderNames = LlmProviderNames
+        multi_llm_module.LitellmLLM = LitellmLLM
+        llm_package.multi_llm = multi_llm_module
+        url_module.validate_outbound_http_url = validate_outbound_http_url
+        utils_module.url = url_module
+        onyx_module.llm = llm_package
+        onyx_module.utils = utils_module
+        return (
+            {
+                "httpx": httpx_module,
+                "openai": openai_module,
+                "onyx": onyx_module,
+                "onyx.llm": llm_package,
+                "onyx.llm.multi_llm": multi_llm_module,
+                "onyx.llm.constants": constants_module,
+                "onyx.utils": utils_module,
+                "onyx.utils.url": url_module,
+            },
+            multi_llm_module,
+            clients,
+        )
+
+    def _apply_patch(self):
+        wrapper = _load_wrapper_module()
+        fake_modules, multi_llm_module, clients = self._fake_modules()
+        env = {
+            "WRAPPER_PATCH_STRICT": "true",
+            "ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL": (
+                "http://onyx-host-egress-bridge:3128"
+            ),
+            "ONYX_CONFIGURED_INFERENCE_INTERNAL_BASE_URL": "http://teep:8337/v1",
+        }
+        return wrapper, fake_modules, multi_llm_module, clients, env
+
+    def test_exact_internal_teep_uses_direct_trust_env_false_client(self) -> None:
+        wrapper, fake_modules, multi_llm_module, clients, env = self._apply_patch()
+        with patch.dict(os.environ, env, clear=True), patch.dict(
+            sys.modules, fake_modules
+        ):
+            wrapper.apply_configured_inference_proxy_patch()
+            multi_llm_module.LitellmLLM(
+                api_key="test",
+                model_provider="openai_compatible",
+                model_name="model",
+                max_input_tokens=1000,
+                api_base="http://teep:8337/v1",
+            )
+
+        self.assertEqual(clients, [{"trust_env": False, "timeout": 30}])
+
+    def test_other_configured_base_uses_fixed_host_proxy(self) -> None:
+        wrapper, fake_modules, multi_llm_module, clients, env = self._apply_patch()
+        with patch.dict(os.environ, env, clear=True), patch.dict(
+            sys.modules, fake_modules
+        ):
+            wrapper.apply_configured_inference_proxy_patch()
+            multi_llm_module.LitellmLLM(
+                api_key="test",
+                model_provider="openai_compatible",
+                model_name="model",
+                max_input_tokens=1000,
+                api_base="http://host.docker.internal:1234/v1",
+            )
+
+        self.assertEqual(
+            clients,
+            [
+                {
+                    "trust_env": False,
+                    "timeout": 30,
+                    "proxy": "http://onyx-host-egress-bridge:3128",
+                }
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

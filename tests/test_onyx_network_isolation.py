@@ -191,6 +191,41 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 self.assertTrue(service["read_only"])
                 self.assertEqual(service["cap_drop"], ["ALL"])
 
+    def test_doc_drop_uses_exact_host_policy_gateway(self) -> None:
+        model = _compose_model("full")
+        services = model["services"]
+        gateway = services["doc-drop-route-gateway"]
+        self.assertEqual(
+            set(gateway["networks"]), {"doc-drop-route", "onyx-host-broker"}
+        )
+        self.assertEqual(
+            set(services["doc-drop-web"]["networks"]),
+            {"doc-drop-publish", "doc-drop-route"},
+        )
+        self.assertNotIn("onyx-backend", services["doc-drop-web"]["networks"])
+        self.assertTrue(model["networks"]["doc-drop-route"]["internal"])
+        self.assertEqual(gateway["user"], "65534:65534")
+        self.assertTrue(gateway["read_only"])
+        self.assertEqual(gateway["cap_drop"], ["ALL"])
+        self.assertFalse(gateway.get("ports"))
+        self.assertEqual(
+            services["onyx-host-egress-policy"]["environment"][
+                "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS"
+            ],
+            "doc-drop-web:8091",
+        )
+        self.assertEqual(
+            services["onyx-host-route-broker"]["environment"][
+                "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS"
+            ],
+            "doc-drop-web:8091",
+        )
+        background_env = services["background"]["environment"]
+        self.assertEqual(
+            background_env["ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL"],
+            "http://doc-drop-web:8091/",
+        )
+
     def test_obscura_mcp_and_shared_namespace_artifacts_are_absent(self) -> None:
         model = _compose_model("full")
         service_names = set(model["services"])

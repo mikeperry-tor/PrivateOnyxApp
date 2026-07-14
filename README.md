@@ -117,7 +117,8 @@ Most likely variables you want to change:
     brokers; application and request-policy containers do not share it.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
-  - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, embedding, and inference destinations through the host-capable policy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
+  - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, dedicated embedding-shim upstream, and supported configured chat inference destinations through the host-capable policy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
+  - Enabling it lets the host broker query configured host-route names through system/Docker DNS to determine whether their complete answer set is RFC1918. Public answers are discarded and resolved again through the selected final hop, but the initial system-DNS query is an intentional DNS-privacy tradeoff.
   - Exact `host.docker.internal` is a narrower host-route exception and does not require the RFC1918 option. New installs seed Onyx SSRF protection to **Allow Private Network**, with loopback disabled; saved Admin Security Hardening settings remain authoritative and select the public or host-capable route for new MCP clients and Web crawls.
 
 ### Initial VPN Connection (Myst Payment)
@@ -255,11 +256,24 @@ Once Mysterium VPN successfully connects, Onyx will need to be configured to use
 
 The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown. Use teep's exact model ID as listed; provider catalogs may spell GLM and Kimi model names with different dots, dashes, or compressed forms, and the OpenAI-Compatible path avoids LiteLLM native-provider remapping.
 
+The wrapper recognizes exactly `http://teep:8337/v1` as an internal configured
+chat endpoint and constructs a direct `trust_env=false` client for it. Other
+supported configured chat endpoints use the host-capable policy. This exception
+does not permit another Docker service name or Teep URL shape.
+
 ### Inference Provider Recommendations
 
 The best privacy preserving providers supported by teep are currently `neardirect` and `tinfoil_v3_direct`, which are the direct completions version of [NearAI](https://cloud.near.ai) and [Tinfoil.sh](https://tinfoil.sh), respectively. NearAI is also useful in that it can be paid in cryptocurrency.
 
-This stack can also be used with LMStudio or any other local LLM provider.  Simply use `host.docker.internal` to connect to your localhost instance, using the Onyx Admin UI configuration.
+This stack can also use a local OpenAI-compatible, LM Studio, or Ollama chat
+endpoint through `host.docker.internal` or an explicitly enabled RFC1918
+address. The fixed host route covers chat inference after a provider and model
+have been saved. Onyx's separate model-discovery endpoints are not patched for
+private routing in this wrapper version; if the Admin UI cannot enumerate a
+private endpoint, configure the model identifier explicitly where the UI
+permits it. Configured private image-generation, speech, and arbitrary
+embedding/reranking provider endpoints are likewise not supported; the
+wrapper's dedicated local embedding shim remains supported.
 
 If the local provider is running on a private/LAN address, you will usually also want `EGRESS_ALLOW_RFC1918=true` so traffic can bypass the Myst VPN firewall to reach your host or LAN service.
 
@@ -418,8 +432,9 @@ generic helper route and require component-specific routing; the bundled
 GitHub downloader and normal `requests`, `httpx`, and `urllib` helpers honor it.
 Playwright does not inherit the backend bypass set; every external browser
 navigation uses an explicit selected proxy. The full-mode Web connector has
-one fixed direct exception for the internal `http://doc-drop-web:8091/` crawl
-origin; no host or public name is added to generic `NO_PROXY`.
+one exact host-policy route for the internal `http://doc-drop-web:8091/` crawl
+origin through a fixed gateway; no host or public name is added to generic
+`NO_PROXY`, and doc-drop browser subresources remain policy mediated.
 
 CRW 0.23 requires a local lookup before it will hand a URL to its configured
 proxy. Docker's embedded resolver answers known internal service names with

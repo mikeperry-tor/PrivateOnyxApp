@@ -26,10 +26,10 @@ TCP bridge has exactly one caller network and its matching policy network.
   gateways. CRW uses the prefetch bridge; Obscura uses the browser bridge.
 - Code-interpreter control is on `onyx-backend` and serves port 8000. Spawned
   executors use `none` or their dedicated internal network and executor bridge.
-- Full-mode data services use `onyx-data`. `doc-drop-web` is reached directly
-  on `onyx-backend`; a separate fixed display publisher uses a dedicated
-  internal peer network. The embedding shim reaches its configured upstream
-  only through the host bridge.
+- Full-mode data services use `onyx-data`. `doc-drop-web` is reached only by a
+  fixed gateway from the host broker; a separate fixed display publisher uses
+  a dedicated internal peer network. The embedding shim reaches its configured
+  upstream only through the host bridge.
 - Optional Tailscale reaches nginx only through a fixed HTTP gateway and never
   joins `onyx-frontend`. Myst-routed Teep similarly uses a fixed gateway.
 
@@ -41,10 +41,12 @@ be deleted.
 
 The public bridge accepts generic helper, provider-default inference, and
 strict MCP/Web Connector traffic. The host bridge accepts saved-level-approved
-MCP/OAuth and Web Connector traffic, configured inference endpoints, and the
-embedding shim. Runtime patches create explicit proxy transports when HTTPX,
-MCP SDK, Playwright, or provider SDK construction would ignore environment
-proxy variables.
+MCP/OAuth and Web Connector traffic, supported configured chat inference
+endpoints, and the embedding shim. Runtime patches create explicit proxy
+transports when HTTPX, MCP SDK, Playwright, or provider SDK construction would
+ignore environment proxy variables. Other private configured provider endpoint
+types are intentionally unsupported rather than given an unverified direct or
+environment-proxy path.
 
 The policy processes validate HTTP framing and structural destinations but do
 not resolve public targets. They send a bounded authenticated request to their
@@ -79,11 +81,13 @@ select the public route; levels that permit private networks may select the
 host route. Onyx-side structural validation uses `resolve_dns=False` for
 external requests so the broker remains the authoritative resolver.
 
-The Web connector has one fixed direct exception for
-`http://doc-drop-web:8091/`. It is exact, startup-validated, and internal; it
-does not enable arbitrary private crawling. Display links are rewritten to the
-configured host doc-drop origin only in returned search sections, while stored
-document identity remains the internal crawl URL.
+The Web connector sends the stack-owned `http://doc-drop-web:8091/` origin
+through the host policy. The host broker recognizes that exact authority and
+can reach only its hardened fixed gateway to the real doc-drop service. Browser
+subresources and redirects remain on the selected policy instead of inheriting
+a direct backend route. Display links are rewritten to the configured host
+doc-drop origin only in returned search sections, while stored document
+identity remains the internal crawl URL.
 
 ## Other restricted components
 

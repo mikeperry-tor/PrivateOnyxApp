@@ -2977,11 +2977,33 @@ def apply_mcp_egress_proxy_patch() -> None:
 
 
 def apply_configured_inference_proxy_patch() -> None:
-    """Give supported user-configured OpenAI-compatible bases a host client."""
+    """Give supported configured chat bases one explicit controlled client."""
 
     proxy_url = _validated_fixed_proxy_url(
         "ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL", "onyx-host-egress-bridge"
     )
+    internal_base_url = os.environ.get(
+        "ONYX_CONFIGURED_INFERENCE_INTERNAL_BASE_URL", ""
+    ).strip()
+    internal_base = urlsplit(internal_base_url)
+    try:
+        internal_port = internal_base.port
+    except ValueError:
+        internal_port = None
+    if (
+        internal_base.scheme != "http"
+        or internal_base.hostname != "teep"
+        or internal_port != 8337
+        or internal_base.username is not None
+        or internal_base.password is not None
+        or internal_base.path.rstrip("/") != "/v1"
+        or internal_base.query
+        or internal_base.fragment
+    ):
+        raise RuntimeError(
+            "ONYX_CONFIGURED_INFERENCE_INTERNAL_BASE_URL must be exactly "
+            "http://teep:8337/v1"
+        )
     try:
         import httpx
         import openai
@@ -3034,11 +3056,24 @@ def apply_configured_inference_proxy_patch() -> None:
                 "configured inference api_base is not proxy-covered for provider "
                 f"{provider!r} at the pinned Onyx/LiteLLM version"
             )
-        http_client = httpx.Client(
-            proxy=proxy_url,
-            trust_env=False,
-            timeout=self._timeout,
+        configured_base = urlsplit(self._api_base)
+        is_internal_teep = (
+            configured_base.scheme == internal_base.scheme
+            and configured_base.hostname == internal_base.hostname
+            and configured_base.port == internal_base.port
+            and configured_base.path.rstrip("/") == internal_base.path.rstrip("/")
+            and configured_base.username is None
+            and configured_base.password is None
+            and not configured_base.query
+            and not configured_base.fragment
         )
+        client_kwargs: dict[str, Any] = {
+            "trust_env": False,
+            "timeout": self._timeout,
+        }
+        if not is_internal_teep:
+            client_kwargs["proxy"] = proxy_url
+        http_client = httpx.Client(**client_kwargs)
         inference_client = openai.OpenAI(
             api_key=self._api_key or "not-needed",
             base_url=self._api_base,
@@ -3061,7 +3096,8 @@ def apply_configured_inference_proxy_patch() -> None:
     multi_llm.LitellmLLM.__init__ = _patched_init
     multi_llm.LitellmLLM._completion = _patched_completion
     print(
-        "sitecustomize: routed supported configured inference bases through fixed host egress",
+        "sitecustomize: routed supported configured inference bases through "
+        "fixed host egress with an exact internal Teep exception",
         flush=True,
     )
 

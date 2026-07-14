@@ -4,11 +4,13 @@
 
 Onyx application containers use only internal Compose networks and cannot
 open direct Internet or host-gateway sockets. Generic public HTTP clients use
-`onyx-public-egress-bridge`; configured inference and embedding clients use
-`onyx-host-egress-bridge`. MCP/OAuth and configured Web Connector clients
-choose between them from the saved Admin SSRF level for each new client or
-crawl. Public and host policies have separate namespaces, authenticated route
-brokers, and credentials; browser and executor policies are separate.
+`onyx-public-egress-bridge`; supported configured chat inference and the local
+embedding shim use `onyx-host-egress-bridge`, except that the exact internal
+Teep chat base stays direct on `onyx-teep`. MCP/OAuth and configured Web
+Connector clients choose between them from the saved Admin SSRF level for each
+new client or crawl. Public and host policies have separate namespaces,
+authenticated route brokers, and credentials; browser and executor policies
+are separate.
 
 The MCP runtime patch supplies an explicit `trust_env=False` HTTPX proxy
 transport while preserving Onyx validation for initial URLs, redirects,
@@ -20,10 +22,11 @@ the selected broker resolves and pins the target. Exact
 aliases remain denied.
 
 The Web connector uses the same saved-level selection for requests and
-Playwright fallback. Its only direct exception is the exact full-mode internal
-origin `http://doc-drop-web:8091/`. The former bundled Obscura MCP server was
-removed intentionally; user-configured MCP servers use the guarded paths
-above.
+Playwright fallback, including sitemap construction. The exact full-mode
+internal origin `http://doc-drop-web:8091/` uses the host policy plus a fixed
+gateway; it is not a crawl-wide direct exception. The former bundled Obscura
+MCP server was removed intentionally; user-configured MCP servers use the
+guarded paths above.
 
 This document describes the full request chains for the two primary web-facing
 tool paths in the Onyx agent: the **web search** tool (`web_search`) and the
@@ -793,8 +796,8 @@ generation and code-interpreter executor pod caveats, is documented in
 | **SearXNG** | none by default | CRW-backed engines use only the internal CRW peer network |
 | **Code-interpreter HTTP clients** | executor policy | local executor bridge; search-engine and private/internal targets are blocked |
 | **Onyx API/background HTTP helpers** | public-only Onyx bridge/policy/broker | Environment-aware `requests`, `httpx`, and `urllib` clients use `HTTP_PROXY`/`HTTPS_PROXY=http://onyx-public-egress-bridge:3128`; stack-owned internal bypasses come from `onyx/helper-egress.env` |
-| **MCP/OAuth and configured Web Connector** | saved-level-selected public or host route | Explicit SSRF-guarded transports defer public target DNS to the selected route broker; the exact internal doc-drop crawl origin bypasses both |
-| **Configured inference / embedding shim** | host-capable Onyx route | Explicit clients preserve exact-host and opt-in RFC1918 policy without direct application egress |
+| **MCP/OAuth and configured Web Connector** | saved-level-selected public or host route | Explicit SSRF-guarded transports defer public target DNS to the selected route broker; doc-drop uses one exact host-broker gateway |
+| **Configured chat inference / embedding shim** | host-capable Onyx route | Explicit clients preserve exact-host and opt-in RFC1918 policy; the exact internal Teep chat base remains direct on `onyx-teep` |
 | **OnyxWebCrawler** | selected Onyx bridge | Does not go through CRW/Obscura; its SSRF-validated request and Playwright fallback use explicit public/host routing |
 
 **CONNECT handling:**

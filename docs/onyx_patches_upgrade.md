@@ -741,8 +741,8 @@ Upgrade notes:
 - Test Playwright navigation, a Web connector fetch, a coding-agent GitHub
   download, and an ordinary helper request through each selected route.
 - Verify Chromium receives the selected explicit bridge. The Web Connector's
-  only direct exception must remain exact `http://doc-drop-web:8091/` and
-  reject every other unapproved private target.
+  exact `http://doc-drop-web:8091/` route must traverse only the fixed host
+  gateway, and every other unapproved private target must be rejected.
 
 ### MCP, Web Connector, configured inference, and route brokers
 
@@ -753,11 +753,13 @@ Patch behavior:
   request with target DNS deferred, and constructs HTTPX with an explicit
   proxy plus `trust_env=False`.
 - The background patch selects the public/host requests and Playwright route
-  per Web crawl, preserves the exact internal doc-drop exception, and rewrites
-  only returned display links.
+  during construction and per Web crawl, preserves the exact internal
+  doc-drop host gateway, and rewrites only returned display links.
 - `apply_configured_inference_proxy_patch()` injects a host-route HTTPX client
-  for supported configured OpenAI-compatible LiteLLM providers and fails on an
-  unsupported configured-provider transport shape.
+  for the documented configured chat providers, preserves the exact internal
+  Teep base with a direct `trust_env=False` client, and fails on an unsupported
+  configured chat-provider transport shape. Private image, speech, arbitrary
+  embedding/reranking, and provider-discovery endpoints remain unsupported.
 - `crw/route_broker.py` accepts only the matching policy address, protocol
   version, route class, and generated credential; repeats destination checks;
   and applies framing, connect, idle, total, and concurrency bounds.
@@ -1551,9 +1553,11 @@ Patched Onyx services:
 
 Wrapper additions:
 
-- `doc-drop-web` exposes a local read-only docs directory on the backend and a
-  dedicated publisher network. `host-doc-display-publisher` exposes only that
-  listener on the configured host bind. `doc-drop-web` runs
+- `doc-drop-web` exposes a local read-only docs directory on dedicated route
+  and publisher networks. `doc-drop-route-gateway` gives the authenticated
+  host policy an exact route to that origin, while
+  `host-doc-display-publisher` exposes only that listener on the configured
+  host bind. `doc-drop-web` runs
   `onyx/doc_drop_webserver.py`, a small `http.server` wrapper that hides hidden
   filesystem entries such as `.git`, `._*`, `.DS_Store`, and `__pycache__` from
   directory listings, returns HTTP 404 for direct hidden-path requests, and

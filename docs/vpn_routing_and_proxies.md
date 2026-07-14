@@ -42,10 +42,15 @@ removed intentionally. Existing saved records that name it must be deleted.
 
 Environment-aware public helpers use `onyx-public-egress-bridge:3128`.
 MCP/OAuth and configured Web Connector requests choose the public or host
-bridge from the saved Onyx Admin SSRF level. Configured inference endpoints
-and the embedding shim use the host bridge; provider-default inference uses
-the public bridge. Runtime patches construct explicit transports for clients
-that would otherwise ignore environment proxy settings.
+bridge from the saved Onyx Admin SSRF level. Supported configured chat
+inference endpoints and the embedding shim use the host bridge;
+provider-default inference uses the public bridge. Runtime patches construct
+explicit transports for clients that would otherwise ignore environment
+proxy settings. The exact internal chat base `http://teep:8337/v1` is the one
+configured-inference exception: it uses a direct `trust_env=false` client on
+`onyx-teep` rather than either external route. Private configured image,
+speech, arbitrary embedding/reranking, and Admin provider-discovery endpoints
+are not supported; see [Onyx patches](onyx_patch_info.md).
 
 Each bridge is a hardened numeric-nonroot TCP forwarder with exactly two
 internal networks: one application-side network and one dedicated
@@ -82,8 +87,9 @@ authoritative DNS validation, without enabling public HTTP.
 
 New installs seed Onyx SSRF protection to Allow Private Network with loopback
 disabled. A saved Admin Security Hardening value remains authoritative and is
-read when a new MCP client or Web crawl is created. `open_url` remains strict;
-the only direct Web Connector exception is the exact internal doc-drop origin.
+read when a new MCP client or Web crawl is created. `open_url` remains strict.
+The internal doc-drop origin uses the host policy and an exact fixed gateway;
+it is not a direct crawl bypass.
 
 ## Final-hop routing and DNS
 
@@ -108,6 +114,12 @@ validated pinned address. Upstream credentials are never logged.
 An upstream that resolves a public-looking hostname to a private address is a
 residual risk for remote-DNS schemes; enforce equivalent policy at that
 upstream. Exact host and RFC1918 exceptions are never sent through it.
+
+When `EGRESS_ALLOW_RFC1918=true`, the host broker first queries configured
+host-route names through system/Docker DNS to identify complete RFC1918 answer
+sets. All-global answers are discarded and resolved again through the normal
+selected final hop. This initial system-DNS query is the explicit privacy
+tradeoff for supporting operator-approved LAN names.
 
 ## Readiness and failure behavior
 

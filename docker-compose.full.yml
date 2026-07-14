@@ -70,6 +70,7 @@ services:
       ONYX_WEB_CONNECTOR_PUBLIC_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
       ONYX_WEB_CONNECTOR_HOST_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
       ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
+      ONYX_CONFIGURED_INFERENCE_INTERNAL_BASE_URL: "http://teep:8337/v1"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
@@ -155,11 +156,15 @@ services:
       timeout: 20s
       retries: 3
 
-  # Read-only internal crawl identity, with a separately published host view.
+  # Read-only internal crawl origin, reachable only through the fixed route
+  # gateway or the separately published host view.
   doc-drop-web:
     image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
     restart: unless-stopped
-    networks: [onyx-backend, doc-drop-publish]
+    networks:
+      doc-drop-route:
+        aliases: [doc-drop-origin]
+      doc-drop-publish: {}
     volumes:
       - ${ONYX_RAG_DOC_SOURCE_DIR:-./doc-drop}:/import/docs:ro
       - ./onyx/doc_drop_webserver.py:/app/doc_drop_webserver.py:ro
@@ -177,6 +182,32 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
+
+  # The Web Connector always uses its selected request policy, including for
+  # the stack-owned doc-drop origin. This fixed gateway exposes that origin
+  # only on the host policy/broker path; it is not a general backend relay.
+  doc-drop-route-gateway:
+    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.forwarding: "0"
+    command: ["tcp-listen:8091,fork,reuseaddr", "tcp-connect:doc-drop-origin:8091"]
+    networks:
+      onyx-host-broker:
+        aliases: [doc-drop-web]
+      doc-drop-route: {}
+    depends_on:
+      doc-drop-web: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'GET / HTTP/1.0\r\nHost: doc-drop-web\r\n\r\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:8091,connect-timeout=5 | grep -q '^HTTP/'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   host-doc-display-publisher:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
@@ -260,4 +291,5 @@ services:
         condition: service_healthy
 
 networks:
+  doc-drop-route: {internal: true}
   doc-drop-publish: {internal: true}

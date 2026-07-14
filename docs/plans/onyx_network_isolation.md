@@ -18,6 +18,21 @@
 > network. This is a narrower platform-required deviation from workstream 4's
 > direct-publication wording; it does not restore the old routing namespace or
 > grant application containers an egress route.
+>
+> **Web Connector implementation note:** the deployed stack sends doc-drop
+> through the host request policy and one exact fixed gateway instead of using
+> a process-wide direct crawl exception. This keeps requests, redirects, and
+> browser subresources policy-mediated while preserving the stable
+> `http://doc-drop-web:8091/` document identity.
+>
+> **Configured-provider implementation note:** the deployed minimal patch
+> covers configured chat clients for the supported LiteLLM provider set. The
+> exact internal Teep base uses a direct, environment-independent client;
+> other configured chat bases use the host policy. Private configured image,
+> speech, arbitrary embedding/reranking, and Admin discovery endpoints remain
+> unsupported rather than relying on broad or fragile SDK patches. Current
+> support bounds are documented in
+> [Onyx patches](../onyx_patch_info.md#mcpoauth-web-connector-and-configured-inference).
 
 ## Executive Decision
 
@@ -63,10 +78,10 @@ All Onyx application networks must be `internal: true`. Required internal
 service traffic remains direct on explicitly selected internal networks.
 Generic environment-aware external HTTP(S) uses the public-only bridge.
 MCP/OAuth and admin-configured Web Connector traffic selects the public or
-host-capable bridge from the saved Admin SSRF level. User-configured inference
-base URLs and explicitly approved host-local embedding/narrow-helper traffic
-use the host-capable bridge. Provider-default inference endpoints remain on
-the public-only bridge.
+host-capable bridge from the saved Admin SSRF level. Supported
+user-configured chat inference base URLs and explicitly approved host-local
+embedding/narrow-helper traffic use the host-capable bridge. Provider-default
+inference endpoints remain on the public-only bridge.
 Direct sockets that ignore proxy configuration must fail closed because the
 application containers have no externally routed network.
 
@@ -493,8 +508,8 @@ fail closed. When enabled:
 - Admin-configured Web Connector fetches use an explicit saved-level-selected
   public/host HTTP and Playwright transport, applying the connector SSRF posture
   to every initial, discovered, and redirected URL. The exact stack-owned
-  doc-drop connector remains a direct internal-service exception and never
-  uses egress.
+  doc-drop connector uses one exact host-policy gateway and never receives a
+  process-wide direct crawl context.
 - The local embedding shim and each supported Onyx client for a user-configured
   inference base URL use an explicit host-capable proxy transport rather than
   generic environment routing. Default provider endpoints with no configured
@@ -648,11 +663,11 @@ normal public route. RFC1918 targets require both an Admin level that permits
 connector-private access and `EGRESS_ALLOW_RFC1918=true`; loopback,
 link-local/metadata, and unapproved Docker names remain blocked.
 
-The exact configured local doc-drop connector is different: it uses the fixed
-internal `http://doc-drop-web:8091/` service identity directly on its internal
-network, with the narrow identity/display-link patch below. Do not send it to
-either egress bridge and do not generalize its direct-service exception to
-other saved Web Connector URLs.
+The exact configured local doc-drop connector keeps the fixed internal
+`http://doc-drop-web:8091/` service identity, with the narrow identity/display-
+link patch below. The implementation sends it through the host bridge and an
+exact fixed broker gateway rather than granting a direct crawl context. Do not
+generalize that internal destination to other saved Web Connector URLs.
 
 ### Configured Onyx Inference Upstreams
 
@@ -704,10 +719,12 @@ its named caller network and policy-side network.
 
 ### Local Document RAG
 
-Move `doc-drop-web` to an internal Onyx network, publish its diagnostic/source
-port directly on the configured loopback host bind, and configure the Web
-connector to crawl `http://doc-drop-web:8091/`. Remove the old policy-mediated
-loopback fetch path.
+Move `doc-drop-web` to a dedicated internal route network, publish its
+diagnostic/source port through a fixed hardened publisher on the configured
+host bind, and configure the Web connector to crawl
+`http://doc-drop-web:8091/`. Send that exact origin through the host policy and
+a fixed gateway into the route network; do not grant the background process a
+direct doc-drop network path.
 
 The pinned Web connector uses the fetched URL as both document identity and
 `TextSection.link`; it has no fetch/display URL split. Add a narrow, strict
@@ -1139,8 +1156,9 @@ an operator attaching new networks after startup.
 
 ### `docs/local_docs_rag_search.md`
 
-- Document the internal doc-drop crawl URL, display-only link rewrite, direct
-  host publication, and mandatory connector recreation/reindex migration.
+- Document the internal doc-drop crawl URL, display-only link rewrite, exact
+  host-policy gateway, direct host display publication, and mandatory
+  connector recreation/reindex migration.
 - Update embedding-shim service URL, explicit proxy implementation, host/LAN
   upstream routing, readiness, and failure diagnostics.
 - Revalidate source-link clickability, freshness, PDF reindexing, and
@@ -1240,7 +1258,7 @@ Add focused cases under `tests/` for:
 - local embedding shim HTTP absolute-form and HTTPS CONNECT proxying, TLS SNI,
   connection reuse/retry, no shim-side public DNS, and credential redaction;
 - Web Connector HTTP/Playwright explicit proxying, public and RFC1918 targets,
-  loopback/link-local/metadata denial, and the exact direct doc-drop exception;
+  loopback/link-local/metadata denial, and the exact doc-drop host gateway;
 - configured-inference URL selection for every supported synchronous and
   asynchronous SDK path, explicit client injection, provider-default public
   routing, RFC1918 opt-in, mixed-answer rejection, redirect/discovery handling,
@@ -1312,7 +1330,7 @@ Test at least:
 | MCP allow-private, RFC1918 off | exact host MCP, including plain HTTP, succeeds; RFC1918, loopback, link-local, and other Docker names remain denied |
 | MCP allow-private, RFC1918 on | exact host and all-RFC1918 MCP, including plain HTTP, succeed through the host route; public HTTP still requires `EGRESS_ALLOW_HTTP_URLS=true`; mixed answers and loopback/link-local/other Docker names remain denied |
 | Web Connector, strict/allow-private | strict connector traffic uses the public bridge; permitted private connector traffic uses the host bridge and RFC1918, including plain HTTP, succeeds only with `EGRESS_ALLOW_RFC1918`; configured doc-drop remains internal |
-| configured inference, RFC1918 off/on | configured public endpoints use the host bridge and normal public final route; RFC1918 endpoints, including plain HTTP, fail when off and succeed through the pinned private route when on; public HTTP requires the general HTTP option; provider-default endpoints remain on the public bridge |
+| supported configured chat inference, RFC1918 off/on | configured public endpoints use the host bridge and normal public final route; RFC1918 endpoints, including plain HTTP, fail when off and succeed through the pinned private route when on; public HTTP requires the general HTTP option; provider-default endpoints remain on the public bridge |
 | executor network off/on | control plane works; pods remain `none` or on the dedicated executor network and never inherit Onyx exceptions |
 | Tailscale off/on and routed/unrouted | disabled services absent; enabled ingress reaches nginx without adding application egress |
 

@@ -642,8 +642,9 @@ configured-inference component patches.
 
 Playwright receives an explicit public or host bridge and no generic host
 bypass. The full-mode Web Connector patch recognizes only the exact internal
-`http://doc-drop-web:8091/` origin and reaches it directly on `onyx-backend`.
-All other private targets remain subject to saved-level and host-policy rules.
+`http://doc-drop-web:8091/` origin and sends it through an exact fixed gateway
+owned by the host policy. All browser subresources, redirects, and other
+private targets remain subject to host-policy rules.
 
 ### MCP/OAuth, Web Connector, and configured inference
 
@@ -655,17 +656,27 @@ Streamable HTTP, SSE, redirects, discovery, dynamic registration,
 authorization, token, refresh, and tool calls therefore share the selected
 route. Factory or transport signature drift fails strict startup.
 
-The full-mode background patch selects the same public/host route for each Web
-Connector crawl and its Playwright fallback. Only the exact configured
-internal doc-drop origin is direct. Returned section links are rewritten from
-the internal crawl base to the configured host display base without changing
-stored document identity or freshness URLs.
+The full-mode background patch selects the same public/host route during Web
+Connector construction, sitemap fetching, each crawl, and its Playwright
+fallback. The exact configured internal doc-drop origin uses the host route's
+fixed gateway. Returned section links are rewritten from the internal crawl
+base to the configured host display base without changing stored document
+identity or freshness URLs.
 
-`apply_configured_inference_proxy_patch()` validates configured base URLs and
-injects an explicit host-route HTTPX client into supported synchronous
-OpenAI-compatible LiteLLM requests. Provider-default requests retain the
-public route. A configured provider shape that cannot accept the controlled
-client fails loudly instead of falling back to an ambient socket route.
+`apply_configured_inference_proxy_patch()` validates configured chat base URLs
+and injects an explicit host-route HTTPX client for OpenAI,
+OpenAI-compatible, Bifrost, LiteLLM proxy, LM Studio, and Ollama chat requests.
+The exact `http://teep:8337/v1` base instead receives a direct
+`trust_env=False` client on `onyx-teep`. Provider-default requests retain the
+public route, and unsupported configured chat-provider shapes fail loudly.
+
+This patch does not cover private configured image-generation, speech,
+arbitrary embedding/reranking, or Admin model-discovery endpoints. Those paths
+use separate SDK/module-level factories at the pinned version; extending the
+host route to them would require broader fragile patches. Public endpoints may
+continue to work through environment-aware public egress, but private use of
+those configured endpoint types is unsupported. The stack-owned local
+embedding shim is separately and explicitly supported.
 
 ## Internal search content caps
 

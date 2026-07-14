@@ -46,9 +46,12 @@ At a high level:
   proxies remain authoritative for target DNS and private-target rejection.
 - Onyx applications use internal-only networks. Generic helpers use a fixed
   public bridge; saved-level MCP/Web Connector traffic and configured
-  inference/embedding use separate public or host-capable bridges, isolated
-  policy namespaces, and authenticated route brokers. Direct sockets have no
-  external route; executor pods never inherit Onyx exceptions.
+  chat inference plus the dedicated embedding shim use separate public or
+  host-capable bridges, isolated policy namespaces, and authenticated route
+  brokers. Direct sockets have no external route; executor pods never inherit
+  Onyx exceptions. The exact internal Teep chat base is a startup-validated
+  direct-service exception, and doc-drop Web Connector traffic uses an exact
+  host-policy gateway rather than a process-wide direct crawl.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 
 Those bullets are only a map. Read the docs above before changing any runtime path.

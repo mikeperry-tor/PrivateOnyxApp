@@ -52,15 +52,16 @@ boundary.
 
 1. Files are placed under `ONYX_RAG_DOC_SOURCE_DIR`, defaulting to `./doc-drop`.
 2. `doc-drop-web` mounts that directory read-only at `/import/docs` and serves
-   it on the internal backend and dedicated publisher networks.
+   it on dedicated internal route and publisher networks.
 3. The host display origin is
    `http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/` by default.
 4. In Onyx Admin -> Connectors -> Web, create a Recursive Web connector pointed
    at `http://doc-drop-web:8091/`.
 5. The Onyx `background` worker crawls the directory listing and downloads
-   documents through the Web connector. The background patch permits only this
-   exact internal origin directly; external connector targets use the public
-   or host bridge selected from saved Admin SSRF state.
+   documents through the Web connector. The exact stack-owned origin uses the
+   host policy, an authenticated route broker, and a fixed gateway into the
+   dedicated doc-drop route network. User-defined connector targets use the
+   public or host policy selected from saved Admin SSRF state.
 6. During indexing, `background` calls `MODEL_SERVER_HOST:MODEL_SERVER_PORT`.
    In full mode the wrapper points that to `local-embedding-shim:9101` on the
    internal backend network.
@@ -81,8 +82,8 @@ connectors saved with `http://localhost:8091/` must be recreated with
 
 Implementation:
 
-- Compose services: `doc-drop-web` and `host-doc-display-publisher` in
-  `docker-compose.full.yml`
+- Compose services: `doc-drop-web`, `doc-drop-route-gateway`, and
+  `host-doc-display-publisher` in `docker-compose.full.yml`
 - Server script: `onyx/doc_drop_webserver.py`
 - User-facing env: `ONYX_RAG_DOC_SOURCE_DIR` and `HOST_PORT_ONYX_RAG_DOC_WEB`
 
@@ -123,13 +124,13 @@ MCP_SERVER_ALLOW_LOOPBACK=false
 This maps to Allow Private Network when no Admin value is saved. Saved state
 selects the public or host route for external Web Connector/MCP requests;
 loopback remains blocked. The exact internal doc-drop origin is a separate
-stack-owned exception and does not depend on broad loopback access.
+stack-owned host-policy gateway and does not depend on broad loopback access.
 
 Once an admin saves Security Hardening settings in Onyx, the saved UI value is
 the effective runtime policy and these env vars only act as startup defaults.
-If doc-drop crawling suddenly fails after UI changes, check Admin -> Security
-Hardening first. The strict "Validate All" posture can block the local Web
-connector.
+If generic private crawling suddenly fails after UI changes, check Admin ->
+Security Hardening first. The exact stack-owned doc-drop route remains
+available at the strict "Validate All" posture.
 
 There is an intentional tradeoff here. The document source is local and trusted
 by the operator, so the wrapper optimizes for making Onyx's Web connector see
@@ -435,8 +436,9 @@ Look for these shim messages:
 Common failure modes:
 
 - The Web connector cannot crawl `http://doc-drop-web:8091/`: check that full
-  mode and `doc-drop-web` are healthy and that the connector was recreated
-  after the network-isolation migration. Test the display link separately at
+  mode, `doc-drop-web`, `doc-drop-route-gateway`, and the host egress
+  policy/broker are healthy and that the connector was recreated after the
+  network-isolation migration. Test the display link separately at
   `http://localhost:8091/`.
 - Directory listings work but hidden files are missing: this is expected.
 - Indexing starts but embedding fails with connection errors: confirm the host
