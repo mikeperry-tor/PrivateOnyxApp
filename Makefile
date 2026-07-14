@@ -48,9 +48,10 @@ CONTAINER_BIN ?= $(call env_value,CONTAINER_BIN)
 DOCKER_SOCK_PATH ?= $(call env_value,DOCKER_SOCK_PATH)
 TEEP_ROUTE_THROUGH_MYST_VPN ?= $(call env_value,TEEP_ROUTE_THROUGH_MYST_VPN)
 TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN ?= $(call env_value,TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN)
+TAILSCALE_FUNNEL_ENABLED ?= $(call env_value,TAILSCALE_FUNNEL_ENABLED)
 ONYX_CODE_INTERPRETER_ENABLE_NETWORK ?= $(call env_value,ONYX_CODE_INTERPRETER_ENABLE_NETWORK)
 MYST_VPN_ENABLED ?= $(call env_value,MYST_VPN_ENABLED)
-ONYX_AGENT_OUTBOUND_PROXY_URL ?= $(call env_value,ONYX_AGENT_OUTBOUND_PROXY_URL)
+EGRESS_UPSTREAM_PROXY_URL ?= $(call env_value,EGRESS_UPSTREAM_PROXY_URL)
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -64,6 +65,10 @@ export CONTAINER_BIN
 export DOCKER_SOCK_PATH
 export TEEP_IMAGE
 
+ifneq ($(filter true,$(TAILSCALE_FUNNEL_ENABLED)),)
+export COMPOSE_PROFILES := tailscale
+endif
+
 PODMAN_COMPOSE_SUFFIX :=
 PODMAN_FULL_COMPOSE_SUFFIX :=
 ifneq ($(findstring podman,$(CONTAINER_BIN)),)
@@ -72,14 +77,15 @@ PODMAN_FULL_COMPOSE_SUFFIX :=:$(PODMAN_FULL_OVERRIDE_FILE)
 endif
 
 # Conditional routing overrides for teep and tailscale.
-# When TEEP_ROUTE_THROUGH_MYST_VPN=true, teep joins the netns-holder namespace.
+# When true, a fixed Teep gateway joins the trusted routing namespace; the
+# Onyx caller and Teep service remain on explicit internal networks.
 TEEP_VPN_SUFFIX :=
 ifneq ($(filter true,$(TEEP_ROUTE_THROUGH_MYST_VPN)),)
 TEEP_VPN_SUFFIX :=:docker-compose.teep-vpn.yml
 endif
 
-# When TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true, tailscale joins the
-# netns-holder namespace.
+# When true, Tailscale shares the trusted route namespace but still reaches
+# Onyx only through its fixed frontend gateway.
 TAILSCALE_VPN_SUFFIX :=
 ifneq ($(filter true,$(TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN)),)
 TAILSCALE_VPN_SUFFIX :=:docker-compose.tailscale-vpn.yml
@@ -91,11 +97,11 @@ ifneq ($(filter true,$(ONYX_CODE_INTERPRETER_ENABLE_NETWORK)),)
 CODE_INTERPRETER_NETWORK_SUFFIX :=:docker-compose.code-interpreter-network.yml
 endif
 
-# When ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty, apply the proxy override
+# When EGRESS_UPSTREAM_PROXY_URL is non-empty, apply the proxy override
 # layer records the explicit upstream-proxy mode. Restricted components always
 # use local bridges; only final-hop policy proxies receive the upstream URL.
 PROXY_SUFFIX :=
-ifneq ($(strip $(ONYX_AGENT_OUTBOUND_PROXY_URL)),)
+ifneq ($(strip $(EGRESS_UPSTREAM_PROXY_URL)),)
 PROXY_SUFFIX :=:docker-compose.proxy.yml
 endif
 
@@ -118,9 +124,11 @@ USER_AUTH_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
 CRW_ONYX_API_KEY := crw-$(strip $(shell openssl rand -hex 16 2>/dev/null))
 MINIO_ROOT_USER := $(strip $(shell openssl rand -hex 16 2>/dev/null))
 MINIO_ROOT_PASSWORD := $(strip $(shell openssl rand -hex 32 2>/dev/null))
+ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL := $(strip $(shell openssl rand -hex 32 2>/dev/null))
+ONYX_HOST_ROUTE_BROKER_CREDENTIAL := $(strip $(shell openssl rand -hex 32 2>/dev/null))
 S3_AWS_ACCESS_KEY_ID := $(MINIO_ROOT_USER)
 S3_AWS_SECRET_ACCESS_KEY := $(MINIO_ROOT_PASSWORD)
-ifeq ($(strip $(SEARXNG_SECRET)$(USER_AUTH_SECRET)$(MINIO_ROOT_PASSWORD)),)
+ifeq ($(strip $(SEARXNG_SECRET)$(USER_AUTH_SECRET)$(MINIO_ROOT_PASSWORD)$(ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL)$(ONYX_HOST_ROUTE_BROKER_CREDENTIAL)),)
 $(error openssl is required to generate ephemeral local stack secrets)
 endif
 export SEARXNG_SECRET
@@ -130,6 +138,8 @@ export MINIO_ROOT_USER
 export MINIO_ROOT_PASSWORD
 export S3_AWS_ACCESS_KEY_ID
 export S3_AWS_SECRET_ACCESS_KEY
+export ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL
+export ONYX_HOST_ROUTE_BROKER_CREDENTIAL
 CODE_INTERPRETER_IMAGE_TAG ?= $(call env_value,CODE_INTERPRETER_IMAGE_TAG)
 ifeq ($(strip $(CODE_INTERPRETER_IMAGE_TAG)),)
 $(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass CODE_INTERPRETER_IMAGE_TAG=... on the make command line)
@@ -199,7 +209,7 @@ help:
 	@echo "             TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true in $(ENV_FILE)"
 	@echo "Code interpreter network: set ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true in $(ENV_FILE)"
 	@echo "Disable VPN: set MYST_VPN_ENABLED=false in $(ENV_FILE) to idle myst-client without kill-switch/connect"
-	@echo "Proxy: set ONYX_AGENT_OUTBOUND_PROXY_URL in $(ENV_FILE) (http/https/socks5)"
+	@echo "Proxy: set EGRESS_UPSTREAM_PROXY_URL in $(ENV_FILE) (http/https/socks5)"
 	@echo "       to route Onyx helpers, CRW, Obscura, and network-enabled executor egress"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep pin: make teep-build TEEP_REF=<commit-sha>"
@@ -352,10 +362,10 @@ searxng-image-ready:
 	echo "SearxNG image ready: $$image"
 
 down-lite:
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
+	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
 
 down-full:
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
+	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
 
 ps-lite:
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) ps

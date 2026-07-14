@@ -26,26 +26,29 @@ When a request touches more than one path, read each relevant doc first. Prefer 
 
 At a high level:
 
-- Users reach the Onyx WebUI through the local host proxy or optional Tailscale Funnel.
+- Users reach nginx through a hardened fixed host publisher or the optional
+  fixed Tailscale frontend gateway; nginx stays internal-only.
 - Onyx sends LLM requests through the included Teep local inference service.
 - When explicitly enabled, the base `sitecustomize` patch gives nested Deep
   Research agents the tools selected for the current chat Agent and executes
   complete model-emitted tool batches with bounded concurrency.
 - Onyx `web_search` calls SearXNG, which uses custom CRW-backed engines.
 - CRW uses local proxy/CDP/Obscura components to render search and page content. These components exist to reduce 429 and 403 errors at search engines and web pages.
-- CRW, SearXNG, both Obscura processes, CDP shim, and optional executor pods
+- CRW, SearXNG, Obscura, CDP shim, and optional executor pods
   use narrow internal networks. Internet traffic crosses component bridges to
   final-hop policy proxies in the trusted Mysterium routing namespace.
 - CRW's mandatory local URL-safety lookup uses the loopback-only
   `crw-validation-dns` sidecar. It never forwards target names; authoritative
   destination DNS and address validation remain at the final-hop policy.
-- Both isolated Obscura processes allow private-address resolution only so
-  their HTTP clients can resolve the mandatory Docker egress-bridge proxy.
+- Isolated Obscura allows private-address resolution only so its HTTP client
+  can resolve the mandatory Docker egress-bridge proxy.
   Their narrow networks prevent direct Internet egress, and final-hop policy
   proxies remain authoritative for target DNS and private-target rejection.
-- Environment-aware HTTP helpers in the Onyx API/background services and their
-  Playwright launchers use a loopback-only final-hop policy. Trusted internal
-  service URLs bypass it explicitly; executor pods never inherit that bypass.
+- Onyx applications use internal-only networks. Generic helpers use a fixed
+  public bridge; saved-level MCP/Web Connector traffic and configured
+  inference/embedding use separate public or host-capable bridges, isolated
+  policy namespaces, and authenticated route brokers. Direct sockets have no
+  external route; executor pods never inherit Onyx exceptions.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 
 Those bullets are only a map. Read the docs above before changing any runtime path.
@@ -61,8 +64,8 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 - `docker-compose.code-interpreter-network.yml` - optional executor-only internal network and proxy bridge.
 - `docker-compose.*-vpn.yml`, `docker-compose.proxy.yml`, and Podman overrides
   - optional routing/proxy/container-engine layers selected by the Makefile.
-- `crw/` - CDP shim, CRW validation-DNS sidecar, and prefetch-blocking proxy
-  around CRW/Obscura.
+- `crw/` - CDP shim, CRW validation-DNS sidecar, prefetch-blocking policy, and
+  authenticated Onyx route broker.
 - `searxng/` - custom CRW-backed engines and the minimal SearXNG overlay.
 - `myst/` - Mysterium image build file, entrypoint, signup compose, and helper CLI.
 - `teep/` - Teep image build file and entrypoint.
@@ -120,7 +123,11 @@ This stack protects private research, document contents, browsing behavior, infe
 ### Component-Specific Rules
 
 - Compose layering: the Makefile assembles `COMPOSE_FILE`. Keep optional behavior in override files, keep Docker and Podman behavior separated, and preserve generated local secret flow plus Compose `${VAR:?message}` checks.
-- VPN/proxy routing: preserve explicit VPN/no-VPN behavior, host-proxy access, shared namespace membership where documented, optional routing switches, and `ONYX_AGENT_OUTBOUND_PROXY_URL`/`NO_PROXY` handling. Do not introduce automatic direct-egress fallback when VPN or proxy connectivity fails.
+- VPN/proxy routing: preserve explicit VPN/no-VPN behavior, the separate
+  public/host Onyx route classes, exact host and opt-in RFC1918 policy,
+  optional routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY`
+  handling. Onyx applications must never rejoin `netns-holder` or gain direct
+  fallback when VPN, policy, broker, or proxy connectivity fails.
 - Request handling: keep supported search engines routed through the custom CRW/SearXNG path; preserve CRW/Obscura rendering, prefetch blocking, per-host rate control, anti-bot visibility, and the documented CDP shim behavior. Do not replace this path with plain HTTP fetching or fixed sleeps.
 - Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
 - Patch upgrades: before changing Onyx, code-interpreter, SearXNG, CRW, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
@@ -133,8 +140,8 @@ There is no single test framework for this wrapper. Choose checks based on what 
 - Restricted-egress unit tests: run
   `python3 -m unittest discover -s tests -p 'test_*.py' -v`. Add focused cases
   under `tests/` when changing proxy destination/DNS policy, HTTP request
-  framing, bridge-client enforcement, executor network selection, or injected
-  executor environment. Runtime-limit patches should get focused signature,
+  framing, bridge/broker authentication and route-class enforcement, executor
+  network selection, or injected executor environment. Runtime-limit patches should get focused signature,
   configured-value, and invalid-value cases. Tests must be deterministic and
   must not require live internet, VPN credentials, or the private
   `.env.wrapper`.

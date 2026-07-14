@@ -106,20 +106,19 @@ Most likely variables you want to change:
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **Master VPN switch**:
-  - Set `MYST_VPN_ENABLED=false` to run the entire stack without the Mysterium VPN. The `myst-client` container still starts and joins the shared `netns-holder` namespace (so all service wiring stays identical), but it idles the daemon without arming the kill-switch or attempting to connect. Traffic egresses directly via the Docker bridge. This skips the Myst wallet/funding requirement entirely.
+  - Set `MYST_VPN_ENABLED=false` to use the explicit no-VPN final-hop route. `myst-client` remains the route owner but idles its daemon without arming the kill switch. Onyx application containers stay on internal-only networks in both modes and cannot use Docker as a direct fallback. This skips the Myst wallet/funding requirement entirely.
   - No-VPN readiness requires no stale `myst0` interface and a usable IPv4
     default route on whichever Docker interface owns it; full-mode network
     attachment order means that interface is not necessarily `eth0`.
   - With the VPN enabled, Myst readiness requires a connected daemon, a usable
     `myst0` subnet, and a source-bound query to the provider resolver. Docker
     autoheal restarts only `myst-client` when that data-plane check fails; the
-    stable `netns-holder` namespace lets policy proxies and bridges recover in
-    place without acquiring a direct-egress fallback.
+    stable `netns-holder` namespace contains only final-hop route owners and
+    brokers; application and request-policy containers do not share it.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
-- **Optional LAN access** (for local inference APIs):
-  - Set `MYST_VPN_ALLOW_LAN_BYPASS=true` to allow access to local network addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) without routing through the VPN. Useful for accessing LLMs, embedding servers, or MCP servers running on your host or LAN while maintaining fail-closed behavior for all other traffic. Default: `false`
-  - If you want MCP servers on `host.docker.internal` and the doc-drop connector at `http://localhost:8091/`, use `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL=true`, `ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true`, and `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false`. That yields `Allow Private Network`: Web connectors can crawl local/private targets, and MCP/OAuth endpoints can use private LAN or `host.docker.internal` addresses, while loopback MCP/OAuth targets such as `127.0.0.1` remain blocked.
-  - Set `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` only when you intentionally need loopback MCP/OAuth access. In Onyx v4.2.5 this seeds SSRF `Disabled`, which is broader than the wrapper default.
+- **Optional LAN access**:
+  - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, embedding, and inference destinations through the host-capable policy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
+  - Exact `host.docker.internal` is a narrower host-route exception and does not require the RFC1918 option. New installs seed Onyx SSRF protection to **Allow Private Network**, with loopback disabled; saved Admin Security Hardening settings remain authoritative and select the public or host-capable route for new MCP clients and Web crawls.
 
 ### Initial VPN Connection (Myst Payment)
 
@@ -251,8 +250,8 @@ The node polls the on-chain channel balance and will reflect the transfer once t
 
 Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). Select the **OpenAI-Compatible** provider type for teep. This is important for GLM-5.2 and Kimi-K2.6 reasoning models: the wrapper's Onyx patches preserve active-turn assistant reasoning as OpenAI-compatible `reasoning_content`/`reasoning` fields by default, and the OpenAI-Compatible provider keeps teep's raw model IDs on that request path. Set `ONYX_AGENT_PRESERVE_ALL_REASONING=true` only if you want to carry reasoning from older turns too. The BiFrost provider is also compatible, but OpenAI-Compatible is the recommended teep selection. The URL depends on your `TEEP_ROUTE_THROUGH_MYST_VPN` setting:
 
-- **Default (`TEEP_ROUTE_THROUGH_MYST_VPN=false`):** Use `http://teep:8337/v1` (Docker DNS resolves the teep service on the default network).
-- **VPN-routed (`TEEP_ROUTE_THROUGH_MYST_VPN=true`):** Use `http://127.0.0.1:8337/v1` (shared loopback in the VPN namespace).
+- **Default (`TEEP_ROUTE_THROUGH_MYST_VPN=false`):** Use `http://teep:8337/v1`.
+- **VPN-routed (`TEEP_ROUTE_THROUGH_MYST_VPN=true`):** Also use `http://teep:8337/v1`; the routing override replaces that fixed internal gateway without exposing the VPN namespace to Onyx.
 
 The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown. Use teep's exact model ID as listed; provider catalogs may spell GLM and Kimi model names with different dots, dashes, or compressed forms, and the OpenAI-Compatible path avoids LiteLLM native-provider remapping.
 
@@ -262,7 +261,7 @@ The best privacy preserving providers supported by teep are currently `neardirec
 
 This stack can also be used with LMStudio or any other local LLM provider.  Simply use `host.docker.internal` to connect to your localhost instance, using the Onyx Admin UI configuration.
 
-If the local provider is running on a private/LAN address, you will usually also want `MYST_VPN_ALLOW_LAN_BYPASS=true` so traffic can bypass the Myst VPN firewall to reach your host or LAN service.
+If the local provider is running on a private/LAN address, you will usually also want `EGRESS_ALLOW_RFC1918=true` so traffic can bypass the Myst VPN firewall to reach your host or LAN service.
 
 ### LLM recommendations
 
@@ -371,11 +370,11 @@ they do not limit network bytes or uploaded files.
 
 Restart the stack after changing this setting (`make down-lite && make up-lite`, or the full-mode equivalents).
 
-### Optional: Outbound Proxy (`ONYX_AGENT_OUTBOUND_PROXY_URL`)
+### Optional: Outbound Proxy (`EGRESS_UPSTREAM_PROXY_URL`)
 
-Set `ONYX_AGENT_OUTBOUND_PROXY_URL` in `.env.wrapper` to give the final-hop
-policy proxies an upstream proxy. This includes the loopback-only policy used
-by environment-aware HTTP clients in the Onyx API and background workers, so
+Set `EGRESS_UPSTREAM_PROXY_URL` in `.env.wrapper` to give the final-hop
+policy proxies an upstream proxy. This includes the fixed public-only policy
+used by environment-aware HTTP clients in the Onyx API and background workers, so
 coding-agent repository downloads, Web connector downloads, and similar
 helpers follow the same routing matrix. Restricted components continue to use
 local bridge URLs. This is orthogonal to Mysterium: if both are set, the
@@ -385,27 +384,27 @@ Supported schemes:
 
 ```bash
 # HTTP proxy
-ONYX_AGENT_OUTBOUND_PROXY_URL="http://user:pass@proxy.example.com:8080"
+EGRESS_UPSTREAM_PROXY_URL="http://user:pass@proxy.example.com:8080"
 
 # HTTPS proxy
-ONYX_AGENT_OUTBOUND_PROXY_URL="https://user:pass@proxy.example.com:8443"
+EGRESS_UPSTREAM_PROXY_URL="https://user:pass@proxy.example.com:8443"
 
 # SOCKS5 proxy
-ONYX_AGENT_OUTBOUND_PROXY_URL="socks5://proxy.example.com:1080"
+EGRESS_UPSTREAM_PROXY_URL="socks5://proxy.example.com:1080"
 
 # SOCKS5 with remote DNS resolution
-ONYX_AGENT_OUTBOUND_PROXY_URL="socks5h://proxy.example.com:1080"
+EGRESS_UPSTREAM_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
 The local policy proxies block private/internal literals, all
 `*.docker.internal` names, known legacy Docker Desktop host/gateway names, and
 single-label Docker service/container names. These built-in blocks cannot be
-removed by configuration. With an upstream proxy, target DNS remains remote to
-avoid DNS leakage, so a public-looking hostname that the upstream resolves to a
-private address is a residual risk. Host Tor
-(`socks5h://host.docker.internal:9150`) also currently requires
-`MYST_VPN_ALLOW_LAN_BYPASS=true`; that is a broad LAN route exemption for the
-trusted final-hop proxy, not general LAN access for restricted components.
+removed by configuration. HTTP, HTTPS, and `socks5h` leave target DNS at the
+upstream proxy, so a public-looking hostname that it resolves to a private
+address is a residual risk. Plain `socks5` uses the selected final-hop resolver
+and sends a validated pinned address. Exact host Tor
+(`socks5h://host.docker.internal:9150`) uses the narrow host exception and
+does not require `EGRESS_ALLOW_RFC1918=true`.
 
 In both lite and full mode, the Onyx API uses the helper policy for public
 downloads; the full-only background worker uses it as well. Their direct
@@ -417,10 +416,10 @@ libraries that explicitly disable
 environment proxy discovery or install their own transport are outside this
 generic helper route and require component-specific routing; the bundled
 GitHub downloader and normal `requests`, `httpx`, and `urllib` helpers honor it.
-Playwright does not inherit the backend bypass set; every browser navigation
-uses its explicit proxy. The helper policy has one fixed direct exception for
-the full-mode local document server at
-`localhost`/`127.0.0.1`/`::1` port `8091`; no other private target is allowed.
+Playwright does not inherit the backend bypass set; every external browser
+navigation uses an explicit selected proxy. The full-mode Web connector has
+one fixed direct exception for the internal `http://doc-drop-web:8091/` crawl
+origin; no host or public name is added to generic `NO_PROXY`.
 
 CRW 0.23 requires a local lookup before it will hand a URL to its configured
 proxy. Docker's embedded resolver answers known internal service names with
@@ -489,7 +488,9 @@ the download libraries when the host requires a build/download proxy.
 
 These rules use `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs), and LM Studio's is non-existent.
 
-You must also set `MYST_VPN_ALLOW_LAN_BYPASS=true` in `.env.wrapper`, so traffic can bypass the Myst VPN firewall to reach this embedding service.
+The default `host.docker.internal` endpoint uses the exact host route and does
+not require `EGRESS_ALLOW_RFC1918`. Set it only when the embedding endpoint is
+an RFC1918 host or LAN name.
 
 ### Optional: Using Teep for Embeddings
 
@@ -510,52 +511,12 @@ To use this shim:
 3. Enter `nomic-ai/nomic-embed-text-v23` as the model type (Onyx has special hardcoded features for nomic-ai...)
 4. For both `Harrier-OSS-V1-0.6B` and `Qwen3-Embedding-0.6B`, the embedding dimension is 1024.
 
-### Optional: Obscura MCP Server for Chat Agent Browser Automation
+### MCP servers
 
-In addition to the stealth Obscura browser that the crw Firecrawl API uses, a second obscura instance runs as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) HTTP server by default. This exposes obscura's stealth browser automation tools directly to Onyx chat agents — they can navigate pages, take snapshots, click elements, fill forms, extract content, and more, all through the MCP tool interface.
-
-The MCP server has separate control and egress networks. Onyx reaches its
-unauthenticated listener only through `obscura-mcp-gateway`; browser traffic
-uses a search-allowed, private-target-blocking final-hop policy. The bundled
-server does not require disabling Onyx SSRF protection globally. Obscura is
-allowed to resolve the private address of its mandatory egress bridge, while
-the isolated network and final-hop policy remain responsible for preventing
-direct egress and rejecting Docker-internal/private navigation targets.
-
-**Step 1: Configure the MCP server in Onyx**
-
-1. Go to **Admin Panel -> MCP Servers** ([http://localhost:3000/admin/mcp-servers](http://localhost:3000/admin/mcp-servers)).
-2. Click **Add MCP Server**.
-3. Set **Name** to `obscura` (or any name you prefer).
-4. Set **Server URL** to
-   `http://obscura-mcp-gateway.docker.internal:9223/mcp`. The dotted alias is
-   required because Onyx's frontend URL validator rejects single-label Docker
-   service names in MCP URL fields (but not others)...
-5. Set **Auth Type** to **None** (the gateway is reachable only from the Onyx-side ingress network).
-6. Click **Save**, then click **Discover Tools** to verify the connection.
-
-Onyx Admin → Security Hardening → SSRF Protection must permit private networks
-for tool discovery and calls. The wrapper defaults seed **Allow Private
-Network**, which is sufficient; globally **Disabled** is not required. A saved
-Admin setting takes precedence over the wrapper environment.
-
-**Step 2: Assign the MCP tools to an Assistant**
-
-0. **RELOAD THE ONYX Admin WebUI**. After MCP config change, the Admin WebUI needs to be updated with the proper set of tool lists.
-1. Go to **Admin Panel -> Assistants** and edit an assistant (or create a new one).
-2. Under **MCP Servers**, select the `obscura` server.
-3. Select which tools to expose (or select all).
-4. Save the assistant.
-
-Chat agents using that assistant can drive a stealth browser to navigate, read,
-and interact with web pages. Browser traffic follows the configured
-Mysterium/upstream-proxy/no-VPN routing matrix.
-
-**Security notes:**
-
-- The MCP HTTP transport has no built-in auth. Only the narrow Onyx-side gateway reaches its control network; it is not host-published or executor-accessible.
-- The browser session is shared across all tool calls within a single MCP server instance. Multiple concurrent chat sessions share the same browser state.
-- See the [obscura MCP documentation](https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md) for full details.
+The former bundled Obscura MCP browser has been removed intentionally. Add
+only MCP servers you operate or trust through Onyx Admin. Their streamable
+HTTP, SSE, redirects, discovery, registration, OAuth, token, refresh, and tool
+traffic use the explicit SSRF-guarded public or host-capable egress path.
 
 ## Docker Host Endpoints
 
@@ -584,7 +545,7 @@ Teep, and CDP-shim builds forward standard
 `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` build arguments when those
 variables are present. Image builds and host-side `embedserv` installation
 happen before stack readiness and therefore use the host/build network, not
-the Mysterium namespace or `ONYX_AGENT_OUTBOUND_PROXY_URL`. When changing pins
+the Mysterium namespace or `EGRESS_UPSTREAM_PROXY_URL`. When changing pins
 or rebasing onto a new Onyx release, use
 [`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md).
 
@@ -608,4 +569,4 @@ The reality is that many websites subject Tor and datacenter VPNs to increased c
 
 Until this landscape changes, residential IP address leasing is the only reliable option for a self-hosted private research agent, and Mysterium was the best choice among those, since the server side is open source, and payment is made in cryptocurrency.
 
-To compare routing, set `ONYX_AGENT_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:9150` and `MYST_VPN_ALLOW_LAN_BYPASS=true` in `.env.wrapper` to use the host Tor Browser proxy. SearXNG provides search-engine success statistics on the "Engines" tab of the [Preferences Pane](http://localhost:8080/preferences). Remember that the Myst LAN bypass is broader than the single host-proxy endpoint and upstream-proxy DNS classification has the residual risk documented above.
+To compare routing, set `EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150` in `.env.wrapper` to use the host Tor Browser proxy. SearXNG provides search-engine success statistics on the "Engines" tab of the [Preferences Pane](http://localhost:8080/preferences). The exact Docker-host route is narrower than the separate RFC1918 opt-in; upstream-resolved target DNS retains the residual risk documented above.

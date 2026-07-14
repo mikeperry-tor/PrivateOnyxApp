@@ -176,7 +176,7 @@ class PlaywrightHelperProxyTests(unittest.TestCase):
         fake_modules, playwright_module, launch_calls = self._fake_modules()
         env = {
             "WRAPPER_PATCH_STRICT": "true",
-            "ONYX_HELPER_HTTP_PROXY_URL": "http://127.0.0.1:3132",
+            "ONYX_HELPER_HTTP_PROXY_URL": "http://onyx-public-egress-bridge:3128",
         }
 
         with patch.dict(os.environ, env, clear=True), patch.dict(
@@ -192,7 +192,7 @@ class PlaywrightHelperProxyTests(unittest.TestCase):
                 {
                     "headless": True,
                     "proxy": {
-                        "server": "http://127.0.0.1:3132",
+                        "server": "http://onyx-public-egress-bridge:3128",
                     },
                 }
             ],
@@ -203,7 +203,7 @@ class PlaywrightHelperProxyTests(unittest.TestCase):
         fake_modules, playwright_module, _ = self._fake_modules()
         env = {
             "WRAPPER_PATCH_STRICT": "true",
-            "ONYX_HELPER_HTTP_PROXY_URL": "http://127.0.0.1:3132",
+            "ONYX_HELPER_HTTP_PROXY_URL": "http://onyx-public-egress-bridge:3128",
         }
 
         with patch.dict(os.environ, env, clear=True), patch.dict(

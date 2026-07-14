@@ -707,7 +707,7 @@ Upgrade notes:
 Patch behavior:
 
 - API and background uppercase/lowercase `HTTP_PROXY`/`HTTPS_PROXY` point to
-  loopback `http://127.0.0.1:3132`.
+  `http://onyx-public-egress-bridge:3128`.
 - The tracked `onyx/helper-egress.env` file contains only trusted internal/host
   dependencies, stays aligned with Compose service names and aliases, and is
   never propagated to executor pods.
@@ -736,13 +736,50 @@ Upgrade notes:
 
 - Inventory explicit `trust_env=False`, custom httpx transports, raw sockets,
   and direct browser launch sites; each needs component-specific routing.
-- Verify public helper DNS is absent from Docker resolver traffic in VPN and
-  upstream-proxy modes, and that loopback/internal bypasses still work.
+- Verify public helper DNS is absent from application-side Docker resolver
+  traffic and that internal service bypasses still work.
 - Test Playwright navigation, a Web connector fetch, a coding-agent GitHub
   download, and an ordinary helper request through each selected route.
-- Verify Chromium still appends `<-loopback>`. The helper policy's only trusted
-  internal exception must remain the exact loopback document listener on port
-  8091, resolve once, connect directly, and reject every other private target.
+- Verify Chromium receives the selected explicit bridge. The Web Connector's
+  only direct exception must remain exact `http://doc-drop-web:8091/` and
+  reject every other unapproved private target.
+
+### MCP, Web Connector, configured inference, and route brokers
+
+Patch behavior:
+
+- `apply_mcp_egress_proxy_patch()` validates the stack-owned public/host proxy
+  URLs, preserves the saved SSRF level, validates every custom-transport
+  request with target DNS deferred, and constructs HTTPX with an explicit
+  proxy plus `trust_env=False`.
+- The background patch selects the public/host requests and Playwright route
+  per Web crawl, preserves the exact internal doc-drop exception, and rewrites
+  only returned display links.
+- `apply_configured_inference_proxy_patch()` injects a host-route HTTPX client
+  for supported configured OpenAI-compatible LiteLLM providers and fails on an
+  unsupported configured-provider transport shape.
+- `crw/route_broker.py` accepts only the matching policy address, protocol
+  version, route class, and generated credential; repeats destination checks;
+  and applies framing, connect, idle, total, and concurrency bounds.
+
+Upgrade checks:
+
+- Re-audit MCP SDK streamable HTTP, SSE, redirect, discovery, dynamic
+  registration, authorization, token, and refresh client construction. Any
+  factory or transport signature drift must fail strict startup.
+- Inventory synchronous and asynchronous inference SDK construction for LLM,
+  embedding, reranking, image, speech, and discovery calls. Add explicit
+  injection before supporting a new configured provider; never rely on
+  application direct egress.
+- Test every saved SSRF level, exact host, RFC1918 off/on, mixed DNS answers,
+  loopback/link-local/metadata denial, and a saved-level change between new
+  clients or crawls.
+- Test wrong broker version, credential, route class, peer network, oversized
+  frame, cancellation/half-close, capacity, and deadline behavior. Public and
+  host policies must not share a namespace, broker network, or credential.
+- Verify no public target DNS query occurs in an Onyx application or policy
+  namespace and no cross-class fallback exists when one bridge/policy/broker
+  is stopped.
 
 ### Internal search content caps
 
@@ -944,11 +981,11 @@ Patch behavior:
   join only `PYTHON_EXECUTOR_DOCKER_NETWORK=onyx-code-interpreter-executor`.
 - The patch rejects namespace-sharing/host network values and requires the
   local executor bridge URL.
-- `ONYX_AGENT_OUTBOUND_PROXY_URL` is not injected into executor pods.
+- `EGRESS_UPSTREAM_PROXY_URL` is not injected into executor pods.
 - Executor `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` point at the
   executor bridge on `http://executor-egress-bridge:3128` for every upstream
   proxy scheme. The final-hop policy adapts
-  egress to `ONYX_AGENT_OUTBOUND_PROXY_URL`, including SOCKS URLs.
+  egress to `EGRESS_UPSTREAM_PROXY_URL`, including SOCKS URLs.
 
 Onyx service: `code-interpreter`, plus its transient executor pods.
 
@@ -992,15 +1029,15 @@ Python-sandbox / code-interpreter assumptions to re-check:
 
 Wrapper compose assumptions:
 
-- `docker-compose.yaml` runs `code-interpreter` inside
-  `network_mode: service:netns-holder`, sets `PORT=7000`, and points
-  `CODE_INTERPRETER_BASE_URL` at `http://localhost:7000`.
+- `docker-compose.yaml` runs `code-interpreter` on `onyx-backend`, keeps
+  service `PORT=8000`, and points `CODE_INTERPRETER_BASE_URL` at
+  `http://code-interpreter:8000`.
 - `docker-compose.code-interpreter-network.yml` mounts the patch directory and adds
   `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` plus
   `PYTHON_EXECUTOR_DOCKER_NETWORK=onyx-code-interpreter-executor`, the local
   bridge URL, and loopback-only executor `NO_PROXY`.
-- `docker-compose.yaml` and the executor overlay keep policy
-  proxies in `netns-holder` behind dedicated bridge-upstream networks.
+- The executor overlay keeps its bridge and policy networks separate from the
+  public and host-capable Onyx routes.
 
 Security notes:
 
@@ -1016,7 +1053,7 @@ Upgrade notes:
   `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` semantics change.
 - If upstream changes command construction, proxy injection can fail open or
   fail closed. Verify logs contain the startup patch status and proxy injection
-  messages when `ONYX_AGENT_OUTBOUND_PROXY_URL` is set.
+  messages when `EGRESS_UPSTREAM_PROXY_URL` is set.
 - Verify `PYTHON_EXECUTOR_DOCKER_NETWORK` remains the concrete internal network
   name, never `container:*`, and the bridge is the only executor-network peer.
 - Re-run Myst-provider DNS selection and `myst0` source-address binding checks,
@@ -1078,11 +1115,12 @@ Onyx services: `api_server` and `background`.
 
 Compose wiring:
 
-- `docker-compose.full.yml` sets `MODEL_SERVER_HOST=127.0.0.1`,
-  `MODEL_SERVER_PORT=9101`, `INDEXING_MODEL_SERVER_HOST=127.0.0.1`, and
+- `docker-compose.full.yml` sets `MODEL_SERVER_HOST=local-embedding-shim`,
+  `MODEL_SERVER_PORT=9101`, `INDEXING_MODEL_SERVER_HOST=local-embedding-shim`, and
   `INDEXING_MODEL_SERVER_PORT=9101` for `api_server` and `background`.
-- `local-embedding-shim` runs in `network_mode: service:netns-holder`, so those
-  loopback references resolve inside the shared namespace.
+- `local-embedding-shim` runs on the internal backend and host-egress networks.
+  It uses explicit absolute-form HTTP or HTTPS CONNECT through the host bridge;
+  it has no direct external route.
 - `make embedserv-install`, `make embedserv-verify-model`, and
   `make embedserv-serve` install and run `mlx-openai-server` on the host-side
   `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` (default `http://host.docker.internal:1234/v1/embeddings`).
@@ -1442,34 +1480,36 @@ Related plan:
 
 Patched Onyx services:
 
-- `api_server`: extends upstream, replaces image/build, joins
-  `netns-holder`, disables telemetry/paid-cloud settings, sets SSRF-related
-  env aliases, sets `ASYM_QUERY_PREFIX`, raises `MAX_LLM_CYCLES` and the nested
+- `api_server`: extends upstream, replaces image/build, joins explicit
+  internal frontend/backend/data/public-egress/host-egress/Teep networks,
+  disables telemetry/paid-cloud settings, seeds fixed SSRF defaults, sets
+  `ASYM_QUERY_PREFIX`, raises `MAX_LLM_CYCLES` and the nested
   Deep Research cycle/batch limits, passes
   `ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS`, injects base `PYTHONPATH`,
   mounts wrapper patches and persistent file/model-cache dirs, removes upstream
   `extra_hosts`, and lengthens healthcheck startup.
-- `web_server`: extends upstream, joins `netns-holder`, disables frontend
-  analytics/cloud/billing flags, changes healthcheck to probe namespace IP.
-- `nginx`: extends upstream, joins `netns-holder`, removes direct published
-  ports; host access is via `host-web-proxy`.
-- `code-interpreter`: extends upstream, joins `netns-holder`, moves service port
-  from 8000 to 7000, raises executor limits, and points API/background to
-  `http://localhost:7000`.
+- `web_server`: extends upstream, joins only `onyx-frontend`, and disables
+  frontend analytics/cloud/billing flags.
+- `nginx`: extends upstream and joins only `onyx-frontend`; a hardened fixed
+  publisher exposes the configured host WebUI port because Docker Desktop does
+  not activate ports published directly from internal-only networks.
+- `code-interpreter`: extends upstream, joins `onyx-backend` on port 8000,
+  raises executor limits, and remains separate from spawned executor networks.
 - `relational_db`: extends upstream and bind-mounts wrapper postgres data.
 
 Additional wrapper services:
 
-- `netns-holder` owns the shared network namespace.
-- `myst-client`, `searxng-core`, `searxng-valkey`, `obscura`,
-  `obscura-mcp`, `cdp-shim`, `prefetch-blocking-proxy`, `crw`,
-  `host-web-proxy`, `host-searxng-proxy`, `autoheal`, `tailscale-funnel`, and
-  `teep` are wrapper-side services around Onyx.
+- `netns-holder` owns only the trusted final-hop routing namespace.
+- Separate public/host policy namespaces, authenticated route brokers, and
+  hardened bridges enforce Onyx application egress.
+- `myst-client`, `searxng-core`, `searxng-valkey`, `obscura`, `cdp-shim`,
+  `prefetch-blocking-proxy`, `crw`, `host-searxng-proxy`, `autoheal`, optional
+  Tailscale gateways, and `teep` are wrapper-side services around Onyx.
 
 Upgrade notes:
 
-- Update [Restricted egress network plan](plans/restricted_egress.md) if base
-  service placement, shared-namespace membership, host bridge services,
+- Update the current isolation/security docs if base service placement,
+  internal-network membership, host publication,
   `netns-holder`, `myst-client`, `prefetch-blocking-proxy`, `cdp-shim`, CRW,
   Obscura, SearXNG, or code-interpreter topology changes.
 - Compare upstream service names and `depends_on` shape. Compose `extends`
@@ -1477,7 +1517,7 @@ Upgrade notes:
   `code-interpreter`, and `relational_db`.
 - Re-check upstream healthcheck commands and ports. The wrapper relies on
   `api_server:8080`, `web_server:3000`, nginx port 80, and code-interpreter port
-  remapping to 7000 inside the shared namespace.
+  8000 on `onyx-backend`.
 - Confirm upstream env names for telemetry/cloud/license flags still exist or
   are harmless if ignored.
 
@@ -1485,15 +1525,16 @@ Upgrade notes:
 
 File: `docker-compose.full.yml`.
 
-For the RAG-specific user flow around `doc-drop-web`,
-`host-doc-drop-web-proxy`, and `local-embedding-shim`, see
+For the RAG-specific user flow around `doc-drop-web` and
+`local-embedding-shim`, see
 [Local Document RAG Search](local_docs_rag_search.md). For why the wrapper
 uses full-mode sidecars and compose overrides at all, see
 [Docker Compose wrapper modifications](onyx_patch_info.md#docker-compose-wrapper-modifications).
 
 Patched Onyx services:
 
-- `background`: extends upstream, joins `netns-holder`, disables telemetry,
+- `background`: extends upstream, joins explicit internal backend/data/egress/
+  Teep networks, disables telemetry,
   points model-server env to the local shim, applies the background
   `sitecustomize`, and depends on `local-embedding-shim`.
 - `api_server`: adds model-server env pointing to the shim, forwards optional
@@ -1506,8 +1547,9 @@ Patched Onyx services:
 
 Wrapper additions:
 
-- `doc-drop-web` and `host-doc-drop-web-proxy` expose a local read-only docs
-  directory for the Onyx Web connector. `doc-drop-web` runs
+- `doc-drop-web` exposes a local read-only docs directory on the backend and a
+  dedicated publisher network. `host-doc-display-publisher` exposes only that
+  listener on the configured host bind. `doc-drop-web` runs
   `onyx/doc_drop_webserver.py`, a small `http.server` wrapper that hides hidden
   filesystem entries such as `.git`, `._*`, `.DS_Store`, and `__pycache__` from
   directory listings, returns HTTP 404 for direct hidden-path requests, and
@@ -1577,11 +1619,12 @@ conditional via `Makefile`: it is only added when
 Behavior:
 
 - `docker-compose.proxy.yml` is an explicit routing-mode marker only.
-- Final-hop policy proxies consume `ONYX_AGENT_OUTBOUND_PROXY_URL` directly.
+- Final-hop policy proxies consume `EGRESS_UPSTREAM_PROXY_URL` directly.
 - Restricted components and executor pods always receive local bridge URLs.
 - Default SearXNG remains without general internet egress.
 - Each policy listener accepts only loopback health checks and its configured
-  bridge service. Upstream proxy configuration is startup-validated and
+  bridge service. Onyx public/host listeners use separate namespaces and
+  authenticated matching brokers. Upstream proxy configuration is startup-validated and
   credentials are redacted from logs.
 - HTTP forwarding rejects ambiguous `Content-Length`/`Transfer-Encoding`
   framing and streams valid fixed-length and chunked bodies.
@@ -1589,8 +1632,8 @@ Behavior:
 Upgrade notes:
 
 - Update [Restricted egress network plan](plans/restricted_egress.md) if
-  proxy-mode service coverage, `ONYX_AGENT_OUTBOUND_PROXY_URL`,
-  `ONYX_AGENT_ALLOW_HTTP_URLS`, Obscura bridge input, or executor proxy
+  proxy-mode service coverage, `EGRESS_UPSTREAM_PROXY_URL`,
+  `EGRESS_ALLOW_HTTP_URLS`, Obscura bridge input, or executor proxy
   propagation changes.
 - Main Onyx source references are mostly indirect here: `api_server` prompt text
   must match executor network/proxy reality, and code-interpreter service wiring
@@ -1730,7 +1773,7 @@ With feature flags:
 
 ```sh
 ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true make up-lite
-ONYX_AGENT_OUTBOUND_PROXY_URL=socks5h://host.docker.internal:9150 make up-lite
+EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150 make up-lite
 make embedserv-serve
 ```
 

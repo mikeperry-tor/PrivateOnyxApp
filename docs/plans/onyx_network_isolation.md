@@ -1,15 +1,23 @@
 # Onyx Application Network Isolation Plan
 
-> **Status: planned prerequisite.** This plan moves the Onyx application tier
+> **Status: implemented (2026-07-14).** This plan moved the Onyx application tier
 > out of the trusted Mysterium routing namespace and makes its external and
 > host-local HTTP(S) access depend on separate fixed public-only and
 > host-capable egress bridges plus final-hop
-> policy. Implement this plan before
-> [Direct Obscura request handling](obscura_direct.md). Until implementation is
-> complete, the normative deployed behavior remains documented in
+> policy. This prerequisite is complete for
+> [Direct Obscura request handling](obscura_direct.md). Normative deployed
+> behavior is documented in
 > [VPN routing and restricted egress](../vpn_routing_and_proxies.md),
 > [Internal network security](../internal_network_security.md), and
 > [Request handling](../request_handling.md).
+>
+> **Docker Desktop implementation note:** Docker records but does not activate
+> published ports for containers attached only to `internal: true` networks.
+> The implementation therefore keeps nginx and doc-drop internal and uses
+> hardened, fixed-destination host publishers on a non-masqueraded edge
+> network. This is a narrower platform-required deviation from workstream 4's
+> direct-publication wording; it does not restore the old routing namespace or
+> grant application containers an egress route.
 
 ## Executive Decision
 
@@ -451,7 +459,7 @@ Docker/Podman aliases remain denied by default.
 
 ### Opt-In RFC1918 Configured Endpoints
 
-Rename the overly Myst-specific `MYST_VPN_ALLOW_LAN_BYPASS` option to the
+Rename the overly Myst-specific `EGRESS_ALLOW_RFC1918` option to the
 stack-wide `EGRESS_ALLOW_RFC1918`, default `false`, with no compatibility alias.
 It has two coordinated effects: Myst installs the documented RFC1918 route
 exemptions when Myst is enabled, and the host-capable request-policy
@@ -1112,12 +1120,12 @@ an operator attaching new networks after startup.
 
 ### `.env.wrapper.example`, `AGENTS.md`, and Plans
 
-- Rename `ONYX_AGENT_OUTBOUND_PROXY_URL` to `EGRESS_UPSTREAM_PROXY_URL` and
-  `ONYX_AGENT_ALLOW_HTTP_URLS` to `EGRESS_ALLOW_HTTP_URLS`, with no
+- Rename `EGRESS_UPSTREAM_PROXY_URL` to `EGRESS_UPSTREAM_PROXY_URL` and
+  `EGRESS_ALLOW_HTTP_URLS` to `EGRESS_ALLOW_HTTP_URLS`, with no
   compatibility aliases. Update Make/Compose selection, policy/broker inputs,
   executor injection, tests, help, examples, and current documentation
   atomically. Remove all consumers of the old names; stale values are ignored.
-- Rename `MYST_VPN_ALLOW_LAN_BYPASS` to `EGRESS_ALLOW_RFC1918` as the single
+- Rename `EGRESS_ALLOW_RFC1918` to `EGRESS_ALLOW_RFC1918` as the single
   explicit RFC1918 opt-in, with no consumer or validation for the old name. Its
   example text must cover
   MCP, configured Web Connector, embedding, and inference endpoints; it is not

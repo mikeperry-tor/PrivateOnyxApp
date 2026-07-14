@@ -24,6 +24,9 @@ def _load_module() -> ModuleType:
                 "http://host.docker.internal:3210/v1/embeddings"
             ),
             "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL": "test-model",
+            "ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL": (
+                "http://onyx-host-egress-bridge:3128"
+            ),
         },
         clear=True,
     ):

@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import threading
+from contextlib import contextmanager
 from contextvars import ContextVar
 from types import ModuleType
 from typing import Any
@@ -42,6 +43,26 @@ _DEEP_RESEARCH_WORKER_LIMIT: ContextVar[int | None] = ContextVar(
     "wrapper_deep_research_worker_limit",
     default=None,
 )
+_PLAYWRIGHT_PROXY_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "wrapper_playwright_proxy_override", default=None
+)
+
+
+@contextmanager
+def select_playwright_proxy(proxy_url: str | None):
+    """Temporarily select a validated fixed proxy, or direct internal mode."""
+    if proxy_url not in {
+        None,
+        "",
+        "http://onyx-public-egress-bridge:3128",
+        "http://onyx-host-egress-bridge:3128",
+    }:
+        raise RuntimeError("invalid stack-owned Playwright proxy selection")
+    token = _PLAYWRIGHT_PROXY_OVERRIDE.set(proxy_url)
+    try:
+        yield
+    finally:
+        _PLAYWRIGHT_PROXY_OVERRIDE.reset(token)
 
 
 def _strict_mode() -> bool:
@@ -2754,8 +2775,8 @@ def apply_playwright_helper_proxy_patch() -> None:
         proxy_port = None
     if (
         parsed.scheme != "http"
-        or parsed.hostname not in {"127.0.0.1", "localhost"}
-        or proxy_port is None
+        or parsed.hostname != "onyx-public-egress-bridge"
+        or proxy_port != 3128
         or parsed.username is not None
         or parsed.password is not None
         or parsed.path not in {"", "/"}
@@ -2763,8 +2784,8 @@ def apply_playwright_helper_proxy_patch() -> None:
         or parsed.fragment
     ):
         _warn_or_raise(
-            "ONYX_HELPER_HTTP_PROXY_URL must be an uncredentialed loopback "
-            f"http proxy URL, found {proxy_url!r}"
+            "ONYX_HELPER_HTTP_PROXY_URL must be exactly "
+            f"http://onyx-public-egress-bridge:3128, found {proxy_url!r}"
         )
         return
 
@@ -2794,8 +2815,6 @@ def apply_playwright_helper_proxy_patch() -> None:
         )
         return
 
-    proxy_settings = {"server": proxy_url}
-
     class _BrowserTypeProxy:
         def __init__(self, browser_type) -> None:
             self._browser_type = browser_type
@@ -2810,7 +2829,11 @@ def apply_playwright_helper_proxy_patch() -> None:
                     "wrapper helper-proxy injection must be reviewed"
                 )
                 return self._browser_type.launch(*args, **kwargs)
-            kwargs["proxy"] = dict(proxy_settings)
+            selected_proxy = _PLAYWRIGHT_PROXY_OVERRIDE.get()
+            if selected_proxy is None:
+                selected_proxy = proxy_url
+            if selected_proxy:
+                kwargs["proxy"] = {"server": selected_proxy}
             return self._browser_type.launch(*args, **kwargs)
 
     class _PlaywrightProxy:
@@ -2846,7 +2869,199 @@ def apply_playwright_helper_proxy_patch() -> None:
     playwright_sync_api.sync_playwright = _helper_proxy_sync_playwright
     playwright_fetch._wrapper_helper_proxy_patched = True
     print(
-        "sitecustomize: routed Onyx Playwright through loopback helper proxy",
+        "sitecustomize: routed Onyx Playwright through fixed helper proxy",
+        flush=True,
+    )
+
+
+def _validated_fixed_proxy_url(env_name: str, expected_host: str) -> str:
+    proxy_url = os.environ.get(env_name, "").strip()
+    parsed = urlsplit(proxy_url)
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname != expected_host
+        or port != 3128
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(
+            f"{env_name} must be exactly http://{expected_host}:3128"
+        )
+    return proxy_url
+
+
+def apply_mcp_egress_proxy_patch() -> None:
+    """Select an explicit public/host MCP transport from saved SSRF policy."""
+
+    public_proxy = _validated_fixed_proxy_url(
+        "ONYX_MCP_PUBLIC_HTTP_PROXY_URL", "onyx-public-egress-bridge"
+    )
+    host_proxy = _validated_fixed_proxy_url(
+        "ONYX_MCP_HOST_HTTP_PROXY_URL", "onyx-host-egress-bridge"
+    )
+    try:
+        import httpx
+
+        from onyx.server.security.models import SSRFProtectionLevel
+        from onyx.server.security.store import get_security_settings
+        from onyx.tools.tool_implementations.mcp import mcp_ssrf
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed importing MCP egress patch deps: {e}", flush=True)
+        _raise_if_strict()
+        return
+
+    original_factory = mcp_ssrf.mcp_ssrf_httpx_client_factory
+    signature = inspect.signature(original_factory)
+    if tuple(signature.parameters) != ("headers", "timeout", "auth"):
+        _warn_or_raise(f"MCP HTTP client factory signature changed: {signature}")
+        return
+    if not issubclass(mcp_ssrf._SSRFGuardAsyncTransport, httpx.AsyncHTTPTransport):
+        _warn_or_raise("MCP SSRF transport is no longer an AsyncHTTPTransport")
+        return
+
+    class _WrapperMCPTransport(httpx.AsyncHTTPTransport):
+        def __init__(self, proxy_url: str) -> None:
+            super().__init__(proxy=proxy_url)
+
+        async def handle_async_request(
+            self, request: httpx.Request
+        ) -> httpx.Response:
+            # Structural/literal validation is repeated for every SDK-derived
+            # URL. Authoritative DNS and address pinning belong to the broker.
+            mcp_ssrf.validate_mcp_outbound_url(str(request.url), resolve_dns=False)
+            return await super().handle_async_request(request)
+
+    def _patched_factory(headers=None, timeout=None, auth=None):  # noqa: ANN001
+        level = get_security_settings().ssrf_protection_level
+        use_host = level in {
+            SSRFProtectionLevel.ALLOW_PRIVATE_NETWORK,
+            SSRFProtectionLevel.DISABLED,
+        }
+        kwargs: dict[str, Any] = {
+            "follow_redirects": True,
+            "transport": _WrapperMCPTransport(
+                host_proxy if use_host else public_proxy
+            ),
+            "trust_env": False,
+            "timeout": timeout
+            or httpx.Timeout(
+                mcp_ssrf._MCP_DEFAULT_TIMEOUT,
+                read=mcp_ssrf._MCP_DEFAULT_SSE_READ_TIMEOUT,
+            ),
+        }
+        if headers is not None:
+            kwargs["headers"] = headers
+        if auth is not None:
+            kwargs["auth"] = auth
+        return httpx.AsyncClient(**kwargs)
+
+    mcp_ssrf.mcp_ssrf_httpx_client_factory = _patched_factory
+    # The client module imports the factory by name; update it if source import
+    # order caused it to be cached while applying this startup patch.
+    client_module = sys.modules.get(
+        "onyx.tools.tool_implementations.mcp.mcp_client"
+    )
+    if client_module is not None:
+        setattr(client_module, "mcp_ssrf_httpx_client_factory", _patched_factory)
+    print(
+        "sitecustomize: routed MCP/OAuth HTTP through saved-level-selected fixed egress",
+        flush=True,
+    )
+
+
+def apply_configured_inference_proxy_patch() -> None:
+    """Give supported user-configured OpenAI-compatible bases a host client."""
+
+    proxy_url = _validated_fixed_proxy_url(
+        "ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL", "onyx-host-egress-bridge"
+    )
+    try:
+        import httpx
+        import openai
+
+        from onyx.llm import multi_llm
+        from onyx.llm.constants import LlmProviderNames
+        from onyx.utils.url import validate_outbound_http_url
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing configured inference patch deps: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    original_init = multi_llm.LitellmLLM.__init__
+    original_completion = multi_llm.LitellmLLM._completion
+    completion_signature = inspect.signature(original_completion)
+    if "client" not in completion_signature.parameters:
+        _warn_or_raise(
+            f"LitellmLLM._completion no longer accepts client: {completion_signature}"
+        )
+        return
+
+    supported = {
+        str(LlmProviderNames.OPENAI),
+        str(LlmProviderNames.OPENAI_COMPATIBLE),
+        str(LlmProviderNames.BIFROST),
+        str(LlmProviderNames.LITELLM_PROXY),
+        str(LlmProviderNames.LM_STUDIO),
+        str(LlmProviderNames.OLLAMA_CHAT),
+    }
+
+    @functools.wraps(original_init)
+    def _patched_init(self, *args, **kwargs):  # noqa: ANN001
+        original_init(self, *args, **kwargs)
+        self._wrapper_configured_inference_client = None
+        self._wrapper_configured_inference_http_client = None
+        if not self._api_base:
+            return
+        validate_outbound_http_url(
+            self._api_base,
+            allow_private_network=True,
+            block_loopback_and_link_local=True,
+            resolve_dns=False,
+        )
+        provider = str(self._model_provider)
+        if provider not in supported:
+            raise RuntimeError(
+                "configured inference api_base is not proxy-covered for provider "
+                f"{provider!r} at the pinned Onyx/LiteLLM version"
+            )
+        http_client = httpx.Client(
+            proxy=proxy_url,
+            trust_env=False,
+            timeout=self._timeout,
+        )
+        inference_client = openai.OpenAI(
+            api_key=self._api_key or "not-needed",
+            base_url=self._api_base,
+            http_client=http_client,
+        )
+        self._wrapper_configured_inference_http_client = http_client
+        self._wrapper_configured_inference_client = inference_client
+
+    @functools.wraps(original_completion)
+    def _patched_completion(self, *args, **kwargs):  # noqa: ANN001
+        configured_client = getattr(
+            self, "_wrapper_configured_inference_client", None
+        )
+        if configured_client is None:
+            return original_completion(self, *args, **kwargs)
+        bound = completion_signature.bind_partial(self, *args, **kwargs)
+        bound.arguments["client"] = configured_client
+        return original_completion(*bound.args, **bound.kwargs)
+
+    multi_llm.LitellmLLM.__init__ = _patched_init
+    multi_llm.LitellmLLM._completion = _patched_completion
+    print(
+        "sitecustomize: routed supported configured inference bases through fixed host egress",
         flush=True,
     )
 

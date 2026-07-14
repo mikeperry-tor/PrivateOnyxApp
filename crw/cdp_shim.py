@@ -37,7 +37,7 @@ headless browser) to provide:
    cross-query tracking surface.
 
 4. **Plain HTTP navigation blocking** — By default,
-   ``ONYX_AGENT_ALLOW_HTTP_URLS=false`` makes the shim reject CDP
+   ``EGRESS_ALLOW_HTTP_URLS=false`` makes the shim reject CDP
    ``Page.navigate`` and ``Target.createTarget`` calls whose target URL is
    ``http://``. This mirrors the prefetch-blocking proxy policy so a CRW
    escalation cannot silently fetch cleartext HTTP in the browser path.
@@ -127,14 +127,14 @@ WAIT_UNTIL_SEARCH_HOSTS = frozenset(
 # Plain HTTP URLs are blocked by default. This mirrors the prefetch-blocking
 # proxy policy so a CRW fallback from prefetch to CDP cannot silently fetch
 # http:// pages in the browser path.
-ALLOW_HTTP_URLS = os.environ.get("ONYX_AGENT_ALLOW_HTTP_URLS", "false").lower() in (
+ALLOW_HTTP_URLS = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in (
     "1",
     "true",
     "yes",
     "on",
 )
 HTTP_URL_BLOCK_MESSAGE = (
-    "HTTP URLs are disabled by ONYX_AGENT_ALLOW_HTTP_URLS=false. "
+    "HTTP URLs are disabled by EGRESS_ALLOW_HTTP_URLS=false. "
     "Use an https:// URL instead."
 )
 # Interval for periodic cookie clearing (seconds). 0 = disabled.

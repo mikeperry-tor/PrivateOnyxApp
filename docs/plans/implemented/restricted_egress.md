@@ -1,5 +1,12 @@
 # Restricted Egress Network Plan
 
+> **Partially superseded historical record.** The later
+> [Onyx application network isolation](../onyx_network_isolation.md) removed
+> Onyx applications from `netns-holder`, replaced the helper loopback route
+> with separate public/host policies and authenticated brokers, renamed the
+> egress settings, and removed bundled Obscura MCP. Names and topology below
+> describe the earlier milestone, not the current runtime.
+
 > **Status: implemented (2026-07-13).** The normative runtime documentation is
 > now [VPN routing and restricted egress](../vpn_routing_and_proxies.md),
 > [Internal network security](../internal_network_security.md), and

@@ -28,7 +28,7 @@ case "$funnel_https_port" in
     ;;
 esac
 
-target_host="${TAILSCALE_FUNNEL_TARGET_HOST:-host-web-proxy}"
+target_host="${TAILSCALE_FUNNEL_TARGET_HOST:-tailscale-frontend-gateway}"
 target_port="${TAILSCALE_FUNNEL_TARGET_PORT:-3000}"
 serve_config_path="${TS_SERVE_CONFIG:-/etc/tailscale/serve-config.json}"
 

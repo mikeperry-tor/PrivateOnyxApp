@@ -1,7 +1,8 @@
 # Direct Obscura Request Handling Plan
 
-> **Status: planned; depends on
-> [Onyx application network isolation](onyx_network_isolation.md).** This is a
+> **Status: planned; its
+> [Onyx application network isolation](onyx_network_isolation.md) prerequisite
+> is implemented.** This is a
 > standalone implementation plan for replacing
 > CRW with direct, single-navigation Obscura integrations for Onyx `open_url`
 > and the custom SearXNG search engines. It describes a future topology, not the

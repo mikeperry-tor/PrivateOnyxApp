@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 import queue
+import ssl
 import threading
 import sys
 import time
@@ -45,6 +46,9 @@ DEFAULT_MODEL = (
     or os.environ.get("ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL", "").strip()
 )
 API_KEY = os.environ.get("ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY", "").strip()
+UPSTREAM_PROXY_URL = os.environ.get(
+    "ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL", ""
+).strip()
 
 DEFAULT_QUERY_PREFIX = os.environ.get("SHIM_QUERY_PREFIX", "")
 DEFAULT_PASSAGE_PREFIX = os.environ.get("SHIM_PASSAGE_PREFIX", "")
@@ -131,7 +135,9 @@ class ShimMetrics:
 
 
 class UpstreamConnectionPool:
-    def __init__(self, url: str, pool_size: int, timeout_seconds: float):
+    def __init__(
+        self, url: str, pool_size: int, timeout_seconds: float, proxy_url: str
+    ):
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(
@@ -140,6 +146,26 @@ class UpstreamConnectionPool:
             )
         if not parsed.hostname:
             raise ValueError("ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL must include a hostname")
+        if parsed.username or parsed.password or parsed.fragment:
+            raise ValueError(
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL cannot contain credentials or a fragment"
+            )
+
+        proxy = urlparse(proxy_url)
+        if (
+            proxy.scheme != "http"
+            or proxy.hostname != "onyx-host-egress-bridge"
+            or proxy.port != 3128
+            or proxy.username is not None
+            or proxy.password is not None
+            or proxy.path not in ("", "/")
+            or proxy.query
+            or proxy.fragment
+        ):
+            raise ValueError(
+                "ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL must be exactly "
+                "http://onyx-host-egress-bridge:3128"
+            )
 
         self.scheme = parsed.scheme
         self.host = parsed.hostname
@@ -147,6 +173,9 @@ class UpstreamConnectionPool:
         self.target = parsed.path or "/"
         if parsed.query:
             self.target = f"{self.target}?{parsed.query}"
+        self.absolute_target = url
+        self.proxy_host = proxy.hostname
+        self.proxy_port = proxy.port
 
         self.timeout_seconds = timeout_seconds
         self._pool: queue.LifoQueue[http.client.HTTPConnection] = queue.LifoQueue(
@@ -157,14 +186,17 @@ class UpstreamConnectionPool:
 
     def _new_connection(self) -> http.client.HTTPConnection:
         if self.scheme == "https":
-            return http.client.HTTPSConnection(
-                self.host,
-                self.port,
+            connection = http.client.HTTPSConnection(
+                self.proxy_host,
+                self.proxy_port,
                 timeout=self.timeout_seconds,
+                context=ssl.create_default_context(),
             )
+            connection.set_tunnel(self.host, self.port)
+            return connection
         return http.client.HTTPConnection(
-            self.host,
-            self.port,
+            self.proxy_host,
+            self.proxy_port,
             timeout=self.timeout_seconds,
         )
 
@@ -183,7 +215,10 @@ class UpstreamConnectionPool:
             replace_connection = False
             try:
                 upstream_start = time.monotonic()
-                connection.request(method, self.target, body=body, headers=headers)
+                request_target = (
+                    self.absolute_target if self.scheme == "http" else self.target
+                )
+                connection.request(method, request_target, body=body, headers=headers)
                 response = connection.getresponse()
                 raw = response.read().decode("utf-8")
                 upstream_ms = (time.monotonic() - upstream_start) * 1000.0
@@ -226,6 +261,7 @@ try:
         url=EMBEDDINGS_URL,
         pool_size=UPSTREAM_POOL_SIZE,
         timeout_seconds=HTTP_TIMEOUT_SECONDS,
+        proxy_url=UPSTREAM_PROXY_URL,
     )
 except Exception as e:
     log_line(

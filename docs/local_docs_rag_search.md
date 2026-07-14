@@ -27,12 +27,13 @@ Onyx fork:
 
 - `doc-drop-web` exposes a local document directory as a small read-only HTTP
   site for Onyx's Web connector.
-- `host-doc-drop-web-proxy` publishes that site back to the host on
-  `HOST_PORT_ONYX_RAG_DOC_WEB`, so the connector URL and resulting document
-  links use `http://localhost:8091/` by default.
-- `onyx/patches/sitecustomize_background/sitecustomize.py` adds a local-host
-  PDF freshness optimization and routes its shared Playwright launcher through
-  the Onyx helper egress policy.
+- A hardened fixed display publisher exposes `doc-drop-web` on the host while
+  the server remains internal-only. The connector crawls
+  `http://doc-drop-web:8091/`; returned source
+  links are rewritten to `http://localhost:8091/` by default.
+- `onyx/patches/sitecustomize_background/sitecustomize.py` adds internal-origin
+  PDF freshness, exact crawl routing, saved-level external routing, and
+  display-only source-link rewriting.
 - `onyx/patches/sitecustomize_base/sitecustomize.py` can apply optional
   internal-search content caps so selected chunks do not overwhelm the
   answering model.
@@ -51,19 +52,18 @@ boundary.
 
 1. Files are placed under `ONYX_RAG_DOC_SOURCE_DIR`, defaulting to `./doc-drop`.
 2. `doc-drop-web` mounts that directory read-only at `/import/docs` and serves
-   it from inside the shared `netns-holder` namespace.
-3. `host-doc-drop-web-proxy` publishes the service to the host at
-   `http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/`.
+   it on the internal backend and dedicated publisher networks.
+3. The host display origin is
+   `http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/` by default.
 4. In Onyx Admin -> Connectors -> Web, create a Recursive Web connector pointed
-   at `http://localhost:8091/`.
+   at `http://doc-drop-web:8091/`.
 5. The Onyx `background` worker crawls the directory listing and downloads
-   documents through the Web connector. Playwright uses the loopback helper
-   proxy; that policy permits only the exact local document listener on port
-   8091 as a direct internal/cleartext destination and rejects other private
-   targets.
+   documents through the Web connector. The background patch permits only this
+   exact internal origin directly; external connector targets use the public
+   or host bridge selected from saved Admin SSRF state.
 6. During indexing, `background` calls `MODEL_SERVER_HOST:MODEL_SERVER_PORT`.
-   In full mode the wrapper points that to `127.0.0.1:9101`, which is the local
-   embedding shim in the same network namespace.
+   In full mode the wrapper points that to `local-embedding-shim:9101` on the
+   internal backend network.
 7. The shim converts Onyx model-server `EmbedRequest` payloads into
    OpenAI-compatible embedding requests and sends them to `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
 8. During chat/search, `api_server` uses the same shim path to embed the query
@@ -72,18 +72,16 @@ boundary.
    after Onyx has selected and serialized internal-search results for the
    answering model.
 
-The important subtlety is that `127.0.0.1` and `localhost` are not always the
-same machine in this stack. `MODEL_SERVER_HOST=127.0.0.1` means loopback inside
-the shared Docker namespace. The Web connector URL `http://localhost:8091/`
-means the crawler requests a URL that resolves as local from the Onyx container
-and remains clickable from the host browser because the proxy publishes the same
-port.
+Stored document IDs and freshness requests retain the internal crawl origin.
+Only links returned for display are rewritten to the host origin. Existing Web
+connectors saved with `http://localhost:8091/` must be recreated with
+`http://doc-drop-web:8091/` and reindexed; Compose cannot rewrite saved records.
 
 ## Web Connector Server
 
 Implementation:
 
-- Compose services: `doc-drop-web` and `host-doc-drop-web-proxy` in
+- Compose services: `doc-drop-web` and `host-doc-display-publisher` in
   `docker-compose.full.yml`
 - Server script: `onyx/doc_drop_webserver.py`
 - User-facing env: `ONYX_RAG_DOC_SOURCE_DIR` and `HOST_PORT_ONYX_RAG_DOC_WEB`
@@ -114,25 +112,18 @@ without giving the Onyx containers write access to the user's document tree.
 
 ## SSRF And Security Hardening
 
-Onyx v4.2.5 has SSRF protection for URL-fetching paths. The wrapper seeds the
-default Onyx Security Hardening posture with:
+Onyx v4.2.5 has SSRF protection for URL-fetching paths. Compose seeds:
 
 ```env
-ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL=true
-ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK=true
-ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=false
+OPEN_URL_VALIDATE_SSRF=true
+MCP_SERVER_ALLOW_PRIVATE_NETWORK=true
+MCP_SERVER_ALLOW_LOOPBACK=false
 ```
 
-In Onyx v4.2.5 this maps to "Allow Private Network" when no Security Hardening
-setting has been saved in the Admin UI. That is the desired default for local
-doc-drop crawling: the Web connector is allowed to crawl the local document
-server, MCP/OAuth endpoints may use private LAN or `host.docker.internal`
-addresses, and loopback MCP/OAuth endpoints such as `127.0.0.1` remain blocked.
-Setting `ONYX_SECURITY_SSRF_ALLOW_LOOPBACK=true` seeds the broader "Disabled"
-posture and should be reserved for cases that intentionally need loopback
-MCP/OAuth access. The bundled Obscura MCP server uses the non-loopback
-`http://obscura-mcp-gateway.docker.internal:9223/mcp` endpoint and does not
-require this.
+This maps to Allow Private Network when no Admin value is saved. Saved state
+selects the public or host route for external Web Connector/MCP requests;
+loopback remains blocked. The exact internal doc-drop origin is a separate
+stack-owned exception and does not depend on broad loopback access.
 
 Once an admin saves Security Hardening settings in Onyx, the saved UI value is
 the effective runtime policy and these env vars only act as startup defaults.
@@ -348,7 +339,7 @@ make embedserv-serve
 This host-side installation and model download occur before stack startup and
 do not depend on Myst readiness. They honor the standard host
 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` environment when a download proxy is
-required; `ONYX_AGENT_OUTBOUND_PROXY_URL` is intentionally only a runtime
+required; `EGRESS_UPSTREAM_PROXY_URL` is intentionally only a runtime
 final-hop policy setting.
 Most embedserv requirements are intentionally unconstrained so that target can
 float them forward. Two inputs are compatibility pins. `transformers<5.13`
@@ -373,16 +364,19 @@ requires the path to end in `/v1/embeddings`, and binds to `0.0.0.0` when the
 configured host is `host.docker.internal`. The Docker-side shim reaches that
 host service through `host.docker.internal`.
 
-If the host embedding service is on a LAN or host-local address, set:
+Exact `host.docker.internal` uses the narrow host exception without another
+setting. If the embedding service instead uses an RFC1918 literal or LAN name,
+set:
 
 ```env
-MYST_VPN_ALLOW_LAN_BYPASS=true
+EGRESS_ALLOW_RFC1918=true
 ```
 
-This lets local inference APIs bypass the Myst VPN firewall while preserving the
-fail-closed VPN behavior for other traffic. Without it, `/ready` remains
-unhealthy and full-stack startup fails closed instead of accepting later
-embedding errors.
+The shim itself has no direct route. It uses HTTP absolute-form or HTTPS
+CONNECT through `onyx-host-egress-bridge`, verifies TLS, reuses pooled
+connections, and disables ambient proxy discovery. Without the required host
+policy permission, `/ready` remains unhealthy and full-stack startup fails
+closed instead of accepting later embedding errors.
 
 The Makefile uses `mlx-embeddings` through `mlx-openai-server` because this
 stack expects an OpenAI-compatible embedding endpoint with stable vector output.
@@ -435,15 +429,16 @@ Look for these shim messages:
 
 Common failure modes:
 
-- The Web connector cannot crawl `http://localhost:8091/`: check that full mode
-  is running, `doc-drop-web` is healthy, `host-doc-drop-web-proxy` published the
-  port, `onyx-helper-egress-proxy` is healthy, and Onyx Security Hardening is
-  not set to strict `Validate All`.
+- The Web connector cannot crawl `http://doc-drop-web:8091/`: check that full
+  mode and `doc-drop-web` are healthy and that the connector was recreated
+  after the network-isolation migration. Test the display link separately at
+  `http://localhost:8091/`.
 - Directory listings work but hidden files are missing: this is expected.
 - Indexing starts but embedding fails with connection errors: confirm the host
   embedding server is running at `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`,
-  `MYST_VPN_ALLOW_LAN_BYPASS=true` is set when needed, and the URL uses the
-  container-reachable host name.
+  `onyx-host-egress-bridge` and its policy/broker are healthy,
+  `EGRESS_ALLOW_RFC1918=true` is set only when an RFC1918 endpoint needs it,
+  and the URL uses a container-reachable host name.
 - Search returns weak results after successful indexing: verify query prefix
   logs, embedding dimension, model identity, and whether old documents were
   indexed with a different model or prefix.

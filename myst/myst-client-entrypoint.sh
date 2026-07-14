@@ -11,9 +11,9 @@ myst_cli() {
 }
 
 # Optional LAN access: append common private network CIDRs to route exemptions.
-# When MYST_VPN_ALLOW_LAN_BYPASS=true, LMStudio and other local inference APIs can be
+# When EGRESS_ALLOW_RFC1918=true, LMStudio and other local inference APIs can be
 # reached without VPN routing, while remaining connections stay fail-closed.
-if [ "${MYST_VPN_ALLOW_LAN_BYPASS:-false}" = "true" ]; then
+if [ "${EGRESS_ALLOW_RFC1918:-false}" = "true" ]; then
   # Common private network ranges per RFC 1918
   LAN_CIDRS="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
   if [ -n "${MYST_ROUTE_EXEMPT_CIDRS:-}" ]; then
@@ -21,7 +21,7 @@ if [ "${MYST_VPN_ALLOW_LAN_BYPASS:-false}" = "true" ]; then
   else
     MYST_ROUTE_EXEMPT_CIDRS="${LAN_CIDRS}"
   fi
-  echo "MYST_VPN_ALLOW_LAN_BYPASS=true: added LAN CIDRs to route exemptions"
+  echo "EGRESS_ALLOW_RFC1918=true: added LAN CIDRs to route exemptions"
 fi
 
 # ── Optional VPN bypass ────────────────────────────────────────────────────

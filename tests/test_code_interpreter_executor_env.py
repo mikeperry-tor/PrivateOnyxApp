@@ -55,7 +55,7 @@ class CodeInterpreterExecutorEnvTests(unittest.TestCase):
         env["PYTHON_EXECUTOR_DOCKER_NETWORK"] = "onyx-code-interpreter-executor"
         env["ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL"] = "http://executor-egress-bridge:3128"
         env["ONYX_AGENT_EXECUTOR_NO_PROXY"] = "127.0.0.1,localhost,::1"
-        env["ONYX_AGENT_OUTBOUND_PROXY_URL"] = "socks5h://host.docker.internal:9150"
+        env["EGRESS_UPSTREAM_PROXY_URL"] = "socks5h://host.docker.internal:9150"
 
         with patch.dict(os.environ, env, clear=True):
             module = _load_module()
@@ -65,7 +65,7 @@ class CodeInterpreterExecutorEnvTests(unittest.TestCase):
         self.assertEqual(executor_env["HTTPS_PROXY"], "http://executor-egress-bridge:3128")
         self.assertEqual(executor_env["ALL_PROXY"], "http://executor-egress-bridge:3128")
         self.assertEqual(executor_env["NO_PROXY"], "127.0.0.1,localhost,::1")
-        self.assertNotIn("ONYX_AGENT_OUTBOUND_PROXY_URL", executor_env)
+        self.assertNotIn("EGRESS_UPSTREAM_PROXY_URL", executor_env)
 
     def test_enabled_network_rejects_shared_namespace(self) -> None:
         env = dict(os.environ)

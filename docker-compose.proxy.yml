@@ -1,6 +1,6 @@
 ## Explicit upstream-proxy routing marker.
 ##
-## Selected only when ONYX_AGENT_OUTBOUND_PROXY_URL is non-empty. The actual
+## Selected only when EGRESS_UPSTREAM_PROXY_URL is non-empty. The actual
 ## URL is consumed exclusively by the final-hop policy proxies declared in the
 ## base stack. Restricted components always receive local
 ## bridge URLs, so applying this layer cannot expand an executor or browser

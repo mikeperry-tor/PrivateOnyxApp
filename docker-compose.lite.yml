@@ -6,14 +6,9 @@ services:
     # !override (not !reset) replaces the inherited upstream depends_on. The
     # upstream Onyx compose pulls in a dependency on `cache` via `extends`,
     # which only exists in full mode; overriding here drops it while keeping
-    # netns-holder/myst-client/crw. (!reset collapses the mapping in this
+    # request-path gateways and both egress bridges. (!reset collapses the mapping in this
     # compose version, so !override is used for a clean full replacement.)
     depends_on: !override
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
       # crw is optional for Onyx, but wiring
       # the dependency avoids a first-request race if Onyx's Web Search
       # connector is configured to point at crw's /v1/scrape endpoint.
@@ -23,9 +18,9 @@ services:
         condition: service_healthy
       searxng-service-gateway:
         condition: service_healthy
-      obscura-mcp-gateway:
+      onyx-public-egress-bridge:
         condition: service_healthy
-      onyx-helper-egress-proxy:
+      onyx-host-egress-bridge:
         condition: service_healthy
     environment:
       DISABLE_VECTOR_DB: "true"

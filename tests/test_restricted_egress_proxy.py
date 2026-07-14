@@ -25,8 +25,8 @@ def _load_module(
         "EGRESS_PROXY_POLICY": policy,
         "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "test-bridge",
         "MYST_VPN_ENABLED": "true",
-        "ONYX_AGENT_OUTBOUND_PROXY_URL": "",
-        "ONYX_AGENT_ALLOW_HTTP_URLS": "false",
+        "EGRESS_UPSTREAM_PROXY_URL": "",
+        "EGRESS_ALLOW_HTTP_URLS": "false",
     }
     env.update(env_overrides or {})
     with patch.dict(os.environ, env, clear=True):
@@ -86,6 +86,75 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("blocked", reason or "")
         self.assertEqual(addresses, ())
 
+    async def test_public_route_rejects_exact_host_exception(self) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "public",
+                "EGRESS_POLICY_DEFER_DNS": "true",
+            },
+        )
+        reason, addresses = await module._validate_destination(
+            "host.docker.internal", 9150
+        )
+        self.assertIsNotNone(reason)
+        self.assertEqual(addresses, ())
+
+    async def test_host_policy_defers_exact_host_resolution_to_broker(self) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_POLICY_DEFER_DNS": "true",
+            },
+        )
+        with patch.object(module, "_resolve_system_host", AsyncMock()) as resolve:
+            reason, addresses = await module._validate_destination(
+                "host.docker.internal", 9150
+            )
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ())
+        resolve.assert_not_awaited()
+
+    async def test_rfc1918_requires_host_route_and_explicit_opt_in(self) -> None:
+        for route_class, enabled, allowed in (
+            ("public", "true", False),
+            ("host", "false", False),
+            ("host", "true", True),
+        ):
+            with self.subTest(route_class=route_class, enabled=enabled):
+                module = _load_module(
+                    "onyx-helper",
+                    {
+                        "EGRESS_ROUTE_CLASS": route_class,
+                        "EGRESS_ALLOW_RFC1918": enabled,
+                    },
+                )
+                reason, addresses = await module._validate_destination(
+                    "192.168.10.20", 443
+                )
+                self.assertEqual(reason is None, allowed)
+                self.assertEqual(addresses, ("192.168.10.20",) if allowed else ())
+
+    async def test_host_broker_rejects_mixed_private_public_dns(self) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_ALLOW_RFC1918": "true",
+            },
+        )
+        with patch.object(
+            module,
+            "_resolve_system_host",
+            AsyncMock(return_value={"192.168.1.4", "93.184.216.34"}),
+        ):
+            reason, addresses = await module._validate_destination(
+                "mixed.example", 443
+            )
+        self.assertIn("mixed RFC1918", reason or "")
+        self.assertEqual(addresses, ())
+
     def test_browser_policy_allows_search_hosts(self) -> None:
         module = _load_module("browser")
         self.assertFalse(module.BLOCK_SEARCH_ENGINES)
@@ -122,7 +191,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 "PREFETCH_PROXY_HOST": "127.0.0.1",
                 "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "",
                 "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS": "localhost:8091",
-                "ONYX_AGENT_OUTBOUND_PROXY_URL": "socks5h://proxy.example:1080",
+                "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080",
             },
         )
         resolve = AsyncMock(return_value={"127.0.0.1"})
@@ -214,7 +283,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     def test_upstream_proxy_logging_redacts_credentials(self) -> None:
         module = _load_module(
             env_overrides={
-                "ONYX_AGENT_OUTBOUND_PROXY_URL": "https://user:secret@proxy.example:8443"
+                "EGRESS_UPSTREAM_PROXY_URL": "https://user:secret@proxy.example:8443"
             }
         )
         module._validate_upstream_proxy_config()
@@ -225,7 +294,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     def test_invalid_upstream_proxy_fails_validation(self) -> None:
         module = _load_module(
-            env_overrides={"ONYX_AGENT_OUTBOUND_PROXY_URL": "ftp://proxy.example"}
+            env_overrides={"EGRESS_UPSTREAM_PROXY_URL": "ftp://proxy.example"}
         )
         with self.assertRaisesRegex(RuntimeError, "must use http"):
             module._validate_upstream_proxy_config()
@@ -293,7 +362,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_forward_http_normalizes_and_streams_chunked_request(self) -> None:
         module = _load_module(
-            env_overrides={"ONYX_AGENT_ALLOW_HTTP_URLS": "true"}
+            env_overrides={"EGRESS_ALLOW_HTTP_URLS": "true"}
         )
         encoded_body = b"4\r\ntest\r\n0\r\n\r\n"
         client_reader = module.asyncio.StreamReader()
@@ -413,7 +482,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_upstream_mode_does_not_resolve_target_hostname(self) -> None:
         module = _load_module(
             env_overrides={
-                "ONYX_AGENT_OUTBOUND_PROXY_URL": "socks5h://proxy.example:1080"
+                "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080"
             }
         )
         target_resolver = AsyncMock()
@@ -426,10 +495,44 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(addresses, ())
         target_resolver.assert_not_awaited()
 
+    async def test_socks5_uses_selected_final_hop_dns_and_pins_answer(self) -> None:
+        module = _load_module(
+            env_overrides={
+                "EGRESS_UPSTREAM_PROXY_URL": "socks5://proxy.example:1080"
+            }
+        )
+        target_resolver = AsyncMock(return_value={"93.184.216.34"})
+        with patch.object(module, "_resolve_target_host", target_resolver):
+            reason, addresses = await module._validate_destination(
+                "target.example", 443
+            )
+
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("93.184.216.34",))
+        target_resolver.assert_awaited_once_with("target.example", 443)
+
+    async def test_socks5_local_dns_rejects_private_answer(self) -> None:
+        module = _load_module(
+            env_overrides={
+                "EGRESS_UPSTREAM_PROXY_URL": "socks5://proxy.example:1080"
+            }
+        )
+        with patch.object(
+            module,
+            "_resolve_target_host",
+            AsyncMock(return_value={"192.168.1.20"}),
+        ):
+            reason, addresses = await module._validate_destination(
+                "target.example", 443
+            )
+
+        self.assertIn("blocked", reason or "")
+        self.assertEqual(addresses, ())
+
     async def test_public_upstream_proxy_bootstrap_uses_myst_dns(self) -> None:
         module = _load_module(
             env_overrides={
-                "ONYX_AGENT_OUTBOUND_PROXY_URL": "http://proxy.example:8080"
+                "EGRESS_UPSTREAM_PROXY_URL": "http://proxy.example:8080"
             }
         )
         vpn_resolver = AsyncMock(return_value={"93.184.216.34"})
@@ -449,7 +552,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_internal_upstream_proxy_bootstrap_uses_system_dns(self) -> None:
         module = _load_module(
             env_overrides={
-                "ONYX_AGENT_OUTBOUND_PROXY_URL": (
+                "EGRESS_UPSTREAM_PROXY_URL": (
                     "socks5h://host.docker.internal:9150"
                 )
             }
@@ -485,7 +588,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_upstream_readiness_does_not_resolve_browsing_target(self) -> None:
         module = _load_module(
             env_overrides={
-                "ONYX_AGENT_OUTBOUND_PROXY_URL": (
+                "EGRESS_UPSTREAM_PROXY_URL": (
                     "https://user:secret@proxy.example:8443"
                 )
             }

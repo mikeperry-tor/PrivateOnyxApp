@@ -8,7 +8,7 @@ services:
       service: background
     image: onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
-    network_mode: "service:netns-holder"
+    networks: [onyx-backend, onyx-data, onyx-public-egress, onyx-host-egress, onyx-teep]
     # Use the same stack-owned internal-service bypasses as api_server.
     env_file:
       - path: ./onyx/helper-egress.env
@@ -41,42 +41,45 @@ services:
       S3_AWS_ACCESS_KEY_ID: "${S3_AWS_ACCESS_KEY_ID:?S3_AWS_ACCESS_KEY_ID must be set}"
       S3_AWS_SECRET_ACCESS_KEY: "${S3_AWS_SECRET_ACCESS_KEY:?S3_AWS_SECRET_ACCESS_KEY must be set}"
       # Controls Web connector SSRF-style URL checks
-      OPEN_URL_VALIDATE_SSRF: ${ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL:-true}
-      MCP_SERVER_ALLOW_PRIVATE_NETWORK: ${ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK:-true}
-      MCP_SERVER_ALLOW_LOOPBACK: ${ONYX_SECURITY_SSRF_ALLOW_LOOPBACK:-false}
+      OPEN_URL_VALIDATE_SSRF: "true"
+      MCP_SERVER_ALLOW_PRIVATE_NETWORK: "true"
+      MCP_SERVER_ALLOW_LOOPBACK: "false"
       # Wrapper-level alias for Onyx's asymmetric query prefix setting.
       ASYM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-}"
       EMBEDDING_BATCH_SIZE: "${ONYX_RAG_EMBEDDING_BATCH_SIZE:-}"
-      MODEL_SERVER_HOST: "127.0.0.1"
+      MODEL_SERVER_HOST: "local-embedding-shim"
       MODEL_SERVER_PORT: "9101"
-      INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
+      INDEXING_MODEL_SERVER_HOST: "local-embedding-shim"
       INDEXING_MODEL_SERVER_PORT: "9101"
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/app/wrapper-patches-background:/app/wrapper-patches-base:${PYTHONPATH:-}"
       ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED: "true"
-      ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS: "localhost,127.0.0.1,::1"
-      # code-interpreter runs on 7000 in the shared netns (8000 is taken by background prometheus).
-      CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
+      ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS: "doc-drop-web"
+      ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL: "http://doc-drop-web:8091/"
+      ONYX_WEB_CONNECTOR_DISPLAY_BASE_URL: "http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/"
+      CODE_INTERPRETER_BASE_URL: "http://code-interpreter:8000"
       # Route connector downloads and other environment-aware background HTTP
       # clients through the trusted loopback final-hop policy.
-      HTTP_PROXY: "http://127.0.0.1:3132"
-      HTTPS_PROXY: "http://127.0.0.1:3132"
-      http_proxy: "http://127.0.0.1:3132"
-      https_proxy: "http://127.0.0.1:3132"
-      ONYX_HELPER_HTTP_PROXY_URL: "http://127.0.0.1:3132"
+      HTTP_PROXY: "http://onyx-public-egress-bridge:3128"
+      HTTPS_PROXY: "http://onyx-public-egress-bridge:3128"
+      http_proxy: "http://onyx-public-egress-bridge:3128"
+      https_proxy: "http://onyx-public-egress-bridge:3128"
+      ONYX_HELPER_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
+      ONYX_MCP_PUBLIC_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
+      ONYX_MCP_HOST_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
+      ONYX_WEB_CONNECTOR_PUBLIC_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
+      ONYX_WEB_CONNECTOR_HOST_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
+      ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
     extra_hosts: !reset []
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
       local-embedding-shim:
         condition: service_healthy
-      onyx-helper-egress-proxy:
+      onyx-public-egress-bridge:
+        condition: service_healthy
+      onyx-host-egress-bridge:
         condition: service_healthy
     volumes: !override
       - ./docker-data/file-system:/app/file-system
@@ -96,8 +99,8 @@ services:
     environment:
       SENTRY_DSN: ""
       SENTRY_TRACES_SAMPLE_RATE: "0"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    extra_hosts: !reset []
+    networks: [onyx-data]
     volumes: !override
       - ./docker-data/model-cache:/app/.cache/huggingface
       - inference_model_server_logs:/var/log/onyx
@@ -111,8 +114,8 @@ services:
     environment:
       SENTRY_DSN: ""
       SENTRY_TRACES_SAMPLE_RATE: "0"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    extra_hosts: !reset []
+    networks: [onyx-data]
     volumes: !override
       - ./docker-data/indexing-model-cache:/app/.cache/huggingface
       - indexing_model_server_logs:/var/log/onyx
@@ -123,16 +126,19 @@ services:
       service: opensearch
     volumes: !override
       - ./docker-data/opensearch:/usr/share/opensearch/data
+    networks: [onyx-data]
 
   cache:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: cache
+    networks: [onyx-data]
 
   # Required by upstream Onyx service dependencies inherited via extends.
   minio:
     image: ${MINIO_IMAGE:?MINIO_IMAGE must be set}
     restart: unless-stopped
+    networks: [onyx-data]
     env_file:
       - path: ./onyx/onyx_data/deployment/.env
         required: true
@@ -149,34 +155,11 @@ services:
       timeout: 20s
       retries: 3
 
-  host-doc-drop-web-proxy:
-    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
-    restart: unless-stopped
-    command: tcp-listen:8091,fork,reuseaddr tcp-connect:myst-client:8091
-    ports:
-      - ${DOC_DROP_WEB_HOST:+${DOC_DROP_WEB_HOST}:}${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}:8091
-    depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
-      doc-drop-web:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "printf 'GET / HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:8091,connect-timeout=5 | grep -q '^HTTP/1[.][01] 200'"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 10s
-
-  # Read-only HTTP view of ONYX_RAG_DOC_SOURCE_DIR from inside the shared myst namespace.
-  # Use with Onyx Web connector at http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/
-  # so source links stay host-clickable while crawler access remains local.
+  # Read-only internal crawl identity, with a separately published host view.
   doc-drop-web:
     image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
     restart: unless-stopped
-    network_mode: "service:netns-holder"
+    networks: [onyx-backend, doc-drop-publish]
     volumes:
       - ${ONYX_RAG_DOC_SOURCE_DIR:-./doc-drop}:/import/docs:ro
       - ./onyx/doc_drop_webserver.py:/app/doc_drop_webserver.py:ro
@@ -194,12 +177,28 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
+
+  host-doc-display-publisher:
+    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.forwarding: "0"
+    command: ["tcp-listen:8091,fork,reuseaddr", "tcp-connect:doc-drop-web:8091"]
+    networks: [doc-drop-publish, host-publish]
+    ports:
+      - ${DOC_DROP_WEB_HOST:+${DOC_DROP_WEB_HOST}:}${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}:8091
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
+      doc-drop-web: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'GET / HTTP/1.0\r\nHost: localhost\r\n\r\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:8091,connect-timeout=5 | grep -q '^HTTP/'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   api_server:
     environment:
@@ -208,17 +207,12 @@ services:
       # cap; Onyx's own section-count and selection behavior is left intact.
       ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT: "${ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT:-}"
       ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS: "${ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS:-}"
-      MODEL_SERVER_HOST: "127.0.0.1"
+      MODEL_SERVER_HOST: "local-embedding-shim"
       MODEL_SERVER_PORT: "9101"
-      INDEXING_MODEL_SERVER_HOST: "127.0.0.1"
+      INDEXING_MODEL_SERVER_HOST: "local-embedding-shim"
       INDEXING_MODEL_SERVER_PORT: "9101"
       WRAPPER_PATCH_STRICT: "true"
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
       # Gate Onyx on the complete wrapper request chain so it cannot report
       # ready while configured Web Search/Open URL gateways are unavailable.
       crw:
@@ -227,11 +221,11 @@ services:
         condition: service_healthy
       searxng-service-gateway:
         condition: service_healthy
-      obscura-mcp-gateway:
-        condition: service_healthy
       local-embedding-shim:
         condition: service_healthy
-      onyx-helper-egress-proxy:
+      onyx-public-egress-bridge:
+        condition: service_healthy
+      onyx-host-egress-bridge:
         condition: service_healthy
 
   # Model-server-compatible embedding shim for local OpenAI-compatible
@@ -239,7 +233,7 @@ services:
   local-embedding-shim:
     image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
     restart: unless-stopped
-    network_mode: "service:netns-holder"
+    networks: [onyx-backend, onyx-host-egress]
     environment:
       ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL: "${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-http://host.docker.internal:3210/v1/embeddings}"
       ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY: "${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY:-}"
@@ -247,6 +241,7 @@ services:
       ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL: "${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"
       SHIM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-}"
       SHIM_PASSAGE_PREFIX: "${ONYX_RAG_EMBEDDING_PASSAGE_PREFIX:-}"
+      ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
     volumes:
       - ./onyx/local_embedding_shim.py:/app/local_embedding_shim.py:ro
     command:
@@ -261,8 +256,8 @@ services:
       retries: 5
       start_period: 10s
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
+      onyx-host-egress-bridge:
         condition: service_healthy
-        restart: true
+
+networks:
+  doc-drop-publish: {internal: true}

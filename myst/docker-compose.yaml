@@ -101,7 +101,7 @@
 #                            pin to specific nodes (e.g. "0xABC...,0xDEF...").
 #                            When set, --location-type and --country are still
 #                            applied as secondary filters. Default: ""
-#   MYST_VPN_ALLOW_LAN_BYPASS
+#   EGRESS_ALLOW_RFC1918
 #                            When "true", allows local network (RFC 1918)
 #                            addresses to bypass the VPN firewall, enabling
 #                            access to local inference APIs (LMStudio, etc).
@@ -177,8 +177,10 @@ services:
     sysctls:
       - net.ipv4.conf.all.rp_filter=0
       - net.ipv4.conf.default.rp_filter=0
+      - net.ipv4.ip_forward=0
       - net.ipv6.conf.all.disable_ipv6=1
       - net.ipv6.conf.default.disable_ipv6=1
+      - net.ipv6.conf.all.forwarding=0
     # NOTE: Docker Compose resolves relative volume paths relative to this
     # file's directory (myst/). The paths below use ../ to reach the project
     # root, so they work both when run standalone and when extended by the
@@ -212,7 +214,7 @@ services:
       MYST_COUNTRY: "${MYST_COUNTRY:-US}"
       MYST_VPN_PREFERRED_PROVIDER_IDS: "${MYST_VPN_PREFERRED_PROVIDER_IDS:-}"
       # Optional LAN access bypass for local inference APIs / services.
-      MYST_VPN_ALLOW_LAN_BYPASS: "${MYST_VPN_ALLOW_LAN_BYPASS:-false}"
+      EGRESS_ALLOW_RFC1918: "${EGRESS_ALLOW_RFC1918:-false}"
       # Connection retry policy (helps with provider-specific transient failures).
       MYST_CONNECT_MAX_ATTEMPTS: "6"
       MYST_CONNECT_RETRY_INTERVAL: "5"

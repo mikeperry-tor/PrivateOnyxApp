@@ -6,10 +6,13 @@ Loaded automatically by Python when this directory is on PYTHONPATH.
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from datetime import datetime
 from datetime import timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
+from urllib.parse import urlsplit
+from urllib.parse import urlunsplit
 
 
 FRESHNESS_META_VERSION_KEY = "_wrapper_http_freshness_version"
@@ -24,6 +27,9 @@ TERMINAL_HTTP_STATUS_SKIP_CODES = frozenset({401, 403, 404})
 _PATCH_LOGGER = None
 _INDEXING_SKIP_PATCHED = False
 _LOG_ONCE_KEYS: set[str] = set()
+_WEB_CONNECTOR_PROXY: ContextVar[str | None] = ContextVar(
+    "wrapper_web_connector_proxy", default=None
+)
 
 
 def _apply_playwright_helper_proxy_patch() -> None:
@@ -38,6 +44,133 @@ def _apply_playwright_helper_proxy_patch() -> None:
         )
         if _strict_mode():
             raise
+
+
+def _apply_configured_inference_proxy_patch() -> None:
+    try:
+        from wrapper_env_patches import apply_configured_inference_proxy_patch
+
+        apply_configured_inference_proxy_patch()
+    except Exception as e:  # pragma: no cover
+        print(
+            "sitecustomize_background: failed to patch configured inference egress: "
+            f"{e}",
+            flush=True,
+        )
+        if _strict_mode():
+            raise
+
+
+def _apply_web_connector_egress_patch() -> None:
+    """Select public/host policy from saved SSRF level for an entire crawl."""
+    try:
+        import inspect
+        import requests
+
+        from onyx.connectors.web import connector as web_connector
+        from onyx.server.security.models import SSRFProtectionLevel
+        from onyx.server.security.models import web_connector_ssrf_enforced
+        from onyx.server.security.store import get_security_settings
+        from onyx.utils.url import validate_outbound_http_url
+        from wrapper_env_patches import _validated_fixed_proxy_url
+        from wrapper_env_patches import select_playwright_proxy
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize_background: failed importing Web connector egress deps: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    public_proxy = _validated_fixed_proxy_url(
+        "ONYX_WEB_CONNECTOR_PUBLIC_HTTP_PROXY_URL", "onyx-public-egress-bridge"
+    )
+    host_proxy = _validated_fixed_proxy_url(
+        "ONYX_WEB_CONNECTOR_HOST_HTTP_PROXY_URL", "onyx-host-egress-bridge"
+    )
+    internal_base = urlsplit(
+        os.environ.get("ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL", "").strip()
+    )
+    if (
+        internal_base.scheme != "http"
+        or internal_base.hostname != "doc-drop-web"
+        or internal_base.port != 8091
+        or internal_base.username is not None
+        or internal_base.password is not None
+    ):
+        raise RuntimeError("ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL is invalid")
+
+    def _is_internal_doc_drop(url: str) -> bool:
+        parsed = urlsplit(url)
+        prefix = internal_base.path.rstrip("/") + "/"
+        return (
+            parsed.scheme == internal_base.scheme
+            and parsed.hostname == internal_base.hostname
+            and parsed.port == internal_base.port
+            and (parsed.path + ("/" if not parsed.path else "")).startswith(prefix)
+        )
+
+    original_request = requests.sessions.Session.request
+
+    def _proxy_selected_request(self, method, url, **kwargs):  # noqa: ANN001
+        selected = _WEB_CONNECTOR_PROXY.get()
+        if selected is None:
+            return original_request(self, method, url, **kwargs)
+        previous_trust_env = self.trust_env
+        self.trust_env = False
+        try:
+            kwargs["proxies"] = (
+                {"http": selected, "https": selected} if selected else {}
+            )
+            return original_request(self, method, url, **kwargs)
+        finally:
+            self.trust_env = previous_trust_env
+
+    requests.sessions.Session.request = _proxy_selected_request
+
+    def _structural_protected_url_check(url: str) -> None:
+        level = get_security_settings().ssrf_protection_level
+        strict = web_connector_ssrf_enforced(level)
+        validate_outbound_http_url(
+            url,
+            allow_private_network=not strict,
+            block_loopback_and_link_local=True,
+            resolve_dns=False,
+        )
+
+    web_connector.protected_url_check = _structural_protected_url_check
+
+    original_load = web_connector.WebConnector.load_from_state
+    signature = inspect.signature(original_load)
+    if tuple(signature.parameters) != ("self", "slim"):
+        raise RuntimeError(f"WebConnector.load_from_state signature changed: {signature}")
+
+    def _patched_load_from_state(self, slim=False):  # noqa: ANN001
+        if not self.to_visit_list:
+            yield from original_load(self, slim=slim)
+            return
+        initial_url = self.to_visit_list[0]
+        if _is_internal_doc_drop(initial_url):
+            selected = ""
+        else:
+            level = get_security_settings().ssrf_protection_level
+            selected = (
+                public_proxy
+                if level == SSRFProtectionLevel.VALIDATE_ALL
+                else host_proxy
+            )
+        token = _WEB_CONNECTOR_PROXY.set(selected)
+        try:
+            with select_playwright_proxy(selected):
+                yield from original_load(self, slim=slim)
+        finally:
+            _WEB_CONNECTOR_PROXY.reset(token)
+
+    web_connector.WebConnector.load_from_state = _patched_load_from_state
+    print(
+        "sitecustomize_background: routed Web connector through saved-level-selected fixed egress",
+        flush=True,
+    )
 
 
 def _env_enabled(name: str, default: bool = True) -> bool:
@@ -72,6 +205,48 @@ def _is_allowed_url(url: str) -> bool:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     return host in _allowed_hosts()
+
+
+def _rewrite_doc_drop_display_links(result):  # noqa: ANN001
+    """Rewrite only returned section links; retain internal document identity."""
+    internal_raw = os.environ.get("ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL", "").strip()
+    display_raw = os.environ.get("ONYX_WEB_CONNECTOR_DISPLAY_BASE_URL", "").strip()
+    if not internal_raw or not display_raw or getattr(result, "doc", None) is None:
+        return result
+    internal = urlsplit(internal_raw)
+    display = urlsplit(display_raw)
+    if (
+        internal.scheme != "http"
+        or internal.hostname != "doc-drop-web"
+        or internal.port != 8091
+        or display.scheme not in {"http", "https"}
+        or display.hostname not in {"localhost", "127.0.0.1", "::1"}
+    ):
+        raise RuntimeError("invalid doc-drop internal/display base URL configuration")
+    internal_prefix = internal.path.rstrip("/") + "/"
+    display_prefix = display.path.rstrip("/")
+    for section in result.doc.sections:
+        link = getattr(section, "link", None)
+        if not link:
+            continue
+        parsed = urlsplit(link)
+        if (
+            parsed.scheme != internal.scheme
+            or parsed.hostname != internal.hostname
+            or parsed.port != internal.port
+            or not parsed.path.startswith(internal_prefix)
+        ):
+            continue
+        section.link = urlunsplit(
+            (
+                display.scheme,
+                display.netloc,
+                display_prefix + parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+    return result
 
 
 def _parse_last_modified(value: str | None) -> datetime | None:
@@ -388,6 +563,11 @@ def _apply_web_connector_http_freshness_patch() -> None:
     original_do_scrape = web_connector.WebConnector._do_scrape
     _apply_indexing_freshness_skip_patch()
 
+    def _scrape_with_display_links(self, index, initial_url, session_ctx, slim=False):  # noqa: ANN001
+        return _rewrite_doc_drop_display_links(
+            original_do_scrape(self, index, initial_url, session_ctx, slim=slim)
+        )
+
     def _patched_do_scrape(self, index, initial_url, session_ctx, slim=False):  # noqa: ANN001
         if slim or not _is_allowed_url(initial_url):
             return original_do_scrape(self, index, initial_url, session_ctx, slim=slim)
@@ -466,7 +646,7 @@ def _apply_web_connector_http_freshness_patch() -> None:
                     initial_url,
                     head_response.url,
                 )
-                return original_do_scrape(
+                return _scrape_with_display_links(
                     self, index, initial_url, session_ctx, slim=slim
                 )
         except Exception:
@@ -477,10 +657,10 @@ def _apply_web_connector_http_freshness_patch() -> None:
                 "url=%s",
                 initial_url,
             )
-            return original_do_scrape(self, index, initial_url, session_ctx, slim=slim)
+            return _scrape_with_display_links(self, index, initial_url, session_ctx, slim=slim)
 
         if not is_pdf:
-            return original_do_scrape(self, index, initial_url, session_ctx, slim=slim)
+            return _scrape_with_display_links(self, index, initial_url, session_ctx, slim=slim)
 
         if last_modified_dt is None or content_length is None:
             _log_once(
@@ -615,7 +795,7 @@ def _apply_web_connector_http_freshness_patch() -> None:
                     e,
                 )
 
-        result = original_do_scrape(self, index, initial_url, session_ctx, slim=slim)
+        result = _scrape_with_display_links(self, index, initial_url, session_ctx, slim=slim)
 
         if (
             result.doc is None
@@ -704,4 +884,6 @@ def _apply_web_connector_http_freshness_patch() -> None:
 
 
 _apply_playwright_helper_proxy_patch()
+_apply_configured_inference_proxy_patch()
+_apply_web_connector_egress_patch()
 _apply_web_connector_http_freshness_patch()

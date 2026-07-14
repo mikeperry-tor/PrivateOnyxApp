@@ -19,7 +19,7 @@ Related implementation docs:
   SearXNG and CRW, how `open_url` reaches CRW directly, and how both use the
   prefetch policy plus the conditional CDP shim / Obscura browser path.
 - [VPN routing and proxies](vpn_routing_and_proxies.md) describes the
-  Compose-level VPN namespace, `ONYX_AGENT_OUTBOUND_PROXY_URL`, and optional teep, Tailscale, and
+  Compose-level VPN namespace, `EGRESS_UPSTREAM_PROXY_URL`, and optional teep, Tailscale, and
   code-interpreter routing modes.
 - [Internal network security](internal_network_security.md) records the
   restricted component topology, final-hop validation, executor isolation,
@@ -70,13 +70,11 @@ Upstreamable versions of these changes should keep current Onyx defaults
 unchanged. Riskier behavior, especially code-interpreter network access and
 trusted HTTP freshness, should remain explicit opt-in configuration.
 
-The wrapper's `ONYX_SECURITY_SSRF_*` env vars are not prerequisites for the
-runtime patches themselves. They only seed Onyx's Admin -> Security Hardening
-SSRF Protection level for URL-fetching paths such as Web connectors, MCP/OAuth
-endpoints, and the fallback `OnyxWebCrawler` provider. The local embedding shim
-uses explicit model-server routing instead, and CRW/Obscura browser traffic is
-governed by the Compose network/proxy/VPN layout rather than those Onyx SSRF
-settings.
+Compose seeds Onyx SSRF protection to Allow Private Network with loopback
+disabled. Saved Admin Security Hardening state takes precedence and selects
+the public or host-capable route for new MCP clients and Web crawls. Runtime
+patches use explicit transports because the network boundary, not environment
+proxy discovery, must enforce outbound routing.
 
 ## Modification summary
 
@@ -92,7 +90,10 @@ settings.
 | Saved tool-result preservation | `api_server` | `sitecustomize` optionally replaces Onyx's cross-message placeholder with saved tool responses | Per-agent/admin setting for how much saved tool output to keep |
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
 | Coding-agent repository/upload limit | `api_server`, `code-interpreter` | `sitecustomize` aligns the GitHub downloader default with Compose `MAX_FILE_SIZE_MB` | One first-class byte limit applied at producer and receiver |
-| Onyx helper HTTP/Playwright proxying | `api_server`, `background` | Proxy environment plus `sitecustomize` Playwright launch injection | First-class outbound transport/proxy configuration for backend helpers |
+| Onyx helper HTTP/Playwright proxying | `api_server`, `background` | Public bridge proxy environment plus saved-level Playwright selection | First-class outbound transport/proxy configuration for backend helpers |
+| MCP/OAuth egress | `api_server` | Explicit `trust_env=False` HTTPX proxy transport with saved-level route selection and structural SSRF validation | First-class proxy-aware MCP/OAuth client construction |
+| Configured inference egress | `api_server`, `background` | Explicit host-route HTTPX client injection for supported configured OpenAI-compatible providers | Provider clients that accept and enforce explicit outbound transports |
+| Web Connector routing | `background` | Per-crawl requests/Playwright selection plus exact internal doc-drop exception | Saved-level-aware connector transport configuration |
 | Internal search content caps | `api_server` | `sitecustomize` optionally wraps result formatting; full compose passes wrapper env aliases | Admin/env settings for per-result and aggregate tool-response budgets |
 | Code-interpreter capability text | `api_server` | `sitecustomize` rewrites tool descriptions and prompt constants | Capability-driven tool descriptions generated from actual executor config |
 | Lite Open URL availability | Lite `api_server` | `sitecustomize` forces `OpenURLTool.is_available` true | Separate Open URL availability from vector DB availability |
@@ -614,8 +615,8 @@ Local files:
 - `crw/prefetch_blocking_proxy.py`
 
 The API server in both modes, plus the full-mode background worker, point
-uppercase/lowercase `HTTP_PROXY` and `HTTPS_PROXY` at the loopback-bound
-`onyx-helper` final-hop policy. This routes environment-aware repository,
+uppercase/lowercase `HTTP_PROXY` and `HTTPS_PROXY` at the fixed public-only
+Onyx bridge. This routes environment-aware repository,
 connector, OAuth/JWT, file, and other `requests`/`httpx`/`urllib` operations
 through the selected VPN/upstream-proxy/no-VPN path. The tracked
 `onyx/helper-egress.env` file supplies their explicit trusted internal and
@@ -633,17 +634,38 @@ Both the API fallback crawler and full-mode Web connector use the common
 launcher. An upstream-provided Playwright proxy causes a strict failure at
 first launch so routing changes cannot silently override the wrapper.
 
-The helper policy binds only `127.0.0.1` in the trusted namespace, blocks
-private/internal targets, and performs provider-DNS validation or remote
-upstream-proxy resolution exactly like the other final-hop policies. Libraries
-that explicitly install another transport still require component-specific
-routing.
+The public request policy and route broker block private/internal targets and
+perform final-hop DNS/upstream selection. They live outside the application
+networks; direct application sockets have no external route. Libraries that
+explicitly install another transport require the MCP, Web Connector, or
+configured-inference component patches.
 
-Playwright intentionally appends Chromium's `<-loopback>` proxy rule, so its
-browser bypass list does not bypass `localhost`. The loopback-only helper
-policy carries one exact, non-configurable Compose exception for the bundled
-document server on port 8091 (loopback names/literals only). It resolves and
-pins that direct connection and continues to reject all other private targets.
+Playwright receives an explicit public or host bridge and no generic host
+bypass. The full-mode Web Connector patch recognizes only the exact internal
+`http://doc-drop-web:8091/` origin and reaches it directly on `onyx-backend`.
+All other private targets remain subject to saved-level and host-policy rules.
+
+### MCP/OAuth, Web Connector, and configured inference
+
+`apply_mcp_egress_proxy_patch()` validates the two stack-owned bridge URLs and
+patches the pinned MCP client factory. It preserves the saved SSRF level,
+validates every derived request structurally with DNS deferred, and constructs
+the custom HTTPX transport with an explicit proxy and `trust_env=False`.
+Streamable HTTP, SSE, redirects, discovery, dynamic registration,
+authorization, token, refresh, and tool calls therefore share the selected
+route. Factory or transport signature drift fails strict startup.
+
+The full-mode background patch selects the same public/host route for each Web
+Connector crawl and its Playwright fallback. Only the exact configured
+internal doc-drop origin is direct. Returned section links are rewritten from
+the internal crawl base to the configured host display base without changing
+stored document identity or freshness URLs.
+
+`apply_configured_inference_proxy_patch()` validates configured base URLs and
+injects an explicit host-route HTTPX client into supported synchronous
+OpenAI-compatible LiteLLM requests. Provider-default requests retain the
+public route. A configured provider shape that cannot accept the controlled
+client fails loudly instead of falling back to an ambient socket route.
 
 ## Internal search content caps
 
@@ -1066,9 +1088,9 @@ container also loads a `sitecustomize` patch that:
 - Injects upper/lowercase HTTP proxy variables pointing only at the bridge.
 - Injects executor-only `NO_PROXY=127.0.0.1,localhost,::1`.
 
-The trusted code-interpreter control service still shares `netns-holder` to
-serve Onyx and spawn containers through the Docker socket. Executor pods do
-not inherit it. `ONYX_AGENT_OUTBOUND_PROXY_URL` is consumed only by final-hop
+The trusted code-interpreter control service serves Onyx on the internal
+backend network and retains the Docker socket, but it has no direct external
+route. Executor pods do not inherit Onyx networks. `EGRESS_UPSTREAM_PROXY_URL` is consumed only by final-hop
 policy proxies and is never injected into executor pods. With network access
 disabled, the patch makes no changes and upstream `network=none` remains.
 
@@ -1077,12 +1099,12 @@ their lowercase variants pointing at
 `http://executor-egress-bridge:3128`. That gives Python `urllib`,
 `requests`, `httpx`, curl, git, and similar clients an ordinary HTTP proxy
 endpoint while the sidecar adapts upstream egress to the configured
-`ONYX_AGENT_OUTBOUND_PROXY_URL` scheme, including SOCKS.
+`EGRESS_UPSTREAM_PROXY_URL` scheme, including SOCKS.
 
 The executor policy still blocks configured search-engine hosts, so the
 code-interpreter path should not expect direct access to those search pages
 through the injected proxy variables. With
-`ONYX_AGENT_ALLOW_HTTP_URLS=false`, it also blocks plain `http://` requests
+`EGRESS_ALLOW_HTTP_URLS=false`, it also blocks plain `http://` requests
 from executor clients. Raw sockets cannot bypass the proxy because the
 executor network has no direct route. CONNECT to port 80 is also rejected in
 this mode; other CONNECT ports remain opaque. See
@@ -1128,13 +1150,15 @@ Older notes may refer to `local_embedding_sim.py`; the checked-in file is
 The shim does not import or patch Onyx directly. Instead, full-mode compose
 points Onyx's model-server environment variables at the shim:
 
-- `MODEL_SERVER_HOST=127.0.0.1`
+- `MODEL_SERVER_HOST=local-embedding-shim`
 - `MODEL_SERVER_PORT=9101`
-- `INDEXING_MODEL_SERVER_HOST=127.0.0.1`
+- `INDEXING_MODEL_SERVER_HOST=local-embedding-shim`
 - `INDEXING_MODEL_SERVER_PORT=9101`
 
-The shim runs in the shared network namespace, so `127.0.0.1:9101` resolves for
-both `api_server` and `background`.
+The shim shares only the internal backend caller network and the host egress
+network. Its explicit HTTP absolute-form / HTTPS CONNECT implementation reaches
+the configured upstream through `onyx-host-egress-bridge`; it disables ambient
+proxy discovery, verifies upstream TLS, reuses connections, and fails closed.
 
 The shim implements the endpoints Onyx needs for local embedding startup and
 embedding requests:
@@ -1222,7 +1246,8 @@ line-oriented full-mode compose checks live in
 
 The wrapper runs Onyx as part of a larger local system with:
 
-- A shared network namespace.
+- Internal-only application and data networks.
+- Separate public and host-capable egress policies and route brokers.
 - VPN and proxy egress.
 - Search and browser sidecars.
 - Optional Tailscale and Teep routing.
@@ -1239,14 +1264,14 @@ while changing the pieces needed for the local topology.
 
 The base compose wrapper changes the runtime shape of core Onyx services:
 
-- `api_server` joins the shared namespace, receives wrapper env, mounts
-  `sitecustomize` patches, disables telemetry/cloud flags, and points
-  code-interpreter calls at localhost.
-- `web_server` joins the shared namespace and disables analytics/cloud UI flags.
-- `nginx` no longer publishes ports directly; host access goes through a
-  wrapper proxy.
-- `code-interpreter` joins the trusted shared namespace, moves to port 7000,
-  and can spawn executor pods on the separate restricted network.
+- `api_server` joins explicit internal frontend/backend/data/egress-caller
+  networks, mounts `sitecustomize` patches, disables telemetry/cloud flags,
+  and points code-interpreter calls at `code-interpreter:8000`.
+- `web_server` joins only the frontend network and disables analytics/cloud UI flags.
+- `nginx` remains frontend-only; a hardened fixed publisher exposes the
+  configured host WebUI port through a non-masqueraded Docker Desktop edge.
+- `code-interpreter` joins the backend network on port 8000 and can spawn
+  executor pods on the separate restricted network.
 - `relational_db` uses wrapper-managed persistent storage.
 
 Full mode adds model-server routing through the local embedding shim, internal

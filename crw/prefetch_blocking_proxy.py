@@ -23,24 +23,24 @@ For prefetch traffic this proxy:
 
 2. **For plain HTTP URLs**: returns ``403 Forbidden`` by default with a clear
    message telling callers to use ``https://`` instead. Set
-   ``ONYX_AGENT_ALLOW_HTTP_URLS=true`` only when cleartext HTTP fetches are
+   ``EGRESS_ALLOW_HTTP_URLS=true`` only when cleartext HTTP fetches are
    intentionally needed.
 
 3. **For HTTPS URLs, and explicitly allowed plain HTTP URLs**: forwards the
-   request to the target, through ``ONYX_AGENT_OUTBOUND_PROXY_URL`` if set.
+   request to the target, through ``EGRESS_UPSTREAM_PROXY_URL`` if set.
 
 Before any CONNECT tunnel or HTTP forwarding, the proxy rejects loopback,
 private/RFC1918, link-local, multicast, reserved, and other non-global IP
 destinations. It also rejects loopback names, Docker Desktop's current and
 legacy ``*.docker.internal`` host/gateway names, their subdomains, and
 single-label Docker-style hostnames. When
-``ONYX_AGENT_OUTBOUND_PROXY_URL`` is empty, DNS names are resolved directly
+``EGRESS_UPSTREAM_PROXY_URL`` is empty, DNS names are resolved directly
 through the Mysterium provider resolver when VPN routing is enabled, or through
 system DNS only in explicit no-VPN mode; all returned addresses are classified.
 When an upstream proxy is set, target DNS resolution is skipped so the target
 hostname is sent only through the proxy protocol.
 
-When ``ONYX_AGENT_OUTBOUND_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
+When ``EGRESS_UPSTREAM_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
 routes its own upstream requests through that proxy. Restricted components
 reach policy instances only through their local bridges.
 
@@ -53,7 +53,7 @@ Architecture::
                                    ├─ Other HTTP URL → 403 unless explicitly allowed
                                    ├─ Other HTTPS URL → CONNECT tunnel
                                    │
-                                   └── upstream ──> ONYX_AGENT_OUTBOUND_PROXY_URL (Tor/VPN)
+                                   └── upstream ──> EGRESS_UPSTREAM_PROXY_URL (Tor/VPN)
                                                     (if set)
 
 CRW is configured with ``HTTP_PROXY``/``HTTPS_PROXY`` pointing at its
@@ -74,6 +74,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -102,11 +103,30 @@ if POLICY_MODE not in {
     raise RuntimeError(f"Unsupported EGRESS_PROXY_POLICY={POLICY_MODE!r}")
 BLOCK_SEARCH_ENGINES = POLICY_MODE in {"prefetch", "executor"}
 
-# Upstream proxy (ONYX_AGENT_OUTBOUND_PROXY_URL from .env.wrapper). When set,
+# Onyx application egress policies run outside the trusted routing namespace.
+# They perform HTTP/framing and structural destination checks, then ask one
+# fixed authenticated route broker to make the authoritative DNS/upstream
+# connection. Existing browser/executor/prefetch policies leave these unset
+# and retain their direct final-hop behavior.
+ROUTE_CLASS = os.environ.get("EGRESS_ROUTE_CLASS", "public").strip().lower()
+if ROUTE_CLASS not in {"public", "host"}:
+    raise RuntimeError("EGRESS_ROUTE_CLASS must be exactly 'public' or 'host'")
+DEFER_DNS_TO_BROKER = os.environ.get(
+    "EGRESS_POLICY_DEFER_DNS", "false"
+).strip().lower() == "true"
+ROUTE_BROKER_HOST = os.environ.get("EGRESS_ROUTE_BROKER_HOST", "").strip()
+ROUTE_BROKER_PORT_RAW = os.environ.get("EGRESS_ROUTE_BROKER_PORT", "").strip()
+ROUTE_BROKER_CREDENTIAL = os.environ.get(
+    "EGRESS_ROUTE_BROKER_CREDENTIAL", ""
+).strip()
+ROUTE_BROKER_PORT = int(ROUTE_BROKER_PORT_RAW) if ROUTE_BROKER_PORT_RAW else 0
+ALLOW_RFC1918 = os.environ.get("EGRESS_ALLOW_RFC1918", "false").strip() == "true"
+
+# Upstream proxy (EGRESS_UPSTREAM_PROXY_URL from .env.wrapper). When set,
 # the proxy routes its own requests through this upstream. Supports:
 # http://, https://, socks5://, socks5h://
 # When empty, requests go direct (through the VPN namespace).
-UPSTREAM_PROXY = os.environ.get("ONYX_AGENT_OUTBOUND_PROXY_URL", "").strip()
+UPSTREAM_PROXY = os.environ.get("EGRESS_UPSTREAM_PROXY_URL", "").strip()
 _MYST_VPN_ENABLED_RAW = os.environ.get("MYST_VPN_ENABLED", "true").strip()
 if _MYST_VPN_ENABLED_RAW not in {"true", "false"}:
     raise RuntimeError("MYST_VPN_ENABLED must be exactly 'true' or 'false'")
@@ -145,14 +165,14 @@ HTTPS_PROXY_REQUIRE_TLS13 = (
 # destination validation: even public HTTP hosts leak path/query contents in
 # cleartext and should not be fetched by an LLM web tool unless the operator
 # explicitly opts in.
-ALLOW_HTTP_URLS = os.environ.get("ONYX_AGENT_ALLOW_HTTP_URLS", "false").lower() in (
+ALLOW_HTTP_URLS = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in (
     "1",
     "true",
     "yes",
     "on",
 )
 HTTP_URL_BLOCK_MESSAGE = (
-    "HTTP URLs are disabled by ONYX_AGENT_ALLOW_HTTP_URLS=false. "
+    "HTTP URLs are disabled by EGRESS_ALLOW_HTTP_URLS=false. "
     "Use an https:// URL instead."
 )
 
@@ -188,9 +208,13 @@ BUILTIN_BLOCKED_HOSTNAMES = frozenset(
         "docker.for.mac.gateway.internal",
         "docker.for.win.host.internal",
         "docker.for.win.localhost",
+        "host.containers.internal",
+        "gateway.containers.internal",
     }
 )
-BUILTIN_BLOCKED_HOSTNAME_SUFFIXES = frozenset({"docker.internal"})
+BUILTIN_BLOCKED_HOSTNAME_SUFFIXES = frozenset(
+    {"docker.internal", "containers.internal"}
+)
 
 # Additional deployment-specific internal names. Docker service names,
 # container names, and the aliases in this repository are single-label and
@@ -256,6 +280,26 @@ def _ip_block_reason(ip_text: str) -> str | None:
     if not ip.is_global:
         return "non-global IP"
     return None
+
+
+def _is_rfc1918(ip_text: str) -> bool:
+    """Return True only for the three operator-routable IPv4 private ranges."""
+    try:
+        ip = ipaddress.ip_address(ip_text)
+    except ValueError:
+        return False
+    return isinstance(ip, ipaddress.IPv4Address) and any(
+        ip in network
+        for network in (
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+        )
+    )
+
+
+def _is_exact_host_exception(host: str) -> bool:
+    return ROUTE_CLASS == "host" and _normalize_host(host) == "host.docker.internal"
 
 
 def _loose_ipv4_literal(host: str) -> str | None:
@@ -665,6 +709,28 @@ async def _check_egress_readiness() -> None:
     writer.close()
     await writer.wait_closed()
 
+    if ROUTE_BROKER_HOST:
+        try:
+            broker_reader, broker_writer = await _connect_via_route_broker(
+                "localhost", 443
+            )
+        except ConnectionError as exc:
+            if not any(
+                marker in str(exc)
+                for marker in (
+                    "loopback",
+                    "blocked hostname",
+                    "blocked internal hostname",
+                    "single-label",
+                )
+            ):
+                raise
+        else:
+            broker_writer.close()
+            await broker_writer.wait_closed()
+            raise RuntimeError("route broker unexpectedly allowed localhost")
+        return
+
     if not UPSTREAM_PROXY:
         addresses = await _resolve_target_host("example.com", 443)
         if not addresses:
@@ -704,6 +770,24 @@ async def _validate_destination(
     if not 0 < port <= 65535:
         return "invalid port", ()
 
+    # The host-capable route has one always-available Docker-host identity.
+    # It is deliberately exact (not a suffix rule) and is resolved only by the
+    # authoritative broker in the trusted namespace.
+    if _is_exact_host_exception(host):
+        if DEFER_DNS_TO_BROKER:
+            return None, ()
+        try:
+            resolved_ips = await _resolve_system_host(host, port)
+        except (socket.gaierror, OSError, ValueError) as e:
+            return f"host exception DNS resolution failed: {e}", ()
+        if not resolved_ips:
+            return "host exception DNS resolution returned no addresses", ()
+        for resolved_ip in resolved_ips:
+            ip = _parse_ip_literal(resolved_ip)
+            if ip is None or ip.is_loopback or ip.is_link_local or ip.is_multicast:
+                return "host exception resolved to a forbidden address", ()
+        return None, tuple(sorted(resolved_ips))
+
     if _is_trusted_internal_destination(host, port):
         try:
             resolved_ips = await _resolve_system_host(host, port)
@@ -712,6 +796,13 @@ async def _validate_destination(
         if not resolved_ips:
             return "trusted internal DNS resolution returned no addresses", ()
         return None, tuple(sorted(resolved_ips))
+
+    if (
+        ROUTE_CLASS == "host"
+        and ALLOW_RFC1918
+        and _is_rfc1918(host)
+    ):
+        return None, () if DEFER_DNS_TO_BROKER else (host,)
 
     if _parse_ip_literal(host) and not _ip_block_reason(host):
         return None, (host,)
@@ -730,8 +821,50 @@ async def _validate_destination(
     if hostname_reason:
         return hostname_reason, ()
 
-    if UPSTREAM_PROXY:
+    # Isolated request-policy namespaces must not resolve target names. Their
+    # matching route broker repeats this function with authoritative routing.
+    if DEFER_DNS_TO_BROKER:
         return None, ()
+
+    # The broad LAN option exists only on the host broker. Resolve once with
+    # trusted system DNS to classify a private-capable name. Mixed answers fail
+    # closed. All-global answers are discarded and resolved again through the
+    # normal VPN/upstream/no-VPN public route below.
+    if ROUTE_CLASS == "host" and ALLOW_RFC1918:
+        try:
+            candidate_ips = await _resolve_system_host(host, port)
+        except (socket.gaierror, OSError, ValueError):
+            candidate_ips = set()
+        if candidate_ips:
+            private = {_is_rfc1918(ip) for ip in candidate_ips}
+            if private == {True}:
+                return None, tuple(sorted(candidate_ips))
+            if private == {False}:
+                pass
+            else:
+                return "DNS returned mixed RFC1918 and non-RFC1918 addresses", ()
+
+    if UPSTREAM_PROXY:
+        scheme, _proxy_host, _proxy_port, _username, _password = _parse_proxy_url(
+            UPSTREAM_PROXY
+        )
+        if scheme != "socks5":
+            return None, ()
+
+        # socks5 performs target DNS at the selected final hop. Resolve and pin
+        # the validated address here. socks5h, HTTP, and HTTPS deliberately
+        # leave target DNS to the configured upstream proxy.
+        try:
+            resolved_ips = await _resolve_target_host(host, port)
+        except (socket.gaierror, OSError, RuntimeError, ValueError) as e:
+            return f"DNS resolution failed: {e}", ()
+        if not resolved_ips:
+            return "DNS resolution returned no addresses", ()
+        for resolved_ip in sorted(resolved_ips):
+            resolved_reason = _ip_block_reason(resolved_ip)
+            if resolved_reason:
+                return f"DNS resolved to blocked {resolved_ip} ({resolved_reason})", ()
+        return None, tuple(sorted(resolved_ips))
 
     try:
         resolved_ips = await _resolve_target_host(host, port)
@@ -848,26 +981,26 @@ def _validate_upstream_proxy_config() -> None:
         parsed = urlparse(UPSTREAM_PROXY)
         scheme, host, port, username, password = _parse_proxy_url(UPSTREAM_PROXY)
     except ValueError as exc:
-        raise RuntimeError(f"Invalid ONYX_AGENT_OUTBOUND_PROXY_URL: {exc}") from exc
+        raise RuntimeError(f"Invalid EGRESS_UPSTREAM_PROXY_URL: {exc}") from exc
 
     if scheme not in {"http", "https", "socks5", "socks5h"}:
         raise RuntimeError(
-            "ONYX_AGENT_OUTBOUND_PROXY_URL must use http, https, socks5, or "
+            "EGRESS_UPSTREAM_PROXY_URL must use http, https, socks5, or "
             f"socks5h, not {scheme or '(missing scheme)'}"
         )
     if not host:
-        raise RuntimeError("ONYX_AGENT_OUTBOUND_PROXY_URL must include a hostname")
+        raise RuntimeError("EGRESS_UPSTREAM_PROXY_URL must include a hostname")
     if not 0 < port <= 65535:
-        raise RuntimeError("ONYX_AGENT_OUTBOUND_PROXY_URL has an invalid port")
+        raise RuntimeError("EGRESS_UPSTREAM_PROXY_URL has an invalid port")
     if parsed.query or parsed.fragment or parsed.params:
         raise RuntimeError(
-            "ONYX_AGENT_OUTBOUND_PROXY_URL must not include params, a query, or a fragment"
+            "EGRESS_UPSTREAM_PROXY_URL must not include params, a query, or a fragment"
         )
     if parsed.path not in ("", "/"):
-        raise RuntimeError("ONYX_AGENT_OUTBOUND_PROXY_URL must not include a path")
+        raise RuntimeError("EGRESS_UPSTREAM_PROXY_URL must not include a path")
     if (username is None) != (password is None):
         raise RuntimeError(
-            "ONYX_AGENT_OUTBOUND_PROXY_URL must provide both username and password"
+            "EGRESS_UPSTREAM_PROXY_URL must provide both username and password"
         )
     if scheme in {"socks5", "socks5h"} and username is not None:
         if len(username.encode("utf-8")) > 255 or len((password or "").encode("utf-8")) > 255:
@@ -884,8 +1017,13 @@ def _sanitized_upstream_proxy() -> str:
 
 
 def _target_dns_mode() -> str:
+    if ROUTE_BROKER_HOST:
+        return "route-broker"
     if UPSTREAM_PROXY:
-        return "upstream-proxy"
+        scheme, _host, _port, _username, _password = _parse_proxy_url(
+            UPSTREAM_PROXY
+        )
+        return "selected-final-hop" if scheme == "socks5" else "upstream-proxy"
     if MYST_VPN_ENABLED:
         return f"myst-provider-via-{MYST_VPN_INTERFACE}"
     return "system-explicit-no-vpn"
@@ -915,7 +1053,18 @@ async def _connect_via_upstream(
     Supports HTTP CONNECT, SOCKS5, and SOCKS5h proxies.
     Returns (reader, writer) for the established tunnel.
     """
+    if ROUTE_BROKER_HOST:
+        return await _connect_via_route_broker(target_host, target_port)
+
     if _is_trusted_internal_destination(target_host, target_port):
+        return await _open_validated_direct_connection(validated_ips, target_port)
+
+    if _is_exact_host_exception(target_host):
+        return await _open_validated_direct_connection(validated_ips, target_port)
+
+    if ROUTE_CLASS == "host" and ALLOW_RFC1918 and validated_ips and all(
+        _is_rfc1918(ip) for ip in validated_ips
+    ):
         return await _open_validated_direct_connection(validated_ips, target_port)
 
     if not UPSTREAM_PROXY:
@@ -934,6 +1083,7 @@ async def _connect_via_upstream(
             proxy_user,
             proxy_pass,
             scheme,
+            validated_ips,
         )
     elif scheme in ("http", "https"):
         return await _connect_via_http_connect(
@@ -947,6 +1097,49 @@ async def _connect_via_upstream(
         )
     else:
         raise ValueError(f"Unsupported proxy scheme: {scheme}")
+
+
+async def _connect_via_route_broker(
+    target_host: str, target_port: int
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Open one authenticated bounded stream through the fixed route broker."""
+    if not ROUTE_BROKER_HOST or not 0 < ROUTE_BROKER_PORT <= 65535:
+        raise RuntimeError("route broker host and port are required")
+    if (
+        len(ROUTE_BROKER_CREDENTIAL) != 64
+        or any(c not in "0123456789abcdef" for c in ROUTE_BROKER_CREDENTIAL)
+    ):
+        raise RuntimeError("route broker credential is invalid")
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_connection(ROUTE_BROKER_HOST, ROUTE_BROKER_PORT),
+        timeout=TUNNEL_CONNECT_TIMEOUT,
+    )
+    request = {
+        "version": "onyx-route-broker-v1",
+        "credential": ROUTE_BROKER_CREDENTIAL,
+        "route_class": ROUTE_CLASS,
+        "host": _normalize_host(target_host),
+        "port": target_port,
+    }
+    encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+    if len(encoded) > 4096:
+        writer.close()
+        raise ConnectionError("route broker request is too large")
+    writer.write(encoded)
+    await writer.drain()
+    raw_response = await asyncio.wait_for(reader.readline(), TUNNEL_CONNECT_TIMEOUT)
+    if not raw_response or len(raw_response) > 1024:
+        writer.close()
+        raise ConnectionError("route broker returned invalid framing")
+    try:
+        response = json.loads(raw_response)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        writer.close()
+        raise ConnectionError("route broker returned invalid response") from exc
+    if response.get("status") != "ok":
+        writer.close()
+        raise ConnectionError(str(response.get("reason", "route denied"))[:512])
+    return reader, writer
 
 
 async def _open_validated_direct_connection(
@@ -980,6 +1173,7 @@ async def _connect_via_socks5(
     username: str | None,
     password: str | None,
     scheme: str,
+    validated_ips: tuple[str, ...] = (),
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Establish a SOCKS5/SOCKS5h tunnel to the target."""
     reader, writer = await _open_http_proxy_connection(
@@ -1023,13 +1217,22 @@ async def _connect_via_socks5(
             writer.close()
             raise ConnectionError("SOCKS5: auth failed")
 
-    # SOCKS5 connect request. Send DNS names to the proxy for both socks5 and
-    # socks5h so an explicit upstream proxy does not trigger local DNS leaks.
+    # socks5 uses the address resolved and validated through the selected
+    # final-hop resolver; socks5h deliberately sends the hostname upstream.
     normalized_host = _normalize_host(target_host)
     literal_ip = _parse_ip_literal(normalized_host)
     loose_ip = _loose_ipv4_literal(normalized_host)
-    if literal_ip is None and loose_ip is None:
+    if scheme == "socks5" and literal_ip is None and loose_ip is None:
+        if not validated_ips:
+            writer.close()
+            raise ConnectionError("SOCKS5: missing validated target address")
+        normalized_host = validated_ips[0]
+        literal_ip = _parse_ip_literal(normalized_host)
+    if scheme == "socks5h" and literal_ip is None and loose_ip is None:
         host_bytes = target_host.encode("utf-8")
+        if not host_bytes or len(host_bytes) > 255:
+            writer.close()
+            raise ConnectionError("SOCKS5h: invalid target hostname length")
         writer.write(
             b"\x05\x01\x00\x03"
             + bytes([len(host_bytes)])
@@ -1193,6 +1396,10 @@ async def _open_plain_http_forward_connection(
     expect absolute-form request targets for plain HTTP forwarding; direct and
     SOCKS paths expect origin-form.
     """
+    if ROUTE_BROKER_HOST:
+        reader, writer = await _connect_via_route_broker(target_host, target_port)
+        return reader, writer, False
+
     if _is_trusted_internal_destination(target_host, target_port):
         reader, writer = await _open_validated_direct_connection(
             validated_ips, target_port
@@ -1635,7 +1842,7 @@ async def _handle_forward_http(
 
     HTTPS clients normally use CONNECT and are handled by _handle_connect().
     Plain HTTP requests are denied by default before upstream egress. If
-    ONYX_AGENT_ALLOW_HTTP_URLS=true, they are forwarded after destination
+    EGRESS_ALLOW_HTTP_URLS=true, they are forwarded after destination
     validation. Search-engine targets are still denied locally.
     """
     parsed = urlparse(target)
@@ -1823,6 +2030,22 @@ async def _handle_forward_http(
 
 async def main() -> None:
     _validate_upstream_proxy_config()
+    if ROUTE_BROKER_HOST:
+        if UPSTREAM_PROXY:
+            raise RuntimeError(
+                "isolated policy must not receive EGRESS_UPSTREAM_PROXY_URL"
+            )
+        if not DEFER_DNS_TO_BROKER:
+            raise RuntimeError(
+                "isolated policy with a route broker must defer target DNS"
+            )
+        if not 0 < ROUTE_BROKER_PORT <= 65535:
+            raise RuntimeError("EGRESS_ROUTE_BROKER_PORT is invalid")
+        if (
+            len(ROUTE_BROKER_CREDENTIAL) != 64
+            or any(c not in "0123456789abcdef" for c in ROUTE_BROKER_CREDENTIAL)
+        ):
+            raise RuntimeError("EGRESS_ROUTE_BROKER_CREDENTIAL is invalid")
     if not ALLOWED_CLIENT_HOSTS and not _listener_is_loopback_only():
         raise RuntimeError(
             "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS must name the dedicated bridge "

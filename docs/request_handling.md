@@ -1,5 +1,30 @@
 # Request Handling: Search & open_url() Paths
 
+## Onyx application egress boundary
+
+Onyx application containers use only internal Compose networks and cannot
+open direct Internet or host-gateway sockets. Generic public HTTP clients use
+`onyx-public-egress-bridge`; configured inference and embedding clients use
+`onyx-host-egress-bridge`. MCP/OAuth and configured Web Connector clients
+choose between them from the saved Admin SSRF level for each new client or
+crawl. Public and host policies have separate namespaces, authenticated route
+brokers, and credentials; browser and executor policies are separate.
+
+The MCP runtime patch supplies an explicit `trust_env=False` HTTPX proxy
+transport while preserving Onyx validation for initial URLs, redirects,
+discovery, registration, authorization, token, refresh, SSE, and streamable
+HTTP traffic. Onyx performs structural validation without public target DNS;
+the selected broker resolves and pins the target. Exact
+`host.docker.internal` is host-route-only. RFC1918 targets additionally require
+`EGRESS_ALLOW_RFC1918=true`; loopback, link-local, metadata, and other Docker
+aliases remain denied.
+
+The Web connector uses the same saved-level selection for requests and
+Playwright fallback. Its only direct exception is the exact full-mode internal
+origin `http://doc-drop-web:8091/`. The former bundled Obscura MCP server was
+removed intentionally; user-configured MCP servers use the guarded paths
+above.
+
 This document describes the full request chains for the two primary web-facing
 tool paths in the Onyx agent: the **web search** tool (`web_search`) and the
 **open URL** tool (`open_url`). In the recommended README configuration,
@@ -35,7 +60,7 @@ the image digest. To map an image back to source, inspect the OCI label
 when building `container/dist.dockerfile`.
 
 This document focuses on request chains and browser/scraper behavior. For the
-Compose-level VPN namespace, optional `ONYX_AGENT_OUTBOUND_PROXY_URL`, teep, Tailscale, and
+Compose-level VPN namespace, optional `EGRESS_UPSTREAM_PROXY_URL`, teep, Tailscale, and
 code-interpreter routing switches, see
 [VPN routing and proxies](vpn_routing_and_proxies.md). For the Onyx runtime
 patches that shape tool availability, prompt text, and
@@ -49,7 +74,7 @@ network-enabled code-interpreter executors, see
 Unless a section says otherwise, diagrams assume `MYST_VPN_ENABLED=true`.
 When `MYST_VPN_ENABLED=false`, restricted networks stay unchanged while policy
 proxy traffic leaves the trusted namespace through Docker. When
-`ONYX_AGENT_OUTBOUND_PROXY_URL` is set, final-hop policies connect through it;
+`EGRESS_UPSTREAM_PROXY_URL` is set, final-hop policies connect through it;
 default SearXNG still has no general internet route. See
 [VPN routing and proxies](vpn_routing_and_proxies.md#final-hop-routing-matrix).
 
@@ -403,7 +428,7 @@ LLM as cited search results.
 
 The stack uses an **event-driven wait** instead of a fixed delay to determine
 when a page is "done loading" and ready for content extraction. This is
-critical when `ONYX_AGENT_OUTBOUND_PROXY_URL` routes through Tor or a slow VPN, where page loads
+critical when `EGRESS_UPSTREAM_PROXY_URL` routes through Tor or a slow VPN, where page loads
 can take up to 60 seconds — a fixed 5s sleep would either cut off slow pages
 or waste time on fast ones.
 
@@ -497,7 +522,7 @@ connection. CRW auto mode sees that blocked HTTP result and escalates to the
 chrome/obscura CDP renderer. Non-search HTTPS requests are forwarded through
 the configured egress path and can be returned directly by CRW when the
 response is usable. Plain HTTP URLs are blocked by default with a clear
-message telling the caller to use HTTPS; set `ONYX_AGENT_ALLOW_HTTP_URLS=true`
+message telling the caller to use HTTPS; set `EGRESS_ALLOW_HTTP_URLS=true`
 only when cleartext HTTP fetches are intentionally needed. See §1.7 for the
 proxy details.
 
@@ -635,14 +660,14 @@ HTTP prefetch requests. For configured search-engine hosts it returns
 CRW :3010 ──HTTP proxy──> crw-prefetch-bridge :3128
                                │
                                v
-                         prefetch policy in netns-holder
+                         isolated prefetch policy
                                │
                                ├─ Search engine URL → 403 (no network request)
                                ├─ Internal/private target → 403 (logged)
                                ├─ Other HTTP URL → 403 unless explicitly allowed
                                ├─ Other HTTPS URL → CONNECT prefetch tunnel
                                │
-                               └── upstream ──> ONYX_AGENT_OUTBOUND_PROXY_URL (Tor/VPN)
+                               └── upstream ──> EGRESS_UPSTREAM_PROXY_URL (Tor/VPN)
                                                 (if set)
 ```
 
@@ -673,27 +698,27 @@ CRW :3010 ──HTTP proxy──> crw-prefetch-bridge :3128
      loopback/private/link-local/reserved/non-global IP addresses, and legacy
      IPv4 shorthand forms. Hostnames are IDNA-normalized before these checks,
      including Unicode DNS separator equivalents. When
-     `ONYX_AGENT_OUTBOUND_PROXY_URL` is empty, Myst
+     `EGRESS_UPSTREAM_PROXY_URL` is empty, Myst
      mode sends A queries directly to the provider resolver inside the tunnel;
      explicit no-VPN mode uses system/Docker DNS. The proxy blocks any name
      that resolves to a blocked address and connects only to that validated
      address set without a second hostname lookup, closing the validation-to-
-     connect rebinding race. When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, target
+     connect rebinding race. When `EGRESS_UPSTREAM_PROXY_URL` is set, target
      resolution is left entirely to the upstream proxy protocol. A
      public-looking name that the upstream resolves privately is therefore a
      documented residual risk. Blocked attempts are logged.
    - **Other plain HTTP URLs**: returns `403 Forbidden` by default with the
-     message `HTTP URLs are disabled by ONYX_AGENT_ALLOW_HTTP_URLS=false. Use
-     an https:// URL instead.` Set `ONYX_AGENT_ALLOW_HTTP_URLS=true` to allow
+     message `HTTP URLs are disabled by EGRESS_ALLOW_HTTP_URLS=false. Use
+     an https:// URL instead.` Set `EGRESS_ALLOW_HTTP_URLS=true` to allow
      cleartext HTTP fetches. When allowed, the proxy forwards the HTTP request
-     to the target through `ONYX_AGENT_OUTBOUND_PROXY_URL` if set. If the
+     to the target through `EGRESS_UPSTREAM_PROXY_URL` if set. If the
      response is usable, CRW may return it without visiting the page in
      Obscura. For HTTP/HTTPS upstream proxies, allowed HTTP origin requests are
      forwarded with an absolute-form request target rather than a CONNECT
      tunnel. For an `https://` upstream proxy, that absolute-form request is
      sent inside the verified TLS connection to the proxy.
    - **Other HTTPS URLs**: accepts the CONNECT tunnel and connects through
-     `ONYX_AGENT_OUTBOUND_PROXY_URL` if set. For an `https://` upstream proxy,
+     `EGRESS_UPSTREAM_PROXY_URL` if set. For an `https://` upstream proxy,
      the CONNECT request is sent inside the verified TLS connection to the
      proxy. If the HTTP result is usable, CRW may return it without visiting
      the page in Obscura. If the result is blocked, thin, or JS-required, CRW
@@ -712,13 +737,13 @@ When executor networking is enabled, executor pods live only on the internal
 `onyx-code-interpreter-executor` network and receive
 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY=http://executor-egress-bridge:3128`.
 Direct sockets have no internet or stack route; the bridge reaches a separate
-search-blocking `executor` policy in `netns-holder`.
+search-blocking `executor` policy. Only its final-hop route owner shares the
+trusted routing namespace.
 
-Each policy listener also resolves and accepts only its configured bridge
-service, plus loopback for its local healthcheck. Although the proxies share
-the trusted namespace and bind `0.0.0.0`, unrelated containers on another
-namespace attachment cannot use the listener directly. Failure to resolve the
-allowed bridge rejects the connection.
+Each policy listener resolves and accepts only its configured bridge service,
+plus loopback for its local healthcheck. Onyx public and host policies use
+separate namespaces and authenticated route-broker networks; browser,
+prefetch, and executor policies remain inaccessible from application networks.
 
 The local policy healthcheck is routing-aware. In direct VPN mode it verifies
 the fixed provider-DNS path; in explicit no-VPN mode it uses the explicitly
@@ -728,10 +753,10 @@ browsing hostname. Each egress bridge then sends a blocked localhost CONNECT
 and requires the policy's 403, distinguishing end-to-end forwarding from a
 mere listening socket.
 
-**ONYX_AGENT_OUTBOUND_PROXY_URL usage:**
+**EGRESS_UPSTREAM_PROXY_URL usage:**
 
-When `ONYX_AGENT_OUTBOUND_PROXY_URL` is set (e.g., Tor SOCKS proxy), the prefetch-blocking proxy
-routes its own upstream requests through `ONYX_AGENT_OUTBOUND_PROXY_URL`. This
+When `EGRESS_UPSTREAM_PROXY_URL` is set (e.g., Tor SOCKS proxy), the prefetch-blocking proxy
+routes its own upstream requests through `EGRESS_UPSTREAM_PROXY_URL`. This
 keeps all final-hop policy connections on the configured upstream path.
 The URL is validated before the listener starts; unsupported schemes,
 malformed ports, incomplete credentials, and path/query/fragment components
@@ -755,27 +780,28 @@ For `https://` upstream proxies, the prefetch-blocking proxy verifies the
 proxy certificate, sends SNI for the proxy host, and requires TLS 1.3 by
 default when the Python/OpenSSL runtime supports it.
 
-The full service-by-service `ONYX_AGENT_OUTBOUND_PROXY_URL` behavior, including SearXNG settings
+The full service-by-service `EGRESS_UPSTREAM_PROXY_URL` behavior, including SearXNG settings
 generation and code-interpreter executor pod caveats, is documented in
 [VPN routing and proxies](vpn_routing_and_proxies.md#final-hop-routing-matrix).
 
 | Component | Proxy used | How |
 |-----------|-----------|-----|
 | **Obscura (CDP browser)** | browser policy | `OBSCURA_PROXY=http://obscura-egress-bridge:3128`; `OBSCURA_ALLOW_PRIVATE_NETWORK=true` lets Obscura's own resolver reach that private proxy name |
-| **Obscura MCP browser** | separate browser policy instance | explicit `--proxy http://obscura-mcp-egress-bridge:3128`; `OBSCURA_ALLOW_PRIVATE_NETWORK=true` is required because Obscura 0.1.10 does not propagate the equivalent CLI flag into its MCP browser context |
-| **Prefetch-blocking proxy (HTTP/CONNECT)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` | `ONYX_AGENT_OUTBOUND_PROXY_URL` env var → upstream connection |
+| **Prefetch-blocking proxy (HTTP/CONNECT)** | `EGRESS_UPSTREAM_PROXY_URL` | `EGRESS_UPSTREAM_PROXY_URL` env var → upstream connection |
 | **CRW HTTP prefetch** | prefetch-blocking proxy | `HTTPS_PROXY` / `HTTP_PROXY` env vars on the CRW container |
-| **CRW CDP (obscura)** | `ONYX_AGENT_OUTBOUND_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
+| **CRW CDP (obscura)** | `EGRESS_UPSTREAM_PROXY_URL` (via obscura) | no `REQUEST_PROXY` in the default path; shim strips `proxyServer` only as a safety net |
 | **SearXNG** | none by default | CRW-backed engines use only the internal CRW peer network |
 | **Code-interpreter HTTP clients** | executor policy | local executor bridge; search-engine and private/internal targets are blocked |
-| **Onyx API/background HTTP helpers** | loopback `onyx-helper` policy | The API in both modes and the full-only background worker send environment-aware `requests`, `httpx`, and `urllib` clients through `HTTP_PROXY`/`HTTPS_PROXY=http://127.0.0.1:3132`; stack-owned internal bypasses come from `onyx/helper-egress.env` |
-| **OnyxWebCrawler** | loopback `onyx-helper` policy | Does not go through CRW/Obscura, but its SSRF-validated `requests` fetch uses the helper proxy and selected VPN/upstream-proxy/no-VPN route |
+| **Onyx API/background HTTP helpers** | public-only Onyx bridge/policy/broker | Environment-aware `requests`, `httpx`, and `urllib` clients use `HTTP_PROXY`/`HTTPS_PROXY=http://onyx-public-egress-bridge:3128`; stack-owned internal bypasses come from `onyx/helper-egress.env` |
+| **MCP/OAuth and configured Web Connector** | saved-level-selected public or host route | Explicit SSRF-guarded transports defer public target DNS to the selected route broker; the exact internal doc-drop crawl origin bypasses both |
+| **Configured inference / embedding shim** | host-capable Onyx route | Explicit clients preserve exact-host and opt-in RFC1918 policy without direct application egress |
+| **OnyxWebCrawler** | selected Onyx bridge | Does not go through CRW/Obscura; its SSRF-validated request and Playwright fallback use explicit public/host routing |
 
 **CONNECT handling:**
 
 For HTTPS URLs (which include all search engine URLs), reqwest uses HTTP
 CONNECT tunneling. The proxy handles CONNECT requests as follows:
-- **Port 80 while `ONYX_AGENT_ALLOW_HTTP_URLS=false`**: returns `403` before
+- **Port 80 while `EGRESS_ALLOW_HTTP_URLS=false`**: returns `403` before
   opening a tunnel. Other allowed ports are opaque and are not protocol-inspected.
 - **Search engine hosts**: returns `403` immediately (rejects the CONNECT).
   This forces CRW's auto mode to escalate to the CDP renderer (obscura),
@@ -785,7 +811,7 @@ CONNECT tunneling. The proxy handles CONNECT requests as follows:
   destination validation is used for `CONNECT`, `GET`, and `HEAD`, so direct
   callers cannot use the proxy as a generic internal TCP tunnel or blind
   internal `HEAD` primitive.
-- **Non-search-engine hosts**: establishes the tunnel through `ONYX_AGENT_OUTBOUND_PROXY_URL`
+- **Non-search-engine hosts**: establishes the tunnel through `EGRESS_UPSTREAM_PROXY_URL`
   and pipes bidirectionally. For usable HTTP results, CRW can return the
   prefetch result directly. If CRW later escalates to CDP, this can produce
   both a reqwest fetch and an obscura navigation for that non-search URL. The
@@ -797,7 +823,7 @@ CONNECT tunneling. The proxy handles CONNECT requests as follows:
 
 For plain HTTP URLs, the proxy applies the same search-engine and
 internal/private destination blocks, then blocks the request unless
-`ONYX_AGENT_ALLOW_HTTP_URLS=true`. When HTTP is explicitly allowed, direct and
+`EGRESS_ALLOW_HTTP_URLS=true`. When HTTP is explicitly allowed, direct and
 SOCKS paths use normal origin-form forwarding, while HTTP/HTTPS upstream
 proxies receive absolute-form HTTP requests. HTTPS upstream proxies receive
 that request inside the verified TLS connection to the proxy. As with HTTPS, an
@@ -854,8 +880,8 @@ This is critical for two reasons:
 |----------|---------|-------------|
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
-| `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://` |
-| `ONYX_AGENT_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs. When false, the prefetch proxy returns a text/plain 403 telling the agent to use HTTPS, and the CDP shim rejects HTTP browser navigations too. |
+| `EGRESS_UPSTREAM_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://` |
+| `EGRESS_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs. When false, the prefetch proxy returns a text/plain 403 telling the agent to use HTTPS, and the CDP shim rejects HTTP browser navigations too. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_BLOCK_INTERNAL_HOSTS` | empty | Optional comma-separated additional internal hostnames to block by name without opening an upstream request. It cannot remove the built-in localhost, `*.docker.internal`, legacy Docker Desktop, or single-label Docker-name blocks. Subdomains of configured names are blocked too. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
@@ -962,7 +988,7 @@ but that is not the recommended wrapper setup.
     that CRW classifies as blocked, thin, or JS-required go through
     CDP/shim/Obscura; usable non-search HTTPS responses can be returned from
     CRW's HTTP prefetch without Obscura. Plain HTTP URLs are blocked by
-    default unless `ONYX_AGENT_ALLOW_HTTP_URLS=true`. PDFs are handled
+    default unless `EGRESS_ALLOW_HTTP_URLS=true`. PDFs are handled
     natively by CRW's `pdf_inspector` and bypass Obscura entirely.
   - **OnyxWebCrawler (fallback if no provider is configured)**: In-process HTTP
     via `ssrf_safe_get` and the helper policy, handles PDFs natively (PyPDF2), optional Playwright
@@ -1009,9 +1035,10 @@ SSRF Protection policy to the target URL. Even when the fallback crawler is
 allowed to fetch private-network targets, loopback/link-local targets remain
 blocked on that LLM-controlled fetch path.
 
-The `ONYX_SECURITY_SSRF_*` wrapper env vars only seed Onyx's Admin -> Security
-Hardening SSRF Protection level. They are not firewall rules for CRW, the CDP
-shim, or Obscura. A page rendered in Obscura can attempt browser requests
+Compose seeds Onyx Admin SSRF protection to Allow Private Network with
+loopback disabled; saved Admin state takes precedence. The selected level
+chooses the public or host bridge for each new MCP client and Web crawl. These
+settings are not firewall rules for CRW, the CDP shim, or Obscura. A page rendered in Obscura can attempt browser requests
 to internal addresses that are reachable from the browser namespace; browser
 same-origin/CORS behavior may limit reading responses, but it is not a
 stack-internal access-control boundary.
@@ -1093,7 +1120,7 @@ In this deployment the prefetch goes through the prefetch-blocking proxy:
 
 - **Other plain HTTP pages**: Blocked by default before any upstream request is
   opened. The response body tells the agent to use an `https://` URL instead.
-  If `ONYX_AGENT_ALLOW_HTTP_URLS=true`, the proxy forwards the request and the
+  If `EGRESS_ALLOW_HTTP_URLS=true`, the proxy forwards the request and the
   same "usable HTTP result can bypass Obscura" limitation applies.
 
 - **PDF documents**: When the HTTP prefetch returns `Content-Type:
@@ -1112,7 +1139,7 @@ In this deployment the prefetch goes through the prefetch-blocking proxy:
 
 ```
 Onyx open_url → OnyxWebCrawler.contents(urls)
-  → ssrf_safe_get(url) through http://127.0.0.1:3132
+  → ssrf_safe_get(url) through the selected Onyx egress bridge
   → 4xx response? (403 or Cloudflare cf-ray/cf-mitigated headers)
     → if OPEN_URL_PLAYWRIGHT_FALLBACK_ENABLED:
         → fetch_rendered_html(url) (one-shot headless Chromium render)
@@ -1460,7 +1487,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `CRW_CRAWLER__PROXY` | (unset) | Intentionally not used for the prefetch-blocking proxy. Setting it would make CRW include `proxyServer` in `Target.createBrowserContext`; the shim can strip this as a safety net, but the compose default avoids that path entirely. |
 | `CRW_RENDERER__CHROME__WS_URL` | `ws://cdp-shim:9224/devtools/browser` | CDP shim endpoint on the dedicated network |
 | `CRW_RENDERER__CHROME_TIMEOUT_MS` | `50000` | Per-page navigation timeout for the chrome (obscura) renderer tier. Must be ≥ `OBSCURA_NAV_TIMEOUT_MS` so CRW's deadline doesn't fire before obscura's nav timeout. |
-| `CRW_RENDERER__HTTP_TIMEOUT_MS` | `60000` | HTTP prefetch timeout. CRW always runs an HTTP prefetch before the CDP renderer (even with `RENDER_JS_DEFAULT=true`) to check Content-Type. PDFs and usable non-search HTTPS results can bypass obscura; plain HTTP results can only do so if `ONYX_AGENT_ALLOW_HTTP_URLS=true`. Ceiling, not delay — completes in 1-3s on happy path. Contributes to `ladder_min`. No happy-path impact. |
+| `CRW_RENDERER__HTTP_TIMEOUT_MS` | `60000` | HTTP prefetch timeout. CRW always runs an HTTP prefetch before the CDP renderer (even with `RENDER_JS_DEFAULT=true`) to check Content-Type. PDFs and usable non-search HTTPS results can bypass obscura; plain HTTP results can only do so if `EGRESS_ALLOW_HTTP_URLS=true`. Ceiling, not delay — completes in 1-3s on happy path. Contributes to `ladder_min`. No happy-path impact. |
 | `CRW_RENDERER__CHROME_NAV_BUDGET_MS` | `48000` | Post-navigate budget for the chrome renderer tier. This races CRW's post-navigation work after `Page.loadEventFired`: SPA selector poll, content stability, challenge retry, and DOM extraction. |
 | `CRW_REQUEST__DEADLINE_MS_DEFAULT` | `300000` | Baseline per-request deadline (ms). With `auto_extend_deadline_for_ladder=true` (default), effective deadline is `max(this, ladder_min=~138s)` = 300s. Accommodates multi-request scenarios (multiple search query strings, `SEARXNG_ROUND_ROBIN=false` parallel fan-out, GitHub URL crawling) by giving queued requests in the per-host rate limiter enough budget to complete while serializing per-host to avoid 429s. No happy-path impact. See §1.6.1. |
 | `CRW_CRAWLER__REQUESTS_PER_SECOND` | `0.33` | Per-host rate limit (~3s interval). The rate-limit sleep is deducted from the request's deadline budget before navigation begins. See §1.6.1 for the compounding interaction with queued same-host requests. |
@@ -1494,8 +1521,8 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `EGRESS_PROXY_ALLOWED_CLIENT_HOSTS` | required except for literal-loopback listeners | Comma-separated dedicated bridge service names allowed to connect; an empty list is valid only when `PREFETCH_PROXY_HOST` is a literal loopback address. |
 | `EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS` | empty; helper Compose sets exact loopback port 8091 authorities | Exact `host:port` authorities allowed to connect directly despite normal private/cleartext blocking. Valid only for `onyx-helper`; this is not a general bypass list. |
-| `ONYX_AGENT_OUTBOUND_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
-| `ONYX_AGENT_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs in the prefetch proxy and CDP shim. When false, HTTP fetches fail closed with a message telling the agent to use HTTPS. |
+| `EGRESS_UPSTREAM_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
+| `EGRESS_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs in the prefetch proxy and CDP shim. When false, HTTP fetches fail closed with a message telling the agent to use HTTPS. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |
 | `PREFETCH_BLOCK_INTERNAL_HOSTS` | empty | Optional comma-separated additional internal hostnames to block by name without opening an upstream request. It cannot remove the built-in localhost, `*.docker.internal`, legacy Docker Desktop, or single-label Docker-name blocks. Subdomains of configured names are blocked too. |
 | `PREFETCH_PROXY_LOG_LEVEL` | `info` | Log level (debug/info/warning/error) |
@@ -1566,9 +1593,9 @@ HTTP prefetch through reqwest. The prefetch-blocking proxy handles those
 requests after destination validation:
 
 - plain HTTP non-search URLs are blocked by default unless
-  `ONYX_AGENT_ALLOW_HTTP_URLS=true`;
+  `EGRESS_ALLOW_HTTP_URLS=true`;
 - HTTPS non-search URLs are allowed as CONNECT tunnels;
-- if `ONYX_AGENT_OUTBOUND_PROXY_URL` is set, forwarded HTTPS requests and
+- if `EGRESS_UPSTREAM_PROXY_URL` is set, forwarded HTTPS requests and
   explicitly allowed HTTP requests use that upstream proxy;
 - if `MYST_VPN_ENABLED=true` and no explicit proxy is set, they leave through
   the Mysterium namespace;
@@ -1586,7 +1613,7 @@ This is not a new HTTPS behavior. Non-search HTTPS URLs have long used HTTP
 CONNECT through the prefetch proxy so CRW can perform its end-to-end TLS
 prefetch and detect PDFs/content type without MITM. Plain HTTP URLs are now
 blocked by default before this limitation can apply; if an operator sets
-`ONYX_AGENT_ALLOW_HTTP_URLS=true`, the same "usable prefetch can be final"
+`EGRESS_ALLOW_HTTP_URLS=true`, the same "usable prefetch can be final"
 property applies to those HTTP URLs too. The search-engine path is still
 different: configured search-engine hosts receive local `403` responses and
 therefore escalate to Obscura without a raw prefetch reaching the search
@@ -1616,7 +1643,7 @@ though, the same MIME probe can create a real double-hit:
 The prefetch-blocking proxy removes this double-hit for configured search
 engine hosts by returning a local `403` before the reqwest fetch leaves the
 stack. It does not remove the behavior for normal non-search HTTPS pages, or
-for plain HTTP pages when `ONYX_AGENT_ALLOW_HTTP_URLS=true`. Those pages may
+for plain HTTP pages when `EGRESS_ALLOW_HTTP_URLS=true`. Those pages may
 receive only the preliminary reqwest `GET` when CRW considers the result
 usable, or may receive both the reqwest `GET` and a browser navigation if CRW
 escalates afterward.

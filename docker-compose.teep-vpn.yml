@@ -8,9 +8,15 @@
 ## Docker network with direct port publishing and no VPN routing.
 
 services:
+  netns-holder:
+    networks:
+      teep-vpn-ingress:
+        aliases: [myst-client]
+
   teep:
     # Join the shared VPN namespace instead of the default network.
     network_mode: "service:netns-holder"
+    networks: !reset []
     # Remove direct port publishing — ports can't be published from a shared
     # netns. Host access is handled by host-teep-proxy below.
     ports: !reset []
@@ -21,6 +27,21 @@ services:
         condition: service_healthy
         restart: true
 
+  teep-service-gateway:
+    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["tcp-listen:8337,fork,reuseaddr", "tcp-connect:myst-client:8337"]
+    networks:
+      onyx-teep:
+        aliases: [teep]
+      teep-vpn-ingress: {}
+    depends_on:
+      teep: {condition: service_healthy}
+
   # Host-facing TCP bridge for teep. Forwards host traffic to the teep port
   # inside the shared netns-holder namespace (reachable via the myst-client
   # alias on the default network).
@@ -28,6 +49,7 @@ services:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
     command: tcp-listen:8337,fork,reuseaddr tcp-connect:myst-client:8337
+    networks: [routing-uplink]
     ports:
       - ${TEEP_HOST:+${TEEP_HOST}:}${HOST_PORT_TEEP:-8337}:8337
     depends_on:
@@ -44,3 +66,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 10s
+
+networks:
+  teep-vpn-ingress: {internal: true}

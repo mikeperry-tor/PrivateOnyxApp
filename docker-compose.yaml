@@ -12,9 +12,13 @@ name: onyx
 x-tcp-gateway: &tcp-gateway
   image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
   restart: unless-stopped
+  user: "65534:65534"
   read_only: true
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
+  sysctls:
+    net.ipv4.ip_forward: "0"
+    net.ipv6.conf.all.forwarding: "0"
 
 x-policy-proxy: &policy-proxy
   image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
@@ -41,25 +45,20 @@ services:
     image: ${NETNS_HOLDER_IMAGE:?NETNS_HOLDER_IMAGE must be set}
     command: ["sleep", "infinity"]
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
-      default:
-        aliases:
-          - myst-client
-          - api_server
-          - web_server
-          - background
-          - nginx
-          - code-interpreter
+      routing-uplink:
+        aliases: [myst-client]
         gw_priority: 1
       prefetch-policy-upstream:
         aliases: [myst-client]
       browser-policy-upstream:
         aliases: [myst-client]
-      mcp-browser-policy-upstream:
-        aliases: [myst-client]
-      onyx-crw-ingress: {}
-      onyx-searxng-ingress: {}
-      onyx-mcp-ingress: {}
+      onyx-public-broker:
+        aliases: [onyx-public-route-broker]
+      onyx-host-broker:
+        aliases: [onyx-host-route-broker]
 
   # VPN gateway for SearxNG-routed workloads
   myst-client:
@@ -75,8 +74,6 @@ services:
     # VPN routing is active in this namespace.
     ports: []
     environment:
-      # Optional LAN access bypass for local inference APIs / services.
-      MYST_VPN_ALLOW_LAN_BYPASS: "${MYST_VPN_ALLOW_LAN_BYPASS:-false}"
       # WireGuard MTU override to fix HTTPS timeouts on path MTU constraints
       # Set to 1280 to work around ISP upstream path MTU constraints
       MYST_VPN_WIREGUARD_MTU: "${MYST_VPN_WIREGUARD_MTU:-1280}"
@@ -195,7 +192,7 @@ services:
       - "/data/obscura"
     environment:
       # Hard ceiling on a single Page.navigate. Obscura's default is 30s,
-      # but when ONYX_AGENT_OUTBOUND_PROXY_URL routes through Tor or a slow VPN, page loads can
+      # but when EGRESS_UPSTREAM_PROXY_URL routes through Tor or a slow VPN, page loads can
       # take up to 60s. Set to 45000 to give obscura enough headroom for
       # the waitUntil=networkidle2 condition (injected by the CDP shim) to
       # resolve on slow proxy paths. Must be ≤ CRW's chrome_timeout_ms
@@ -235,51 +232,6 @@ services:
       start_period: 15s
     depends_on:
       obscura-egress-bridge:
-        condition: service_healthy
-
-  # Obscura MCP server: exposes obscura's browser automation tools
-  # (browser_navigate, browser_snapshot, browser_click, browser_fill, etc.)
-  # as a Model Context Protocol HTTP server that Onyx chat agents can use
-  # directly. Runs a separate obscura process from the CDP `serve` instance
-  # above so crw's browser driving is not disrupted.
-  #
-  # The HTTP transport has no built-in auth. Its dedicated control network is
-  # exposed only through a narrow Onyx-side gateway.
-  #
-  # See: https://github.com/h4ckf0r0day/obscura/blob/main/docs/Use-the-MCP-server.md
-  obscura-mcp:
-    image: ${OBSCURA_IMAGE:?OBSCURA_IMAGE must be set}
-    restart: unless-stopped
-    networks: [obscura-mcp-control, mcp-browser-egress]
-    command:
-      - "mcp"
-      - "--http"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "9223"
-      - "--stealth"
-      - "--proxy"
-      - "http://obscura-mcp-egress-bridge:3128"
-    environment:
-      # Obscura 0.1.10's MCP constructor does not propagate the CLI
-      # --allow-private-network flag, but its reqwest SSRF resolver applies to
-      # the private proxy hostname itself. The env form permits that mandatory
-      # bridge lookup. Network isolation plus the final-hop browser policy
-      # remains the destination-security boundary.
-      OBSCURA_ALLOW_PRIVATE_NETWORK: "true"
-    healthcheck:
-      # The obscura image is distroless. Probe the MCP HTTP endpoint via the
-      # obscura binary's own `fetch` subcommand. The MCP server responds to
-      # GET / with a JSON-RPC error (method not found) or an SSE stream —
-      # either way a non-empty response means the server is up.
-      test: ["CMD", "/obscura", "fetch", "http://127.0.0.1:9223/", "--dump", "original", "--allow-private-network", "--quiet"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 15s
-    depends_on:
-      obscura-mcp-egress-bridge:
         condition: service_healthy
 
   # CDP WebSocket proxy shim between CRW and obscura.
@@ -336,7 +288,7 @@ services:
       OBSCURA_BROWSER_WAIT_UNTIL_SEARCH_HOSTS: "google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com"
       # Fail closed for cleartext HTTP browser navigations. The prefetch proxy
       # enforces the same setting before CRW can fetch http:// URLs directly.
-      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
+      EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
       # Interval for periodic cookie clearing on obscura (seconds). In the
       # normal wrapper path CRW uses Target.createTarget on obscura's default
       # context, so cookies can persist between CDP WebSocket connections.
@@ -381,7 +333,7 @@ services:
   # This proxy intercepts CRW's HTTP prefetch requests:
   #  - Search engine URLs → 403 immediately (no network request)
   #  - Internal/private targets → 403 immediately
-  #  - Other plain HTTP URLs → 403 unless ONYX_AGENT_ALLOW_HTTP_URLS=true
+  #  - Other plain HTTP URLs → 403 unless EGRESS_ALLOW_HTTP_URLS=true
   #  - Other HTTPS URLs → CONNECT tunnel through the configured egress path
   #
   # CRW points HTTP_PROXY/HTTPS_PROXY at a narrow bridge to this proxy. We
@@ -389,7 +341,7 @@ services:
   # the CDP shim strips proxyServer from Target.createBrowserContext so
   # obscura uses its own --proxy flag, not this proxy.
   #
-  # When ONYX_AGENT_OUTBOUND_PROXY_URL is set (e.g., Tor SOCKS proxy), this
+  # When EGRESS_UPSTREAM_PROXY_URL is set (e.g., Tor SOCKS proxy), this
   # proxy routes its own upstream requests through that proxy. It also blocks
   # internal/private destinations without opening CONNECT or HTTP forwarding
   # paths; target DNS resolution checks are performed only when no explicit
@@ -411,14 +363,14 @@ services:
       EGRESS_PROXY_POLICY: prefetch
       EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: crw-prefetch-bridge
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
-      # Upstream proxy (ONYX_AGENT_OUTBOUND_PROXY_URL from .env.wrapper). When set, the proxy
+      # Upstream proxy (EGRESS_UPSTREAM_PROXY_URL from .env.wrapper). When set, the proxy
       # routes its own upstream requests through this upstream.
       # Supports http://, https://, socks5://, socks5h://
-      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
       ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
       # Cleartext http:// URL policy. The CDP shim enforces the same setting
       # for browser navigations after CRW escalates to Obscura.
-      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
+      EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
       # Comma-separated list of search engine hostnames to block immediately
       # (return 403 without any network request).
       PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
@@ -455,9 +407,9 @@ services:
       EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: obscura-egress-bridge
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
       PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
-      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
+      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
       ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
-      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
+      EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
       PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
       PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
     depends_on:
@@ -467,57 +419,110 @@ services:
         condition: service_healthy
         restart: true
 
-  mcp-browser-egress-proxy:
-    <<: *policy-proxy
+  # Authoritative final connections remain in the trusted routing namespace.
+  # These are authenticated stream brokers, not HTTP/SOCKS proxies.
+  onyx-public-route-broker:
+    image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
+    restart: unless-stopped
+    network_mode: "service:netns-holder"
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      EGRESS_BROKER_HOST: onyx-public-route-broker
+      EGRESS_BROKER_PORT: "3140"
+      EGRESS_BROKER_ALLOWED_CLIENT_HOST: onyx-public-egress-policy
+      EGRESS_ROUTE_BROKER_CREDENTIAL: "${ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL:?ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL must be set}"
+      EGRESS_ROUTE_CLASS: public
+      EGRESS_ALLOW_RFC1918: "false"
+      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
+      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
+    volumes:
+      - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
+      - ./crw/route_broker.py:/app/route_broker.py:ro
+    command: ["python", "-u", "/app/route_broker.py"]
+    healthcheck:
+      test: ["CMD", "python", "/app/route_broker.py", "--check-ready"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      myst-client: {condition: service_healthy}
+
+  onyx-host-route-broker:
+    extends: onyx-public-route-broker
+    environment:
+      EGRESS_BROKER_HOST: onyx-host-route-broker
+      EGRESS_BROKER_PORT: "3141"
+      EGRESS_BROKER_ALLOWED_CLIENT_HOST: onyx-host-egress-policy
+      EGRESS_ROUTE_BROKER_CREDENTIAL: "${ONYX_HOST_ROUTE_BROKER_CREDENTIAL:?ONYX_HOST_ROUTE_BROKER_CREDENTIAL must be set}"
+      EGRESS_ROUTE_CLASS: host
+      EGRESS_ALLOW_RFC1918: "${EGRESS_ALLOW_RFC1918:-false}"
+      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
+      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
+      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
+
+  # Separate policy namespaces preserve the public/host security boundary.
+  onyx-public-egress-policy:
+    image: ${PYTHON_SLIM_IMAGE:?PYTHON_SLIM_IMAGE must be set}
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.forwarding: "0"
+    networks: [onyx-public-policy-upstream, onyx-public-broker]
     environment:
       PREFETCH_PROXY_HOST: "0.0.0.0"
-      PREFETCH_PROXY_PORT: "3131"
-      EGRESS_PROXY_POLICY: browser
-      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: obscura-mcp-egress-bridge
-      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
-      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
-      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
-      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
-      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
-      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
-      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
-    depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
-
-  # HTTP(S) egress for trusted Onyx backend helpers. The listener is available
-  # only on loopback in the shared namespace, so it is not another bridge for
-  # restricted components. Onyx resolves only this loopback endpoint; the
-  # policy performs target DNS through Myst or delegates names to the explicit
-  # upstream proxy. Internal service URLs use the stack-owned bypasses in
-  # onyx/helper-egress.env.
-  onyx-helper-egress-proxy:
-    <<: *policy-proxy
-    environment:
-      PREFETCH_PROXY_HOST: "127.0.0.1"
-      PREFETCH_PROXY_PORT: "3132"
+      PREFETCH_PROXY_PORT: "3128"
       EGRESS_PROXY_POLICY: onyx-helper
-      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: ""
-      # Playwright deliberately forces loopback requests through its configured
-      # proxy. Permit only the local document server's exact listener and keep
-      # every other internal/private proxy target blocked.
-      EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS: "localhost:8091,127.0.0.1:8091,[::1]:8091"
-      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
-      PREFETCH_PROXY_LOG_LEVEL: "${PREFETCH_PROXY_LOG_LEVEL:-info}"
-      ONYX_AGENT_OUTBOUND_PROXY_URL: "${ONYX_AGENT_OUTBOUND_PROXY_URL:-}"
-      ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
-      ONYX_AGENT_ALLOW_HTTP_URLS: "${ONYX_AGENT_ALLOW_HTTP_URLS:-false}"
-      PREFETCH_BLOCK_HOSTS: "${PREFETCH_BLOCK_HOSTS:-google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com}"
+      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: onyx-public-egress-bridge
+      EGRESS_ROUTE_CLASS: public
+      EGRESS_POLICY_DEFER_DNS: "true"
+      EGRESS_ROUTE_BROKER_HOST: onyx-public-route-broker
+      EGRESS_ROUTE_BROKER_PORT: "3140"
+      EGRESS_ROUTE_BROKER_CREDENTIAL: "${ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL:?ONYX_PUBLIC_ROUTE_BROKER_CREDENTIAL must be set}"
+      MYST_VPN_ENABLED: "false"
+      EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
       PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
+    volumes:
+      - ./crw/prefetch_blocking_proxy.py:/app/prefetch_blocking_proxy.py:ro
+    command: ["python", "-u", "/app/prefetch_blocking_proxy.py"]
+    healthcheck:
+      test: ["CMD", "python", "/app/prefetch_blocking_proxy.py", "--check-ready"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 10s
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
+      onyx-public-route-broker: {condition: service_healthy}
+
+  onyx-host-egress-policy:
+    extends: onyx-public-egress-policy
+    networks: !override [onyx-host-policy-upstream, onyx-host-broker]
+    environment:
+      PREFETCH_PROXY_HOST: "0.0.0.0"
+      PREFETCH_PROXY_PORT: "3128"
+      EGRESS_PROXY_POLICY: onyx-helper
+      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: onyx-host-egress-bridge
+      EGRESS_ROUTE_CLASS: host
+      EGRESS_POLICY_DEFER_DNS: "true"
+      EGRESS_ROUTE_BROKER_HOST: onyx-host-route-broker
+      EGRESS_ROUTE_BROKER_PORT: "3141"
+      EGRESS_ROUTE_BROKER_CREDENTIAL: "${ONYX_HOST_ROUTE_BROKER_CREDENTIAL:?ONYX_HOST_ROUTE_BROKER_CREDENTIAL must be set}"
+      EGRESS_ALLOW_RFC1918: "${EGRESS_ALLOW_RFC1918:-false}"
+      MYST_VPN_ENABLED: "false"
+      EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
+      PREFETCH_BLOCK_INTERNAL_HOSTS: "${PREFETCH_BLOCK_INTERNAL_HOSTS:-}"
+    depends_on: !override
+      onyx-host-route-broker: {condition: service_healthy}
 
   crw-prefetch-bridge:
     <<: *tcp-gateway
@@ -545,12 +550,25 @@ services:
       timeout: 5s
       retries: 3
 
-  obscura-mcp-egress-bridge:
+  onyx-public-egress-bridge:
     <<: *tcp-gateway
-    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3131"]
-    networks: [mcp-browser-egress, mcp-browser-policy-upstream]
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:onyx-public-egress-policy:3128"]
+    networks: [onyx-public-egress, onyx-public-policy-upstream]
     depends_on:
-      mcp-browser-egress-proxy:
+      onyx-public-egress-policy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n' | socat -T 3 STDIO,ignoreeof TCP:127.0.0.1:3128,connect-timeout=3 | grep -q '^HTTP/1.1 403'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  onyx-host-egress-bridge:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:onyx-host-egress-policy:3128"]
+    networks: [onyx-host-egress, onyx-host-policy-upstream]
+    depends_on:
+      onyx-host-egress-policy:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "printf 'CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n' | socat -T 3 STDIO,ignoreeof TCP:127.0.0.1:3128,connect-timeout=3 | grep -q '^HTTP/1.1 403'"]
@@ -563,7 +581,7 @@ services:
   crw-service-gateway:
     <<: *tcp-gateway
     command: ["tcp-listen:3010,fork,reuseaddr", "tcp-connect:crw:3010"]
-    networks: [onyx-crw-ingress, crw-api]
+    networks: [onyx-backend, crw-api]
     depends_on:
       crw:
         condition: service_healthy
@@ -606,33 +624,12 @@ services:
   searxng-service-gateway:
     <<: *tcp-gateway
     command: ["tcp-listen:8888,fork,reuseaddr", "tcp-connect:searxng-core:8888"]
-    networks: [onyx-searxng-ingress, searxng-api]
+    networks: [onyx-backend, searxng-api]
     depends_on:
       searxng-core:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "printf 'GET / HTTP/1.1\r\nHost: searxng\r\nConnection: close\r\n\r\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:8888,connect-timeout=5 | grep -Eq '^HTTP/1[.][01] 200'"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s
-
-  obscura-mcp-gateway:
-    <<: *tcp-gateway
-    command: ["tcp-listen:9223,fork,reuseaddr", "tcp-connect:obscura-mcp:9223"]
-    networks:
-      # Onyx's frontend uses Yup's public-style URL validator, which rejects
-      # single-label Docker service names. The dotted alias remains scoped to
-      # this internal ingress network and is covered by the final-hop policy's
-      # non-removable *.docker.internal block.
-      onyx-mcp-ingress:
-        aliases: [obscura-mcp-gateway.docker.internal]
-      obscura-mcp-control: {}
-    depends_on:
-      obscura-mcp:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "printf 'GET / HTTP/1.1\r\nHost: obscura-mcp\r\nConnection: close\r\n\r\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:9223,connect-timeout=5 | grep -q '^HTTP/'"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -668,7 +665,7 @@ services:
       # prefetch and returns 403 for search-engine URLs, forcing CRW to escalate
       # to obscura for those pages. Non-search HTTPS URLs are tunneled through
       # the configured egress path; plain HTTP URLs are blocked unless
-      # ONYX_AGENT_ALLOW_HTTP_URLS=true.
+      # EGRESS_ALLOW_HTTP_URLS=true.
       #
       # We do NOT set render_js_default=true because that mode runs the HTTP
       # prefetch unconditionally and does NOT escalate to CDP on prefetch
@@ -695,7 +692,7 @@ services:
       #
       # The proxy returns 403 for search engine URLs, forcing CRW to escalate
       # to the CDP renderer (obscura). Other HTTPS URLs are tunneled. Plain
-      # HTTP URLs are blocked unless ONYX_AGENT_ALLOW_HTTP_URLS=true.
+      # HTTP URLs are blocked unless EGRESS_ALLOW_HTTP_URLS=true.
       HTTPS_PROXY: "http://crw-prefetch-bridge:3128"
       HTTP_PROXY: "http://crw-prefetch-bridge:3128"
       # Exclude the explicit CDP and search peers from the prefetch proxy.
@@ -704,7 +701,7 @@ services:
       # for completeness.
       NO_PROXY: "127.0.0.1,localhost,::1,cdp-shim,searxng-core"
       # Per-page navigation timeout for the chrome (obscura) renderer tier.
-      # CRW's default page_timeout_ms is 30s, but when ONYX_AGENT_OUTBOUND_PROXY_URL routes
+      # CRW's default page_timeout_ms is 30s, but when EGRESS_UPSTREAM_PROXY_URL routes
       # through Tor or a slow VPN, obscura's waitUntil=networkidle2 can
       # take up to 45s (OBSCURA_NAV_TIMEOUT_MS). This must be ≥
       # OBSCURA_NAV_TIMEOUT_MS so CRW's page_timeout doesn't fire before
@@ -795,34 +792,10 @@ services:
       searxng-core:
         condition: service_healthy
 
-  # Host-facing TCP bridges. WebUI traffic targets the trusted namespace;
-  # SearXNG diagnostics target its restricted API network directly.
-  host-web-proxy:
-    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
-    restart: unless-stopped
-    command: tcp-listen:3000,fork,reuseaddr tcp-connect:myst-client:80
-    ports:
-      - "${HOST_PORT_ONYX_WEBUI:-3000}:3000"
-    depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_started
-        restart: true
-      nginx:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "printf 'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:3000,connect-timeout=5 | grep -Eq '^HTTP/1[.][01] [23][0-9][0-9]'"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s
-
   host-searxng-proxy:
-    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
-    restart: unless-stopped
-    command: tcp-listen:8888,fork,reuseaddr tcp-connect:searxng-core:8888
-    networks: [default, searxng-api]
+    <<: *tcp-gateway
+    command: ["tcp-listen:8888,fork,reuseaddr", "tcp-connect:searxng-core:8888"]
+    networks: [searxng-api, host-publish]
     ports:
       - ${SEARXNG_HOST:+${SEARXNG_HOST}:}${HOST_PORT_SEARXNG:-8080}:8888
     depends_on:
@@ -839,6 +812,7 @@ services:
   autoheal:
     image: ${AUTOHEAL_IMAGE:?AUTOHEAL_IMAGE must be set}
     restart: unless-stopped
+    network_mode: none
     environment:
       AUTOHEAL_CONTAINER_LABEL: autoheal
       AUTOHEAL_INTERVAL: 15
@@ -850,21 +824,44 @@ services:
       myst-client:
         condition: service_started
 
-  # Optional Tailscale Funnel bridge for exposing the Onyx WebUI publicly.
-  # Default: stays on the default compose network so it does not inherit
-  # Myst VPN routing from netns-holder (keeps Tailscale identity separate
-  # from the VPN exit IP).
+  # Optional fixed HTTP gateway for Tailscale ingress. Profiles keep both the
+  # gateway and Funnel container structurally absent when the feature is off.
+  tailscale-frontend-gateway:
+    image: ${BASE_IMAGE_REGISTRY:-docker.io}/library/nginx:1.25.5-alpine
+    profiles: [tailscale]
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [tailscale-ingress, onyx-frontend]
+    volumes:
+      - ./tailscale/frontend-gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    tmpfs:
+      - /var/cache/nginx:uid=101,gid=101,mode=0755
+      - /var/run:uid=101,gid=101,mode=0755
+      - /tmp
+    depends_on:
+      nginx: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # Set TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true in .env.wrapper to route
   # Tailscale through the Mysterium VPN namespace (applies
   # docker-compose.tailscale-vpn.yml via Makefile layering).
   tailscale-funnel:
     image: ${TAILSCALE_IMAGE:?TAILSCALE_IMAGE must be set}
+    profiles: [tailscale]
     entrypoint: ["/usr/local/bin/tailscale-entrypoint.sh"]
     restart: unless-stopped
+    networks: [tailscale-ingress, tailscale-uplink]
     environment:
       TAILSCALE_FUNNEL_ENABLED: "${TAILSCALE_FUNNEL_ENABLED:-false}"
-      TAILSCALE_FUNNEL_TARGET_HOST: "host-web-proxy"
-      TAILSCALE_FUNNEL_TARGET_PORT: "3000"
+      TAILSCALE_FUNNEL_TARGET_HOST: "tailscale-frontend-gateway"
+      TAILSCALE_FUNNEL_TARGET_PORT: "8080"
       TAILSCALE_FUNNEL_HTTPS_PORT: "443"
       TS_AUTHKEY: "${TAILSCALE_FUNNEL_AUTHKEY:-}"
       TS_HOSTNAME: "${TAILSCALE_FUNNEL_HOSTNAME:-onyx-funnel}"
@@ -877,7 +874,7 @@ services:
       - ./docker-data/tailscale:/var/lib/tailscale
       - ./tailscale/entrypoint.sh:/usr/local/bin/tailscale-entrypoint.sh:ro
     depends_on:
-      host-web-proxy:
+      tailscale-frontend-gateway:
         condition: service_healthy
     healthcheck:
       test:
@@ -890,22 +887,23 @@ services:
       retries: 3
       start_period: 15s
 
-  # Onyx app tier (routed through the shared netns-holder namespace)
+  # Onyx application tier. Every attached network is internal; external and
+  # host-local HTTP(S) access is available only through fixed policy bridges.
   api_server:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: api_server
     image: onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
-    network_mode: "service:netns-holder"
+    networks:
+      [onyx-frontend, onyx-backend, onyx-data, onyx-public-egress, onyx-host-egress, onyx-teep]
     # Shared, stack-owned internal-service bypasses. This file is deliberately
     # not part of the user-facing .env.wrapper configuration surface.
     env_file:
       - path: ./onyx/helper-egress.env
         required: true
     environment:
-      # code-interpreter runs on 7000 in the shared netns (8000 is taken by background prometheus).
-      CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
+      CODE_INTERPRETER_BASE_URL: "http://code-interpreter:8000"
       # Generated by the Makefile for each stack start. Existing auth cookies,
       # password-reset tokens, and email-verification tokens expire on restart.
       USER_AUTH_SECRET: "${USER_AUTH_SECRET:?USER_AUTH_SECRET must be set}"
@@ -934,9 +932,9 @@ services:
       CAPTCHA_ENABLED: "false"
       RECAPTCHA_SECRET_KEY: ""
       # Controls Web connector SSRF-style URL checks.
-      OPEN_URL_VALIDATE_SSRF: ${ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL:-true}
-      MCP_SERVER_ALLOW_PRIVATE_NETWORK: ${ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK:-true}
-      MCP_SERVER_ALLOW_LOOPBACK: ${ONYX_SECURITY_SSRF_ALLOW_LOOPBACK:-false}
+      OPEN_URL_VALIDATE_SSRF: "true"
+      MCP_SERVER_ALLOW_PRIVATE_NETWORK: "true"
+      MCP_SERVER_ALLOW_LOOPBACK: "false"
       # Wrapper-level alias for Onyx's asymmetric query prefix setting.
       ASYM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-}"
       # Interactive chat tool-call loop cap (per request).
@@ -958,13 +956,16 @@ services:
       # code-interpreter file API that receives them. This is intentionally
       # separate from the post-fetch open_url character budgets above.
       ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB: "${ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB:-1000}"
-      # Route environment-aware Onyx HTTP clients through the loopback final-hop
-      # policy. The bypass is restricted to trusted stack/host endpoints.
-      HTTP_PROXY: "http://127.0.0.1:3132"
-      HTTPS_PROXY: "http://127.0.0.1:3132"
-      http_proxy: "http://127.0.0.1:3132"
-      https_proxy: "http://127.0.0.1:3132"
-      ONYX_HELPER_HTTP_PROXY_URL: "http://127.0.0.1:3132"
+      HTTP_PROXY: "http://onyx-public-egress-bridge:3128"
+      HTTPS_PROXY: "http://onyx-public-egress-bridge:3128"
+      http_proxy: "http://onyx-public-egress-bridge:3128"
+      https_proxy: "http://onyx-public-egress-bridge:3128"
+      ONYX_HELPER_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
+      ONYX_MCP_PUBLIC_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
+      ONYX_MCP_HOST_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
+      ONYX_WEB_CONNECTOR_PUBLIC_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
+      ONYX_WEB_CONNECTOR_HOST_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
+      ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
       # When true, previous-turn tool responses are preserved in future LLM
       # context instead of being replaced with Onyx's generic placeholder.
       ONYX_AGENT_PRESERVE_TOOL_RESULTS: "${ONYX_AGENT_PRESERVE_TOOL_RESULTS:-true}"
@@ -1001,11 +1002,6 @@ services:
       retries: 3
       start_period: 240s
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
       # crw is optional for Onyx, but wiring
       # the dependency avoids a first-request race if Onyx's Web Search
       # connector is configured to point at crw's /v1/scrape endpoint.
@@ -1015,9 +1011,9 @@ services:
         condition: service_healthy
       searxng-service-gateway:
         condition: service_healthy
-      obscura-mcp-gateway:
+      onyx-public-egress-bridge:
         condition: service_healthy
-      onyx-helper-egress-proxy:
+      onyx-host-egress-bridge:
         condition: service_healthy
     volumes: !override
       - ./docker-data/file-system:/app/file-system
@@ -1032,7 +1028,7 @@ services:
       service: web_server
     image: onyxdotapp/onyx-web-server:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
-    network_mode: "service:netns-holder"
+    networks: [onyx-frontend]
     environment:
       # Disable frontend analytics/instrumentation and cloud billing flows.
       NEXT_PUBLIC_CLOUD_ENABLED: "false"
@@ -1046,24 +1042,13 @@ services:
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ""
       # Minimum password length enforced by the backend and surfaced in the UI.
       PASSWORD_MIN_LENGTH: "8"
-    # In shared netns mode, Next.js may bind eth0 only (not loopback), so
-    # healthcheck probes the namespace IP instead of 127.0.0.1.
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "ip=$$(hostname -i | awk '{print $1}'); wget -q -T 5 -O /dev/null http://$$ip:3000/ || exit 1",
-        ]
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:3000/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
       api_server:
         condition: service_healthy
 
@@ -1071,7 +1056,7 @@ services:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: nginx
-    network_mode: "service:netns-holder"
+    networks: [onyx-frontend]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/ || exit 1"]
       interval: 30s
@@ -1080,28 +1065,37 @@ services:
       start_period: 30s
     ports: !reset []
     depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
       api_server:
         condition: service_healthy
       web_server:
         condition: service_healthy
+
+  # Docker Desktop does not activate published ports for containers attached
+  # only to internal networks. Keep nginx isolated and publish it through one
+  # hardened fixed-destination forwarder on a non-masqueraded host edge.
+  host-webui-publisher:
+    <<: *tcp-gateway
+    command: ["tcp-listen:3000,fork,reuseaddr", "tcp-connect:nginx:80"]
+    networks: [onyx-frontend, host-publish]
+    ports:
+      - ${ONYX_WEBUI_HOST:+${ONYX_WEBUI_HOST}:}${HOST_PORT_ONYX_WEBUI:-3000}:3000
+    depends_on:
+      nginx: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'GET / HTTP/1.0\r\nHost: localhost\r\n\r\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:3000,connect-timeout=5 | grep -q '^HTTP/'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   code-interpreter:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: code-interpreter
     image: onyxdotapp/code-interpreter:${CODE_INTERPRETER_IMAGE_TAG:?CODE_INTERPRETER_IMAGE_TAG must be set}
-    network_mode: "service:netns-holder"
-    # Port 8000 is occupied in the shared myst netns by background's Prometheus
-    # metrics server (hardcoded start_http_server(8000) in slack/listener.py).
-    # Redirect code-interpreter to 7000 and point api_server/background at it.
+    networks: [onyx-backend]
     environment:
-      PORT: "7000"
-      CODE_INTERPRETER_BASE_URL: "http://localhost:7000"
+      PORT: "8000"
+      CODE_INTERPRETER_BASE_URL: "http://code-interpreter:8000"
       # Executor pod resource limits (defaults are tight: 256MB RAM, 5s CPU,
       # 1MB output). Raise them for data analysis / matplotlib workloads.
       MEMORY_LIMIT_MB: "${ONYX_CODE_INTERPRETER_MEMORY_LIMIT_MB:-512}"
@@ -1109,12 +1103,7 @@ services:
       MAX_OUTPUT_BYTES: "${ONYX_CODE_INTERPRETER_MAX_OUTPUT_BYTES:-20000000}"
       MAX_EXEC_TIMEOUT_MS: "${ONYX_CODE_INTERPRETER_MAX_EXEC_TIMEOUT_MS:-120000}"
       MAX_FILE_SIZE_MB: "${ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB:-1000}"
-    depends_on:
-      netns-holder:
-        condition: service_started
-      myst-client:
-        condition: service_healthy
-        restart: true
+    depends_on: !reset {}
 
   # Teep: private verified LLM inference proxy.
   # Default: runs on the default Docker network (no VPN). Teep traffic egresses
@@ -1125,6 +1114,7 @@ services:
   teep:
     image: ${TEEP_IMAGE:-13rac1/teep:${TEEP_REF:?TEEP_REF must be set}}
     restart: unless-stopped
+    networks: [onyx-teep, teep-uplink]
     ports:
       - ${TEEP_HOST:+${TEEP_HOST}:}${HOST_PORT_TEEP:-8337}:8337
     environment:
@@ -1149,14 +1139,32 @@ services:
       service: relational_db
     volumes: !override
       - ./docker-data/postgres:/var/lib/postgresql/data
+    networks: [onyx-data]
 
 networks:
+  routing-uplink: {}
+  teep-uplink: {}
+  tailscale-uplink: {}
+  # Port publication requires a non-internal Docker edge on Docker Desktop.
+  # Only hardened fixed-destination publishers join it. Disabling masquerade
+  # prevents it from becoming a general Internet-NAT path.
+  host-publish:
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+      com.docker.network.bridge.enable_icc: "false"
+  tailscale-ingress: {internal: true}
+  onyx-frontend: {internal: true}
+  onyx-backend: {internal: true}
+  onyx-data: {internal: true}
+  onyx-teep: {internal: true}
+  onyx-public-egress: {internal: true}
+  onyx-host-egress: {internal: true}
+  onyx-public-policy-upstream: {internal: true}
+  onyx-host-policy-upstream: {internal: true}
+  onyx-public-broker: {internal: true}
+  onyx-host-broker: {internal: true}
   prefetch-policy-upstream: {internal: true}
   browser-policy-upstream: {internal: true}
-  mcp-browser-policy-upstream: {internal: true}
-  onyx-crw-ingress: {internal: true}
-  onyx-searxng-ingress: {internal: true}
-  onyx-mcp-ingress: {internal: true}
   crw-api: {internal: true}
   crw-cdp: {internal: true}
   crw-search: {internal: true}
@@ -1165,8 +1173,6 @@ networks:
   searxng-valkey: {internal: true}
   obscura-control: {internal: true}
   browser-egress: {internal: true}
-  obscura-mcp-control: {internal: true}
-  mcp-browser-egress: {internal: true}
 
 volumes:
   api_server_logs:
