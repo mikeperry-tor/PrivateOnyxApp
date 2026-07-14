@@ -10,6 +10,67 @@ myst_cli() {
   $MYST cli --agreed-terms-and-conditions "$@"
 }
 
+is_rfc1918_ipv4_literal() {
+  _value="$1"
+  case "${_value}" in
+    *[!0-9.]* | .* | *. | *..*) return 1 ;;
+  esac
+  OLDIFS="$IFS"
+  IFS='.'
+  set -- ${_value}
+  IFS="$OLDIFS"
+  [ "$#" -eq 4 ] || return 1
+  for _octet in "$@"; do
+    [ "${_octet}" -le 255 ] 2>/dev/null || return 1
+  done
+  case "$1" in
+    10) return 0 ;;
+    192) [ "$2" -eq 168 ] ; return ;;
+    172) [ "$2" -ge 16 ] && [ "$2" -le 31 ] ; return ;;
+  esac
+  return 1
+}
+
+# A configured RFC1918 proxy is routing infrastructure, not permission for
+# arbitrary RFC1918 targets. Give only an IPv4-literal proxy endpoint an exact
+# host route; named operator-local proxies continue to require the explicit
+# RFC1918 mode so their complete system-DNS answer set can be classified.
+if [ -n "${EGRESS_UPSTREAM_PROXY_URL:-}" ]; then
+  case "${EGRESS_UPSTREAM_PROXY_URL}" in
+    http://* | https://* | socks5://* | socks5h://*)
+      _proxy_authority="${EGRESS_UPSTREAM_PROXY_URL#*://}"
+      ;;
+    *) _proxy_authority="" ;;
+  esac
+  case "${_proxy_authority}" in
+    */* | *\?* | *\#*) _proxy_authority="" ;;
+  esac
+  _proxy_authority="${_proxy_authority##*@}"
+  case "${_proxy_authority}" in
+    \[*\]:*) _proxy_host="" ;;
+    *:*)
+      _proxy_host="${_proxy_authority%:*}"
+      _proxy_port="${_proxy_authority##*:}"
+      case "${_proxy_port}" in
+        "" | *[!0-9]*) _proxy_host="" ;;
+        *)
+          [ "${_proxy_port}" -ge 1 ] 2>/dev/null || _proxy_host=""
+          [ "${_proxy_port}" -le 65535 ] 2>/dev/null || _proxy_host=""
+          ;;
+      esac
+      ;;
+    *) _proxy_host="" ;;
+  esac
+  if [ -n "${_proxy_host}" ] && is_rfc1918_ipv4_literal "${_proxy_host}"; then
+    if [ -n "${MYST_ROUTE_EXEMPT_CIDRS:-}" ]; then
+      MYST_ROUTE_EXEMPT_CIDRS="${MYST_ROUTE_EXEMPT_CIDRS},${_proxy_host}/32"
+    else
+      MYST_ROUTE_EXEMPT_CIDRS="${_proxy_host}/32"
+    fi
+    echo "Configured RFC1918 upstream proxy: added exact route exemption"
+  fi
+fi
+
 # Optional LAN access: append common private network CIDRs to route exemptions.
 # When EGRESS_ALLOW_RFC1918=true, LMStudio and other local inference APIs can be
 # reached without VPN routing, while remaining connections stay fail-closed.

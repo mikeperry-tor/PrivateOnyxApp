@@ -478,8 +478,10 @@ ports published directly from containers attached only to internal networks,
 so `host-searxng-proxy` remains the portable diagnostic publisher. Preserve
 `host-teep-proxy` in the Teep-through-VPN layer: the Teep service cannot publish
 a port while sharing `netns-holder`, and the narrow publisher avoids weakening
-Teep or Onyx network placement. Retain service-level health checks for the
-underlying services and publishers.
+Teep or Onyx network placement. It remains a fixed-destination,
+numeric-nonroot, read-only publisher with all capabilities dropped,
+`no-new-privileges`, and IP forwarding disabled. Retain service-level health
+checks for the underlying services and publishers.
 
 Make optional behavior structurally optional:
 
@@ -745,6 +747,13 @@ route, as documented in
 - remote target resolution through `socks5h` or equivalent proxy semantics
   when an upstream proxy is configured; and
 - the explicitly selected system/no-VPN resolver only in explicit no-VPN mode.
+
+The configured upstream proxy endpoint itself follows the prerequisite's
+bootstrap rules: in VPN mode public proxy names use Myst provider DNS and
+public proxy addresses use the Myst route; exact `host.docker.internal` uses
+the narrow host route; an RFC1918 IPv4 literal receives only an exact `/32`
+proxy-endpoint route; and system resolution of the three operator-local
+suffixes requires `EGRESS_ALLOW_RFC1918=true`.
 
 Only the internal CDP service name is resolved through Docker DNS. User target
 hostnames must not appear there.
@@ -1564,8 +1573,8 @@ Retain the prerequisite's exact `host.docker.internal` exception and its
 `.local`/`.internal`/`.home.arpa` names only on the host-capable Onyx policy
 listener and broker. Both exceptions include plain HTTP when general cleartext
 URLs are disabled, with the broker enforcing the decision after authoritative
-DNS validation. Retain the existing host-only upstream-proxy bootstrap
-exception only for the configured proxy endpoint.
+DNS validation. Retain the existing endpoint-scoped upstream-proxy bootstrap
+routes only for the configured proxy endpoint.
 Never add any of these exceptions to the public Onyx, browser, or executor
 destination policy.
 

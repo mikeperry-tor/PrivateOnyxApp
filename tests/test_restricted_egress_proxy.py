@@ -759,6 +759,59 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "93.184.216.34", 8080, ssl=None, server_hostname=None
         )
 
+    async def test_public_proxy_name_still_uses_myst_dns_with_rfc1918_enabled(
+        self,
+    ) -> None:
+        module = _load_module(
+            env_overrides={
+                "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080",
+                "EGRESS_ALLOW_RFC1918": "true",
+            }
+        )
+        vpn_resolver = AsyncMock(return_value={"93.184.216.34"})
+        system_resolver = AsyncMock()
+        open_connection = AsyncMock(return_value=(object(), object()))
+        with patch.object(
+            module, "_resolve_target_host", vpn_resolver
+        ), patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module.asyncio, "open_connection", open_connection):
+            await module._open_http_proxy_connection(
+                "proxy.example", 1080, "socks5h"
+            )
+
+        vpn_resolver.assert_awaited_once_with("proxy.example", 1080)
+        system_resolver.assert_not_awaited()
+        open_connection.assert_awaited_once_with(
+            "93.184.216.34", 1080, ssl=None, server_hostname=None
+        )
+
+    async def test_global_literal_proxy_uses_namespace_route_without_dns(
+        self,
+    ) -> None:
+        module = _load_module(
+            env_overrides={
+                "EGRESS_UPSTREAM_PROXY_URL": "socks5h://93.184.216.34:1080"
+            }
+        )
+        vpn_resolver = AsyncMock()
+        system_resolver = AsyncMock()
+        open_connection = AsyncMock(return_value=(object(), object()))
+        with patch.object(
+            module, "_resolve_target_host", vpn_resolver
+        ), patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module.asyncio, "open_connection", open_connection):
+            await module._open_http_proxy_connection(
+                "93.184.216.34", 1080, "socks5h"
+            )
+
+        vpn_resolver.assert_not_awaited()
+        system_resolver.assert_not_awaited()
+        open_connection.assert_awaited_once_with(
+            "93.184.216.34", 1080, ssl=None, server_hostname=None
+        )
+
     async def test_internal_upstream_proxy_bootstrap_uses_system_dns(self) -> None:
         module = _load_module(
             env_overrides={

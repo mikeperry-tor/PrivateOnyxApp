@@ -1,8 +1,9 @@
 ## Explicit upstream-proxy routing marker.
 ##
 ## Selected only when EGRESS_UPSTREAM_PROXY_URL is non-empty. The actual
-## URL is consumed exclusively by the final-hop policy proxies declared in the
-## base stack. Restricted components always receive local
+## URL is consumed by the final-hop policy proxies declared in the base stack;
+## the trusted Myst entrypoint also sees it solely to install an exact route
+## for an RFC1918 proxy literal. Restricted components always receive local
 ## bridge URLs, so applying this layer cannot expand an executor or browser
 ## network sandbox.
 

@@ -91,7 +91,7 @@ proxy discovery, must enforce outbound routing.
 | Open URL and web search character budgets | `api_server` | `sitecustomize` rewrites module constants and function defaults | Admin/env settings for per-URL and aggregate tool budgets |
 | Coding-agent repository/upload limit | `api_server`, `code-interpreter` | `sitecustomize` aligns the GitHub downloader default with Compose `MAX_FILE_SIZE_MB` | One first-class byte limit applied at producer and receiver |
 | Onyx helper HTTP/Playwright proxying | `api_server`, `background` | Public bridge proxy environment plus saved-level Playwright selection | First-class outbound transport/proxy configuration for backend helpers |
-| MCP/OAuth egress | `api_server` | Explicit `trust_env=False` HTTPX proxy transport with saved-level route selection and structural SSRF validation | First-class proxy-aware MCP/OAuth client construction |
+| MCP/OAuth egress | `api_server` | Explicit `trust_env=False` HTTPX proxy transport with saved-level route selection; destination enforcement remains at the selected policy/broker | First-class proxy-aware MCP/OAuth client construction |
 | Configured inference egress | `api_server`, `background` | Explicit host-route HTTPX client injection for supported configured OpenAI-compatible providers | Provider clients that accept and enforce explicit outbound transports |
 | Web Connector routing | `background` | Per-crawl requests/Playwright selection plus exact internal doc-drop exception | Saved-level-aware connector transport configuration |
 | Internal search content caps | `api_server` | `sitecustomize` optionally wraps result formatting; full compose passes wrapper env aliases | Admin/env settings for per-result and aggregate tool-response budgets |
@@ -650,11 +650,15 @@ private targets remain subject to host-policy rules.
 
 `apply_mcp_egress_proxy_patch()` validates the two stack-owned bridge URLs and
 patches the pinned MCP client factory. It preserves the saved SSRF level,
-validates every derived request structurally with DNS deferred, and constructs
-the custom HTTPX transport with an explicit proxy and `trust_env=False`.
+and constructs HTTPX with an explicit proxy and `trust_env=False`. It does not
+add another fetch-time destination validator: the selected policy and broker
+apply one consistent destination policy to every SDK-derived request.
 Streamable HTTP, SSE, redirects, discovery, dynamic registration,
 authorization, token, refresh, and tool calls therefore share the selected
-route. Factory or transport signature drift fails strict startup.
+route. Public MCP servers may use any policy-permitted TCP port. RFC1918 MCP
+destinations require the host route and `EGRESS_ALLOW_RFC1918=true`; exact
+`host.docker.internal` is the narrower host-route exception and does not need
+that switch. Factory signature drift fails strict startup.
 
 The full-mode background patch selects the same public/host route during Web
 Connector construction, sitemap fetching, each crawl, and its Playwright
@@ -1101,8 +1105,10 @@ container also loads a `sitecustomize` patch that:
 
 The trusted code-interpreter control service serves Onyx on the internal
 backend network and retains the Docker socket, but it has no direct external
-route. Executor pods do not inherit Onyx networks. `EGRESS_UPSTREAM_PROXY_URL` is consumed only by final-hop
-policy proxies and is never injected into executor pods. With network access
+route. Executor pods do not inherit Onyx networks.
+`EGRESS_UPSTREAM_PROXY_URL` is consumed by final-hop policy proxies and by the
+trusted Myst entrypoint solely to install an exact route for an RFC1918
+proxy literal. It is never injected into executor pods. With network access
 disabled, the patch makes no changes and upstream `network=none` remains.
 
 When active, the patch injects `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and

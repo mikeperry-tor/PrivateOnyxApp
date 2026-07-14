@@ -29,9 +29,9 @@ SearXNG/CRW/Obscura request path and live parser assumptions, see
 security findings to re-check when changing CRW, Obscura, code-interpreter,
 proxy, or shim behavior, see
 [`docs/internal_network_security.md`](internal_network_security.md).
-For the planned restricted-egress architecture, component version scope, and
+For the implemented restricted-egress baseline, component version scope, and
 network-placement assumptions to keep synchronized during upgrades, see
-[`docs/plans/restricted_egress.md`](plans/restricted_egress.md).
+[`docs/plans/implemented/restricted_egress.md`](plans/implemented/restricted_egress.md).
 
 ## Fast upgrade checklist
 
@@ -62,7 +62,7 @@ network-placement assumptions to keep synchronized during upgrades, see
    CRW, Obscura, the prefetch proxy, CDP shim, code-interpreter executor
    networking, or shared-namespace service placement.
 11. Update the version scope and affected component assumptions in
-    [Restricted egress network plan](plans/restricted_egress.md) when changing
+    [Restricted egress network plan](plans/implemented/restricted_egress.md) when changing
     Onyx, code-interpreter, SearXNG, CRW, Obscura, Mysterium, routing/support
     images, proxy behavior, CDP/prefetch shims, executor networking, or
     full-mode RAG placement.
@@ -749,9 +749,10 @@ Upgrade notes:
 Patch behavior:
 
 - `apply_mcp_egress_proxy_patch()` validates the stack-owned public/host proxy
-  URLs, preserves the saved SSRF level, validates every custom-transport
-  request with target DNS deferred, and constructs HTTPX with an explicit
-  proxy plus `trust_env=False`.
+  URLs, preserves the saved SSRF level, and constructs HTTPX with an explicit
+  proxy plus `trust_env=False`. It deliberately leaves initial and
+  SDK-derived destination enforcement to the selected policy/broker instead
+  of installing a second transport-level validator.
 - The background patch selects the public/host requests and Playwright route
   during construction and per Web crawl, preserves the exact internal
   doc-drop host gateway, and rewrites only returned display links.
@@ -768,7 +769,8 @@ Upgrade checks:
 
 - Re-audit MCP SDK streamable HTTP, SSE, redirect, discovery, dynamic
   registration, authorization, token, and refresh client construction. Any
-  factory or transport signature drift must fail strict startup.
+  factory signature drift must fail strict startup, and every path must keep
+  using the explicit selected proxy.
 - Inventory synchronous and asynchronous inference SDK construction for LLM,
   embedding, reranking, image, speech, and discovery calls. Add explicit
   injection before supporting a new configured provider; never rely on
@@ -976,7 +978,7 @@ Local files:
 
 Related plan:
 
-- [Restricted egress network plan](plans/restricted_egress.md), especially the
+- [Restricted egress network plan](plans/implemented/restricted_egress.md), especially the
   code-interpreter executor target model and policy preference surface.
 
 Patch behavior:
@@ -1052,7 +1054,7 @@ Security notes:
 
 Upgrade notes:
 
-- Update [Restricted egress network plan](plans/restricted_egress.md) if the
+- Update [Restricted egress network plan](plans/implemented/restricted_egress.md) if the
   code-interpreter image tag, executor Docker network setting, proxy injection
   behavior, executor prompt/capability text, or
   `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` semantics change.
@@ -1169,7 +1171,7 @@ Upstream v4.2.5 assumptions to re-check:
 
 Upgrade notes:
 
-- Update [Restricted egress network plan](plans/restricted_egress.md) if the
+- Update [Restricted egress network plan](plans/implemented/restricted_egress.md) if the
   local embedding shim, doc-drop, Web connector, or full-mode model-server
   placement changes the networks or local peers used by full-mode RAG.
 - When upgrading Onyx, verify that `internal_search` still uses the same
@@ -1220,7 +1222,7 @@ Upstream SearXNG references:
 
 Related plan:
 
-- [Restricted egress network plan](plans/restricted_egress.md), especially the
+- [Restricted egress network plan](plans/implemented/restricted_egress.md), especially the
   CRW, SearXNG, Obscura browser, final-hop proxy, and policy preference
   sections.
 
@@ -1266,7 +1268,7 @@ Behavior:
 
 Upgrade notes:
 
-- Update [Restricted egress network plan](plans/restricted_egress.md) if a
+- Update [Restricted egress network plan](plans/implemented/restricted_egress.md) if a
   SearXNG, CRW, or Obscura version change alters custom engine transport,
   CRW scrape URL assumptions, HTTP prefetch behavior, CDP rendering, search
   host blocking, or browser egress policy.
@@ -1347,7 +1349,7 @@ Behavior:
 
 Upgrade notes:
 
-- Update [Restricted egress network plan](plans/restricted_egress.md) if
+- Update [Restricted egress network plan](plans/implemented/restricted_egress.md) if
   `SEARXNG_ROUND_ROBIN`, last-resort scoring, provider suspension behavior, or
   custom-provider selection changes the search fan-out or network egress
   expectations for SearXNG.
@@ -1438,7 +1440,7 @@ Upgrade procedure:
 
 - Keep `settings.yml` as an overlay. Do not copy the full upstream
   `searx/settings.yml` into `searxng/core-config/`.
-- Update [Restricted egress network plan](plans/restricted_egress.md) if
+- Update [Restricted egress network plan](plans/implemented/restricted_egress.md) if
   SearXNG outgoing proxy semantics, per-engine `network`, custom-engine
   `enable_http`, or CRW-loopback/direct-network assumptions change.
 - Check `reference_repos/searxng/searx/settings_loader.py` for
@@ -1481,7 +1483,7 @@ Primary upstream reference:
 
 Related plan:
 
-- [Restricted egress network plan](plans/restricted_egress.md), especially
+- [Restricted egress network plan](plans/implemented/restricted_egress.md), especially
   Compose layering, routing matrix, component bridges, final-hop proxy policy,
   and validation plan.
 
@@ -1575,7 +1577,7 @@ Wrapper additions:
 
 Upgrade notes:
 
-- Update [Restricted egress network plan](plans/restricted_egress.md) if
+- Update [Restricted egress network plan](plans/implemented/restricted_egress.md) if
   full-mode service placement changes doc-drop, embedding-shim, model-server,
   MinIO, Valkey, or local document RAG reachability.
 - Confirm upstream `background` still accepts `MODEL_SERVER_HOST`,
@@ -1637,7 +1639,9 @@ conditional via `Makefile`: it is only added when
 Behavior:
 
 - `docker-compose.proxy.yml` is an explicit routing-mode marker only.
-- Final-hop policy proxies consume `EGRESS_UPSTREAM_PROXY_URL` directly.
+- Final-hop policy proxies consume `EGRESS_UPSTREAM_PROXY_URL` directly. The
+  trusted Myst entrypoint sees it only to install an exact `/32` route for a
+  configured RFC1918 proxy literal.
 - Restricted components and executor pods always receive local bridge URLs.
 - Default SearXNG remains without general internet egress.
 - Each policy listener accepts only loopback health checks and its configured
@@ -1649,7 +1653,7 @@ Behavior:
 
 Upgrade notes:
 
-- Update [Restricted egress network plan](plans/restricted_egress.md) if
+- Update [Restricted egress network plan](plans/implemented/restricted_egress.md) if
   proxy-mode service coverage, `EGRESS_UPSTREAM_PROXY_URL`,
   `EGRESS_ALLOW_HTTP_URLS`, Obscura bridge input, or executor proxy
   propagation changes.
@@ -1659,7 +1663,8 @@ Upgrade notes:
 - Run `python3 -m unittest discover -s tests -p 'test_*.py' -v`, then re-test
   HTTP and SOCKS proxy modes. Keep deterministic regression cases for hostname
   normalization, bridge-client enforcement, startup validation, credential
-  redaction, and request framing.
+  redaction, request framing, provider-DNS use for public proxy names, VPN
+  routing for public proxy addresses, and the endpoint-scoped RFC1918 route.
 
 ## Install and upgrade hooks
 
@@ -1714,7 +1719,7 @@ Behavior:
 Upgrade notes:
 
 - When changing `stack.versions.env`, update the version scope in
-  [Restricted egress network plan](plans/restricted_egress.md) for any pin
+  [Restricted egress network plan](plans/implemented/restricted_egress.md) for any pin
   that affects Onyx, code-interpreter, SearXNG, CRW, Obscura, Mysterium,
   routing/support images, or full-mode data/search support.
 - If upstream moves deployment files out of `deployment/docker_compose`, update

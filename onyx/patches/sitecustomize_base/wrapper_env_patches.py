@@ -2922,21 +2922,6 @@ def apply_mcp_egress_proxy_patch() -> None:
     if tuple(signature.parameters) != ("headers", "timeout", "auth"):
         _warn_or_raise(f"MCP HTTP client factory signature changed: {signature}")
         return
-    if not issubclass(mcp_ssrf._SSRFGuardAsyncTransport, httpx.AsyncHTTPTransport):
-        _warn_or_raise("MCP SSRF transport is no longer an AsyncHTTPTransport")
-        return
-
-    class _WrapperMCPTransport(httpx.AsyncHTTPTransport):
-        def __init__(self, proxy_url: str) -> None:
-            super().__init__(proxy=proxy_url)
-
-        async def handle_async_request(
-            self, request: httpx.Request
-        ) -> httpx.Response:
-            # Structural/literal validation is repeated for every SDK-derived
-            # URL. Authoritative DNS and address pinning belong to the broker.
-            mcp_ssrf.validate_mcp_outbound_url(str(request.url), resolve_dns=False)
-            return await super().handle_async_request(request)
 
     def _patched_factory(headers=None, timeout=None, auth=None):  # noqa: ANN001
         level = get_security_settings().ssrf_protection_level
@@ -2946,8 +2931,12 @@ def apply_mcp_egress_proxy_patch() -> None:
         }
         kwargs: dict[str, Any] = {
             "follow_redirects": True,
-            "transport": _WrapperMCPTransport(
-                host_proxy if use_host else public_proxy
+            # The selected policy and route broker validate every initial and
+            # SDK-derived destination. Keep the Onyx transport deliberately
+            # limited to explicit route selection so destination policy is not
+            # duplicated here with subtly different hostname/DNS semantics.
+            "transport": httpx.AsyncHTTPTransport(
+                proxy=host_proxy if use_host else public_proxy
             ),
             "trust_env": False,
             "timeout": timeout

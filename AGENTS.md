@@ -130,7 +130,11 @@ This stack protects private research, document contents, browsing behavior, infe
 - VPN/proxy routing: preserve explicit VPN/no-VPN behavior, the separate
   public/host Onyx route classes, exact host and opt-in RFC1918 policy,
   operator-local `.local`/`.internal`/`.home.arpa` DNS restriction, optional
-  routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY` handling. Onyx
+  routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY` handling.
+  Public upstream-proxy names and addresses must use provider DNS and the VPN
+  route in VPN mode; exact host and RFC1918-literal proxy endpoints use only
+  their documented narrow route exceptions, while named operator-local
+  proxies require the RFC1918 opt-in. Onyx
   applications must never rejoin `netns-holder` or gain direct fallback when
   VPN, policy, broker, or proxy connectivity fails.
 - Request handling: keep supported search engines routed through the custom CRW/SearXNG path; preserve CRW/Obscura rendering, prefetch blocking, per-host rate control, anti-bot visibility, and the documented CDP shim behavior. Do not replace this path with plain HTTP fetching or fixed sleeps.

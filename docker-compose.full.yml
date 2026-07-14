@@ -59,7 +59,7 @@ services:
       ONYX_WEB_CONNECTOR_DISPLAY_BASE_URL: "http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/"
       CODE_INTERPRETER_BASE_URL: "http://code-interpreter:8000"
       # Route connector downloads and other environment-aware background HTTP
-      # clients through the trusted loopback final-hop policy.
+      # clients through the fixed public-only application bridge.
       HTTP_PROXY: "http://onyx-public-egress-bridge:3128"
       HTTPS_PROXY: "http://onyx-public-egress-bridge:3128"
       http_proxy: "http://onyx-public-egress-bridge:3128"

@@ -48,7 +48,11 @@ enabled, VPN mode additionally permits classification of names ending in
 
 When ``EGRESS_UPSTREAM_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
 routes its own upstream requests through that proxy. Restricted components
-reach policy instances only through their local bridges.
+reach policy instances only through their local bridges. In VPN mode, public
+proxy names use provider DNS and public proxy addresses follow the Myst route.
+Exact ``host.docker.internal`` uses its narrow route; an RFC1918 IPv4 literal
+receives only an exact proxy-endpoint route; and operator-local proxy names use
+system DNS only with ``EGRESS_ALLOW_RFC1918=true``.
 
 Architecture::
 

@@ -78,8 +78,9 @@ Compose seeds `OPEN_URL_VALIDATE_SSRF=true`,
 `MCP_SERVER_ALLOW_LOOPBACK=false`. Saved Admin Security Hardening state takes
 precedence and is read for each new MCP client or Web crawl. Strict levels
 select the public route; levels that permit private networks may select the
-host route. Onyx-side structural validation uses `resolve_dns=False` for
-external requests so the broker remains the authoritative resolver.
+host route. The MCP wrapper transport does not duplicate destination policy:
+the selected policy/broker validates initial and SDK-derived requests and the
+broker remains the authoritative resolver.
 
 The Web connector sends the stack-owned `http://doc-drop-web:8091/` origin
 through the host policy. The host broker recognizes that exact authority and
@@ -116,6 +117,15 @@ and `socks5h` upstream proxies receive target hostnames without a preliminary
 target lookup. With RFC1918 access enabled, system DNS classification is
 limited to `.local`, `.internal`, and `.home.arpa`; other names never reach
 system DNS in VPN mode.
+
+That DNS rule also applies while locating the configured upstream proxy:
+public proxy names use Myst provider DNS in VPN mode, while the three
+operator-local suffixes use system DNS only with `EGRESS_ALLOW_RFC1918=true`.
+Public proxy addresses inherit the namespace's Myst routes. Exact
+`host.docker.internal` uses the narrow Docker-host route. A configured RFC1918
+IPv4 literal receives an exact `/32` proxy-endpoint route without granting
+general RFC1918 target access; named operator-local proxies require the
+RFC1918 option.
 
 Remote-DNS proxy schemes cannot locally prove what address an upstream will
 choose. A malicious or misconfigured upstream can resolve a public-looking

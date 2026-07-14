@@ -8,9 +8,9 @@
 > describe the earlier milestone, not the current runtime.
 
 > **Status: implemented (2026-07-13).** The normative runtime documentation is
-> now [VPN routing and restricted egress](../vpn_routing_and_proxies.md),
-> [Internal network security](../internal_network_security.md), and
-> [Request handling](../request_handling.md). “Current state” and workstream
+> now [VPN routing and restricted egress](../../vpn_routing_and_proxies.md),
+> [Internal network security](../../internal_network_security.md), and
+> [Request handling](../../request_handling.md). “Current state” and workstream
 > wording below records the pre-implementation design context; it is retained
 > as the architecture/validation decision record, not as deployed topology.
 
@@ -59,18 +59,18 @@ scheme, one proxy-policy vocabulary, and staged compose work that is easy to
 validate independently.
 
 Use this plan with the subsystem docs, not as a replacement for them. The
-request path details live in [Request handling](../request_handling.md), the
+request path details live in [Request handling](../../request_handling.md), the
 VPN/proxy routing matrix lives in
-[VPN routing and proxies](../vpn_routing_and_proxies.md), current internal
+[VPN routing and proxies](../../vpn_routing_and_proxies.md), current internal
 reachability risks live in
-[Internal network security](../internal_network_security.md), runtime patch
-behavior lives in [Onyx patch information](../onyx_patch_info.md), and upgrade
-checks live in [Onyx wrapper patches](../onyx_patches_upgrade.md).
+[Internal network security](../../internal_network_security.md), runtime patch
+behavior lives in [Onyx patch information](../../onyx_patch_info.md), and upgrade
+checks live in [Onyx wrapper patches](../../onyx_patches_upgrade.md).
 
 ## Version Scope
 
 This plan is current for the committed pins in
-[`stack.versions.env`](../../stack.versions.env). Re-check the assumptions in
+[`stack.versions.env`](../../../stack.versions.env). Re-check the assumptions in
 this file when any of these pins or their equivalent local overrides change.
 
 | Component | Current pin | Why it matters for this plan |
@@ -115,9 +115,9 @@ In that namespace, many useful internal listeners share loopback and Docker
 service aliases: Onyx API/Web, CRW, SearXNG, Obscura CDP/MCP, CDP shim,
 doc-drop, embedding shim, code-interpreter, and Mysterium control surfaces.
 For the current namespace topology and optional routing layers, see
-[VPN routing and proxies](../vpn_routing_and_proxies.md). For tested
+[VPN routing and proxies](../../vpn_routing_and_proxies.md). For tested
 reachability and the current security gaps, see
-[Internal network security](../internal_network_security.md).
+[Internal network security](../../internal_network_security.md).
 
 The current web request path is intentionally routed through wrapper shims:
 
@@ -140,7 +140,7 @@ The current web request path is intentionally routed through wrapper shims:
 
 The full `web_search` and `open_url` chains, including CRW, SearXNG,
 prefetch-blocking proxy, CDP shim, Obscura, rate limiting, and anti-bot
-behavior, are documented in [Request handling](../request_handling.md).
+behavior, are documented in [Request handling](../../request_handling.md).
 
 The largest current gap is code-interpreter network enablement. When
 `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, the Makefile layers
@@ -197,7 +197,7 @@ Out of scope for this plan unless they become agent-facing network paths:
 Full-mode local document RAG has its own doc-drop, Web connector, PDF
 freshness, and embedding-shim constraints. If restricted-network work changes
 doc-drop or embedding-shim placement, read
-[Local docs RAG search](../local_docs_rag_search.md) first.
+[Local docs RAG search](../../local_docs_rag_search.md) first.
 
 ### Component Bridge
 
@@ -263,8 +263,8 @@ routing namespace and expose them through narrow bridges.
 
 The restricted-egress implementation must preserve the current user-facing
 preference surface from `.env.wrapper.example`,
-[Request handling](../request_handling.md), and
-[VPN routing and proxies](../vpn_routing_and_proxies.md). Do not replace these
+[Request handling](../../request_handling.md), and
+[VPN routing and proxies](../../vpn_routing_and_proxies.md). Do not replace these
 values with hardcoded per-mode defaults or new names unless the documentation
 and example env file are updated in the same change.
 
@@ -347,7 +347,7 @@ support.
 
 For the current service-by-service `ONYX_AGENT_OUTBOUND_PROXY_URL` behavior,
 the explicit no-VPN mode, and the optional service routing switches, see
-[VPN routing and proxies](../vpn_routing_and_proxies.md).
+[VPN routing and proxies](../../vpn_routing_and_proxies.md).
 
 ## Host-Resident Upstream Proxies
 
@@ -378,10 +378,10 @@ host-resident upstream proxies, not general permission for restricted
 components to reach host or LAN targets.
 
 For the current host-proxy and LAN-bypass behavior, see
-[VPN routing and proxies](../vpn_routing_and_proxies.md). For why host,
+[VPN routing and proxies](../../vpn_routing_and_proxies.md). For why host,
 private, link-local, and internal targets remain security-sensitive even when
 an upstream proxy is configured, see
-[Internal network security](../internal_network_security.md).
+[Internal network security](../../internal_network_security.md).
 
 ## DNS Classification
 
@@ -428,8 +428,8 @@ Component bridges should not perform target DNS classification. Keep that
 logic centralized in the final-hop proxy policy.
 
 The current prefetch-proxy DNS behavior and its upstream-proxy residual risk
-are described in [Request handling](../request_handling.md) and
-[Internal network security](../internal_network_security.md).
+are described in [Request handling](../../request_handling.md) and
+[Internal network security](../../internal_network_security.md).
 
 ## Component Targets
 
@@ -481,10 +481,10 @@ Executor requirements:
   SearXNG/CRW/Obscura path instead of direct SERP scraping.
 
 For the current executor gap and recommended proxy-only direction, see
-[Internal network security](../internal_network_security.md). For the existing
+[Internal network security](../../internal_network_security.md). For the existing
 runtime patch mechanics and upgrade checks, see
-[Onyx patch information](../onyx_patch_info.md) and
-[Onyx wrapper patches](../onyx_patches_upgrade.md).
+[Onyx patch information](../../onyx_patch_info.md) and
+[Onyx wrapper patches](../../onyx_patches_upgrade.md).
 
 The code-interpreter `sitecustomize` patch should model three independent
 decisions:
@@ -614,7 +614,7 @@ prefetch/executor block.
 
 For the current CRW-to-CDP-to-Obscura browser chain, wait strategy, cookie
 clearing, and CDP shim behavior, see
-[Request handling](../request_handling.md).
+[Request handling](../../request_handling.md).
 
 ### Obscura MCP Browser
 
@@ -725,7 +725,7 @@ This requires replacing current loopback assumptions:
 
 For CRW's Firecrawl-compatible scrape path, HTTP prefetch behavior,
 PDF/content-type handling, and `open_url` fallback caveats, see
-[Request handling](../request_handling.md).
+[Request handling](../../request_handling.md).
 
 ### SearXNG
 
@@ -769,8 +769,8 @@ from bypassing those SearXNG settings.
 
 For the current custom CRW-backed engines, provider scheduling, parser
 assumptions, and SearXNG proxy overlay behavior, see
-[Request handling](../request_handling.md) and
-[Onyx patch information](../onyx_patch_info.md).
+[Request handling](../../request_handling.md) and
+[Onyx patch information](../../onyx_patch_info.md).
 
 ## Service Ingress And Atomic Cutover Topology
 
@@ -860,9 +860,9 @@ Additional layering edge cases:
   and no host gateway or stack aliases are reachable.
 
 For the existing Compose layering and routing overrides, see
-[VPN routing and proxies](../vpn_routing_and_proxies.md). For the upgrade
+[VPN routing and proxies](../../vpn_routing_and_proxies.md). For the upgrade
 checklist that covers Compose, SearXNG, Onyx, and code-interpreter patch
-surfaces, see [Onyx wrapper patches](../onyx_patches_upgrade.md).
+surfaces, see [Onyx wrapper patches](../../onyx_patches_upgrade.md).
 
 The Makefile should use network-specific suffix names, for example:
 
@@ -1064,25 +1064,25 @@ behavioral documentation with the same atomic deployment change.
   classification caveat near the upstream proxy examples so operators do not
   read `ONYX_AGENT_OUTBOUND_PROXY_URL` as a complete private-network
   enforcement layer.
-- [VPN routing and proxies](../vpn_routing_and_proxies.md): replace
+- [VPN routing and proxies](../../vpn_routing_and_proxies.md): replace
   shared-namespace executor routing text; document the final-hop matrix,
   upstream-proxy DNS caveat, and host-proxy LAN bypass distinction.
-- [Internal network security](../internal_network_security.md): replace the
+- [Internal network security](../../internal_network_security.md): replace the
   shared-namespace executor gap description with the resulting restricted
   topology; document remaining bridge, opaque-CONNECT, upstream-proxy DNS, and
   host-proxy risks, and document direct-mode connection pinning to validated
   DNS addresses.
-- [Request handling](../request_handling.md): describe restricted CRW, SearXNG,
+- [Request handling](../../request_handling.md): describe restricted CRW, SearXNG,
   Obscura CDP, Obscura MCP, and executor paths as they land, including
   search-engine blocking, the port-80 CONNECT rule, and the difference between
   direct-mode pinned DNS classification and upstream-proxy mode.
 - `README.md`: replace the Obscura MCP shared-loopback instructions with the
   narrow Onyx-side gateway URL and remove any instruction to disable SSRF
   protection globally solely to reach the bundled MCP service.
-- [Onyx patch information](../onyx_patch_info.md) and
-  [Onyx wrapper patches](../onyx_patches_upgrade.md): update code-interpreter
+- [Onyx patch information](../../onyx_patch_info.md) and
+  [Onyx wrapper patches](../../onyx_patches_upgrade.md): update code-interpreter
   prompt/proxy patch mechanics and upgrade checks.
-- [Local docs RAG search](../local_docs_rag_search.md): update only if the
+- [Local docs RAG search](../../local_docs_rag_search.md): update only if the
   restricted network work changes doc-drop, Web connector, PDF freshness, or
   embedding-shim placement.
 

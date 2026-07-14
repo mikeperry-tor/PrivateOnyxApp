@@ -146,6 +146,32 @@ class RouteBrokerTests(unittest.IsolatedAsyncioTestCase):
             "example.com", 443, ("93.184.216.34",)
         )
 
+    async def test_public_route_allows_policy_validated_external_port(self) -> None:
+        module = _load_module()
+        request = {
+            "version": module.MAGIC,
+            "credential": CREDENTIAL,
+            "route_class": "public",
+            "transport": "opaque",
+            "host": "mcp.example.com",
+            "port": 8443,
+        }
+        writer = _Writer()
+        validate = AsyncMock(return_value=(None, ("93.184.216.34",)))
+        connect = AsyncMock(return_value=(_reader(b""), _Writer()))
+        with patch.object(module, "_allowed_peer", AsyncMock(return_value=True)), patch.object(
+            module.policy, "_validate_destination", validate
+        ), patch.object(module.policy, "_connect_via_upstream", connect):
+            await module.handle_client(
+                _reader((json.dumps(request) + "\n").encode()), writer
+            )
+
+        self.assertTrue(writer.data.startswith(b'{"status":"ok"}\n'))
+        validate.assert_awaited_once_with("mcp.example.com", 8443)
+        connect.assert_awaited_once_with(
+            "mcp.example.com", 8443, ("93.184.216.34",)
+        )
+
     async def test_host_route_allows_cleartext_to_validated_rfc1918(self) -> None:
         module = _load_module(
             {

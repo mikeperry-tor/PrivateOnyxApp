@@ -215,6 +215,10 @@ services:
       MYST_VPN_PREFERRED_PROVIDER_IDS: "${MYST_VPN_PREFERRED_PROVIDER_IDS:-}"
       # Optional LAN access bypass for local inference APIs / services.
       EGRESS_ALLOW_RFC1918: "${EGRESS_ALLOW_RFC1918:-false}"
+      # Used only to install an exact /32 route for a configured RFC1918
+      # proxy literal; names remain subject to the resolver rules in the
+      # final-hop broker. The entrypoint never logs the URL or credentials.
+      EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
       # Connection retry policy (helps with provider-specific transient failures).
       MYST_CONNECT_MAX_ATTEMPTS: "6"
       MYST_CONNECT_RETRY_INTERVAL: "5"

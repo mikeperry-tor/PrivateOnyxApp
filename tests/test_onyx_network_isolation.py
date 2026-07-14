@@ -220,6 +220,38 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 }
             )
 
+    def test_myst_receives_proxy_url_for_exact_rfc1918_endpoint_route(self) -> None:
+        model = _compose_model("full")
+        self.assertIn(
+            "EGRESS_UPSTREAM_PROXY_URL",
+            model["services"]["myst-client"]["environment"],
+        )
+        entrypoint = (ROOT / "myst" / "myst-client-entrypoint.sh").read_text()
+        bootstrap = entrypoint.split("# Optional LAN access:", 1)[0]
+
+        def exempt_cidrs(proxy_url: str) -> str:
+            result = subprocess.run(
+                [
+                    "sh",
+                    "-c",
+                    bootstrap + '\nprintf "%s\\n" "${MYST_ROUTE_EXEMPT_CIDRS:-}"',
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env={"EGRESS_UPSTREAM_PROXY_URL": proxy_url},
+            )
+            return result.stdout.splitlines()[-1] if result.stdout else ""
+
+        self.assertEqual(
+            exempt_cidrs("socks5h://user:secret@192.168.1.20:1080"),
+            "192.168.1.20/32",
+        )
+        self.assertEqual(exempt_cidrs("https://93.184.216.34:8443"), "")
+        self.assertEqual(exempt_cidrs("socks5h://proxy.internal:1080"), "")
+        self.assertEqual(exempt_cidrs("ftp://192.168.1.20:21"), "")
+        self.assertEqual(exempt_cidrs("https://192.168.1.20:70000"), "")
+
     def test_host_publish_edge_contains_only_fixed_publishers(self) -> None:
         for mode in ("lite", "full"):
             model = _compose_model(mode)
@@ -247,6 +279,29 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 self.assertEqual(service["user"], "65534:65534")
                 self.assertTrue(service["read_only"])
                 self.assertEqual(service["cap_drop"], ["ALL"])
+
+    def test_vpn_routed_teep_publisher_is_fixed_and_hardened(self) -> None:
+        model = _compose_model("full", "docker-compose.teep-vpn.yml")
+        publisher = model["services"]["host-teep-proxy"]
+        self.assertEqual(set(publisher["networks"]), {"routing-uplink"})
+        self.assertEqual(publisher["user"], "65534:65534")
+        self.assertTrue(publisher["read_only"])
+        self.assertEqual(publisher["cap_drop"], ["ALL"])
+        self.assertIn("no-new-privileges:true", publisher["security_opt"])
+        self.assertEqual(
+            publisher["sysctls"],
+            {
+                "net.ipv4.ip_forward": "0",
+                "net.ipv6.conf.all.forwarding": "0",
+            },
+        )
+        self.assertEqual(
+            publisher["command"],
+            [
+                "tcp-listen:8337,fork,reuseaddr",
+                "tcp-connect:myst-client:8337",
+            ],
+        )
 
     def test_doc_drop_uses_exact_host_policy_gateway(self) -> None:
         model = _compose_model("full")

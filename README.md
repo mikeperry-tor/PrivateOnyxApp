@@ -397,6 +397,14 @@ helpers follow the same routing matrix. Restricted components continue to use
 local bridge URLs. This is orthogonal to Mysterium: if both are set, the
 upstream-proxy connection crosses the VPN.
 
+The proxy endpoint itself follows the same routing boundary. In VPN mode,
+public proxy names use the Myst provider resolver and public proxy addresses
+use the Myst route. Exact `host.docker.internal` uses the narrow host-route
+exception. A configured RFC1918 IPv4 literal receives an exact `/32` route and
+does not require or enable general RFC1918 target access. System-DNS resolution
+of `.local`, `.internal`, or `.home.arpa` proxy names requires
+`EGRESS_ALLOW_RFC1918=true` so the complete answer set can be classified.
+
 Supported schemes:
 
 ```bash
@@ -539,7 +547,12 @@ To use this shim:
 The former bundled Obscura MCP browser has been removed intentionally. Add
 only MCP servers you operate or trust through Onyx Admin. Their streamable
 HTTP, SSE, redirects, discovery, registration, OAuth, token, refresh, and tool
-traffic use the explicit SSRF-guarded public or host-capable egress path.
+traffic use an explicit public or host-capable proxy transport. The selected
+egress policy and broker, rather than a second HTTPX validator, enforce every
+initial and SDK-derived destination. Public servers may use nonstandard TCP
+ports; RFC1918 destinations require `EGRESS_ALLOW_RFC1918=true` and the host
+route, while exact `host.docker.internal` uses the existing narrower host
+exception.
 
 ## Docker Host Endpoints
 

@@ -44,11 +44,19 @@ services:
 
   # Host-facing TCP bridge for teep. Forwards host traffic to the teep port
   # inside the shared netns-holder namespace (reachable via the myst-client
-  # alias on the default network).
+  # alias on routing-uplink). This publisher has the same fixed-destination,
+  # nonroot, read-only hardening as the other host edge publishers.
   host-teep-proxy:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
     restart: unless-stopped
-    command: tcp-listen:8337,fork,reuseaddr tcp-connect:myst-client:8337
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.forwarding: "0"
+    command: ["tcp-listen:8337,fork,reuseaddr", "tcp-connect:myst-client:8337"]
     networks: [routing-uplink]
     ports:
       - ${TEEP_HOST:+${TEEP_HOST}:}${HOST_PORT_TEEP:-8337}:8337

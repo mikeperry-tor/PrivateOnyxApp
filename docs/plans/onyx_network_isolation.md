@@ -322,6 +322,13 @@ HTTP proxy traffic from Onyx, browsers, executors, or a caller bridge. A
 compromised public request-policy process can therefore request arbitrary
 public egress but still cannot obtain a host/LAN route from its broker.
 
+The configured upstream proxy endpoint is operator-selected routing
+infrastructure, not a target-policy grant. In VPN mode, public proxy names use
+provider DNS and public addresses follow the VPN route. Exact
+`host.docker.internal` keeps its narrow route; an RFC1918 IPv4 literal receives
+only an exact `/32` proxy-endpoint route; and named operator-local proxies use
+system DNS only with `EGRESS_ALLOW_RFC1918=true`.
+
 Attach `netns-holder` to two distinct internal broker networks, each with only
 the matching isolated policy service as its other member. Each broker binds a
 fixed port only on its matching namespace interface, authenticates a distinct
@@ -490,7 +497,7 @@ Docker/Podman aliases remain denied by default.
 
 ### Opt-In RFC1918 Configured Endpoints
 
-Rename the overly Myst-specific `EGRESS_ALLOW_RFC1918` option to the
+Rename the overly Myst-specific `MYST_VPN_ALLOW_LAN_BYPASS` option to the
 stack-wide `EGRESS_ALLOW_RFC1918`, default `false`, with no compatibility alias.
 It has two coordinated effects: Myst installs the documented RFC1918 route
 exemptions when Myst is enabled, and the host-capable request-policy
@@ -574,8 +581,10 @@ Connectors, only `VALIDATE_ALL` selects the public bridge; the other levels
 select the host bridge, matching upstream connector semantics. RFC1918 still
 fails unless `EGRESS_ALLOW_RFC1918=true`, and `DISABLED` still cannot create a
 broker route to loopback/link-local/metadata. Read the saved level at
-client/crawl creation and revalidate every derived URL. A saved Admin override
-remains authoritative and may tighten the default without changing Compose.
+client/crawl creation. The selected egress policy and broker validate every
+initial or SDK-derived destination; a second MCP-only fetch-time policy in
+Onyx would be duplicate enforcement. A saved Admin override remains
+authoritative and may tighten the default without changing Compose.
 
 ### Explicit MCP Transport
 
@@ -587,47 +596,49 @@ The MCP factory must:
 
 1. Validate both exact proxy URLs and reject credentials, paths, query,
    fragments, unexpected hosts, or ports at startup.
-2. Instantiate the SSRF-guarded `AsyncHTTPTransport` with the public or host
+2. Instantiate a plain explicit `AsyncHTTPTransport` with the public or host
    proxy selected from the saved Admin level above; never select from the
    destination text alone.
 3. construct `httpx.AsyncClient(..., trust_env=False, transport=...)` so
    environment settings cannot silently replace or bypass the selected route.
 4. Preserve the existing timeout, headers, authentication, redirect, SSE, and
    streamable-HTTP behavior.
-5. Revalidate every request produced by the MCP SDK, including redirects,
-   protected-resource discovery, authorization-server metadata, dynamic
-   registration, token exchange, and refresh.
+5. Let the selected policy/broker validate every request produced by the MCP
+   SDK, including redirects, protected-resource discovery,
+   authorization-server metadata, dynamic registration, token exchange, and
+   refresh.
 6. Fail startup in strict mode if the pinned HTTPX/MCP signatures or transport
    behavior no longer match.
 
-Do not implement this by removing the custom SSRF transport and falling back
-to generic environment handling. The guard exists because the MCP SDK creates
-additional URLs from server responses.
+Do not fall back to generic environment handling. The explicit transport is
+required so the saved Admin level selects exactly one route and every URL the
+MCP SDK creates crosses that route.
 
-### DNS-Safe MCP Validation
+### DNS-Safe MCP Routing
 
 The current fetch-time guard calls `socket.getaddrinfo()` before sending the
 request. That would fail or leak public target names through Docker's embedded
 resolver after network isolation.
 
-Split validation responsibilities:
+Split validation responsibilities without duplicating destination policy:
 
-- Onyx performs scheme, credential, syntax, normalized-hostname, IP-literal,
-  always-blocked-name, Admin SSRF-level, and exact trusted-host checks without
-  resolving arbitrary public names.
-- The matching route broker resolves and validates public names using the
-  selected VPN/upstream/no-VPN mode and rechecks every CONNECT/forward request.
+- Onyx retains its upstream configuration/store-time checks and uses the saved
+  Admin SSRF level only to choose the public or host transport at client
+  creation. The wrapper adds no second per-request MCP URL validator.
+- The selected policy and matching route broker validate every
+  CONNECT/forward request, including SDK-derived destinations. The broker
+  resolves public names using the selected VPN/upstream/no-VPN mode.
 - Exact `host.docker.internal` destinations are resolved only by their
   authorized host-broker exception.
 - When `EGRESS_ALLOW_RFC1918=true`, the host-capable path follows the
   explicit IP-literal or `.local`/`.internal`/`.home.arpa` resolution and
   pinning rules above; the public path remains unchanged.
 
-At strict SSRF levels, `host.docker.internal` must be rejected structurally
-even without DNS. At `ALLOW_PRIVATE_NETWORK`, allow that exact non-loopback
-host identity but retain loopback and link-local denial. At `DISABLED`, retain
-the always-on link-local/cloud-metadata floor. Store-time and fetch-time
-behavior must remain consistent, and redirects cannot downgrade the decision.
+At strict SSRF levels, the public route rejects `host.docker.internal`. At
+`ALLOW_PRIVATE_NETWORK` or `DISABLED`, the host route can admit that exact
+non-loopback identity but retains the broker's loopback, link-local, and
+metadata floor. Redirects and other derived requests cannot bypass the
+selected route.
 
 With a configured remote upstream proxy, a public-looking hostname that the
 upstream resolves privately remains the documented upstream-side DNS residual
@@ -819,9 +830,11 @@ When Teep is configured to route through Myst, retain its namespace placement
 and expose a fixed single-destination Teep gateway on `onyx-teep`; do not attach
 `netns-holder` itself to the Onyx caller network and do not move the Onyx
 application tier back into the namespace. This adds a gateway only in the mode
-that cannot safely use the direct narrow network. Host Teep publication and any
-`host-teep-proxy` removal remain coordinated with the Direct Obscura
-service-reduction work unless this plan necessarily changes them first.
+that cannot safely use the direct narrow network. If host Teep publication is
+retained, `host-teep-proxy` must be a hardened fixed-destination publisher:
+numeric nonroot, read-only, all capabilities dropped, `no-new-privileges`, and
+forwarding disabled. Any later removal remains coordinated with the Direct
+Obscura service-reduction work.
 
 ## Service and Network Simplifications
 
@@ -1017,7 +1030,8 @@ an operator attaching new networks after startup.
 
 1. Add the strict saved-level-selected MCP proxy transport and the explicit
    configured Web Connector transports.
-2. Split non-resolving Onyx validation from authoritative final-hop DNS.
+2. Keep route selection in Onyx and authoritative request validation/DNS at
+   the selected final hop, without a duplicate MCP fetch-time validator.
 3. Add separate public and host request-policy namespaces plus their distinct
    public-only and host-capable route brokers in `netns-holder`.
 4. Add exact host and opt-in RFC1918 handling only to the host-capable
@@ -1174,12 +1188,12 @@ an operator attaching new networks after startup.
 
 ### `.env.wrapper.example`, `AGENTS.md`, and Plans
 
-- Rename `EGRESS_UPSTREAM_PROXY_URL` to `EGRESS_UPSTREAM_PROXY_URL` and
-  `EGRESS_ALLOW_HTTP_URLS` to `EGRESS_ALLOW_HTTP_URLS`, with no
+- Rename `ONYX_AGENT_OUTBOUND_PROXY_URL` to `EGRESS_UPSTREAM_PROXY_URL` and
+  `ONYX_AGENT_ALLOW_HTTP_URLS` to `EGRESS_ALLOW_HTTP_URLS`, with no
   compatibility aliases. Update Make/Compose selection, policy/broker inputs,
   executor injection, tests, help, examples, and current documentation
   atomically. Remove all consumers of the old names; stale values are ignored.
-- Rename `EGRESS_ALLOW_RFC1918` to `EGRESS_ALLOW_RFC1918` as the single
+- Rename `MYST_VPN_ALLOW_LAN_BYPASS` to `EGRESS_ALLOW_RFC1918` as the single
   explicit RFC1918 opt-in, with no consumer or validation for the old name. Its
   example text must cover
   MCP, configured Web Connector, embedding, and inference endpoints; it is not
@@ -1235,8 +1249,8 @@ Add focused cases under `tests/` for:
 - HTTPX custom transport construction with the explicit proxy and
   `trust_env=False`;
 - streamable HTTP and SSE factory use;
-- initial URL, redirect, OAuth metadata, registration, authorization, token,
-  and refresh validation;
+- policy/broker validation of the initial URL, redirects, OAuth metadata,
+  registration, authorization, token, and refresh requests;
 - saved-level bridge selection for MCP/OAuth and Web Connectors at every SSRF
   level, including derived URLs, sitemaps, browser fallback, and a saved-level
   change between new clients/crawls;
@@ -1458,7 +1472,7 @@ for any URL that must change; Compose cannot rewrite stored records.
 | --- | --- |
 | Onyx application/data reachability | explicit internal Compose networks |
 | generic Onyx public HTTP(S) route | fixed public-only Onyx bridge, isolated request-policy namespace, and public-only route broker |
-| remote MCP/OAuth transport | saved-level-selected, SSRF-guarded HTTPX proxy transport |
+| remote MCP/OAuth transport | saved-level-selected explicit HTTPX proxy transport; selected egress policy/broker is authoritative |
 | admin-configured Web Connector transport | saved-level-selected explicit HTTP/Playwright proxy; exact doc-drop connector stays internal |
 | public target DNS and address validation | selected route broker in the trusted routing namespace |
 | exact host and opt-in RFC1918 MCP/Web Connector/embedding/inference route | fixed host-capable Onyx bridge, isolated host policy namespace, and host route broker; plain HTTP is allowed for these destinations only after broker validation |

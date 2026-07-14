@@ -13,10 +13,11 @@ authenticated route brokers, and credentials; browser and executor policies
 are separate.
 
 The MCP runtime patch supplies an explicit `trust_env=False` HTTPX proxy
-transport while preserving Onyx validation for initial URLs, redirects,
-discovery, registration, authorization, token, refresh, SSE, and streamable
-HTTP traffic. Onyx performs structural validation without public target DNS;
-the selected broker resolves and pins the target. Exact
+transport for initial URLs, redirects, discovery, registration,
+authorization, token, refresh, SSE, and streamable HTTP traffic. The wrapper
+does not add a second per-request destination validator inside HTTPX: the
+selected request policy and broker enforce every initial and SDK-derived
+destination consistently, and the broker resolves and pins the target. Exact
 `host.docker.internal` is host-route-only. RFC1918 targets additionally require
 `EGRESS_ALLOW_RFC1918=true`; named RFC1918 targets must end in `.local`,
 `.internal`, or `.home.arpa`. Loopback, link-local, metadata, and other Docker
@@ -768,8 +769,10 @@ The URL is validated before the listener starts; unsupported schemes,
 malformed ports, incomplete credentials, and path/query/fragment components
 fail startup. Logs show only a credential-free scheme/host/port description.
 In VPN mode, a public upstream-proxy hostname is bootstrapped through the Myst
-provider resolver and connected by IP. `host.docker.internal` and other
-explicit internal proxy endpoints use Docker service resolution. The
+provider resolver and connected by IP. An RFC1918 IPv4 literal needs no DNS
+and receives only its exact Myst route exemption; `host.docker.internal` uses
+Docker resolution and its existing narrow route. The three operator-local
+suffixes use system DNS only with `EGRESS_ALLOW_RFC1918=true`. The
 final-hop policy never sends browsing target hostnames to Docker DNS in
 upstream-proxy mode. CRW's earlier synthetic preflight may pass through
 Docker's embedded resolver, but its only upstream is the loopback-only
@@ -799,7 +802,7 @@ generation and code-interpreter executor pod caveats, is documented in
 | **SearXNG** | none by default | CRW-backed engines use only the internal CRW peer network |
 | **Code-interpreter HTTP clients** | executor policy | local executor bridge; search-engine and private/internal targets are blocked |
 | **Onyx API/background HTTP helpers** | public-only Onyx bridge/policy/broker | Environment-aware `requests`, `httpx`, and `urllib` clients use `HTTP_PROXY`/`HTTPS_PROXY=http://onyx-public-egress-bridge:3128`; stack-owned internal bypasses come from `onyx/helper-egress.env` |
-| **MCP/OAuth and configured Web Connector** | saved-level-selected public or host route | Explicit SSRF-guarded transports defer public target DNS to the selected route broker; doc-drop uses one exact host-broker gateway |
+| **MCP/OAuth and configured Web Connector** | saved-level-selected public or host route | Explicit transports leave target enforcement and public DNS to the selected policy/broker; doc-drop uses one exact host-broker gateway |
 | **Configured chat inference / embedding shim** | host-capable Onyx route | Explicit clients preserve exact-host and opt-in RFC1918 policy; the exact internal Teep chat base remains direct on `onyx-teep` |
 | **OnyxWebCrawler** | selected Onyx bridge | Does not go through CRW/Obscura; its SSRF-validated request and Playwright fallback use explicit public/host routing |
 
@@ -1022,7 +1025,7 @@ selected at configuration time:
   shim → Obscura; ordinary non-search pages may be returned from CRW's HTTP
   prefetch without Obscura. This is the recommended wrapper configuration.
 - **OnyxWebCrawler**: In-process HTTP fetch via `ssrf_safe_get` (SSRF-validated
-  `requests`) and the loopback helper policy. Handles HTML and PDF natively. Has an optional Playwright
+  `requests`) and the fixed public Onyx egress bridge. Handles HTML and PDF natively. Has an optional Playwright
   headless-browser fallback for Cloudflare/bot-challenge 403 responses. Does
   NOT go through CRW/obscura. Upstream Onyx uses this only when no content
   provider is configured.
@@ -1170,13 +1173,15 @@ PDF text extraction uses `extract_pdf_text(content)` which returns
 
 This path does **not** go through CRW, the CDP shim, or obscura. It is an
 in-process HTTP fetch via `ssrf_safe_get()` (SSRF-validated `requests.get`),
-and `requests` sends public targets through the loopback `onyx-helper` policy.
-That policy applies private/internal and cleartext URL rules and selects Myst,
-the configured upstream proxy, or explicit no-VPN egress. Onyx's internal
+and `requests` sends public targets through `onyx-public-egress-bridge` to the
+public policy and route broker. That path applies private/internal and
+cleartext URL rules and selects Myst, the configured upstream proxy, or
+explicit no-VPN egress. Onyx's internal
 dependencies bypass it only through the stack-owned `NO_PROXY` set in
 `onyx/helper-egress.env`. Playwright does not inherit that set; the helper
-policy permits only the
-local document server's exact loopback port 8091 as a direct internal target.
+path has no private-target exception. The separate full-mode Web Connector
+reaches the exact `doc-drop-web:8091` identity through the host policy, route
+broker, and fixed doc-drop gateway.
 The initial request uses a simple `OnyxWebCrawler/1.0 (+https://www.onyx.app)`
 user agent with no stealth. When the response is a 403 or carries Cloudflare
 headers (`cf-ray`, `cf-mitigated`, `Server: cloudflare`), and
@@ -1526,7 +1531,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
 | `EGRESS_PROXY_ALLOWED_CLIENT_HOSTS` | required except for literal-loopback listeners | Comma-separated dedicated bridge service names allowed to connect; an empty list is valid only when `PREFETCH_PROXY_HOST` is a literal loopback address. |
-| `EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS` | empty; helper Compose sets exact loopback port 8091 authorities | Exact `host:port` authorities allowed to connect directly despite normal private/cleartext blocking. Valid only for `onyx-helper`; this is not a general bypass list. |
+| `EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS` | empty; the full stack sets exact `doc-drop-web:8091` authority on the host policy and broker | Exact stack-owned `host:port` authorities allowed through their fixed internal gateway despite normal private/cleartext blocking. Valid only for `onyx-helper`; this is not a general bypass list. |
 | `EGRESS_UPSTREAM_PROXY_URL` | (empty) | Upstream proxy for HTTP forwarding and CONNECT tunnels. Supports `http://`, `https://`, `socks5://`, `socks5h://`. When set, the proxy routes its own upstream requests through this proxy. |
 | `EGRESS_ALLOW_HTTP_URLS` | `false` | Allow cleartext `http://` target URLs in the prefetch proxy and CDP shim. When false, HTTP fetches fail closed with a message telling the agent to use HTTPS. |
 | `PREFETCH_BLOCK_HOSTS` | `google.com,search.brave.com,html.duckduckgo.com,startpage.com,bing.com` | Comma-separated search engine hostnames to block immediately (403 without network request) |

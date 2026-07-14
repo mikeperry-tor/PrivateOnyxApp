@@ -113,6 +113,14 @@ lookup. Without an upstream proxy, public names are resolved and pinned at the
 broker through Myst provider DNS or explicit no-VPN system DNS. Upstream
 credentials are never logged.
 
+The upstream proxy endpoint is bootstrap routing, not a target-policy
+exception. In VPN mode, public proxy names are resolved with the Myst provider
+resolver and public proxy addresses follow the Myst route. Exact
+`host.docker.internal` uses its narrow host route. A configured RFC1918 IPv4
+literal receives only an exact `/32` proxy-endpoint route, without enabling
+general RFC1918 target access. System-DNS resolution of `.local`, `.internal`,
+or `.home.arpa` proxy names requires `EGRESS_ALLOW_RFC1918=true`.
+
 An upstream that resolves a public-looking hostname to a private address is a
 residual risk for remote-DNS schemes; enforce equivalent policy at that
 upstream. Exact host and RFC1918 exceptions are never sent through it.
