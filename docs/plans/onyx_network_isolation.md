@@ -38,28 +38,35 @@ host browser / optional Tailscale
        |                |                 +--> internal data/service peers
        |                +--> fixed request-path gateways
        |
-       +--> fixed public-only bridge --> public Onyx policy listener -----+
-       |                                                                 |
-       +--> fixed host-capable bridge --> host-capable policy listener --+-->
-                                                                         |
-              Myst / configured upstream proxy / explicit no-VPN route <-+
-              (the host-capable listener also has exact approved host
-               exceptions; the public listener never does)
+       +--> fixed public-only bridge --> public request-policy namespace
+       |                                      |
+       |                                      v
+       |                              public-only route broker -----------+
+       |                                                                  |
+       +--> fixed host-capable bridge --> host request-policy namespace   |
+                                              |                           |
+                                              v                           v
+                                      host-capable route broker --> selected
+                                        (exact host and optional        final
+                                         RFC1918 exceptions only)       route
 ```
 
 All Onyx application networks must be `internal: true`. Required internal
 service traffic remains direct on explicitly selected internal networks.
 Generic environment-aware external HTTP(S) uses the public-only bridge.
-Remote MCP/OAuth and explicitly approved host-local MCP, embedding, and narrow
-helper traffic use the host-capable bridge. Direct sockets that ignore proxy
-configuration must fail closed because the application containers have no
-externally routed network.
+Remote MCP/OAuth, user-configured inference base URLs, and explicitly approved
+host-local MCP, embedding, and narrow helper traffic use the host-capable
+bridge. Provider-default inference endpoints remain on the public-only bridge.
+Direct sockets that ignore proxy configuration must fail closed because the
+application containers have no externally routed network.
 
 Both Onyx bridges must remain separate from the browser and executor bridges
 planned by `obscura_direct.md`. The public-versus-host distinction is the
-security boundary: only the host-capable Onyx listener may reach exact trusted
-host-local destinations. Sharing that listener or bridge with a browser or
-executor would create a path to the Docker host.
+security boundary: the public and host request-policy processes run in
+different network namespaces with different route-broker networks, and only
+the host route broker may use exact host-local or explicitly enabled RFC1918
+destinations. Sharing that listener, namespace, route broker, or bridge with a
+browser or executor would create a path to the Docker host or LAN.
 
 ## Relationship to Other Plans
 
@@ -74,8 +81,8 @@ Ownership is divided as follows:
 | Concern | Owning plan |
 | --- | --- |
 | Onyx application networks and removal from `netns-holder` | this plan |
-| Separate public-only and host-capable Onyx bridges/listeners | this plan |
-| Onyx MCP HTTPX proxy correctness and target-DNS behavior | this plan |
+| Separate public-only and host-capable Onyx bridges, policy namespaces, and route brokers | this plan |
+| Onyx MCP and configured-inference proxy correctness and target-DNS behavior | this plan |
 | Internal service URL migration away from shared loopback | this plan |
 | Host WebUI/doc publication and Tailscale-to-Onyx ingress | this plan |
 | CRW removal and direct Onyx/SearXNG-to-Obscura fetching | `obscura_direct.md` |
@@ -127,8 +134,9 @@ this plan across an upgrade without source and runtime validation.
 2. Make direct external sockets from Onyx application containers fail at the
    network layer in VPN, upstream-proxy, and explicit no-VPN modes.
 3. Preserve environment-aware helper downloads, Playwright helpers, Web
-   connectors, remote LLM/helper clients, and other supported outbound paths
-   through the final-hop policy.
+   connectors, provider-default and configured inference clients, remote
+   helper clients, and other supported outbound paths through the final-hop
+   policy.
 4. Route streamable HTTP and SSE MCP traffic, redirects, discovery, OAuth,
    registration, refresh, and token requests through the Onyx egress policy.
 5. Preserve MCP access to exact `host.docker.internal` endpoints when the Onyx
@@ -161,11 +169,13 @@ this plan across an upgrade without source and runtime validation.
 - Do not rely on `HTTP_PROXY`, `HTTPS_PROXY`, or `NO_PROXY` as the security
   boundary. They select the intended route; internal network placement
   prevents bypass.
-- Do not grant browser or executor bridges access to either Onyx listener, and
-  never grant the public-only Onyx listener host/internal exceptions.
-- Do not allow arbitrary Docker-internal names, the Docker gateway, LAN
-  ranges, link-local metadata, or loopback merely because exact
-  `host.docker.internal` MCP access is supported.
+- Do not grant browser or executor bridges access to either Onyx listener or
+  route broker, and never grant the public-only Onyx namespace or route broker
+  host/internal exceptions.
+- Do not allow arbitrary Docker-internal names, the Docker gateway, link-local
+  metadata, or loopback merely because host/private MCP access is supported.
+  RFC1918 access is a separate explicit opt-in described below and exists only
+  on the host-capable route.
 - Do not disable Onyx SSRF validation globally. Preserve the Admin control and
   its distinction between public, private-network, loopback, and link-local
   targets.
@@ -249,10 +259,12 @@ with a direct removal message rather than silently ignoring it.
 Retain `netns-holder` as the stable owner of the Myst namespace. It contains:
 
 - `myst-client`;
-- final-hop policy process or processes;
+- minimal public-only and host-capable route-broker processes that perform the
+  authoritative final connection, DNS selection, address pinning, and repeated
+  destination validation;
 - exact routing/DNS readiness logic;
 - VPN-only optional services that genuinely require namespace routing; and
-- only the policy-side endpoints of fixed gateways.
+- only the trusted-namespace endpoints of fixed route gateways.
 
 It must not contain `api_server`, `background`, `web_server`, `nginx`,
 code-interpreter control, local application helpers, or data services. Remove
@@ -262,6 +274,40 @@ aliases currently assigned to `netns-holder`.
 Give the routing namespace an explicitly named external-capable uplink network
 rather than relying on accidental application use of Compose `default`.
 Application and data services must not attach to that uplink.
+
+The request-policy processes do **not** use
+`network_mode: service:netns-holder`. Run the public-only and host-capable
+processes in separate ordinary container network namespaces. Neither receives
+an external-capable network, the other's route network, or a direct
+host-gateway route. Each can reach only its caller bridge and its matching
+fixed route broker in `netns-holder`.
+
+The route brokers are deliberately smaller than the request-policy processes.
+They accept one versioned stack-internal protocol from their one allowed policy
+peer, repeat canonical host/address/port validation, and open the final
+connection through Myst, the configured upstream proxy, or explicit no-VPN
+mode. The public broker accepts only public destinations. The host broker adds
+only the exact host and opt-in RFC1918 behavior below. They must not accept raw
+HTTP proxy traffic from Onyx, browsers, executors, or a caller bridge. A
+compromised public request-policy process can therefore request arbitrary
+public egress but still cannot obtain a host/LAN route from its broker.
+
+Attach `netns-holder` to two distinct internal broker networks, each with only
+the matching isolated policy service as its other member. Each broker binds a
+fixed port only on its matching namespace interface, authenticates a distinct
+per-start stack-generated policy credential, and rejects traffic arriving on
+the wrong interface or with the wrong protocol/version. Keep IPv4/IPv6
+forwarding disabled so these attachments cannot become routed bridges.
+
+The broker request carries only a canonical destination host, port, route
+class, and bounded connection metadata; it cannot select an upstream proxy,
+resolver, source address, or alternate broker. After validation and pinned
+resolution, the broker returns a bounded duplex byte stream for that one
+connection. Specify framing, maximum field/frame sizes, connect/idle/total
+deadlines, half-close and cancellation behavior, concurrency limits, and
+credential-safe errors. Upstream proxy credentials and provider-DNS settings
+remain broker-side. Malformed frames, peer loss, DNS disagreement, unavailable
+routes, and partial upstream handshakes fail closed without a direct retry.
 
 ### Internal Onyx Networks
 
@@ -274,7 +320,7 @@ recommended shape is:
 | `onyx-backend` | API, background, code-interpreter control, trusted wrapper helpers, and caller sides of fixed request-path gateways. |
 | `onyx-data` | API/background and only their required PostgreSQL/cache/index/object-store peers. |
 | `onyx-public-egress` | API/background generic environment-aware clients; only peer is the fixed public-only bridge. |
-| `onyx-host-egress` | API MCP transport, local embedding shim, and explicitly approved narrow host-capable helpers; only peer is the fixed host-capable bridge. |
+| `onyx-host-egress` | API/background MCP and configured-inference transports, local embedding shim, and explicitly approved narrow host-capable helpers; only peer is the fixed host-capable bridge. |
 | existing restricted service networks | CRW, SearXNG, and later Obscura CDP remain behind fixed gateways; do not expose their control networks directly to general Onyx peers. |
 
 Do not retain a broad default network attachment in addition to these
@@ -294,9 +340,11 @@ this same caller-side network.
 Add two fixed bridges. Each has exactly two network attachments:
 
 - `onyx-public-egress-bridge` attaches to `onyx-public-egress` and a dedicated
-  internal `onyx-public-policy-upstream` shared only with `netns-holder`; and
+  internal `onyx-public-policy-upstream` shared only with the public
+  request-policy process; and
 - `onyx-host-egress-bridge` attaches to `onyx-host-egress` and a dedicated
-  internal `onyx-host-policy-upstream` shared only with `netns-holder`.
+  internal `onyx-host-policy-upstream` shared only with the host-capable
+  request-policy process.
 
 Each bridge forwards one fixed proxy port to its matching fixed listener. Each
 must:
@@ -312,37 +360,48 @@ must:
 - be tested as a TCP forwarder rather than an IP router.
 
 Only generic public clients attach to `onyx-public-egress`. Only MCP,
-embedding, and named narrow helpers attach to `onyx-host-egress`. Network
-membership alone is not the request selector for API/background, which need
-both classes: generic `HTTP_PROXY`/`HTTPS_PROXY` point to the public bridge,
-while the strict MCP transport and each approved host helper use an explicit
-host-bridge URL. Neither bridge may attach to browser, executor, data,
-frontend, or restricted service control networks.
+configured-inference, embedding, and named narrow helpers attach to
+`onyx-host-egress`. Network membership alone is not the request selector for
+API/background, which need both classes: generic `HTTP_PROXY`/`HTTPS_PROXY`
+point to the public bridge, while the strict MCP transport, configured-
+inference transport, and each approved host helper use an explicit host-bridge
+URL. Neither bridge may attach to browser, executor, data, frontend, or
+restricted service control networks.
 
-Use the same audited policy implementation for both classes, but run separate
-processes/listeners with separate policy-side networks. A configuration or
-process compromise in the public-only listener must not acquire the
-host-capable route or exception table. Direct Obscura may later place the
-generic-Onyx, browser, and executor public-only listeners in this same
-public-only process, but it must preserve each listener's separate bridge and
-policy-side network. It must keep the host-capable listener in its own process
-with its distinct allowed bridge peer.
+Use the same audited request-policy implementation for both classes, but run
+separate processes in separate network namespaces with separate listener and
+route-broker networks. The public namespace reaches only the public route
+broker; the host namespace reaches only the host route broker. Both brokers
+repeat destination validation, and neither broker protocol accepts a
+client-selected alternate broker or upstream. A configuration or process
+compromise in the public-only request-policy listener must therefore remain
+unable to acquire the host-capable route or exception table.
+
+Direct Obscura may later place the generic-Onyx, browser, and executor
+public-only listeners in the same public request-policy process, but it must
+preserve each listener's separate bridge and peer allowlist. It must keep the
+host-capable listener in its own namespace with its distinct bridge peer and
+route broker.
 
 ### Onyx Policy Listener Classes
 
-Both Onyx listeners apply normal final-hop policy to public destinations:
+Both Onyx request-policy listeners apply normal request/framing policy, and
+their route brokers repeat all destination-sensitive checks before making the
+authoritative final connection:
 
 - HTTP request-framing validation;
 - URL/port/plain-HTTP policy;
 - internal and Docker-name rejection;
-- VPN provider DNS and address pinning when VPN is enabled without an upstream
-  proxy;
-- remote target DNS at the configured upstream proxy when one is set;
+- VPN provider DNS and address pinning in the route broker when VPN is enabled
+  without an upstream proxy;
+- upstream-proxy DNS semantics selected by scheme (`socks5h` and HTTP CONNECT
+  keep target DNS remote; plain `socks5` uses the documented local resolver);
 - explicit system/Docker DNS only in documented no-VPN direct mode; and
 - credential-safe logging.
 
-Only the host-capable listener additionally supports a small stack-owned
-exact-destination table. At minimum, evaluate and test:
+Only the host-capable request-policy namespace and route broker additionally
+support a small stack-owned exact-destination table. At minimum, evaluate and
+test:
 
 - `host.docker.internal:*` for trusted host-local MCP, OAuth, local model, and
   explicitly supported helper endpoints.
@@ -379,11 +438,49 @@ an always-on denial floor for:
 - configured deployment-local suffixes plus all non-public resolved address
   ranges.
 
-Only the exact host-capable-listener exceptions named above can precede that
-floor. The public-only listener has no exception table and always applies the
-floor.
+Only the exact host-capable exceptions named above and the explicit RFC1918
+mode below can precede that floor. The public-only namespace and broker have no
+exception table and always apply the floor.
 They do not create a suffix exception, so subdomains and newly introduced
 Docker/Podman aliases remain denied by default.
+
+### Opt-In RFC1918 MCP, Embedding, and Inference
+
+Preserve private-network integrations behind the existing explicit
+`MYST_VPN_ALLOW_LAN_BYPASS=true` preference. This switch has two coordinated
+effects: Myst installs the documented RFC1918 route exemptions, and the
+host-capable request-policy namespace/broker permits RFC1918 destinations for
+MCP, embedding, and inference clients deliberately routed to the host-capable
+bridge. The public-only namespace, browser, executor, and generic helper path
+never receive this capability.
+
+When disabled, RFC1918 literals and names resolving only to RFC1918 addresses
+fail closed. When enabled:
+
+- Onyx MCP still applies the saved Admin SSRF level on every initial and
+  derived URL; strict levels reject private destinations before proxying.
+- The local embedding shim and each supported Onyx client for a user-configured
+  inference base URL use an explicit host-capable proxy transport rather than
+  generic environment routing. Default provider endpoints with no configured
+  base URL may remain on the generic public path.
+- The host route broker resolves private-capable hostnames with the trusted
+  system resolver, requires every selected address to be RFC1918, pins the
+  connection, and never sends it through Myst provider DNS or an external
+  upstream proxy.
+- Loopback, link-local, metadata, multicast, unspecified, Docker-internal names
+  other than the exact host exception, and IPv4-mapped bypass forms remain
+  blocked even when the switch is enabled.
+
+Supporting arbitrary private MCP and configured endpoint hostnames necessarily
+means that, while this opt-in is enabled, host-capable target names may be
+queried through the trusted system resolver before the broker can determine
+that they are private. An all-RFC1918 answer may use the pinned private route;
+a mixed private/global answer is rejected; and an all-global answer is
+discarded and resolved again through the normal selected public-target route.
+Document the resulting DNS-privacy tradeoff. A compromised
+API/background process that can use the host-capable bridge can probe RFC1918
+services while the switch is enabled, so this remains a broad operator-approved
+LAN capability rather than an endpoint-scoped sandbox guarantee.
 
 ## MCP, OAuth, and Target DNS
 
@@ -423,11 +520,14 @@ Split validation responsibilities:
 
 - Onyx performs scheme, credential, syntax, normalized-hostname, IP-literal,
   always-blocked-name, Admin SSRF-level, and exact trusted-host checks without
-  resolving arbitrary public names.
-- The final-hop policy resolves and validates public names using the selected
-  VPN/upstream/no-VPN mode and rechecks every CONNECT/forward request.
+  resolving arbitrary public names when private-LAN mode is disabled.
+- The matching route broker resolves and validates public names using the
+  selected VPN/upstream/no-VPN mode and rechecks every CONNECT/forward request.
 - Exact `host.docker.internal` destinations are resolved only by their
-  authorized host-listener exception.
+  authorized host-broker exception.
+- When `MYST_VPN_ALLOW_LAN_BYPASS=true`, the host-capable path follows the
+  explicit RFC1918 resolution and pinning rules above; the public path remains
+  unchanged.
 
 At strict SSRF levels, `host.docker.internal` must be rejected structurally
 even without DNS. At `ALLOW_PRIVATE_NETWORK`, allow that exact non-loopback
@@ -454,6 +554,33 @@ Libraries with explicit transports, disabled environment discovery, custom
 DNS, raw sockets, browser launch flags, or SDK-specific clients must be audited
 individually. The network boundary makes a missed client fail closed, but every
 supported feature still needs an intentional route and regression test.
+
+### Configured Onyx Inference Upstreams
+
+Preserve RFC1918 inference endpoints configured through Onyx provider
+`api_base` or equivalent fields by adding one stack-owned
+`ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL` that points to the same fixed
+host-capable bridge as MCP and embedding. It is not a user-selectable proxy.
+Apply it only to requests derived from a user-configured inference base URL;
+provider-default public endpoints continue to use the public bridge.
+
+Inventory every synchronous and asynchronous path that consumes a configured
+LLM, embedding, reranking, image-generation, speech, or provider-discovery base
+URL at the pinned Onyx/LiteLLM versions. Supply an explicit proxy-capable client or
+transport with environment discovery disabled, preserving streaming, TLS
+verification/SNI, authentication, timeouts, retries, and connection pooling.
+If a pinned SDK cannot accept a per-client proxy without changing global
+traffic, add a narrow startup-validated factory patch and block cutover for
+that configured-provider path until it is covered; do not use `NO_PROXY`, a
+direct socket, or a process-global proxy switch that silently moves default
+providers onto the host-capable path.
+
+Validate the configured endpoint URL before client construction and on every
+SDK-derived redirect or discovery URL where the SDK permits them. The route
+broker remains authoritative for DNS/address selection: RFC1918 succeeds only
+with `MYST_VPN_ALLOW_LAN_BYPASS=true`, while public configured endpoints use
+the normal public final route through the host broker. Startup/source-shape
+checks must fail loudly if an SDK upgrade stops using the injected client.
 
 ## Internal Service URL Migration
 
@@ -500,17 +627,21 @@ service URLs from displayed citations.
 
 ### Local Embedding Upstream
 
-Move `local-embedding-shim` to an internal network and make its
-environment-aware HTTP client reach the configured upstream through the
-host-capable Onyx bridge. The
+Move `local-embedding-shim` to an internal network and patch its owned
+`http.client` connection pool to use an explicit, strictly validated
+host-capable Onyx proxy URL. The current client is not environment-proxy aware,
+so this is a required implementation change rather than an optional fallback. The
 default `host.docker.internal` upstream must use the exact host exception.
-Public embedding upstreams use normal final-hop policy. API/background reach
-only `local-embedding-shim:9101`, never its upstream directly.
+RFC1918 upstreams require `MYST_VPN_ALLOW_LAN_BYPASS=true`; public embedding
+upstreams use normal final-hop policy. API/background reach only
+`local-embedding-shim:9101`, never its upstream directly.
 
-If the shim cannot use an explicit proxy without changing request semantics,
-patch its small owned implementation rather than attaching it to an external
-network. Validate `/ready`, query/passage prefixes, model conversion, API-key
-redaction, indexing, and `internal_search`.
+Implement HTTP absolute-form forwarding and HTTPS `CONNECT` with ordinary TLS
+certificate verification and target SNI after the tunnel is established.
+Preserve pooling and one bounded reconnect, keep proxy and upstream credentials
+out of logs, and ensure public target DNS is not resolved by the shim. Validate
+HTTP and HTTPS upstreams, `/ready`, query/passage prefixes, model conversion,
+API-key redaction, indexing, and `internal_search`.
 
 ## Ingress and Optional Exposure
 
@@ -547,13 +678,20 @@ disabled. Health checks must traverse the configured target path.
 
 ### Teep
 
-Teep remains a separate inference component. Onyx reaches it by service name
-on an internal caller network. If Teep is configured to route through Myst,
-retain its namespace placement and expose a fixed internal gateway to Onyx;
-do not move the Onyx application tier back into the namespace. Host Teep
-publication and any `host-teep-proxy` removal remain coordinated with the
-Direct Obscura service-reduction work unless this plan necessarily changes
-them first.
+Teep remains a separate inference component. To minimize additional services
+without making it a pivot into `onyx-backend`, use a dedicated internal
+`onyx-teep` network containing only Teep and the exact Onyx callers that need
+it when Teep uses its normal external-capable namespace. Teep may be dual-homed
+between that narrow caller network and its selected external uplink; it must
+not attach to frontend, backend, data, public-egress, or host-egress networks.
+
+When Teep is configured to route through Myst, retain its namespace placement
+and expose a fixed single-destination Teep gateway on `onyx-teep`; do not attach
+`netns-holder` itself to the Onyx caller network and do not move the Onyx
+application tier back into the namespace. This adds a gateway only in the mode
+that cannot safely use the direct narrow network. Host Teep publication and any
+`host-teep-proxy` removal remain coordinated with the Direct Obscura
+service-reduction work unless this plan necessarily changes them first.
 
 ## Service and Network Simplifications
 
@@ -591,9 +729,12 @@ Isolation enables these reductions independently of CRW/Obscura removal:
 13. Remove readiness checks and restart edges that exist only to coordinate
     unrelated services sharing one namespace.
 
-The migration adds two Onyx egress bridges and may add a conditional Tailscale
-frontend gateway. Count reductions and additions from effective Compose models
-rather than claiming an unconditional net service count.
+The migration adds two Onyx egress bridges, two isolated request-policy
+services, and two minimal route brokers, and may add a conditional Tailscale
+frontend gateway. These replace the current loopback policy arrangement rather
+than supplementing it indefinitely. Count reductions and additions from the
+effective lite/full Compose models, including optional executor, Tailscale, and
+Teep layers, rather than claiming an unconditional net service count.
 
 Do not use this plan to remove SearXNG Valkey, upstream model-server
 containers, CRW, CDP shim, browser policy services, or renderer bridges. Those
@@ -632,19 +773,23 @@ Use this dependency chain for egress-capable Onyx services:
 ```text
 myst-client data-plane readiness (VPN mode)
   or explicit no-VPN namespace readiness
-    -> both required Onyx policy listener readiness checks
+    -> both trusted route-broker readiness checks
+    -> matching isolated Onyx request-policy readiness checks
     -> matching fixed Onyx egress bridge end-to-end readiness
     -> API/background/helper readiness
 ```
 
-Policy readiness must retain the target-free checks from the restricted-egress
-implementation: provider-DNS validation in direct VPN/no-VPN mode or
-upstream-proxy endpoint bootstrap plus protocol/authentication handshake. The
-bridge health check must traverse the bridge and receive the expected policy
-denial for a blocked local target.
+Route-broker readiness must retain the target-free checks from the
+restricted-egress implementation: provider-DNS validation in direct VPN/no-VPN
+mode or upstream-proxy endpoint bootstrap plus protocol/authentication
+handshake. Request-policy readiness must verify its fixed broker protocol and
+the broker's expected denial without opening an arbitrary public target. The
+bridge health check must traverse the bridge, request policy, and broker and
+receive the expected denial for a blocked local target.
 
 Application services no longer depend directly on `myst-client` merely because
-they share its namespace. Egress-capable services depend on the bridge/policy;
+they share its namespace. Egress-capable services depend on the complete
+bridge/request-policy/route-broker chain;
 pure internal services depend only on their real application/data peers. A
 post-start policy failure remains a visible request failure; do not add direct
 fallback.
@@ -660,11 +805,11 @@ This keeps a tunnel flap visible on egress requests without turning it into an
 application restart cascade.
 
 Only Myst retains the `autoheal=true` recovery role in VPN mode. Restarting
-Myst leaves `netns-holder` stable, the policy recovers in place, and isolated
+Myst leaves `netns-holder` stable, the route brokers and policies recover in place, and isolated
 Onyx services remain running. This prerequisite makes explicit no-VPN models
 omit autoheal; the Direct Obscura migration must preserve that layer boundary.
-Do not autoheal application, bridge, or gateway containers in response to a
-tunnel flap.
+Do not autoheal application, request-policy, route-broker, bridge, or gateway
+containers in response to a tunnel flap.
 
 Validate:
 
@@ -690,9 +835,10 @@ After migration:
   service explicitly requires one;
 - code-interpreter control remains highly trusted because it owns the Docker
   socket, but its HTTP service no longer receives general namespace egress;
-- the two fixed Onyx bridges are the only multi-homed exceptions between their
-  Onyx egress classes and policy upstreams;
-- the policy, not application DNS, is authoritative for public target
+- the two request-policy namespaces and their fixed route-broker links preserve
+  the public-versus-host boundary without placing either request-policy process
+  in `netns-holder`;
+- the route broker, not application DNS, is authoritative for public target
   resolution and private-address rejection;
 - exact host exceptions intentionally expose approved host services to trusted
   Onyx callers when Admin SSRF policy permits them; and
@@ -702,7 +848,10 @@ Residual risks to document:
 
 - a compromise or generic-relay misconfiguration in either Onyx bridge could
   pivot between its two attached networks;
-- a compromise of the final-hop policy process has trusted namespace access;
+- a compromise of either minimal route broker has trusted namespace access;
+- a compromise of the public request-policy process can obtain arbitrary
+  policy-permitted public egress but remains behind the public broker's
+  private/host denial;
 - the code-interpreter control service's Docker socket remains a host-level
   capability independent of network isolation;
 - an upstream proxy may resolve a public-looking name privately unless it
@@ -710,6 +859,8 @@ Residual risks to document:
 - permitting arbitrary ports on exact `host.docker.internal` exposes whatever
   host services listen on those ports to an SSRF-permitted Onyx MCP/helper
   request; and
+- enabling `MYST_VPN_ALLOW_LAN_BYPASS` intentionally gives host-capable Onyx
+  callers broad RFC1918 reach and weakens target-DNS confinement for that class;
 - required internal peers remain laterally reachable according to the selected
   application/data network grouping.
 
@@ -737,11 +888,15 @@ an operator attaching new networks after startup.
 
 1. Add the strict explicit MCP proxy transport.
 2. Split non-resolving Onyx validation from authoritative final-hop DNS.
-3. Add exact host exception handling only to the host-capable Onyx policy
-   listener, and prove the public-only listener rejects the same target.
-4. Preserve Admin SSRF level semantics on initial URLs and every derived URL.
-5. Add Linux host-gateway and Myst route-exemption validation.
-6. Add focused unit tests before changing network placement.
+3. Add separate public and host request-policy namespaces plus their distinct
+   public-only and host-capable route brokers in `netns-holder`.
+4. Add exact host and opt-in RFC1918 handling only to the host-capable
+   namespace/broker, and prove the public broker rejects the same target.
+5. Define the bounded authenticated policy-to-broker protocol and generate a
+   distinct ephemeral credential for each broker on every stack start.
+6. Preserve Admin SSRF level semantics on initial URLs and every derived URL.
+7. Add Linux host-gateway, RFC1918 opt-in, and Myst route-exemption validation.
+8. Add focused unit tests before changing network placement.
 
 ### Workstream 2: Internal Application Networks
 
@@ -759,13 +914,17 @@ an operator attaching new networks after startup.
 ### Workstream 3: Separate Onyx Egress Bridges
 
 1. Build or reuse an audited fixed-forwarder image with immutable provenance.
-2. Add the public-only and host-capable component and policy-side networks.
-3. Expose each policy listener only to its expected bridge peer and prove that
-   the public listener has no host exception capability.
+2. Add the public-only and host-capable component, policy, and route-broker
+   networks without attaching either request-policy process to `netns-holder`.
+3. Expose each request-policy listener only to its expected bridge peer and
+   each broker only to its expected policy peer; prove the public broker has no
+   host or RFC1918 exception capability.
 4. Retarget generic helper/Playwright proxy variables to the public bridge and
-   MCP/embedding/narrow host helpers to the explicit host bridge URL.
+   MCP/configured-inference/embedding/narrow host helpers to explicit
+   host-bridge URLs.
 5. Update stack-owned `NO_PROXY` for internal service DNS only.
-6. Prove packet forwarding and client-selected destinations are impossible.
+6. Prove packet forwarding, cross-broker access, and client-selected alternate
+   upstreams are impossible.
 7. Remove the old loopback-only helper client assumption.
 
 ### Workstream 4: Ingress and Local Services
@@ -776,9 +935,14 @@ an operator attaching new networks after startup.
    affected connectors, and remove `host-doc-drop-web-proxy`.
 3. Add the conditional fixed Tailscale frontend gateway and its narrow caller
    network; keep Tailscale itself off `onyx-frontend`.
-4. Route local embedding upstream through the host-capable Onyx policy.
-5. Retarget Teep and internal model-service URLs without changing inference
-   trust semantics.
+4. Add explicit HTTP/HTTPS proxy support to the local embedding shim and route
+   its upstream through the host-capable Onyx policy.
+5. Add and validate the explicit configured-inference transport for every
+   supported pinned SDK path without changing provider-default routing.
+6. Put ordinary Teep on the dedicated narrow `onyx-teep` network; add a fixed
+   Teep gateway only in the Myst-routed mode.
+7. Retarget internal model-service URLs without changing inference trust
+   semantics.
 
 ### Workstream 5: Readiness and Compose Cleanup
 
@@ -800,16 +964,21 @@ an operator attaching new networks after startup.
   supported external traffic crosses restricted egress.
 - Preserve Admin SSRF instructions for host MCP and explain that the connection
   is policy-mediated rather than a `NO_PROXY` bypass.
+- Explain that `MYST_VPN_ALLOW_LAN_BYPASS` gates RFC1918 MCP, embedding, and
+  user-configured inference base URLs, while provider-default inference and
+  all browser/executor traffic remain on public-only paths.
 - Update host endpoints, local RAG URLs, Tailscale behavior, troubleshooting,
   and service counts.
 - Remove shared-namespace and port-7000 instructions.
 
 ### `docs/vpn_routing_and_proxies.md`
 
-- Restrict the trusted namespace inventory to Myst, final-hop policy, and
-  genuine VPN-side services.
-- Add both Onyx bridges and policy-side networks, their distinct peer sets,
-  the host-only exception table, and the DNS matrix.
+- Restrict the trusted namespace inventory to Myst, minimal route brokers, and
+  genuine VPN-side services; document that request-policy processes use
+  separate namespaces.
+- Add both Onyx bridges, isolated policy namespaces, route-broker networks,
+  their distinct peer sets, the host/RFC1918 exception table, and the DNS
+  matrix.
 - Explain explicit MCP transport handling and why environment variables alone
   were insufficient.
 - Update readiness, autoheal, upstream proxy, Teep, Tailscale, and no-VPN
@@ -819,14 +988,17 @@ an operator attaching new networks after startup.
 
 - Make Onyx application networks part of the enforced boundary rather than a
   trusted shared-namespace exception.
-- Document permitted peers per network, both Onyx bridges, the exact
-  host-listener exception, Docker-internal denial, and residual pivot risk.
+- Document permitted peers per network, both Onyx bridges and policy
+  namespaces, both route brokers, the exact host/RFC1918 exceptions,
+  Docker-internal denial, and residual pivot risk.
 - Update reachability tables and negative-path evidence.
 
 ### `docs/request_handling.md`
 
 - Update Onyx helper, MCP/OAuth, Web connector, local Chromium, and gateway
   request chains.
+- Add configured-inference versus provider-default proxy selection, including
+  RFC1918 opt-in, mixed-answer rejection, and fail-closed SDK coverage.
 - Distinguish internal service DNS from public target DNS.
 - Preserve current CRW/Obscura behavior until Direct Obscura is implemented.
 - Remove the bundled Obscura MCP request chain and all setup, endpoint,
@@ -836,6 +1008,8 @@ an operator attaching new networks after startup.
 
 - Document the strict MCP proxy/DNS patch and revised Playwright proxy URL
   validation.
+- Document the configured-inference proxy selection patch, covered provider
+  clients, and strict source-shape validation.
 - Add source-shape anchors for HTTPX transport construction, MCP SDK clients,
   redirects, OAuth, and SSRF settings.
 - Add upgrade tests that fail if environment proxy behavior or SDK factory
@@ -846,14 +1020,17 @@ an operator attaching new networks after startup.
 
 - Document the internal doc-drop crawl URL, display-only link rewrite, direct
   host publication, and mandatory connector recreation/reindex migration.
-- Update embedding-shim service URL, host upstream routing, readiness, and
-  failure diagnostics.
+- Update embedding-shim service URL, explicit proxy implementation, host/LAN
+  upstream routing, readiness, and failure diagnostics.
 - Revalidate source-link clickability, freshness, PDF reindexing, and
   `internal_search`.
 
 ### `.env.wrapper.example`, `AGENTS.md`, and Plans
 
 - Do not make stack-owned bridge URLs or `NO_PROXY` values user-facing.
+- Generate the two distinct broker authentication credentials through the
+  existing ephemeral stack-secret flow on every start; do not add them to
+  `.env.wrapper.example` or persist them in application data.
 - Preserve user-facing SSRF, host port, VPN, upstream-proxy, and local embedding
   settings with accurate semantics.
 - Update `AGENTS.md` runtime shape, key locations, invariants, and test guidance.
@@ -894,11 +1071,23 @@ Add focused cases under `tests/` for:
   suffixes, single-label services, trailing dots, IDNA, and IP literals;
 - exact policy exception matching, system resolver selection, address pinning,
   and no external-upstream use for host targets;
+- broker protocol version/authentication/framing limits, wrong-interface and
+  cross-credential denial, deadlines/cancellation/half-close, concurrency, and
+  no caller-selected resolver/upstream/source address;
+- `MYST_VPN_ALLOW_LAN_BYPASS` disabled/enabled behavior, RFC1918-only answer
+  validation, mixed-answer rejection, all-global public-route handoff, and the
+  unchanged public-only denial;
 - normal VPN/upstream/no-VPN public resolver selection;
 - HTTP framing and credential redaction regression;
 - generic-helper failure when the public bridge/policy is unavailable, MCP
-  and embedding failure when the host bridge/policy is unavailable, and no
-  cross-class fallback;
+  configured-inference, and embedding failure when the host bridge/policy is
+  unavailable, and no cross-class fallback;
+- local embedding shim HTTP absolute-form and HTTPS CONNECT proxying, TLS SNI,
+  connection reuse/retry, no shim-side public DNS, and credential redaction;
+- configured-inference URL selection for every supported synchronous and
+  asynchronous SDK path, explicit client injection, provider-default public
+  routing, RFC1918 opt-in, mixed-answer rejection, redirect/discovery handling,
+  and strict failure when an SDK bypasses the injected transport;
 - internal doc-drop identity/display-link rewriting, path normalization,
   encoding, and strict source-shape failure;
 - rejection of every removed bundled Obscura MCP setting or route; and
@@ -912,16 +1101,20 @@ VPN credentials, the Docker host, or `.env.wrapper`.
 Parse effective models structurally and assert:
 
 - no Onyx application service uses `network_mode: service:netns-holder`;
-- only Myst, final-hop policy, and explicitly justified VPN-side services share
-  the namespace;
+- only Myst, the minimal route brokers, and explicitly justified VPN-side
+  services share `netns-holder`; request-policy processes use separate
+  namespaces and cannot reach the other broker network;
 - every Onyx application/data network is `internal: true`;
 - no Onyx application service attaches to the routing uplink, policy upstream,
-  browser, executor, or restricted service control networks;
+  route-broker, browser, executor, or restricted service control networks;
 - each Onyx bridge has exactly its two networks and hardening;
+- each broker network contains only `netns-holder` and its matching policy;
+  each broker binds only its matching interface, uses a distinct generated
+  credential, and namespace IP forwarding remains disabled;
 - browser and executor bridges are separate and cannot reach either Onyx
   listener or policy-side network;
-- the public-only listener cannot route any host/private destination and has
-  no host-exception configuration;
+- the public-only listener and route broker cannot route any host/private
+  destination and have no host/RFC1918-exception configuration;
 - caller-side request gateways attach to `onyx-backend` and exactly one
   restricted service network, expose one fixed destination, and cannot relay
   to another gateway's service;
@@ -933,7 +1126,10 @@ Parse effective models structurally and assert:
 - Tailscale/frontend gateways exist only in enabled layers; Tailscale never
   attaches directly to `onyx-frontend`, and the fixed HTTP gateway has no
   egress/helper/data network;
-- direct Myst dependencies are absent from pure application services; and
+- ordinary Teep attaches only to `onyx-teep` plus its selected uplink, while
+  Myst-routed Teep uses a fixed gateway and never exposes `netns-holder` to the
+  Onyx caller network;
+- direct Myst dependencies are absent from pure application services;
 - no bundled Obscura MCP service, gateway, network, route, environment value,
   secret, health check, or conditional profile exists; and
 - health dependencies follow the target graph in lite and full modes.
@@ -954,7 +1150,9 @@ Test at least:
 | lite, upstream SOCKS5/SOCKS5h | target DNS behavior matches scheme and no direct fallback occurs |
 | full, VPN/no VPN | all lite checks plus doc-drop crawl, source links, PDF freshness, embeddings, indexing, and `internal_search` |
 | MCP strict SSRF | host MCP rejected; remote public MCP succeeds through policy |
-| MCP allow-private | exact host MCP succeeds; loopback/link-local/other Docker names remain denied |
+| MCP allow-private, LAN bypass off | exact host MCP succeeds; RFC1918, loopback, link-local, and other Docker names remain denied |
+| MCP allow-private, LAN bypass on | exact host and RFC1918 MCP succeed through the host route; loopback/link-local/other Docker names remain denied |
+| configured inference, LAN bypass off/on | configured public endpoints use the host bridge and normal public final route; RFC1918 endpoints fail when off and succeed through the pinned private route when on; provider-default endpoints remain on the public bridge |
 | executor network off/on | control plane works; pods remain `none` or on the dedicated executor network and never inherit Onyx exceptions |
 | Tailscale off/on and routed/unrouted | disabled services absent; enabled ingress reaches nginx without adding application egress |
 
@@ -973,8 +1171,10 @@ host-to-link-local redirects under every SSRF level.
 - Drop Myst and prove policy readiness fails, direct sockets remain impossible,
   and internal chat/data health is not needlessly restarted.
 - Change an MCP/HTTPX signature in a fixture and prove strict startup fails.
-- Verify local model, GitHub repository download, Web connector, Highspot,
-  OAuth refresh, LLM provider, and remaining helper clients use their intended
+- Verify local model, configured
+  LLM/embedding/reranking/image/speech/provider-discovery endpoints,
+  provider-default LLM endpoints, GitHub repository download, Web connector,
+  Highspot, OAuth refresh, and remaining helper clients use their intended
   path.
 - Verify host and service DNS do not leak public MCP/helper names.
 - Verify logs contain no query values, credentials, OAuth tokens, proxy
@@ -999,7 +1199,8 @@ permit.
    strict readiness.
 3. Move API/background and retarget all internal URLs and gateways.
 4. Move web/nginx/code-interpreter control and change host ingress.
-5. Move or explicitly classify doc-drop and embedding helpers.
+5. Move or explicitly classify doc-drop and embedding helpers, and enable the
+   explicit configured-inference transport.
 6. Remove shared namespace aliases, application attachments, direct Myst
    dependencies, loopback workarounds, and obsolete publisher services.
 7. Exercise every mode from a clean Compose state and verify direct-socket
@@ -1028,13 +1229,17 @@ for any URL that must change; Compose cannot rewrite stored records.
   target DNS lookup.
 - Exact `host.docker.internal` MCP works only at the intended SSRF levels,
   stays local, and never traverses the external upstream proxy.
+- RFC1918 MCP, embedding, and inference endpoints work only when
+  `MYST_VPN_ALLOW_LAN_BYPASS=true`, only through the host-capable namespace and
+  broker, and never become reachable from public, browser, or executor paths.
 - The bundled Obscura MCP service and all of its configuration, secrets,
   routes, networks, tests, and documentation are absent; stale enablement
   configuration is rejected explicitly.
 - Loopback, link-local metadata, other Docker-internal names, private IPs at
   strict levels, and redirect bypasses remain denied.
 - Browser and executor bridges are separate and cannot reach either Onyx
-  listener, the host exception, application networks, or data networks.
+  listener or route broker, the host/RFC1918 exceptions, application networks,
+  or data networks.
 - Internal Onyx, data, Teep, request-gateway, code-interpreter-control, and RAG
   traffic uses explicit service networks and DNS names.
 - The code-interpreter port collision workaround and netns-holder application
@@ -1053,10 +1258,10 @@ for any URL that must change; Compose cannot rewrite stored records.
 | Behavior | Owner after isolation |
 | --- | --- |
 | Onyx application/data reachability | explicit internal Compose networks |
-| generic Onyx public HTTP(S) route | fixed public-only Onyx bridge and listener |
+| generic Onyx public HTTP(S) route | fixed public-only Onyx bridge, isolated request-policy namespace, and public-only route broker |
 | remote MCP/OAuth transport | explicit SSRF-guarded HTTPX proxy transport |
-| public target DNS and address validation | selected final-hop policy |
-| exact host MCP/embedding/narrow-helper route | fixed host-capable Onyx bridge and exact policy exception in trusted namespace |
+| public target DNS and address validation | selected route broker in the trusted routing namespace |
+| exact host and opt-in RFC1918 MCP/embedding/inference route | fixed host-capable Onyx bridge, isolated host policy namespace, and host route broker |
 | browser and executor public routes | separate bridges owned by Direct Obscura |
 | VPN readiness and recovery | Myst plus target-free policy readiness and Myst-only autoheal |
 | internal service bypasses | stack-owned `NO_PROXY` plus internal networks, never host/public names |
