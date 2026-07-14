@@ -16,7 +16,7 @@ MODULE_PATH = CRW_DIR / "route_broker.py"
 CREDENTIAL = "a" * 64
 
 
-def _load_module() -> ModuleType:
+def _load_module(env_overrides: dict[str, str] | None = None) -> ModuleType:
     spec = importlib.util.spec_from_file_location("route_broker_test", MODULE_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -29,6 +29,7 @@ def _load_module() -> ModuleType:
         "MYST_VPN_ENABLED": "false",
         "EGRESS_UPSTREAM_PROXY_URL": "",
     }
+    env.update(env_overrides or {})
     with patch.dict(os.environ, env, clear=True), patch.object(
         sys, "path", [str(CRW_DIR), *sys.path]
     ):
@@ -72,6 +73,7 @@ class RouteBrokerTests(unittest.IsolatedAsyncioTestCase):
             "version": module.MAGIC,
             "credential": "b" * 64,
             "route_class": "public",
+            "transport": "opaque",
             "host": "example.com",
             "port": 443,
         }
@@ -96,6 +98,7 @@ class RouteBrokerTests(unittest.IsolatedAsyncioTestCase):
             "version": module.MAGIC,
             "credential": CREDENTIAL,
             "route_class": "host",
+            "transport": "opaque",
             "host": "example.com",
             "port": 443,
         }
@@ -121,6 +124,7 @@ class RouteBrokerTests(unittest.IsolatedAsyncioTestCase):
             "version": module.MAGIC,
             "credential": CREDENTIAL,
             "route_class": "public",
+            "transport": "opaque",
             "host": "example.com",
             "port": 443,
         }
@@ -141,6 +145,66 @@ class RouteBrokerTests(unittest.IsolatedAsyncioTestCase):
         connect.assert_awaited_once_with(
             "example.com", 443, ("93.184.216.34",)
         )
+
+    async def test_host_route_allows_cleartext_to_validated_rfc1918(self) -> None:
+        module = _load_module(
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_ALLOW_RFC1918": "true",
+            }
+        )
+        request = {
+            "version": module.MAGIC,
+            "credential": CREDENTIAL,
+            "route_class": "host",
+            "transport": "cleartext",
+            "host": "inference.lan.example",
+            "port": 8080,
+        }
+        writer = _Writer()
+        validate = AsyncMock(return_value=(None, ("192.168.1.20",)))
+        connect = AsyncMock(return_value=(_reader(b""), _Writer()))
+        with patch.object(module, "_allowed_peer", AsyncMock(return_value=True)), patch.object(
+            module.policy, "_validate_destination", validate
+        ), patch.object(module.policy, "_connect_via_upstream", connect):
+            await module.handle_client(
+                _reader((json.dumps(request) + "\n").encode()), writer
+            )
+
+        self.assertTrue(writer.data.startswith(b'{"status":"ok"}\n'))
+        connect.assert_awaited_once_with(
+            "inference.lan.example", 8080, ("192.168.1.20",)
+        )
+
+    async def test_host_route_denies_cleartext_to_global_answer(self) -> None:
+        module = _load_module(
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_ALLOW_RFC1918": "true",
+            }
+        )
+        request = {
+            "version": module.MAGIC,
+            "credential": CREDENTIAL,
+            "route_class": "host",
+            "transport": "cleartext",
+            "host": "public.example",
+            "port": 80,
+        }
+        writer = _Writer()
+        validate = AsyncMock(return_value=(None, ("93.184.216.34",)))
+        connect = AsyncMock()
+        with patch.object(module, "_allowed_peer", AsyncMock(return_value=True)), patch.object(
+            module.policy, "_validate_destination", validate
+        ), patch.object(module.policy, "_connect_via_upstream", connect):
+            await module.handle_client(
+                _reader((json.dumps(request) + "\n").encode()), writer
+            )
+
+        response = json.loads(writer.data)
+        self.assertEqual(response["status"], "denied")
+        self.assertIn("HTTP URLs are disabled", response["reason"])
+        connect.assert_not_awaited()
 
 
 if __name__ == "__main__":

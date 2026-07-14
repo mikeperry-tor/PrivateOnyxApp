@@ -1158,11 +1158,12 @@ points Onyx's model-server environment variables at the shim:
 The shim shares only the internal backend caller network and the host egress
 network. Its explicit HTTP absolute-form / HTTPS CONNECT implementation reaches
 the configured upstream through `onyx-host-egress-bridge`; it disables ambient
-proxy discovery. The host policy permits plain HTTP only for its exact,
-broker-resolved `host.docker.internal` exception when general cleartext URLs
-are disabled. This keeps the bundled host embedding default usable without
-opening public or general RFC1918 HTTP destinations. The shim verifies
-upstream TLS, reuses connections, and fails closed.
+proxy discovery. When general cleartext URLs are disabled, the host policy
+permits plain HTTP for exact, broker-resolved `host.docker.internal` and for
+destinations whose complete broker-validated answer set is RFC1918 when
+`EGRESS_ALLOW_RFC1918=true`. This supports host and explicitly allowed LAN
+embedding endpoints without opening public HTTP destinations. The shim
+verifies upstream TLS, reuses connections, and fails closed.
 
 The shim implements the endpoints Onyx needs for local embedding startup and
 embedding requests:

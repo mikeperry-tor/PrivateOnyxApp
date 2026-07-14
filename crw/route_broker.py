@@ -19,7 +19,7 @@ from typing import Any
 
 import prefetch_blocking_proxy as policy
 
-MAGIC = "onyx-route-broker-v1"
+MAGIC = "onyx-route-broker-v2"
 MAX_REQUEST_BYTES = 4096
 HANDSHAKE_TIMEOUT = 10
 IDLE_TIMEOUT = int(os.environ.get("EGRESS_BROKER_IDLE_TIMEOUT", "300"))
@@ -119,9 +119,15 @@ async def handle_client(
         except (UnicodeDecodeError, json.JSONDecodeError):
             await _send_error(writer, "invalid broker request")
             return
-        if not isinstance(request, dict) or set(request) != {
-            "version", "credential", "route_class", "host", "port"
-        }:
+        required_fields = {
+            "version",
+            "credential",
+            "route_class",
+            "transport",
+            "host",
+            "port",
+        }
+        if not isinstance(request, dict) or set(request) != required_fields:
             await _send_error(writer, "invalid broker request fields")
             return
         if request["version"] != MAGIC or not hmac.compare_digest(
@@ -131,6 +137,10 @@ async def handle_client(
             return
         if request["route_class"] != policy.ROUTE_CLASS:
             await _send_error(writer, "wrong route class")
+            return
+        transport = request["transport"]
+        if transport not in {"opaque", "cleartext"}:
+            await _send_error(writer, "invalid transport class")
             return
         host = request["host"]
         port = request["port"]
@@ -143,6 +153,11 @@ async def handle_client(
         reason, validated_ips = await policy._validate_destination(host, port)
         if reason:
             await _send_error(writer, reason)
+            return
+        if transport == "cleartext" and not policy._plain_http_allowed(
+            host, port, validated_ips
+        ):
+            await _send_error(writer, policy.HTTP_URL_BLOCK_MESSAGE)
             return
         upstream_reader, upstream_writer = await policy._connect_via_upstream(
             host, port, validated_ips

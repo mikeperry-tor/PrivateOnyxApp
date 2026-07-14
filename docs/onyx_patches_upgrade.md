@@ -1120,10 +1120,11 @@ Compose wiring:
   `INDEXING_MODEL_SERVER_PORT=9101` for `api_server` and `background`.
 - `local-embedding-shim` runs on the internal backend and host-egress networks.
   It uses explicit absolute-form HTTP or HTTPS CONNECT through the host bridge;
-  it has no direct external route. The host policy's exact
-  `host.docker.internal` destination remains the sole fixed plain-HTTP
-  exception when `EGRESS_ALLOW_HTTP_URLS=false`; public and general RFC1918
-  cleartext destinations must remain denied.
+  it has no direct external route. When `EGRESS_ALLOW_HTTP_URLS=false`, the
+  host policy permits plain HTTP only for exact `host.docker.internal` and for
+  destinations whose complete answer set is RFC1918 when
+  `EGRESS_ALLOW_RFC1918=true`; public cleartext destinations must remain
+  denied.
 - `make embedserv-install`, `make embedserv-verify-model`, and
   `make embedserv-serve` install and run `mlx-openai-server` on the host-side
   `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` (default `http://host.docker.internal:1234/v1/embeddings`).

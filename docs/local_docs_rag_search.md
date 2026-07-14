@@ -271,7 +271,9 @@ start while the host/LAN embedding endpoint, its route, or its model is
 unusable. The response and logs expose no API key or upstream response body.
 The default plain-HTTP `host.docker.internal` endpoint uses the host route's
 fixed exact-host exception even when public cleartext URLs are disabled;
-arbitrary public and RFC1918 HTTP destinations remain blocked.
+arbitrary public HTTP destinations remain blocked. RFC1918 HTTP destinations
+are allowed only on the host route when `EGRESS_ALLOW_RFC1918=true` and the
+broker validates the complete DNS answer set as RFC1918.
 
 ## Why The Shim Exists
 

@@ -116,19 +116,49 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(addresses, ())
         resolve.assert_not_awaited()
 
-    def test_plain_http_exact_host_exception_is_host_route_only(self) -> None:
+    def test_plain_http_private_exceptions_are_host_route_only(self) -> None:
         host_module = _load_module(
             "onyx-helper",
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_POLICY_DEFER_DNS": "true",
+                "EGRESS_ROUTE_BROKER_HOST": "host-route-broker",
+                "EGRESS_ROUTE_BROKER_CREDENTIAL": "a" * 64,
+                "EGRESS_ALLOW_RFC1918": "true",
             },
         )
         self.assertTrue(
             host_module._plain_http_allowed("host.docker.internal", 3210)
         )
-        self.assertFalse(host_module._plain_http_allowed("192.168.1.20", 3210))
-        self.assertFalse(host_module._plain_http_allowed("public.example", 80))
+        self.assertTrue(host_module._plain_http_allowed("192.168.1.20", 3210))
+        self.assertTrue(host_module._plain_http_allowed("inference.lan", 8080))
+        # The isolated policy deliberately defers DNS classification. It may
+        # send the cleartext request to the authenticated broker, which must
+        # reject a public or mixed answer before opening the destination.
+        self.assertTrue(host_module._plain_http_allowed("public.example", 80))
+
+        broker_module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_ALLOW_RFC1918": "true",
+            },
+        )
+        self.assertTrue(
+            broker_module._plain_http_allowed(
+                "inference.lan", 8080, ("192.168.1.20",)
+            )
+        )
+        self.assertFalse(
+            broker_module._plain_http_allowed(
+                "public.example", 80, ("93.184.216.34",)
+            )
+        )
+        self.assertFalse(
+            broker_module._plain_http_allowed(
+                "mixed.example", 80, ("192.168.1.20", "93.184.216.34")
+            )
+        )
 
         public_module = _load_module(
             "onyx-helper",

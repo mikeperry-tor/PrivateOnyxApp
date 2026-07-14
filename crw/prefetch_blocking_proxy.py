@@ -22,9 +22,10 @@ For prefetch traffic this proxy:
    navigation.
 
 2. **For plain HTTP URLs**: returns ``403 Forbidden`` by default with a clear
-   message telling callers to use ``https://`` instead. Set
-   ``EGRESS_ALLOW_HTTP_URLS=true`` only when cleartext HTTP fetches are
-   intentionally needed.
+   explanatory message. The host route retains narrow exceptions for exact
+   ``host.docker.internal`` and opt-in, broker-validated RFC1918 destinations.
+   Set ``EGRESS_ALLOW_HTTP_URLS=true`` only when general cleartext HTTP fetches
+   are intentionally required.
 
 3. **For HTTPS URLs, and explicitly allowed plain HTTP URLs**: forwards the
    request to the target, through ``EGRESS_UPSTREAM_PROXY_URL`` if set.
@@ -399,11 +400,22 @@ def _is_trusted_internal_destination(host: str, port: int) -> bool:
     return (_normalize_host(host), port) in TRUSTED_INTERNAL_DESTINATIONS
 
 
-def _plain_http_allowed(host: str, port: int) -> bool:
+def _plain_http_allowed(
+    host: str, port: int, validated_ips: tuple[str, ...] = ()
+) -> bool:
+    validated_rfc1918 = bool(validated_ips) and all(
+        _is_rfc1918(ip) for ip in validated_ips
+    )
+    broker_will_validate = bool(ROUTE_BROKER_HOST and DEFER_DNS_TO_BROKER)
     return (
         ALLOW_HTTP_URLS
         or _is_trusted_internal_destination(host, port)
         or _is_exact_host_exception(host)
+        or (
+            ROUTE_CLASS == "host"
+            and ALLOW_RFC1918
+            and (validated_rfc1918 or broker_will_validate)
+        )
     )
 
 
@@ -1057,6 +1069,7 @@ async def _connect_via_upstream(
     target_host: str,
     target_port: int,
     validated_ips: tuple[str, ...] = (),
+    transport: str = "opaque",
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Connect to target_host:target_port through UPSTREAM_PROXY.
 
@@ -1064,7 +1077,9 @@ async def _connect_via_upstream(
     Returns (reader, writer) for the established tunnel.
     """
     if ROUTE_BROKER_HOST:
-        return await _connect_via_route_broker(target_host, target_port)
+        return await _connect_via_route_broker(
+            target_host, target_port, transport=transport
+        )
 
     if _is_trusted_internal_destination(target_host, target_port):
         return await _open_validated_direct_connection(validated_ips, target_port)
@@ -1110,7 +1125,7 @@ async def _connect_via_upstream(
 
 
 async def _connect_via_route_broker(
-    target_host: str, target_port: int
+    target_host: str, target_port: int, transport: str = "opaque"
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Open one authenticated bounded stream through the fixed route broker."""
     if not ROUTE_BROKER_HOST or not 0 < ROUTE_BROKER_PORT <= 65535:
@@ -1124,10 +1139,14 @@ async def _connect_via_route_broker(
         asyncio.open_connection(ROUTE_BROKER_HOST, ROUTE_BROKER_PORT),
         timeout=TUNNEL_CONNECT_TIMEOUT,
     )
+    if transport not in {"opaque", "cleartext"}:
+        writer.close()
+        raise ValueError("invalid route broker transport")
     request = {
-        "version": "onyx-route-broker-v1",
+        "version": "onyx-route-broker-v2",
         "credential": ROUTE_BROKER_CREDENTIAL,
         "route_class": ROUTE_CLASS,
+        "transport": transport,
         "host": _normalize_host(target_host),
         "port": target_port,
     }
@@ -1407,7 +1426,9 @@ async def _open_plain_http_forward_connection(
     SOCKS paths expect origin-form.
     """
     if ROUTE_BROKER_HOST:
-        reader, writer = await _connect_via_route_broker(target_host, target_port)
+        reader, writer = await _connect_via_route_broker(
+            target_host, target_port, transport="cleartext"
+        )
         return reader, writer, False
 
     if _is_trusted_internal_destination(target_host, target_port):
@@ -1788,25 +1809,27 @@ async def _handle_connect(
         )
         return
 
-    if (
-        target_port == 80
-        and not _plain_http_allowed(target_host, target_port)
-    ):
-        await _write_text_response(
-            client_writer, 403, "Forbidden", HTTP_URL_BLOCK_MESSAGE
-        )
-        return
-
     blocked, validated_ips = await _reject_blocked_destination(
         "CONNECT", target_host, target_port, client_writer, peer
     )
     if blocked:
         return
 
+    if target_port == 80 and not _plain_http_allowed(
+        target_host, target_port, validated_ips
+    ):
+        await _write_text_response(
+            client_writer, 403, "Forbidden", HTTP_URL_BLOCK_MESSAGE
+        )
+        return
+
     # Non-search-engine: tunnel through.
     try:
         upstream_reader, upstream_writer = await _connect_via_upstream(
-            target_host, target_port, validated_ips
+            target_host,
+            target_port,
+            validated_ips,
+            transport="cleartext" if target_port == 80 else "opaque",
         )
     except Exception as e:
         logger.warning(
@@ -1902,25 +1925,6 @@ async def _handle_forward_http(
         use_tls = False
         path = target or "/"
 
-    if (
-        not use_tls
-        and not _plain_http_allowed(target_host, target_port)
-    ):
-        logger.info(
-            "BLOCKED FORWARD %s http://%s:%d%s (HTTP URLs disabled) -> 403",
-            method,
-            target_host,
-            target_port,
-            path,
-        )
-        await _write_text_response(
-            client_writer,
-            403,
-            "Forbidden",
-            HTTP_URL_BLOCK_MESSAGE,
-        )
-        return
-
     if BLOCK_SEARCH_ENGINES and _is_search_engine(target_host):
         logger.info(
             "BLOCKED FORWARD %s %s:%d%s (search engine) → 403",
@@ -1941,6 +1945,24 @@ async def _handle_forward_http(
         f"FORWARD {method}", target_host, target_port, client_writer, peer
     )
     if blocked:
+        return
+
+    if not use_tls and not _plain_http_allowed(
+        target_host, target_port, validated_ips
+    ):
+        logger.info(
+            "BLOCKED FORWARD %s http://%s:%d%s (HTTP URLs disabled) -> 403",
+            method,
+            target_host,
+            target_port,
+            path,
+        )
+        await _write_text_response(
+            client_writer,
+            403,
+            "Forbidden",
+            HTTP_URL_BLOCK_MESSAGE,
+        )
         return
 
     try:
