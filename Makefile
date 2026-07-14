@@ -5,6 +5,8 @@ FULL_OVERRIDE_FILE := docker-compose.full.yml
 LITE_OVERRIDE_FILE := docker-compose.lite.yml
 PODMAN_OVERRIDE_FILE := docker-compose.podman.yml
 PODMAN_FULL_OVERRIDE_FILE := docker-compose.podman-full.yml
+PODMAN_VPN_OVERRIDE_FILE := docker-compose.podman-vpn.yml
+VPN_AUTOHEAL_OVERRIDE_FILE := docker-compose.vpn-autoheal.yml
 
 env_value = $(strip $(shell for f in "$(ENV_FILE)" "$(VERSION_FILE)"; do [ -f "$$f" ] || continue; sed -n 's/^$(1)=//p' "$$f" | head -1 | sed 's/^"//; s/"$$//'; done | head -1))
 COMPOSE_ENV_FILES = --env-file "$(VERSION_FILE)" --env-file "$(ENV_FILE)"
@@ -71,9 +73,22 @@ endif
 
 PODMAN_COMPOSE_SUFFIX :=
 PODMAN_FULL_COMPOSE_SUFFIX :=
+PODMAN_VPN_COMPOSE_SUFFIX :=
 ifneq ($(findstring podman,$(CONTAINER_BIN)),)
 PODMAN_COMPOSE_SUFFIX :=:$(PODMAN_OVERRIDE_FILE)
 PODMAN_FULL_COMPOSE_SUFFIX :=:$(PODMAN_FULL_OVERRIDE_FILE)
+endif
+
+# Autoheal has Docker-socket authority and is useful only for recovering the
+# VPN client. Keep it structurally absent from explicit no-VPN stacks.
+VPN_AUTOHEAL_SUFFIX :=:$(VPN_AUTOHEAL_OVERRIDE_FILE)
+ifneq ($(filter false,$(MYST_VPN_ENABLED)),)
+VPN_AUTOHEAL_SUFFIX :=
+endif
+ifneq ($(findstring podman,$(CONTAINER_BIN)),)
+ifneq ($(strip $(VPN_AUTOHEAL_SUFFIX)),)
+PODMAN_VPN_COMPOSE_SUFFIX :=:$(PODMAN_VPN_OVERRIDE_FILE)
+endif
 endif
 
 # Conditional routing overrides for teep and tailscale.
@@ -165,8 +180,8 @@ CDP_SHIM_REQUIREMENTS_IN := crw/cdp-shim-requirements.in
 CDP_SHIM_REQUIREMENTS := crw/cdp-shim-requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
 .PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready tailscale-image-ready crw-image-ready cdp-shim-image-ready cdp-shim-build myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
@@ -204,7 +219,7 @@ help:
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override install-time low-port remap: make up-full ONYX_INSTALL_HOST_PORT_80=3001"
 	@echo "Override container engine: make up-lite CONTAINER_BIN=/opt/homebrew/bin/podman"
-	@echo "Note: podman mode applies $(PODMAN_OVERRIDE_FILE) (disables code-interpreter + autoheal by default)"
+	@echo "Note: podman mode disables code-interpreter and VPN-only autoheal by default"
 	@echo "VPN routing: set TEEP_ROUTE_THROUGH_MYST_VPN=true or"
 	@echo "             TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true in $(ENV_FILE)"
 	@echo "Code interpreter network: set ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true in $(ENV_FILE)"

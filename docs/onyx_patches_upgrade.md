@@ -115,7 +115,7 @@ handling and browser-rendered SERP extraction.
 | `onyx/patches/sitecustomize/sitecustomize.py` | `api_server` in lite mode | Mounted at `/app/wrapper-patches`; `PYTHONPATH` in `docker-compose.lite.yml` before base path | Applicable base API-server helpers plus `backend/onyx/tools/tool_implementations/open_url/open_url_tool.py` |
 | `onyx/patches/sitecustomize_background/sitecustomize.py` | `background` | Mounted at `/app/wrapper-patches-background`, with base helpers at `/app/wrapper-patches-base`; `PYTHONPATH` in `docker-compose.full.yml` | `backend/onyx/connectors/web/connector.py`, `backend/onyx/utils/playwright_fetch.py`, `backend/onyx/db/models.py` |
 | `onyx/patches/sitecustomize_code_interpreter/sitecustomize.py` | `code-interpreter` and spawned executor pods | Mounted by `docker-compose.code-interpreter-network.yml` when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`; proxy env points only at the executor bridge | Main Onyx compose defines the service; executor code is in `reference_repos/python-sandbox/code-interpreter/app/services/executor_docker.py` |
-| `onyx/local_embedding_shim.py` | `api_server` and `background` model-server calls | `docker-compose.full.yml` points `MODEL_SERVER_*` and `INDEXING_MODEL_SERVER_*` to `127.0.0.1:9101` | `backend/model_server/*`, `backend/onyx/natural_language_processing/search_nlp_models.py`, `backend/onyx/indexing/embedder.py`, `backend/shared_configs/model_server_models.py` |
+| `onyx/local_embedding_shim.py` | `api_server` and `background` model-server calls | `docker-compose.full.yml` points `MODEL_SERVER_*` and `INDEXING_MODEL_SERVER_*` to `local-embedding-shim:9101` on `onyx-backend` | `backend/model_server/*`, `backend/onyx/natural_language_processing/search_nlp_models.py`, `backend/onyx/indexing/embedder.py`, `backend/shared_configs/model_server_models.py` |
 | `onyx/doc_drop_webserver.py` | `doc-drop-web` | Mounted at `/app/doc_drop_webserver.py`; command in `docker-compose.full.yml` | Python `http.server.SimpleHTTPRequestHandler` behavior |
 | `searxng/engines/*.py`, `searxng/patches/sitecustomize.py`, `searxng/core-config/settings.yml` | `searxng-core` | Mounted by `searxng/docker-compose.yml`; patch path added to `PYTHONPATH`; CRW URL supplied by restricted-egress Compose | `reference_repos/searxng/searx/results.py`, `reference_repos/searxng/searx/result_types/_base.py`, `reference_repos/searxng/searx/settings_loader.py`, `reference_repos/searxng/searx/settings.yml`, stock engine modules |
 | `onyx/install.sh`, `onyx/install-with-container-bin.sh`, `Makefile` | install/upgrade flow, not a runtime container | `make ensure-onyx-config`, `make upgrade-onyx`, `make onyx-build` | `deployment/docker_compose/install.sh`, `deployment/docker_compose/docker-compose.yml`, `deployment/docker_compose/env.template` |
@@ -1512,8 +1512,12 @@ Additional wrapper services:
 - Separate public/host policy namespaces, authenticated route brokers, and
   hardened bridges enforce Onyx application egress.
 - `myst-client`, `searxng-core`, `searxng-valkey`, `obscura`, `cdp-shim`,
-  `prefetch-blocking-proxy`, `crw`, `host-searxng-proxy`, `autoheal`, optional
-  Tailscale gateways, and `teep` are wrapper-side services around Onyx.
+  `prefetch-blocking-proxy`, `crw`, `host-searxng-proxy`, VPN-only `autoheal`,
+  optional Tailscale gateways, and `teep` are wrapper-side services around
+  Onyx.
+- `docker-compose.vpn-autoheal.yml` supplies autoheal only when the Makefile's
+  effective `MYST_VPN_ENABLED` value is not `false`; explicit no-VPN models
+  omit the layer and Docker socket mount.
 
 Upgrade notes:
 
@@ -1605,9 +1609,12 @@ Upgrade notes:
 
 Patched Onyx services:
 
-- `docker-compose.podman.yml`: places `autoheal` and `code-interpreter` behind
-  a `requires-docker-socket` profile because rootless Podman on macOS cannot
-  reliably provide the Docker socket behavior those containers need.
+- `docker-compose.podman.yml`: places `code-interpreter` behind a
+  `requires-docker-socket` profile because rootless Podman on macOS cannot
+  reliably provide the Docker socket behavior it needs.
+- `docker-compose.podman-vpn.yml`: places the VPN-only `autoheal` service
+  behind the same profile. Explicit no-VPN models omit both the autoheal
+  service and this override.
 - `docker-compose.podman-full.yml`: sets OpenSearch `userns_mode:
   keep-id:uid=1000,gid=1000` so the bind-mounted data dir is writable under
   rootless Podman.

@@ -137,5 +137,6 @@ are security-critical because they own final-hop DNS and connectivity.
 
 Failure is intentionally closed: stopping a policy, bridge, broker, Myst, or
 upstream disables its route without cross-class or direct fallback. Only Myst
-is autohealed, preventing dependency restart storms while internal application
-health remains independent.
+is autohealed in VPN-enabled models, preventing dependency restart storms
+while internal application health remains independent. Explicit no-VPN models
+omit autoheal and its Docker socket.

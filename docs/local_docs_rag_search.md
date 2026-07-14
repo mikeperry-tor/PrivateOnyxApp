@@ -225,13 +225,14 @@ upstreamable design are in
 contract and upstream references to verify during upgrades are in
 [Local embedding shim](onyx_patches_upgrade.md#local-embedding-shim).
 
-The shim listens on `0.0.0.0:9101` inside the shared namespace. Full mode sets
-these env vars for `api_server` and `background`:
+The shim listens on `0.0.0.0:9101` on its own container and joins the internal
+`onyx-backend` network. Full mode sets these env vars for `api_server` and
+`background`:
 
 ```env
-MODEL_SERVER_HOST=127.0.0.1
+MODEL_SERVER_HOST=local-embedding-shim
 MODEL_SERVER_PORT=9101
-INDEXING_MODEL_SERVER_HOST=127.0.0.1
+INDEXING_MODEL_SERVER_HOST=local-embedding-shim
 INDEXING_MODEL_SERVER_PORT=9101
 ```
 

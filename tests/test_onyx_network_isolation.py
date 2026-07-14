@@ -22,7 +22,7 @@ SECRET_ENV = {
 }
 
 
-def _compose_model(mode: str) -> dict:
+def _compose_model(mode: str, *extra_files: str) -> dict:
     command = [
         "docker",
         "compose",
@@ -34,11 +34,15 @@ def _compose_model(mode: str) -> dict:
         "docker-compose.yaml",
         "-f",
         f"docker-compose.{mode}.yml",
+    ]
+    for compose_file in extra_files:
+        command.extend(("-f", compose_file))
+    command.extend([
         "config",
         "--no-env-resolution",
         "--format",
         "json",
-    ]
+    ])
     completed = subprocess.run(
         command,
         cwd=ROOT,
@@ -50,8 +54,61 @@ def _compose_model(mode: str) -> dict:
     return json.loads(completed.stdout)
 
 
+def _make_compose_files(vpn_enabled: bool, container_bin: str = "docker") -> str:
+    completed = subprocess.run(
+        [
+            "make",
+            "-pn",
+            "ENV_FILE=.env.wrapper.example",
+            f"MYST_VPN_ENABLED={'true' if vpn_enabled else 'false'}",
+            f"CONTAINER_BIN={container_bin}",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    prefix = "FULL_FILES := "
+    for line in completed.stdout.splitlines():
+        if line.startswith(prefix):
+            return line.removeprefix(prefix)
+    raise AssertionError("FULL_FILES is absent from the Make database")
+
+
 @unittest.skipUnless(shutil.which("docker"), "docker compose is required")
 class OnyxNetworkIsolationComposeTests(unittest.TestCase):
+    def test_makefile_selects_autoheal_only_for_vpn_models(self) -> None:
+        vpn_files = _make_compose_files(vpn_enabled=True)
+        self.assertIn("docker-compose.vpn-autoheal.yml", vpn_files)
+
+        no_vpn_files = _make_compose_files(vpn_enabled=False)
+        self.assertNotIn("docker-compose.vpn-autoheal.yml", no_vpn_files)
+
+        podman_vpn_files = _make_compose_files(
+            vpn_enabled=True, container_bin="podman"
+        )
+        self.assertIn("docker-compose.vpn-autoheal.yml", podman_vpn_files)
+        self.assertIn("docker-compose.podman-vpn.yml", podman_vpn_files)
+
+        podman_no_vpn_files = _make_compose_files(
+            vpn_enabled=False, container_bin="podman"
+        )
+        self.assertNotIn("docker-compose.vpn-autoheal.yml", podman_no_vpn_files)
+        self.assertNotIn("docker-compose.podman-vpn.yml", podman_no_vpn_files)
+
+    def test_autoheal_is_present_only_in_vpn_models(self) -> None:
+        for mode in ("lite", "full"):
+            no_vpn_model = _compose_model(mode)
+            self.assertNotIn("autoheal", no_vpn_model["services"])
+
+            vpn_model = _compose_model(mode, "docker-compose.vpn-autoheal.yml")
+            autoheal = vpn_model["services"]["autoheal"]
+            self.assertEqual(autoheal["network_mode"], "none")
+            self.assertEqual(
+                autoheal["volumes"][0]["source"], "/var/run/docker.sock"
+            )
+            self.assertIn("myst-client", autoheal["depends_on"])
+
     def test_lite_and_full_application_services_are_internal_only(self) -> None:
         expected = {
             "api_server": {

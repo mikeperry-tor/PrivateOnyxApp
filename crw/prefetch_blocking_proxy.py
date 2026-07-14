@@ -818,7 +818,14 @@ async def _validate_destination(
             return "host exception DNS resolution returned no addresses", ()
         for resolved_ip in resolved_ips:
             ip = _parse_ip_literal(resolved_ip)
-            if ip is None or ip.is_loopback or ip.is_link_local or ip.is_multicast:
+            if (
+                ip is None
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_unspecified
+                or ip.is_reserved
+            ):
                 return "host exception resolved to a forbidden address", ()
         return None, tuple(sorted(resolved_ips))
 

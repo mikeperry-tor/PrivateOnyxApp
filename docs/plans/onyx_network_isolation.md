@@ -1307,8 +1307,9 @@ Parse effective models structurally and assert:
   the fixed internal seed values;
 - code-interpreter control uses service port `8000`, while executor networking
   remains separately selected and restricted;
-- host WebUI/doc ports bind only as configured and obsolete host publishers are
-  absent;
+- host WebUI/doc ports bind only as configured; obsolete broad publishers are
+  absent while the Docker Desktop implementation note's hardened fixed
+  publishers remain;
 - Tailscale/frontend gateways exist only in enabled layers; Tailscale never
   attaches directly to `onyx-frontend`, and the fixed HTTP gateway has no
   egress/helper/data network;

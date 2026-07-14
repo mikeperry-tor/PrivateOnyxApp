@@ -184,8 +184,9 @@ compatible unmodified upstream release can be pinned and re-audited.
     content, and unavailable bodies loud and diagnosable.
 13. Remove unused or structurally unnecessary services remaining after the
     isolation prerequisite: SearXNG Valkey, the bypassed Onyx
-    inference/indexing model servers, the SearXNG and Teep host-only socat
-    publishers.
+    inference/indexing model servers, and obsolete CRW/shim services. Retain
+    the prerequisite's hardened fixed host publishers where Docker Desktop
+    cannot activate direct publication from internal-only networks.
 14. Leave full-mode local document ingestion unchanged. Preserve optional
     executor network isolation and explicit enablement while intentionally
     allowing its proxy path to reach public search engines.
@@ -470,22 +471,15 @@ the deletion checklist; do not retain empty networks for compatibility.
 
 ### Remaining Host Publication and Conditional Service Layers
 
-The isolation prerequisite already owns nginx/WebUI and doc-drop host
-publication and removal of their obsolete publisher containers. Do not
-recreate them or move Onyx services back into `netns-holder`. In this plan,
-remove `host-teep-proxy` from the Teep-through-VPN layer only after validating
-the prerequisite's fixed internal Teep gateway and a loopback-bound host
-publication from the namespace owner. If that publication is not portable in
-a supported engine, retain the narrow Teep host publisher rather than
-weakening Teep or Onyx network placement.
-
-Publish the optional SearXNG diagnostic host port directly from
-`searxng-core:8888`, bound to `127.0.0.1`. Validate both Docker and Podman with
-the SearXNG networks marked `internal: true`. If a supported engine cannot do
-this safely, omit the host diagnostic endpoint for that engine rather than
-restoring an always-on proxy; Onyx reaches SearXNG through its service gateway.
-Retain service-level health checks because deleting a host publisher also
-deletes only that publisher's redundant health state.
+The isolation prerequisite owns nginx/WebUI, doc-drop, and SearXNG host
+publication. Preserve those hardened fixed-destination publishers and do not
+move Onyx services back into `netns-holder`. Docker Desktop does not activate
+ports published directly from containers attached only to internal networks,
+so `host-searxng-proxy` remains the portable diagnostic publisher. Preserve
+`host-teep-proxy` in the Teep-through-VPN layer: the Teep service cannot publish
+a port while sharing `netns-holder`, and the narrow publisher avoids weakening
+Teep or Onyx network placement. Retain service-level health checks for the
+underlying services and publishers.
 
 Make optional behavior structurally optional:
 
@@ -1661,16 +1655,14 @@ Also remove or replace these structural services:
   hardened immutable image if necessary;
 - remove unused `searxng-valkey`, its network/volume/dependency, and
   `VALKEY_IMAGE` pin;
-- remove `host-searxng-proxy`; publish the diagnostics port directly from
-  `searxng-core` on `127.0.0.1`, or omit the optional host diagnostic endpoint
-  if the supported container engine cannot publish securely from its internal
-  network;
+- retain `host-searxng-proxy` as the hardened fixed diagnostic publisher for
+  `searxng-core` on supported Desktop engines;
 - in full mode, remove the unused `inference_model_server` and
   `indexing_model_server` services and their log volumes because `api_server`
   and `background` already route both model-server endpoints to the internal
   embedding shim;
-- remove `host-teep-proxy` from the Teep-through-VPN layer and publish its
-  loopback-bound port from `netns-holder`;
+- retain `host-teep-proxy` in the Teep-through-VPN layer because a service
+  sharing `netns-holder` cannot publish its own port;
 - verify that the prerequisite's Tailscale and autoheal conditional layers are
   preserved without reintroducing either service into disabled/no-VPN models.
 
@@ -1684,15 +1676,15 @@ scheduler, fetch, validation, rate-limit, or body-conversion sidecar is added.
 
 Relative to the completed isolation baseline, the request-path changes remove
 six always-on CRW/shim containers plus the legacy browser policy service, and
-add the document parser plus state clearer. Valkey and SearXNG host-publisher
-removal therefore bring the expected lite reduction to at least seven
-containers, assuming the current gateway is retargeted rather than duplicated.
-An enabled executor layer removes its additional legacy policy service. Full
-mode removes two more unused model servers. Teep-through-VPN may omit one
-additional host proxy when the supported engine can publish it safely. Host WebUI/doc,
-Tailscale, and no-VPN autoheal reductions belong to the prerequisite baseline
-and must not be counted again. Treat all counts as configuration-dependent
-assertions generated from effective pre/post Compose models.
+add the document parser plus state clearer. Removing Valkey therefore brings
+the expected lite reduction to at least six containers, assuming the current
+gateway is retargeted rather than duplicated. An enabled executor layer removes
+its additional legacy policy service. Full mode removes two more unused model
+servers. The hardened SearXNG, WebUI/doc, and VPN-routed Teep publishers remain;
+conditional Tailscale and no-VPN autoheal reductions belong to the prerequisite
+baseline and must not be counted again. Treat all counts as
+configuration-dependent assertions generated from effective pre/post Compose
+models.
 
 Do **not** remove:
 
@@ -1705,6 +1697,8 @@ Do **not** remove:
 - the optional executor component network;
 - `doc-drop-web`, `local-embedding-shim`, or other required full-mode data
   services;
+- the prerequisite hardened WebUI, doc-display, SearXNG diagnostic, and
+  VPN-routed Teep publishers;
 - `autoheal` in VPN-enabled models; or
 - `tailscale-funnel` when Funnel is enabled.
 
@@ -1799,8 +1793,6 @@ Remove:
   dependencies replaced by the neutral implementation;
 - `VALKEY_IMAGE`, SearXNG Valkey service/network/volume/dependency;
 - inference/indexing model-server services and log volumes from full mode;
-- SearXNG and, where validated, Teep socat-publisher services; host WebUI/doc
-  publishers are already absent in the prerequisite baseline;
 - `crw-image-ready`, `cdp-shim-image-ready`, and `cdp-shim-build` targets;
 - CRW/CDP-shim prerequisites from `up-lite`, `up-full`, `upgrade`, and Python
   dependency upgrade flows; and
@@ -1821,8 +1813,6 @@ Add or rename:
   prerequisite's distinct public and host route brokers;
 - distinct fixed browser and optional executor bridge URLs and policy-side
   networks;
-- direct loopback-bound SearXNG publication and the validated Teep publication
-  in place of their remaining host publisher services;
 - Makefile-selected Tailscale-enabled, VPN-autoheal, and Teep-routing layers;
 - the state-clearer image/configuration and normalized cookie-clear setting;
 - the derived SearXNG image pin and build target;
@@ -1936,8 +1926,8 @@ corruption.
    generic Onyx listener into the public-only policy namespace, preserve the
    separate host-capable namespace, and retain separate browser and optional
    executor bridges/listeners/upstreams.
-5. Replace the remaining SearXNG and validated Teep host publisher containers
-   with loopback-bound publications and validate Docker and Podman behavior.
+5. Preserve the hardened fixed SearXNG and VPN-routed Teep publishers and
+   validate their Docker and Podman behavior.
 6. Remove Valkey and the full-mode model-server containers; preserve the
    prerequisite's conditional Tailscale and VPN-autoheal layers.
 7. Apply the revised health dependencies without reintroducing direct Myst or
@@ -1972,7 +1962,7 @@ Documentation changes are part of implementation, not a follow-up.
   `open_url`, executors, and helpers may contact public search engines
   directly and unscheduled.
 - Update service counts and optional-feature instructions for removed Valkey,
-  model servers, remaining host publishers, and separate restricted-component
+  model servers, retained fixed host publishers, and separate restricted-component
   egress bridges. Use the implemented isolation topology
   as the service-count baseline.
 - Preserve local-RAG, executor, upstream proxy, VPN, and Tailscale guidance.
@@ -2043,8 +2033,8 @@ sections rather than retaining a historical appendix.
 - Document redirect resolution and the no-target-Docker-DNS property.
 - Explain the narrow Onyx SSRF patch interaction and final-hop authority.
 - Add the body-buffering and large-document residual memory risks.
-- Update reachability tables for removed Valkey, host publishers, model
-  servers, and conditional Tailscale/autoheal services.
+- Update reachability tables for removed Valkey and model servers, retained
+  fixed host publishers, and conditional Tailscale/autoheal services.
 
 ### `docs/onyx_patch_info.md`
 
@@ -2115,9 +2105,8 @@ sections rather than retaining a historical appendix.
 - Retain `ONYX_CODE_INTERPRETER_ENABLE_NETWORK`, but state that enabled
   executors may reach public search engines while host/private targets remain
   denied.
-- Retain the SearXNG/Teep host-port and Teep routing switches, but replace
-  legacy socat/proxy-bridge descriptions with the final direct-publication and
-  fixed-gateway topology.
+- Retain the SearXNG/Teep host-port and Teep routing switches, and document the
+  final hardened fixed-publisher and fixed-gateway topology.
 - Remove CRW, CDP-shim, search-block-host, and policy-mode user settings.
 - Consume the prerequisite's `EGRESS_UPSTREAM_PROXY_URL` and
   `EGRESS_ALLOW_HTTP_URLS` names, its `EGRESS_ALLOW_RFC1918` option, and its
@@ -2414,10 +2403,9 @@ Parse effective Compose models structurally and assert:
   attachment, exactly one replica, and the normalized interval setting; its
   private state volume is writable only by the clearer and read-only in Onyx
   and SearXNG, and stale/malformed state blocks new navigations;
-- Valkey, inference/indexing model servers, and the remaining SearXNG/validated
-  Teep host publisher services are absent; SearXNG and any supported Teep
-  diagnostic ports use the exact publication design specified above, while
-  prerequisite WebUI/doc publication remains unchanged;
+- Valkey and inference/indexing model servers are absent; the hardened fixed
+  SearXNG and VPN-routed Teep publishers use the exact prerequisite publication
+  design specified above, while WebUI/doc publication remains unchanged;
 - disabled Tailscale and no-VPN models omit Tailscale and autoheal services,
   respectively;
 - effective service-count reductions match the inventory above;
@@ -2568,10 +2556,10 @@ The plan is complete only when all of the following are true:
 - Legacy component-specific policy services and named policy modes are absent.
   Browser and executor use separate hardened fixed bridges and cannot reach
   one another or either prerequisite Onyx bridge/listener.
-- SearXNG Valkey, full-mode inference/indexing model servers, and the remaining
-  SearXNG/validated Teep publisher containers are absent. WebUI/doc publisher
-  removal belongs to the prerequisite baseline. Disabled Tailscale and no-VPN
-  models omit their Tailscale/autoheal services, respectively.
+- SearXNG Valkey and full-mode inference/indexing model servers are absent.
+  Hardened WebUI/doc, SearXNG diagnostic, and VPN-routed Teep publishers remain
+  as established by the prerequisite. Disabled Tailscale and no-VPN models
+  omit their Tailscale/autoheal services, respectively.
 - Periodic cookie clearing, stable global fingerprint, explicit waits,
   diagnostics, and challenge visibility have named owners and passing tests;
   documentation explicitly states that CDP provides no first-party context

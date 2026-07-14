@@ -1,0 +1,17 @@
+services:
+  # Docker-socket authority is present only while VPN recovery is relevant.
+  # The Makefile omits this entire layer when MYST_VPN_ENABLED=false.
+  autoheal:
+    image: ${AUTOHEAL_IMAGE:?AUTOHEAL_IMAGE must be set}
+    restart: unless-stopped
+    network_mode: none
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 15
+      AUTOHEAL_START_PERIOD: 300
+      AUTOHEAL_ONLY_MONITOR_RUNNING: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      myst-client:
+        condition: service_started

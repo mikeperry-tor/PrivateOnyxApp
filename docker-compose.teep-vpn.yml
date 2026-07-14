@@ -1,11 +1,11 @@
 ## Teep VPN routing override.
 ## Applied when TEEP_ROUTE_THROUGH_MYST_VPN=true in .env.wrapper (via Makefile
-## COMPOSE_FILE layering). Moves teep into the shared netns-holder namespace so
-## LLM API traffic egresses through the Mysterium VPN tunnel, and re-adds the
+## COMPOSE_FILE layering). Moves teep into the trusted netns-holder namespace
+## so LLM API traffic egresses through the Mysterium VPN tunnel, and adds the
 ## host-teep-proxy socat bridge for host-side port access.
 ##
-## When this override is NOT applied (default), teep runs on the default
-## Docker network with direct port publishing and no VPN routing.
+## When this override is NOT applied (default), teep uses onyx-teep plus its
+## dedicated direct uplink, with direct port publishing and no VPN routing.
 
 services:
   netns-holder:
@@ -14,7 +14,7 @@ services:
         aliases: [myst-client]
 
   teep:
-    # Join the shared VPN namespace instead of the default network.
+    # Join the trusted VPN namespace instead of the dedicated direct uplink.
     network_mode: "service:netns-holder"
     networks: !reset []
     # Remove direct port publishing — ports can't be published from a shared

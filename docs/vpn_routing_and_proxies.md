@@ -69,15 +69,16 @@ concurrency limits.
 ## Destination classes
 
 The public route rejects private, loopback, link-local, multicast, metadata,
-Docker/Podman internal names, legacy host aliases, and single-label service
-names. The host route adds only:
+unspecified/reserved addresses, Docker/Podman internal names, legacy host
+aliases, and single-label service names. The host route adds only:
 
 - exact `host.docker.internal`, resolved and pinned by the host broker; and
 - RFC1918 literals or `.local`, `.internal`, and `.home.arpa` names whose
   complete answer set is RFC1918, only when `EGRESS_ALLOW_RFC1918=true`.
 
-Mixed private/global answers fail closed. Loopback, link-local, other Docker
-aliases, and metadata remain blocked even on the host route. Exact
+Mixed private/global answers fail closed. Loopback, link-local, multicast,
+unspecified/reserved, other Docker aliases, and metadata remain blocked even
+on the host route. Exact
 `host.docker.internal` does not require the RFC1918 option and never traverses
 an external upstream proxy. When `EGRESS_ALLOW_HTTP_URLS=false`, the host route
 still permits plain HTTP to that exact host and to destinations whose complete
@@ -103,7 +104,8 @@ it is not a direct crawl bypass.
 No-VPN mode changes only the broker's selected final route; application
 isolation is identical. Myst readiness requires a working `myst0` route and a
 source-bound provider-DNS probe. No-VPN readiness requires no stale `myst0`
-and a usable non-Myst default route. Only `myst-client` is autohealed.
+and a usable non-Myst default route. In VPN-enabled models only `myst-client`
+is autohealed; explicit no-VPN models omit autoheal and its Docker socket.
 
 With an upstream proxy, HTTP, HTTPS, `socks5`, and `socks5h` all send ordinary
 target names directly to that proxy without a preliminary system or Myst DNS
@@ -162,6 +164,9 @@ HTTP frontend gateway; the Tailscale process never joins
 `onyx-frontend`. Ordinary Teep uses `onyx-teep` plus its selected uplink;
 Myst-routed Teep is exposed through a fixed internal gateway instead of
 sharing the Onyx caller network with `netns-holder`.
+
+`autoheal` is selected as a VPN-only Compose layer and has only the narrow Myst
+recovery role. Explicit no-VPN models omit the service and Docker socket mount.
 
 Executor pods remain `none` by default. When enabled, they use their own
 internal network and executor bridge/policy, receive no Onyx broker credential

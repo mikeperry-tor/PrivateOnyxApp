@@ -1,0 +1,5 @@
+services:
+  # Podman machine mode on macOS cannot reliably provide the Docker-compatible
+  # socket that autoheal requires. Keep it inactive when the VPN layer exists.
+  autoheal:
+    profiles: ["requires-docker-socket"]

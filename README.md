@@ -28,7 +28,7 @@ The Docker Compose files in this stack relies on the following components:
 
 3. [Mysterium](https://github.com/mysteriumnetwork/node) is a Wireguard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. The use of residential IP addresses reduces the rate of captchas and rate limiting by search engines and websites. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
-4. [Obscura](https://github.com/h4ckf0r0day/obscura) is combined with [crw](https://github.com/us/crw) to provide the Onyx agent with an actual headless browser with anti-fingerprinting defenses, as a Firecrawl-compatible API endpoint. This helps reduce fingerprint-based bans by search engines and pages that CRW renders through the browser. Ordinary non-search `open_url` pages may be returned from CRW's HTTP prefetch without Obscura when the HTTP result is usable; see [`docs/request_handling.md`](docs/request_handling.md#known-limitations). CRW, SearXNG, and both Obscura processes run on narrow internal networks; their internet traffic crosses local bridges to destination-validating final-hop proxies in the selected Myst/proxy/no-VPN routing namespace. A loopback-only DNS sidecar satisfies CRW's mandatory URL-safety preflight without forwarding browsing names; it is not the resolver used for the external connection.
+4. [Obscura](https://github.com/h4ckf0r0day/obscura) is combined with [crw](https://github.com/us/crw) to provide the Onyx agent with an actual headless browser with anti-fingerprinting defenses, as a Firecrawl-compatible API endpoint. This helps reduce fingerprint-based bans by search engines and pages that CRW renders through the browser. Ordinary non-search `open_url` pages may be returned from CRW's HTTP prefetch without Obscura when the HTTP result is usable; see [`docs/request_handling.md`](docs/request_handling.md#known-limitations). CRW, SearXNG, and Obscura run on narrow internal networks; their internet traffic crosses local bridges to destination-validating final-hop proxies in the selected Myst/proxy/no-VPN routing namespace. A loopback-only DNS sidecar satisfies CRW's mandatory URL-safety preflight without forwarding browsing names; it is not the resolver used for the external connection.
 
 5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends. The Google, Brave, DuckDuckGo, Startpage, and Bing web engines are wrapper-provided CRW-backed variants that use the Obscura+crw instance to fetch their search results, which significantly reduces captchas and bans by these search engines.
 
@@ -102,7 +102,7 @@ Most likely variables you want to change:
 
 - Container engine selection:
   - Set `CONTAINER_BIN` to the docker or podman executable you want the wrapper to use.
-  - In podman mode, the wrapper also applies `docker-compose.podman.yml`, which disables `code-interpreter` and `autoheal` by default because they require a functional Docker daemon socket inside containers.
+  - In Podman mode, the wrapper disables `code-interpreter` and the VPN-only `autoheal` service by default because they require a functional Docker-compatible daemon socket inside containers.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **Master VPN switch**:
@@ -115,6 +115,7 @@ Most likely variables you want to change:
     autoheal restarts only `myst-client` when that data-plane check fails; the
     stable `netns-holder` namespace contains only final-hop route owners and
     brokers; application and request-policy containers do not share it.
+    Explicit no-VPN models omit `autoheal` and its Docker socket entirely.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
   - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, dedicated embedding-shim upstream, and supported configured chat inference destinations through the host-capable policy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
@@ -334,11 +335,11 @@ Tailscale Funnel prerequisites:
 
 Bring the stack up as usual (`make up-lite` or `make up-full`).
 
-Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The service will remain idle and will not publish Funnel routes.
+Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The Tailscale process and its fixed frontend gateway are then omitted from the effective Compose model.
 
 ### Optional: VPN Routing for Teep, Tailscale, and Code-Interpreter
 
-By default, **teep** and **tailscale** run on the default Docker network without VPN routing. This means:
+By default, **teep** uses its dedicated service and direct-uplink networks, while enabled **tailscale** uses its dedicated ingress and direct-uplink networks. Neither uses the Mysterium namespace unless its routing switch is enabled. This means:
 
 - Teep LLM API traffic egresses directly (not through Mysterium).
 - Tailscale Funnel traffic egresses directly, keeping your Tailscale identity separate from the VPN exit IP.
@@ -468,13 +469,16 @@ Setup steps:
 2. Start or restart full stack: `make up-full`.
 3. In Onyx Admin → Connectors → Web, create a connector.
 4. Set Web connector type to **Recursive**.
-5. Set URL to `http://localhost:8091/` (or `http://localhost:<HOST_PORT_ONYX_RAG_DOC_WEB>/`).
+5. Set URL to the internal crawl origin `http://doc-drop-web:8091/`.
 6. Sync the connector.
 
 Notes:
 
 - Directory listing pages are crawlable; you can also target specific files
-  directly, e.g. `http://localhost:8091/my-paper.pdf`.
+  directly, e.g. `http://doc-drop-web:8091/my-paper.pdf`.
+- Browser-visible result links are rewritten to the host display origin,
+  `http://localhost:8091/` by default. That host URL is for display, not the
+  saved connector crawl origin.
 - Onyx v4.2.5 has SSRF Protection that can block this service if you save a
   Security Hardening override in the Admin UI.
 - The defaults in `.env.wrapper.example` seed the `Allow Private Network` posture

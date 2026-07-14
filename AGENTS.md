@@ -65,7 +65,8 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 - `docker-compose.full.yml` - full Onyx/RAG mode.
 - `docker-compose.lite.yml` - lite mode.
 - `docker-compose.code-interpreter-network.yml` - optional executor-only internal network and proxy bridge.
-- `docker-compose.*-vpn.yml`, `docker-compose.proxy.yml`, and Podman overrides
+- `docker-compose.*-vpn.yml`, `docker-compose.vpn-autoheal.yml`,
+  `docker-compose.proxy.yml`, and Podman overrides
   - optional routing/proxy/container-engine layers selected by the Makefile.
 - `crw/` - CDP shim, CRW validation-DNS sidecar, prefetch-blocking policy, and
   authenticated Onyx route broker.

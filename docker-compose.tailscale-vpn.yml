@@ -2,12 +2,12 @@
 ## Applied when TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true in .env.wrapper
 ## (via Makefile COMPOSE_FILE layering). Moves tailscale-funnel into the
 ## shared netns-holder namespace so Tailscale traffic egresses through the
-## Mysterium VPN tunnel, and retargets the funnel proxy to nginx directly in
-## the shared namespace.
+## Mysterium VPN tunnel. The Funnel process still reaches Onyx only through
+## the fixed frontend gateway.
 ##
 ## WARNING: When this override is applied, your Tailscale identity becomes
-## linked to the VPN exit IP address. The default (no override) keeps
-## Tailscale on the default network to avoid this linkage.
+## linked to the VPN exit IP address. The default (no override) uses the
+## dedicated Tailscale uplink to avoid this linkage.
 
 services:
   netns-holder:
@@ -15,7 +15,7 @@ services:
       tailscale-ingress: {}
 
   tailscale-funnel:
-    # Join the shared VPN namespace instead of the default network.
+    # Join the trusted VPN namespace instead of the dedicated direct uplink.
     network_mode: "service:netns-holder"
     networks: !reset []
     environment:

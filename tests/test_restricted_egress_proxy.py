@@ -116,6 +116,54 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(addresses, ())
         resolve.assert_not_awaited()
 
+    async def test_exact_host_exception_rejects_non_unicast_answers(self) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_POLICY_DEFER_DNS": "false",
+            },
+        )
+        forbidden_addresses = (
+            "0.0.0.0",
+            "::",
+            "240.0.0.1",
+            "127.0.0.1",
+            "169.254.1.1",
+        )
+        for address in forbidden_addresses:
+            with self.subTest(address=address), patch.object(
+                module,
+                "_resolve_system_host",
+                AsyncMock(return_value={address}),
+            ):
+                reason, addresses = await module._validate_destination(
+                    "host.docker.internal", 9150
+                )
+            self.assertEqual(
+                reason, "host exception resolved to a forbidden address"
+            )
+            self.assertEqual(addresses, ())
+
+    async def test_exact_host_exception_accepts_private_unicast_answer(self) -> None:
+        module = _load_module(
+            "onyx-helper",
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "EGRESS_POLICY_DEFER_DNS": "false",
+            },
+        )
+        with patch.object(
+            module,
+            "_resolve_system_host",
+            AsyncMock(return_value={"192.168.65.2"}),
+        ):
+            reason, addresses = await module._validate_destination(
+                "host.docker.internal", 9150
+            )
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("192.168.65.2",))
+
     def test_plain_http_private_exceptions_are_host_route_only(self) -> None:
         host_module = _load_module(
             "onyx-helper",
