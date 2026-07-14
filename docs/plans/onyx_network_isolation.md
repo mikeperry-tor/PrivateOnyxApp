@@ -54,9 +54,11 @@ host browser / optional Tailscale
 All Onyx application networks must be `internal: true`. Required internal
 service traffic remains direct on explicitly selected internal networks.
 Generic environment-aware external HTTP(S) uses the public-only bridge.
-Remote MCP/OAuth, user-configured inference base URLs, and explicitly approved
-host-local MCP, embedding, and narrow helper traffic use the host-capable
-bridge. Provider-default inference endpoints remain on the public-only bridge.
+MCP/OAuth and admin-configured Web Connector traffic selects the public or
+host-capable bridge from the saved Admin SSRF level. User-configured inference
+base URLs and explicitly approved host-local embedding/narrow-helper traffic
+use the host-capable bridge. Provider-default inference endpoints remain on
+the public-only bridge.
 Direct sockets that ignore proxy configuration must fail closed because the
 application containers have no externally routed network.
 
@@ -82,7 +84,7 @@ Ownership is divided as follows:
 | --- | --- |
 | Onyx application networks and removal from `netns-holder` | this plan |
 | Separate public-only and host-capable Onyx bridges, policy namespaces, and route brokers | this plan |
-| Onyx MCP and configured-inference proxy correctness and target-DNS behavior | this plan |
+| Onyx MCP, configured Web Connector/inference proxy correctness, SSRF defaults, and target-DNS behavior | this plan |
 | Internal service URL migration away from shared loopback | this plan |
 | Host WebUI/doc publication and Tailscale-to-Onyx ingress | this plan |
 | CRW removal and direct Onyx/SearXNG-to-Obscura fetching | `obscura_direct.md` |
@@ -141,21 +143,23 @@ this plan across an upgrade without source and runtime validation.
    registration, refresh, and token requests through the Onyx egress policy.
 5. Preserve MCP access to exact `host.docker.internal` endpoints when the Onyx
    Admin SSRF setting permits private-network destinations.
-6. Remove the bundled Obscura MCP service, its gateway, networks, policy
+6. Preserve opt-in RFC1918 MCP, admin-configured Web Connector, embedding, and
+   inference endpoints behind one generalized network-policy option.
+7. Remove the bundled Obscura MCP service, its gateway, networks, policy
    routes, configuration, secrets, tests, and documentation rather than
    preserving a complexity-heavy feature that is no longer justified.
-7. Preserve target-DNS confinement: public MCP/helper target names are resolved
+8. Preserve target-DNS confinement: public MCP/helper target names are resolved
    only by the selected final hop, except in explicit documented direct mode.
-8. Preserve full-mode RAG, local embedding, doc-drop source links/freshness,
+9. Preserve full-mode RAG, local embedding, doc-drop source links/freshness,
    WebUI access, Teep inference, and optional Tailscale behavior.
-9. Preserve optional executor isolation; the code-interpreter control service
+10. Preserve optional executor isolation; the code-interpreter control service
    may manage pods, but spawned executors retain their separate restricted
    network or `none`.
-10. Simplify service names, networks, ports, dependencies, and health checks
+11. Simplify service names, networks, ports, dependencies, and health checks
     made unnecessary by shared namespace removal.
-11. Keep VPN failure and reconnection fail closed without restarting unrelated
+12. Keep VPN failure and reconnection fail closed without restarting unrelated
     application services or creating an autoheal storm.
-12. Make every routing exception exact, stack-owned, startup-validated, and
+13. Make every routing exception exact, stack-owned, startup-validated, and
     covered by deterministic tests.
 
 ## Non-Goals
@@ -320,7 +324,7 @@ recommended shape is:
 | `onyx-backend` | API, background, code-interpreter control, trusted wrapper helpers, and caller sides of fixed request-path gateways. |
 | `onyx-data` | API/background and only their required PostgreSQL/cache/index/object-store peers. |
 | `onyx-public-egress` | API/background generic environment-aware clients; only peer is the fixed public-only bridge. |
-| `onyx-host-egress` | API/background MCP and configured-inference transports, local embedding shim, and explicitly approved narrow host-capable helpers; only peer is the fixed host-capable bridge. |
+| `onyx-host-egress` | API/background MCP, configured Web Connector and inference transports, local embedding shim, and explicitly approved narrow host-capable helpers; only peer is the fixed host-capable bridge. |
 | existing restricted service networks | CRW, SearXNG, and later Obscura CDP remain behind fixed gateways; do not expose their control networks directly to general Onyx peers. |
 
 Do not retain a broad default network attachment in addition to these
@@ -360,13 +364,14 @@ must:
 - be tested as a TCP forwarder rather than an IP router.
 
 Only generic public clients attach to `onyx-public-egress`. Only MCP,
-configured-inference, embedding, and named narrow helpers attach to
-`onyx-host-egress`. Network membership alone is not the request selector for
+configured Web Connector/inference, embedding, and named narrow helpers attach
+to `onyx-host-egress`. Network membership alone is not the request selector for
 API/background, which need both classes: generic `HTTP_PROXY`/`HTTPS_PROXY`
-point to the public bridge, while the strict MCP transport, configured-
-inference transport, and each approved host helper use an explicit host-bridge
-URL. Neither bridge may attach to browser, executor, data, frontend, or
-restricted service control networks.
+point to the public bridge; MCP and configured Web Connector transports select
+an explicit public/host bridge URL from the saved SSRF level; and configured-
+inference plus approved host-helper transports use the explicit host URL.
+Neither bridge may attach to browser, executor, data, frontend, or restricted
+service control networks.
 
 Use the same audited request-policy implementation for both classes, but run
 separate processes in separate network namespaces with separate listener and
@@ -417,8 +422,8 @@ resolver, pin the selected address, and connect directly through the existing
 host route exemption. Never send them through Myst provider DNS or an external
 upstream proxy. On Linux, add and validate the required
 `host.docker.internal:host-gateway` mapping on the namespace owner. Preserve
-the Myst route exemption for `host.docker.internal` without enabling a broad
-LAN bypass.
+the Myst route exemption for `host.docker.internal` without enabling the broad
+RFC1918 option.
 
 Policy exception matching must occur after canonical URL/hostname parsing and
 before the normal blanket Docker-internal rejection. Reject credentials,
@@ -444,21 +449,27 @@ exception table and always apply the floor.
 They do not create a suffix exception, so subdomains and newly introduced
 Docker/Podman aliases remain denied by default.
 
-### Opt-In RFC1918 MCP, Embedding, and Inference
+### Opt-In RFC1918 Configured Endpoints
 
-Preserve private-network integrations behind the existing explicit
-`MYST_VPN_ALLOW_LAN_BYPASS=true` preference. This switch has two coordinated
-effects: Myst installs the documented RFC1918 route exemptions, and the
-host-capable request-policy namespace/broker permits RFC1918 destinations for
-MCP, embedding, and inference clients deliberately routed to the host-capable
-bridge. The public-only namespace, browser, executor, and generic helper path
-never receive this capability.
+Rename the overly Myst-specific `MYST_VPN_ALLOW_LAN_BYPASS` option to the
+stack-wide `EGRESS_ALLOW_RFC1918`, default `false`, with no compatibility alias.
+It has two coordinated effects: Myst installs the documented RFC1918 route
+exemptions when Myst is enabled, and the host-capable request-policy
+namespace/broker permits RFC1918 destinations in every routing mode for MCP,
+admin-configured Web Connector, embedding, and inference clients deliberately
+routed to the host-capable bridge. The public-only namespace, browser,
+executor, `open_url`, and generic helper path never receive this capability.
 
 When disabled, RFC1918 literals and names resolving only to RFC1918 addresses
 fail closed. When enabled:
 
 - Onyx MCP still applies the saved Admin SSRF level on every initial and
   derived URL; strict levels reject private destinations before proxying.
+- Admin-configured Web Connector fetches use an explicit saved-level-selected
+  public/host HTTP and Playwright transport, applying the connector SSRF posture
+  to every initial, discovered, and redirected URL. The exact stack-owned
+  doc-drop connector remains a direct internal-service exception and never
+  uses egress.
 - The local embedding shim and each supported Onyx client for a user-configured
   inference base URL use an explicit host-capable proxy transport rather than
   generic environment routing. Default provider endpoints with no configured
@@ -471,7 +482,7 @@ fail closed. When enabled:
   other than the exact host exception, and IPv4-mapped bypass forms remain
   blocked even when the switch is enabled.
 
-Supporting arbitrary private MCP and configured endpoint hostnames necessarily
+Supporting arbitrary private MCP, Web Connector, and configured endpoint hostnames necessarily
 means that, while this opt-in is enabled, host-capable target names may be
 queried through the trusted system resolver before the broker can determine
 that they are private. An all-RFC1918 answer may use the pinned private route;
@@ -484,18 +495,56 @@ LAN capability rather than an endpoint-scoped sandbox guarantee.
 
 ## MCP, OAuth, and Target DNS
 
+### One Onyx SSRF Default, No Wrapper Flags
+
+Remove `ONYX_SECURITY_SSRF_VALIDATE_OPEN_URL`,
+`ONYX_SECURITY_SSRF_ALLOW_PRIVATE_NETWORK`, and
+`ONYX_SECURITY_SSRF_ALLOW_LOOPBACK` from `.env.wrapper.example` and reject them
+as stale wrapper configuration. They are three legacy inputs to one saved Onyx
+`SSRFProtectionLevel`, not independent network-policy controls.
+
+Seed Onyx to `ALLOW_PRIVATE_NETWORK` on a new installation, with open-URL
+validation on and loopback off. Until upstream exposes a direct enum default,
+set its three legacy container inputs internally to `true`, `true`, and `false`;
+do not expose them as wrapper options. This preserves the current useful
+default: admin-configured Web Connectors may use private targets, MCP/OAuth may
+use exact host or RFC1918 targets, `open_url` remains private-target guarded,
+and loopback remains blocked.
+
+Do not condition this seed on `EGRESS_ALLOW_RFC1918`. Environment values only
+seed Onyx when no saved Admin override exists, so conditional seeding would be
+stateful and misleading after the Admin setting had been saved. Instead, keep
+two explicit layers whose effective permission is their intersection:
+
+- the saved Admin SSRF level selects application permission and whether MCP,
+  OAuth, and Web Connector traffic uses the public-only or host-capable bridge;
+- `EGRESS_ALLOW_RFC1918` is the network upper bound for RFC1918 routing at the
+  host broker and Myst firewall; and
+- exact `host.docker.internal` is a separate narrow host-broker exception,
+  while loopback/link-local/metadata remain unavailable on every broker.
+
+For MCP/OAuth, `VALIDATE_ALL` and `VALIDATE_LLM` select the public bridge;
+`ALLOW_PRIVATE_NETWORK` and `DISABLED` select the host bridge. For Web
+Connectors, only `VALIDATE_ALL` selects the public bridge; the other levels
+select the host bridge, matching upstream connector semantics. RFC1918 still
+fails unless `EGRESS_ALLOW_RFC1918=true`, and `DISABLED` still cannot create a
+broker route to loopback/link-local/metadata. Read the saved level at
+client/crawl creation and revalidate every derived URL. A saved Admin override
+remains authoritative and may tighten the default without changing Compose.
+
 ### Explicit MCP Transport
 
-Patch the pinned Onyx MCP client narrowly and strictly. Introduce a
-stack-owned `ONYX_MCP_HTTP_PROXY_URL` pointing to
-`http://onyx-host-egress-bridge:3128`. It is not a user-facing routing knob.
+Patch the pinned Onyx MCP client narrowly and strictly. Introduce stack-owned
+`ONYX_MCP_PUBLIC_HTTP_PROXY_URL` and `ONYX_MCP_HOST_HTTP_PROXY_URL` values
+pointing to the two fixed bridges. They are not user-facing routing knobs.
 
 The MCP factory must:
 
-1. Validate the exact proxy URL and reject credentials, paths, query,
+1. Validate both exact proxy URLs and reject credentials, paths, query,
    fragments, unexpected hosts, or ports at startup.
-2. Instantiate the SSRF-guarded `AsyncHTTPTransport` with that explicit HTTP
-   proxy.
+2. Instantiate the SSRF-guarded `AsyncHTTPTransport` with the public or host
+   proxy selected from the saved Admin level above; never select from the
+   destination text alone.
 3. construct `httpx.AsyncClient(..., trust_env=False, transport=...)` so
    environment settings cannot silently replace or bypass the selected route.
 4. Preserve the existing timeout, headers, authentication, redirect, SSE, and
@@ -520,12 +569,12 @@ Split validation responsibilities:
 
 - Onyx performs scheme, credential, syntax, normalized-hostname, IP-literal,
   always-blocked-name, Admin SSRF-level, and exact trusted-host checks without
-  resolving arbitrary public names when private-LAN mode is disabled.
+  resolving arbitrary public names when the RFC1918 option is disabled.
 - The matching route broker resolves and validates public names using the
   selected VPN/upstream/no-VPN mode and rechecks every CONNECT/forward request.
 - Exact `host.docker.internal` destinations are resolved only by their
   authorized host-broker exception.
-- When `MYST_VPN_ALLOW_LAN_BYPASS=true`, the host-capable path follows the
+- When `EGRESS_ALLOW_RFC1918=true`, the host-capable path follows the
   explicit RFC1918 resolution and pinning rules above; the public path remains
   unchanged.
 
@@ -555,12 +604,36 @@ DNS, raw sockets, browser launch flags, or SDK-specific clients must be audited
 individually. The network boundary makes a missed client fail closed, but every
 supported feature still needs an intentional route and regression test.
 
+### Configured Web Connector Upstreams
+
+Route every admin-configured Web Connector crawl other than the exact
+stack-owned doc-drop connector through an explicit proxy transport. Select the
+public or host bridge from the saved SSRF level as described above; never use a
+direct socket, environment-only proxy selection, or `NO_PROXY` for a
+user-configured target.
+
+Patch both the connector's HTTP session and Playwright launcher. Disable
+environment discovery, preserve authentication/headers/timeouts/redirect and
+rendering behavior, and apply URL syntax plus saved-level validation to the
+initial URL, discovered crawl URLs, redirects, sitemap entries, and browser
+navigations. Public connector targets work through either selected broker's
+normal public route. RFC1918 targets require both an Admin level that permits
+connector-private access and `EGRESS_ALLOW_RFC1918=true`; loopback,
+link-local/metadata, and unapproved Docker names remain blocked.
+
+The exact configured local doc-drop connector is different: it uses the fixed
+internal `http://doc-drop-web:8091/` service identity directly on its internal
+network, with the narrow identity/display-link patch below. Do not send it to
+either egress bridge and do not generalize its direct-service exception to
+other saved Web Connector URLs.
+
 ### Configured Onyx Inference Upstreams
 
 Preserve RFC1918 inference endpoints configured through Onyx provider
 `api_base` or equivalent fields by adding one stack-owned
 `ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL` that points to the same fixed
-host-capable bridge as MCP and embedding. It is not a user-selectable proxy.
+host-capable bridge used by private-capable MCP and embedding. It is not a
+user-selectable proxy.
 Apply it only to requests derived from a user-configured inference base URL;
 provider-default public endpoints continue to use the public bridge.
 
@@ -578,7 +651,7 @@ providers onto the host-capable path.
 Validate the configured endpoint URL before client construction and on every
 SDK-derived redirect or discovery URL where the SDK permits them. The route
 broker remains authoritative for DNS/address selection: RFC1918 succeeds only
-with `MYST_VPN_ALLOW_LAN_BYPASS=true`, while public configured endpoints use
+with `EGRESS_ALLOW_RFC1918=true`, while public configured endpoints use
 the normal public final route through the host broker. Startup/source-shape
 checks must fail loudly if an SDK upgrade stops using the injected client.
 
@@ -632,7 +705,7 @@ Move `local-embedding-shim` to an internal network and patch its owned
 host-capable Onyx proxy URL. The current client is not environment-proxy aware,
 so this is a required implementation change rather than an optional fallback. The
 default `host.docker.internal` upstream must use the exact host exception.
-RFC1918 upstreams require `MYST_VPN_ALLOW_LAN_BYPASS=true`; public embedding
+RFC1918 upstreams require `EGRESS_ALLOW_RFC1918=true`; public embedding
 upstreams use normal final-hop policy. API/background reach only
 `local-embedding-shim:9101`, never its upstream directly.
 
@@ -859,7 +932,7 @@ Residual risks to document:
 - permitting arbitrary ports on exact `host.docker.internal` exposes whatever
   host services listen on those ports to an SSRF-permitted Onyx MCP/helper
   request; and
-- enabling `MYST_VPN_ALLOW_LAN_BYPASS` intentionally gives host-capable Onyx
+- enabling `EGRESS_ALLOW_RFC1918` intentionally gives host-capable Onyx
   callers broad RFC1918 reach and weakens target-DNS confinement for that class;
 - required internal peers remain laterally reachable according to the selected
   application/data network grouping.
@@ -886,7 +959,8 @@ an operator attaching new networks after startup.
 
 ### Workstream 1: MCP and Policy Correctness
 
-1. Add the strict explicit MCP proxy transport.
+1. Add the strict saved-level-selected MCP proxy transport and the explicit
+   configured Web Connector transports.
 2. Split non-resolving Onyx validation from authoritative final-hop DNS.
 3. Add separate public and host request-policy namespaces plus their distinct
    public-only and host-capable route brokers in `netns-holder`.
@@ -894,7 +968,9 @@ an operator attaching new networks after startup.
    namespace/broker, and prove the public broker rejects the same target.
 5. Define the bounded authenticated policy-to-broker protocol and generate a
    distinct ephemeral credential for each broker on every stack start.
-6. Preserve Admin SSRF level semantics on initial URLs and every derived URL.
+6. Remove the three wrapper SSRF seed flags, set the fixed
+   `ALLOW_PRIVATE_NETWORK` default, and preserve saved Admin SSRF semantics on
+   initial and derived URLs through public/host bridge selection.
 7. Add Linux host-gateway, RFC1918 opt-in, and Myst route-exemption validation.
 8. Add focused unit tests before changing network placement.
 
@@ -919,9 +995,10 @@ an operator attaching new networks after startup.
 3. Expose each request-policy listener only to its expected bridge peer and
    each broker only to its expected policy peer; prove the public broker has no
    host or RFC1918 exception capability.
-4. Retarget generic helper/Playwright proxy variables to the public bridge and
-   MCP/configured-inference/embedding/narrow host helpers to explicit
-   host-bridge URLs.
+4. Retarget generic helper/Playwright proxy variables to the public bridge;
+   give MCP and configured Web Connector clients both saved-level-selected
+   bridge URLs; and give configured-inference/embedding/narrow host helpers
+   explicit host-bridge URLs.
 5. Update stack-owned `NO_PROXY` for internal service DNS only.
 6. Prove packet forwarding, cross-broker access, and client-selected alternate
    upstreams are impossible.
@@ -964,9 +1041,11 @@ an operator attaching new networks after startup.
   supported external traffic crosses restricted egress.
 - Preserve Admin SSRF instructions for host MCP and explain that the connection
   is policy-mediated rather than a `NO_PROXY` bypass.
-- Explain that `MYST_VPN_ALLOW_LAN_BYPASS` gates RFC1918 MCP, embedding, and
-  user-configured inference base URLs, while provider-default inference and
-  all browser/executor traffic remain on public-only paths.
+- Remove the three legacy wrapper SSRF flags; document the fixed
+  `ALLOW_PRIVATE_NETWORK` seed, saved Admin override, and network-policy ceiling.
+- Explain that `EGRESS_ALLOW_RFC1918` gates RFC1918 MCP, configured Web
+  Connector, embedding, and inference targets, while provider-default
+  inference, `open_url`, and all browser/executor traffic remain public-only.
 - Update host endpoints, local RAG URLs, Tailscale behavior, troubleshooting,
   and service counts.
 - Remove shared-namespace and port-7000 instructions.
@@ -981,6 +1060,8 @@ an operator attaching new networks after startup.
   matrix.
 - Explain explicit MCP transport handling and why environment variables alone
   were insufficient.
+- Document saved-level public/host selection for MCP/OAuth and configured Web
+  Connectors, plus the fixed internal doc-drop exception.
 - Update readiness, autoheal, upstream proxy, Teep, Tailscale, and no-VPN
   diagrams.
 
@@ -991,6 +1072,8 @@ an operator attaching new networks after startup.
 - Document permitted peers per network, both Onyx bridges and policy
   namespaces, both route brokers, the exact host/RFC1918 exceptions,
   Docker-internal denial, and residual pivot risk.
+- Explain the intersection of saved SSRF level, public/host bridge selection,
+  and `EGRESS_ALLOW_RFC1918`, including the always-blocked loopback floor.
 - Update reachability tables and negative-path evidence.
 
 ### `docs/request_handling.md`
@@ -999,6 +1082,9 @@ an operator attaching new networks after startup.
   request chains.
 - Add configured-inference versus provider-default proxy selection, including
   RFC1918 opt-in, mixed-answer rejection, and fail-closed SDK coverage.
+- Replace the three legacy SSRF seed flags with the fixed
+  `ALLOW_PRIVATE_NETWORK` default and explain that the saved Admin level and
+  `EGRESS_ALLOW_RFC1918` form independent, intersecting controls.
 - Distinguish internal service DNS from public target DNS.
 - Preserve current CRW/Obscura behavior until Direct Obscura is implemented.
 - Remove the bundled Obscura MCP request chain and all setup, endpoint,
@@ -1006,8 +1092,9 @@ an operator attaching new networks after startup.
 
 ### `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`
 
-- Document the strict MCP proxy/DNS patch and revised Playwright proxy URL
-  validation.
+- Document the strict MCP and Web Connector proxy/DNS patches, saved-level
+  bridge selection, and revised Playwright proxy URL validation.
+- Document fixed SSRF seeding and removal/rejection of the three wrapper flags.
 - Document the configured-inference proxy selection patch, covered provider
   clients, and strict source-shape validation.
 - Add source-shape anchors for HTTPX transport construction, MCP SDK clients,
@@ -1027,12 +1114,31 @@ an operator attaching new networks after startup.
 
 ### `.env.wrapper.example`, `AGENTS.md`, and Plans
 
-- Do not make stack-owned bridge URLs or `NO_PROXY` values user-facing.
+- Rename `ONYX_AGENT_OUTBOUND_PROXY_URL` to `EGRESS_UPSTREAM_PROXY_URL` and
+  `ONYX_AGENT_ALLOW_HTTP_URLS` to `EGRESS_ALLOW_HTTP_URLS`, with no
+  compatibility aliases. Update Make/Compose selection, policy/broker inputs,
+  executor injection, tests, help, examples, and current documentation
+  atomically. Reject either old name when found in `.env.wrapper` so an upgrade
+  cannot silently ignore a security-relevant value.
+- Rename `MYST_VPN_ALLOW_LAN_BYPASS` to `EGRESS_ALLOW_RFC1918` as the single
+  explicit RFC1918 opt-in and reject the old name. Its example text must cover
+  MCP, configured Web Connector, embedding, and inference endpoints; it is not
+  required for an exact `host.docker.internal` upstream proxy or other exact
+  host exception.
+- Remove all three `ONYX_SECURITY_SSRF_*` options. Internally seed Onyx with
+  `OPEN_URL_VALIDATE_SSRF=true`, `MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, and
+  `MCP_SERVER_ALLOW_LOOPBACK=false`; do not add a replacement wrapper option.
+- Do not make stack-owned bridge/broker URLs, credentials, listener ports, or
+  `NO_PROXY` values user-facing.
 - Generate the two distinct broker authentication credentials through the
   existing ephemeral stack-secret flow on every start; do not add them to
   `.env.wrapper.example` or persist them in application data.
-- Preserve user-facing SSRF, host port, VPN, upstream-proxy, and local embedding
-  settings with accurate semantics.
+- Preserve the saved Admin SSRF control and the remaining host-port, VPN, Teep,
+  Tailscale, code-interpreter, model-behavior, and local-RAG wrapper settings;
+  update descriptions only where routing or publisher ownership changed.
+- Replace the SSRF seed comments with the fixed default, saved Admin override,
+  public/host bridge selection, exact host/RFC1918 policy, and fixed internal
+  doc-drop exception. Remove the obsolete bundled-Obscura-MCP rationale.
 - Update `AGENTS.md` runtime shape, key locations, invariants, and test guidance.
 - Make `obscura_direct.md` depend on this plan and remove its obsolete shared
   namespace assumptions.
@@ -1059,12 +1165,21 @@ an operator attaching new networks after startup.
 
 Add focused cases under `tests/` for:
 
-- exact MCP proxy URL validation and invalid values;
+- `EGRESS_UPSTREAM_PROXY_URL`/`EGRESS_ALLOW_HTTP_URLS` propagation and explicit
+  rejection of both former `ONYX_AGENT_*` names;
+- `EGRESS_ALLOW_RFC1918` propagation and rejection of its former Myst-specific
+  name and all three removed wrapper SSRF names;
+- fixed `ALLOW_PRIVATE_NETWORK` seeding only when no Admin override is saved;
+- exact public/host MCP and Web Connector proxy URL validation and invalid
+  values;
 - HTTPX custom transport construction with the explicit proxy and
   `trust_env=False`;
 - streamable HTTP and SSE factory use;
 - initial URL, redirect, OAuth metadata, registration, authorization, token,
   and refresh validation;
+- saved-level bridge selection for MCP/OAuth and Web Connectors at every SSRF
+  level, including derived URLs, sitemaps, browser fallback, and a saved-level
+  change between new clients/crawls;
 - no public target DNS call in Onyx when the final hop is authoritative;
 - SSRF levels for public, RFC1918, loopback, link-local, exact
   `host.docker.internal`, Docker/Podman/legacy aliases and
@@ -1074,7 +1189,7 @@ Add focused cases under `tests/` for:
 - broker protocol version/authentication/framing limits, wrong-interface and
   cross-credential denial, deadlines/cancellation/half-close, concurrency, and
   no caller-selected resolver/upstream/source address;
-- `MYST_VPN_ALLOW_LAN_BYPASS` disabled/enabled behavior, RFC1918-only answer
+- `EGRESS_ALLOW_RFC1918` disabled/enabled behavior, RFC1918-only answer
   validation, mixed-answer rejection, all-global public-route handoff, and the
   unchanged public-only denial;
 - normal VPN/upstream/no-VPN public resolver selection;
@@ -1084,6 +1199,8 @@ Add focused cases under `tests/` for:
   unavailable, and no cross-class fallback;
 - local embedding shim HTTP absolute-form and HTTPS CONNECT proxying, TLS SNI,
   connection reuse/retry, no shim-side public DNS, and credential redaction;
+- Web Connector HTTP/Playwright explicit proxying, public and RFC1918 targets,
+  loopback/link-local/metadata denial, and the exact direct doc-drop exception;
 - configured-inference URL selection for every supported synchronous and
   asynchronous SDK path, explicit client injection, provider-default public
   routing, RFC1918 opt-in, mixed-answer rejection, redirect/discovery handling,
@@ -1119,6 +1236,8 @@ Parse effective models structurally and assert:
   restricted service network, expose one fixed destination, and cannot relay
   to another gateway's service;
 - `host.docker.internal` is absent from generic helper `NO_PROXY`;
+- `.env.wrapper.example` omits all three legacy SSRF flags, Compose supplies the
+  fixed internal seed values, and stale wrapper values fail validation;
 - code-interpreter control uses service port `8000`, while executor networking
   remains separately selected and restricted;
 - host WebUI/doc ports bind only as configured and obsolete host publishers are
@@ -1150,9 +1269,10 @@ Test at least:
 | lite, upstream SOCKS5/SOCKS5h | target DNS behavior matches scheme and no direct fallback occurs |
 | full, VPN/no VPN | all lite checks plus doc-drop crawl, source links, PDF freshness, embeddings, indexing, and `internal_search` |
 | MCP strict SSRF | host MCP rejected; remote public MCP succeeds through policy |
-| MCP allow-private, LAN bypass off | exact host MCP succeeds; RFC1918, loopback, link-local, and other Docker names remain denied |
-| MCP allow-private, LAN bypass on | exact host and RFC1918 MCP succeed through the host route; loopback/link-local/other Docker names remain denied |
-| configured inference, LAN bypass off/on | configured public endpoints use the host bridge and normal public final route; RFC1918 endpoints fail when off and succeed through the pinned private route when on; provider-default endpoints remain on the public bridge |
+| MCP allow-private, RFC1918 off | exact host MCP succeeds; RFC1918, loopback, link-local, and other Docker names remain denied |
+| MCP allow-private, RFC1918 on | exact host and RFC1918 MCP succeed through the host route; loopback/link-local/other Docker names remain denied |
+| Web Connector, strict/allow-private | strict connector traffic uses the public bridge; permitted private connector traffic uses the host bridge and RFC1918 succeeds only with `EGRESS_ALLOW_RFC1918`; configured doc-drop remains internal |
+| configured inference, RFC1918 off/on | configured public endpoints use the host bridge and normal public final route; RFC1918 endpoints fail when off and succeed through the pinned private route when on; provider-default endpoints remain on the public bridge |
 | executor network off/on | control plane works; pods remain `none` or on the dedicated executor network and never inherit Onyx exceptions |
 | Tailscale off/on and routed/unrouted | disabled services absent; enabled ingress reaches nginx without adding application egress |
 
@@ -1200,7 +1320,7 @@ permit.
 3. Move API/background and retarget all internal URLs and gateways.
 4. Move web/nginx/code-interpreter control and change host ingress.
 5. Move or explicitly classify doc-drop and embedding helpers, and enable the
-   explicit configured-inference transport.
+   saved-level Web Connector plus configured-inference transports.
 6. Remove shared namespace aliases, application attachments, direct Myst
    dependencies, loopback workarounds, and obsolete publisher services.
 7. Exercise every mode from a clean Compose state and verify direct-socket
@@ -1229,9 +1349,13 @@ for any URL that must change; Compose cannot rewrite stored records.
   target DNS lookup.
 - Exact `host.docker.internal` MCP works only at the intended SSRF levels,
   stays local, and never traverses the external upstream proxy.
-- RFC1918 MCP, embedding, and inference endpoints work only when
-  `MYST_VPN_ALLOW_LAN_BYPASS=true`, only through the host-capable namespace and
-  broker, and never become reachable from public, browser, or executor paths.
+- New installs seed Onyx `ALLOW_PRIVATE_NETWORK` with loopback disabled; saved
+  Admin overrides still select public/host routing, and no legacy wrapper SSRF
+  flag remains accepted.
+- RFC1918 MCP, configured Web Connector, embedding, and inference endpoints
+  work only when `EGRESS_ALLOW_RFC1918=true`, only through the host-capable
+  namespace and broker, and never become reachable from `open_url`, generic
+  public, browser, or executor paths.
 - The bundled Obscura MCP service and all of its configuration, secrets,
   routes, networks, tests, and documentation are absent; stale enablement
   configuration is rejected explicitly.
@@ -1259,9 +1383,10 @@ for any URL that must change; Compose cannot rewrite stored records.
 | --- | --- |
 | Onyx application/data reachability | explicit internal Compose networks |
 | generic Onyx public HTTP(S) route | fixed public-only Onyx bridge, isolated request-policy namespace, and public-only route broker |
-| remote MCP/OAuth transport | explicit SSRF-guarded HTTPX proxy transport |
+| remote MCP/OAuth transport | saved-level-selected, SSRF-guarded HTTPX proxy transport |
+| admin-configured Web Connector transport | saved-level-selected explicit HTTP/Playwright proxy; exact doc-drop connector stays internal |
 | public target DNS and address validation | selected route broker in the trusted routing namespace |
-| exact host and opt-in RFC1918 MCP/embedding/inference route | fixed host-capable Onyx bridge, isolated host policy namespace, and host route broker |
+| exact host and opt-in RFC1918 MCP/Web Connector/embedding/inference route | fixed host-capable Onyx bridge, isolated host policy namespace, and host route broker |
 | browser and executor public routes | separate bridges owned by Direct Obscura |
 | VPN readiness and recovery | Myst plus target-free policy readiness and Myst-only autoheal |
 | internal service bypasses | stack-owned `NO_PROXY` plus internal networks, never host/public names |

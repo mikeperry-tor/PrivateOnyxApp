@@ -155,9 +155,10 @@ compatible unmodified upstream release can be pinned and re-audited.
    health dependencies, documentation, and tests.
 5. Use one neutral public-only request-policy namespace for generic Onyx,
    browser, and optional executor listeners, while retaining the prerequisite's
-   separate host-capable policy namespace for MCP, embedding, inference, and
-   named narrow helpers. Each namespace reaches only its matching route broker;
-   public versus host access is a network-namespace and broker boundary.
+   separate host-capable policy namespace for private-permitted MCP/Web
+   Connector traffic, embedding, inference, and named narrow helpers. Each
+   namespace reaches only its matching route broker; public versus host access
+   is a network-namespace and broker boundary.
 6. Retain separate fixed browser and optional executor egress bridges and
    component networks. They use separate listeners in the same public-only
    policy namespace, but neither bridge may attach to the
@@ -1352,7 +1353,7 @@ namespaces:
 Retain the prerequisite's two minimal route brokers in `netns-holder`. The
 public broker repeats destination validation and accepts only public targets
 from the public policy namespace. The host broker repeats validation and adds
-only the exact host and `MYST_VPN_ALLOW_LAN_BYPASS`-gated RFC1918 behavior. A
+only the exact host and `EGRESS_ALLOW_RFC1918`-gated RFC1918 behavior. A
 policy process cannot address the other broker network, and neither broker
 accepts raw client HTTP proxy traffic or an operator/client-selected upstream.
 
@@ -1566,10 +1567,13 @@ must not perform a target DNS lookup before the browser fetch. The direct
 adapter either bypasses the DNS-resolving helper or patches its use at this
 narrow boundary while retaining syntax/literal checks.
 
-Saved Onyx SSRF settings are not authorization for Obscura to access private
-targets. The request-policy and route-broker chain remains authoritative for
-all hostnames and redirects. `ONYX_AGENT_ALLOW_HTTP_URLS` must be enforced both
-before navigation and at the final hop.
+Saved Onyx SSRF settings are not authorization for Obscura or `open_url` to
+access private targets. Direct `open_url` always uses the public bridge; the
+prerequisite's saved-level public/host selection applies only to MCP/OAuth and
+admin-configured Web Connectors. The request-policy and route-broker chain
+remains authoritative for all hostnames and redirects. The prerequisite's
+`EGRESS_ALLOW_HTTP_URLS` setting must be enforced both before navigation and at
+the final hop.
 
 ### Residual Risks
 
@@ -1786,7 +1790,7 @@ Add or rename:
 - `ONYX_OBSCURA_CDP_URL=ws://obscura-cdp-gateway:9222/devtools/browser`;
 - `SEARXNG_OBSCURA_CDP_URL=ws://obscura:9222/devtools/browser`;
 - the generalized document byte/parser settings above;
-- neutral CDP wait/timeout/trace settings;
+- stack-owned CDP wait/timeout/trace settings, not user-facing sample options;
 - stack-owned SearXNG `_obscura.py` scheduler settings for per-provider
   concurrency `1`, rate `0.33`, queue timeout, and the characterized jitter
   profile, plus an explicit `GRANIAN_WORKERS=1`;
@@ -2068,13 +2072,32 @@ sections rather than retaining a historical appendix.
 
 ### `.env.wrapper.example`
 
-- Add the generalized document size and advanced parse/concurrency settings
-  with memory warnings; retain existing Tailscale/VPN switches.
+- Add only `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` for the new document controls,
+  with the memory warning. Keep parser concurrency, timeout, memory, CDP URLs,
+  waits, traces, scheduler internals, and bridge/policy settings as validated
+  stack-owned defaults rather than expanding the sample surface.
 - Rename the cookie interval to
   `OBSCURA_BROWSER_CLEAR_COOKIES_INTERVAL_SECONDS`, document the lack of
   first-party isolation and the periodic-clear tradeoff, and do not retain a
-  compatibility alias for the old name.
+  compatibility alias for the old name. Reject the stale name during startup.
+- Remove `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` and
+  `OBSCURA_BROWSER_WAIT_UNTIL_WEB`; the direct clients own explicit,
+  call-site-specific waits and the CDP-shim-wide overrides no longer have a
+  coherent meaning. Reject stale values instead of ignoring them.
+- Retain `SEARXNG_ROUND_ROBIN`, but replace its CRW wording with the direct
+  Obscura provider-selection semantics; it remains a real operator choice, not
+  an egress-policy mode.
+- Retain `ONYX_CODE_INTERPRETER_ENABLE_NETWORK`, but state that enabled
+  executors may reach public search engines while host/private targets remain
+  denied.
+- Retain the SearXNG/Teep host-port and Teep routing switches, but replace
+  legacy socat/proxy-bridge descriptions with the final direct-publication and
+  fixed-gateway topology.
 - Remove CRW, CDP-shim, search-block-host, and policy-mode user settings.
+- Consume the prerequisite's `EGRESS_UPSTREAM_PROXY_URL` and
+  `EGRESS_ALLOW_HTTP_URLS` names, its `EGRESS_ALLOW_RFC1918` option, and its
+  fixed Onyx SSRF default; do not rename, alias, or re-expose the removed SSRF
+  seed flags here.
 - Do not expose stack-owned CDP URLs or helper `NO_PROXY` values.
 - Keep immutable image/source pins in `stack.versions.env`.
 
@@ -2240,7 +2263,7 @@ Retain and extend tests for:
   including attempts to obtain the exception with headers, targets, or proxy
   chaining;
 - separation of the public and host policy namespaces and broker networks,
-  repeated broker validation, and `MYST_VPN_ALLOW_LAN_BYPASS` behavior inherited
+  repeated broker validation, and `EGRESS_ALLOW_RFC1918` behavior inherited
   from the isolation prerequisite;
 - `Content-Length`/`Transfer-Encoding` request-smuggling defenses already
   present in the proxy; and
@@ -2309,6 +2332,9 @@ Against the exact image pin:
 
 Parse effective Compose models structurally and assert:
 
+- `.env.wrapper.example` exposes the document-size and renamed cookie controls,
+  not the removed CDP-shim wait names or stack-owned parser/CDP/scheduler
+  internals; startup rejects each stale renamed/removed option;
 - no CRW/CDP-shim service, image, secret, env, health dependency, network, or
   host port remains;
 - only the expected clients can reach Obscura control/CDP;
