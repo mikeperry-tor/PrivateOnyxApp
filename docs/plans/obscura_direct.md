@@ -759,6 +759,11 @@ The final-hop policy must repeat host/IP/internal-name checks after resolution
 and for every CONNECT target. Obscura's own private-target protection is useful
 defense in depth, not a replacement for the final-hop policy.
 
+The direct Obscura path is public-only. Its plain-HTTP navigations therefore
+remain disabled unless `EGRESS_ALLOW_HTTP_URLS=true`; it cannot obtain the
+host route's exact-host or RFC1918 exceptions. Host-capable Onyx clients use a
+separate path described below.
+
 ### Diagnostics and Redaction
 
 Replace CDP-shim tracing with neutral direct-client tracing. Configuration may
@@ -1354,9 +1359,16 @@ namespaces:
 Retain the prerequisite's two minimal route brokers in `netns-holder`. The
 public broker repeats destination validation and accepts only public targets
 from the public policy namespace. The host broker repeats validation and adds
-only the exact host and `EGRESS_ALLOW_RFC1918`-gated RFC1918 behavior. A
-policy process cannot address the other broker network, and neither broker
-accepts raw client HTTP proxy traffic or an operator/client-selected upstream.
+only the exact host and `EGRESS_ALLOW_RFC1918`-gated RFC1918 behavior. Preserve
+the authenticated policy-to-broker protocol's explicit `cleartext` versus
+`opaque` transport classification. After authoritative DNS resolution, the
+host broker permits cleartext only for exact `host.docker.internal`, for an
+all-RFC1918 answer set when `EGRESS_ALLOW_RFC1918=true`, or when general HTTP
+is explicitly enabled. The public broker permits cleartext only when general
+HTTP is explicitly enabled. Missing or invalid transport classification must
+fail closed. A policy process cannot address the other broker network, and
+neither broker accepts raw client HTTP proxy traffic or an
+operator/client-selected upstream.
 
 All three public listeners have identical public-destination policy and no
 host/internal exception table. The separate bridges preserve caller-network
@@ -1552,10 +1564,14 @@ including at least:
 - every non-public IPv4 and IPv6 range after resolution, including IPv4-mapped
   IPv6 and alternate textual forms.
 
-Retain the prerequisite's exact `host.docker.internal` exception only on the
-host-capable Onyx policy listener and broker, and the existing host-only
+Retain the prerequisite's exact `host.docker.internal` exception and its
+`EGRESS_ALLOW_RFC1918`-gated, all-RFC1918 destination exception only on the
+host-capable Onyx policy listener and broker. Both exceptions include plain
+HTTP when general cleartext URLs are disabled, with the broker enforcing the
+decision after authoritative DNS validation. Retain the existing host-only
 upstream-proxy bootstrap exception only for the configured proxy endpoint.
-Never add either to the public Onyx, browser, or executor destination policy.
+Never add any of these exceptions to the public Onyx, browser, or executor
+destination policy.
 
 The definitive list and resolver semantics belong in
 [Internal network security](../internal_network_security.md), backed by unit
@@ -1573,8 +1589,10 @@ access private targets. Direct `open_url` always uses the public bridge; the
 prerequisite's saved-level public/host selection applies only to MCP/OAuth and
 admin-configured Web Connectors. The request-policy and route-broker chain
 remains authoritative for all hostnames and redirects. The prerequisite's
-`EGRESS_ALLOW_HTTP_URLS` setting must be enforced both before navigation and at
-the final hop.
+`EGRESS_ALLOW_HTTP_URLS` setting must be enforced both before public browser
+navigation and at the broker. Host-route cleartext must additionally preserve
+the exact-host and opt-in, broker-validated RFC1918 exceptions without making
+them available to the direct Obscura path.
 
 ### Residual Risks
 
@@ -1757,7 +1775,7 @@ For completeness, the current patch inventory has this migration impact:
 | Internal-search content caps | Retain unchanged. |
 | Code-interpreter capability descriptions and executor network/proxy patch | Retain the restricted executor network and its separate bridge when enabled, and remove claims that search hosts are blocked. Exercise as a routing regression. |
 | Background Web-connector PDF freshness | Retain unchanged; it is not the LLM `open_url` PDF path. |
-| Local embedding shim | Retain the isolation prerequisite's explicit host-capable HTTP/HTTPS proxy implementation unchanged. |
+| Local embedding shim | Retain its current explicit host-capable HTTP/HTTPS proxy behavior, including cleartext access to exact `host.docker.internal` and to broker-validated RFC1918 destinations when `EGRESS_ALLOW_RFC1918=true`. |
 | Compose wrapper, Podman, external proxy, and install/upgrade hooks | Modify only where service/image/network names change; preserve their existing semantics and strict validation. |
 
 Update this table during implementation if the current inventory in
@@ -1858,7 +1876,10 @@ corruption.
    host/internal exceptions remain structurally unavailable. Remove the legacy
    browser/executor policy services rather than creating another public process.
 5. Preserve resolver selection, internal blocklists, request framing, upstream
-   proxy handling, HTTP policy, and redaction.
+   proxy handling, HTTP policy, redaction, and the authenticated broker
+   protocol's required `cleartext`/`opaque` classification. Preserve final-hop
+   broker enforcement of public HTTP denial and the host route's exact-host
+   and opt-in, all-RFC1918 cleartext exceptions.
 6. Use one public-only policy namespace with generic-Onyx/browser/executor
    listeners and one separate host-capable namespace; retain all four distinct
    bridges/upstreams and both route brokers.
@@ -2267,6 +2288,13 @@ Retain and extend tests for:
 - separation of the public and host policy namespaces and broker networks,
   repeated broker validation, and `EGRESS_ALLOW_RFC1918` behavior inherited
   from the isolation prerequisite;
+- plain HTTP to an all-RFC1918 answer set succeeds only through the host route
+  with `EGRESS_ALLOW_RFC1918=true`, while public and mixed answer sets fail;
+- public Onyx, browser, and executor listeners cannot obtain either host-route
+  cleartext exception through headers, target syntax, proxy chaining, or an
+  alternate broker; and
+- missing, unknown, or malformed broker transport classification fails closed
+  before any destination connection is opened;
 - `Content-Length`/`Transfer-Encoding` request-smuggling defenses already
   present in the proxy; and
 - no legacy prefetch mode/env names.
@@ -2351,7 +2379,8 @@ Parse effective Compose models structurally and assert:
   no legacy component policy services or ports;
 - neither policy service uses `network_mode: service:netns-holder`; each has
   only its listener networks and matching broker network, while each broker
-  accepts only its expected policy peer and repeats destination validation;
+  accepts only its expected policy peer, requires the authenticated
+  `cleartext`/`opaque` classification, and repeats destination validation;
 - separate fixed browser and optional executor bridges exist and neither is
   attached to the other's component or policy-side network;
 - both prerequisite Onyx bridges still exist on their own client/upstream
@@ -2525,7 +2554,10 @@ The plan is complete only when all of the following are true:
   one public-only policy namespace with generic-Onyx/browser/executor listeners
   plus one host-capable policy namespace and two distinct route brokers. Exact
   host/opt-in RFC1918 exceptions exist only in the host-capable namespace and
-  broker; neither policy process shares `netns-holder`.
+  broker; their cleartext forms are decided by the host broker only after
+  authoritative DNS validation. Public or mixed answers and missing/invalid
+  transport classifications fail before a destination connection opens.
+  Neither policy process shares `netns-holder`.
 - Public search engines are not special-cased by egress policy; renderer,
   helper, and executor peers receive the same allow/deny result for the same
   public destination.
