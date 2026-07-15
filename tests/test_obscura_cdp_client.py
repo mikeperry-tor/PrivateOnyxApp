@@ -14,6 +14,7 @@ from private_onyx_obscura import fetch_sync  # noqa: E402
 from private_onyx_obscura import is_text_like_content_type  # noqa: E402
 from private_onyx_obscura import normalize_public_url  # noqa: E402
 from private_onyx_obscura import validate_wait_until  # noqa: E402
+from private_onyx_obscura.client import _RawCdp  # noqa: E402
 
 
 class ObscuraClientTests(unittest.TestCase):
@@ -59,6 +60,45 @@ class ObscuraClientTests(unittest.TestCase):
                 fetch_sync("https://example.com")
 
         asyncio.run(nested())
+
+    def test_navigation_tunnel_failure_is_transport_not_protocol(self):
+        class WebSocket:
+            async def send(self, _message):
+                return None
+
+            async def recv(self):
+                return (
+                    '{"id":1,"error":{"code":-32000,'
+                    '"message":"Network error: error sending request for URL"}}'
+                )
+
+        async def exercise():
+            with self.assertRaises(ObscuraClientError) as raised:
+                await _RawCdp(WebSocket()).send(
+                    "Page.navigate",
+                    {"url": "https://missing.example/"},
+                    session_id="session",
+                )
+            self.assertEqual(raised.exception.category, FetchFailure.TRANSPORT)
+            self.assertEqual(raised.exception.stage, "navigation-transport")
+            self.assertNotIn("missing.example", str(raised.exception))
+
+        asyncio.run(exercise())
+
+    def test_other_cdp_command_error_remains_protocol(self):
+        class WebSocket:
+            async def send(self, _message):
+                return None
+
+            async def recv(self):
+                return '{"id":1,"error":{"code":-32601,"message":"method not found"}}'
+
+        async def exercise():
+            with self.assertRaises(ObscuraClientError) as raised:
+                await _RawCdp(WebSocket()).send("DOM.getDocument")
+            self.assertEqual(raised.exception.category, FetchFailure.PROTOCOL)
+
+        asyncio.run(exercise())
 
 
 if __name__ == "__main__":

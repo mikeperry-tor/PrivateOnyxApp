@@ -183,11 +183,14 @@ DNS, or explicit system DNS in no-VPN mode. Docker DNS resolves only internal
 service names.
 
 The public final-hop policy rejects canonical internal names and non-public
-addresses for initial requests, redirects, and subresources when the wrapper
-performs DNS and pins the approved addresses. In a deliberately selected
+addresses with HTTP 403 for initial requests, redirects, and subresources when
+the wrapper performs DNS and pins the approved addresses. In a deliberately selected
 remote-DNS upstream-proxy mode, a malicious or misconfigured upstream can
 resolve a public-looking name privately; the wrapper cannot claim address-
-level private-target denial in that mode. There is no direct network fallback
+level private-target denial in that mode. Proxy-side NXDOMAIN, no-address, and
+resolver failures return HTTP 502 rather than being mislabeled as policy
+denials; Obscura exposes the resulting tunnel failure as a typed browser
+transport failure. There is no direct network fallback
 if Obscura, its bridge, the proxy, Myst, or an upstream proxy fails.
 
 Wrapper-owned diagnostics omit query strings, request bodies, response

@@ -95,7 +95,9 @@ and its Docker socket. Switching a live namespace from VPN to no-VPN requires
 tearing down the old stack so a stale interface cannot survive.
 
 Configured upstream failures, VPN disconnects, proxy DNS failures, rejected
-destinations, and broken bridges all fail closed. No application or browser is
+destinations, and broken bridges all fail closed. Policy-rejected destinations
+return HTTP 403; proxy-side NXDOMAIN, no-address, and resolver failures return
+HTTP 502. No application or browser is
 attached to a direct public network as a fallback. Long-lived CONNECT streams
 use connection/setup and idle/framing controls but no arbitrary total tunnel
 lifetime.

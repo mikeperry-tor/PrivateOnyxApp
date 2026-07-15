@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import ipaddress
 import os
+import socket
 import struct
 import unittest
 from pathlib import Path
@@ -1083,11 +1084,34 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_connect_port_80_is_rejected_when_http_is_disabled(self) -> None:
         module = _load_module("public")
         writer = self._Writer()
-        with patch.object(module, "_connect_via_upstream", AsyncMock()) as connect:
+        with patch.object(
+            module,
+            "_resolve_target_host",
+            AsyncMock(return_value={"93.184.216.34"}),
+        ), patch.object(module, "_connect_via_upstream", AsyncMock()) as connect:
             await module._handle_connect(
                 "example.com:80", AsyncMock(), writer, ("test", 1)
             )
         self.assertIn(b"403 Forbidden", writer.data)
+        connect.assert_not_awaited()
+
+    async def test_connect_nxdomain_is_reported_as_bad_gateway(self) -> None:
+        module = _load_module("public")
+        writer = self._Writer()
+        with patch.object(
+            module,
+            "_resolve_target_host",
+            AsyncMock(
+                side_effect=socket.gaierror(
+                    socket.EAI_NONAME, "DNS name does not exist"
+                )
+            ),
+        ), patch.object(module, "_connect_via_upstream", AsyncMock()) as connect:
+            await module._handle_connect(
+                "missing.example:443", AsyncMock(), writer, ("test", 1)
+            )
+        self.assertIn(b"502 Bad Gateway", writer.data)
+        self.assertNotIn(b"403 Forbidden", writer.data)
         connect.assert_not_awaited()
 
 

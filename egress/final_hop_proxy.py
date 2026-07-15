@@ -883,15 +883,27 @@ async def _reject_blocked_destination(
     if not reason:
         return False, validated_ips
 
+    # A proxy-side resolver failure is not a policy refusal.  The client
+    # cannot observe target DNS directly, so report it as a failed gateway
+    # operation rather than incorrectly claiming that policy forbade it.
+    dns_failure = (
+        "DNS resolution failed:" in reason
+        or reason.endswith("DNS resolution returned no addresses")
+    )
+    status_code = 502 if dns_failure else 403
+    status_reason = "Bad Gateway" if dns_failure else "Forbidden"
+    outcome = "FAILED" if dns_failure else "BLOCKED"
     logger.warning(
-        "BLOCKED %s %s:%d (%s, peer=%s) -> 403",
+        "%s %s %s:%d (%s, peer=%s) -> %d",
+        outcome,
         method,
         _normalize_host(host) or "(empty)",
         port,
         reason,
         peer,
+        status_code,
     )
-    writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+    writer.write(f"HTTP/1.1 {status_code} {status_reason}\r\n\r\n".encode("ascii"))
     await writer.drain()
     return True, ()
 

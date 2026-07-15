@@ -324,10 +324,39 @@ class _RawCdp:
             if packet.get("id") == command_id:
                 error = packet.get("error")
                 if error:
+                    error_message = (
+                        str(error.get("message", ""))
+                        if isinstance(error, dict)
+                        else ""
+                    ).upper()
+                    navigation_transport_failure = (
+                        method == "Page.navigate"
+                        and any(
+                            token in error_message
+                            for token in (
+                                "NETWORK ERROR:",
+                                "ERR_TUNNEL_CONNECTION_FAILED",
+                                "ERR_PROXY_CONNECTION_FAILED",
+                                "ERR_NAME_NOT_RESOLVED",
+                            )
+                        )
+                    )
                     raise ObscuraClientError(
-                        FetchFailure.PROTOCOL,
-                        "cdp-command",
-                        f"Obscura rejected {method}",
+                        (
+                            FetchFailure.TRANSPORT
+                            if navigation_transport_failure
+                            else FetchFailure.PROTOCOL
+                        ),
+                        (
+                            "navigation-transport"
+                            if navigation_transport_failure
+                            else "cdp-command"
+                        ),
+                        (
+                            "browser proxy could not resolve or connect to destination"
+                            if navigation_transport_failure
+                            else f"Obscura rejected {method}"
+                        ),
                     )
                 result = packet.get("result", {})
                 if not isinstance(result, dict):
