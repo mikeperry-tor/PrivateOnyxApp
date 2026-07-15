@@ -1609,6 +1609,43 @@ repeated in the overlay:
 
 ## Known Limitations
 
+### Obscura `--allow-file-access` Does Not Cover Every `file:` Read Path
+
+At the pinned Obscura `v0.1.10` source, `--allow-file-access` is a narrow CDP
+navigation switch, not a process-wide filesystem sandbox. When the
+single-worker server does not receive the option, it rejects top-level
+`file:` URLs sent through `Page.navigate` and `Target.createTarget`. The
+current wrapper does not enable the option. Obscura's multi-worker launcher
+also does not propagate it to child processes.
+
+Other upstream code owns page-created subresources. Obscura separately blocks
+an HTTP(S) page from navigating itself to `file:`, and applies a scheme guard
+to ordinary external scripts and stylesheets. The pinned ES-module loop omits
+that guard, however: a remote page can declare a `file:` module, after which
+Obscura's generic client reads the named local file and passes its bytes to the
+JavaScript module loader. Syntactically valid module content can therefore be
+executed in the page realm. The scripted fetch/XHR URL validator also admits
+`file:`, although its pinned stealth/reqwest send path does not use the same
+local-file reader and normally fails that scheme.
+
+This is an upstream Obscura security limitation. Network final-hop destination
+policy cannot prevent it because a local file read does not traverse the
+browser proxy. The current wrapper reduces only the direct CDP exposure by not
+passing `--allow-file-access` and by keeping CDP on internal networks. It does
+currently pass `--storage-dir /data/obscura` and mount the `obscura-data`
+volume, so browser state stored there is also inside the set of paths the
+Obscura process can read. The module path is not a general file-download API:
+the bytes are parsed as JavaScript, and syntax errors do not return the file to
+the page, but syntactically valid module content can execute in the page realm.
+
+The planned direct-Obscura migration rejects caller-supplied non-HTTP(S)
+browser targets, removes `--storage-dir` and the browser-state volume, and
+makes the Obscura container read-only with no private data mounts or browsing
+secrets. Those impact reductions still do not repair or sandbox the upstream
+ES-module path; files inherently present and readable inside the image remain
+in its exposure boundary. Re-audit and test a non-secret local canary whenever
+the Obscura tag changes.
+
 ### Non-Search `open_url` Pages May Bypass Obscura
 
 The wrapper guarantees the Obscura browser path for configured search-engine
