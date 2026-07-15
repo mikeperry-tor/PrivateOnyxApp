@@ -1,27 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Google WEB engine (stealth-browser backed via crw + obscura).
-
-This is a *stub* SearXNG engine that fetches Google's SERP through the local
-crw Firecrawl-compatible scraper, which in turn drives the obscura stealth CDP
-browser.  It exists because the stock ``google`` engine is blocked by Google's
-bot protection on most non-residential exit IPs (HTTP 429 / CAPTCHA).
-
-See:
-    - Discussion #5651: https://github.com/searxng/searxng/discussions/5651
-    - ``searxng/engines/_crw.py`` for the scrape helper.
-
-The request flow reuses SearXNG's own HTTP client: ``request()`` rewrites the
-outbound params so the POST goes to crw's ``/v1/scrape`` with the target Google
-URL in the JSON body.  ``response()`` decodes the crw envelope and parses the
-rendered Google DOM with XPath.
-
-.. note::
-
-    Google's anti-bot is aggressive and IP-reputation based.  Even with
-    obscura's stealth mode, a rate-limited VPN exit IP will still get 429s.
-    The shared crw helper raises SearXNG block exceptions for those responses
-    so SearXNG can suspend the provider and retry another round-robin engine.
-"""
+"""Google WEB offline engine backed by one direct Obscura navigation."""
 
 import typing as t
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
@@ -30,11 +8,12 @@ from lxml import html
 
 from searx.utils import eval_xpath, eval_xpath_list, extract_text
 
-from searx.engines import _crw  # type: ignore  # noqa: E402
+from searx.engines import _obscura  # type: ignore  # noqa: E402
 
 if t.TYPE_CHECKING:
-    from searx.extended_types import SXNG_Response
-    from searx.search.processors import OnlineParams
+    from searx.search.processors import RequestParams
+
+engine_type = "offline"
 
 about = {
     "website": "https://www.google.com",
@@ -60,6 +39,7 @@ time_range_dict = {"day": "d", "week": "w", "month": "m", "year": "y"}
 # containing an h3.  Card/snippet lookup happens from the anchor's ancestor
 # below, because the snippet is often a sibling of the title link.
 results_xpath = '//a[@href][.//h3]'
+no_results_xpath = '//*[@id="topstuff"]//*[contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "did not match any documents")]'
 title_xpath = ".//h3"
 result_container_xpath = (
     './ancestor::div[contains(concat(" ", normalize-space(@class), " "), " g ")'
@@ -78,8 +58,8 @@ content_xpath = (
 )
 
 
-def request(query: str, params: "OnlineParams") -> None:
-    """Build the Google search URL and hand it to crw for stealth rendering."""
+def search(query: str, params: "RequestParams"):
+    """Build the Google URL, navigate once, and parse its rendered DOM."""
     start = (params["pageno"] - 1) * 10
     query_args: t.Dict[str, str] = {"q": query, "hl": "en", "udm": "14"}
     if start:
@@ -88,29 +68,21 @@ def request(query: str, params: "OnlineParams") -> None:
         query_args["tbs"] = "qdr:" + time_range_dict[params["time_range"]]
 
     target_url = "https://www.google.com/search?" + urlencode(query_args)
-    _crw.crw_scrape_request(params, target_url)
+    return _parse_html(_obscura.navigate("google2", target_url))
 
 
-def response(resp: "SXNG_Response"):
-    """Parse the rendered Google SERP HTML returned by crw."""
-    text = _crw.extract_crw_html(resp)
+def _parse_html(text: str):
     if not text:
-        _crw.raise_no_results(
-            "google2",
-            reason="empty CRW HTML",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("google2", text, "empty DOM")
 
     results = []
     dom = html.fromstring(text)
 
     result_nodes = eval_xpath_list(dom, results_xpath)
     if not result_nodes:
-        _crw.raise_no_results(
-            "google2",
-            reason="result XPath matched zero title links",
-            html_text=text,
-        )
+        if eval_xpath(dom, no_results_xpath):
+            return []
+        _obscura.parser_mismatch("google2", text, "zero title links")
 
     for result in result_nodes:
         title_nodes = eval_xpath(result, title_xpath)
@@ -132,11 +104,7 @@ def response(resp: "SXNG_Response"):
         results.append({"url": url, "title": title, "content": content})
 
     if not results:
-        _crw.raise_no_results(
-            "google2",
-            reason="title links matched but no valid organic rows were extracted",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("google2", text, "no valid organic rows")
 
     return results
 

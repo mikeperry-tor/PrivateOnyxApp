@@ -13,7 +13,7 @@ MODULE_PATH = (
     Path(__file__).resolve().parents[1]
     / "onyx"
     / "patches"
-    / "sitecustomize_base"
+    / "shared"
     / "wrapper_env_patches.py"
 )
 

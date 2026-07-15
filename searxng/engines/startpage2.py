@@ -1,20 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Startpage (web) engine (stealth-browser backed via crw + obscura).
+"""Startpage web engine backed by one direct Obscura navigation.
 
 Startpage proxies Google results but wraps them behind its own anti-bot layer
 (``startpage.com``).  The stock ``startpage`` engine scrapes a pre-hydration
 React JSON blob (``React.createElement(UIStartpage.AppSerpWeb, ...)``) from the
 raw HTML; on datacenter / VPN exit IPs Startpage frequently serves a JS
-challenge or empty shell instead, yielding zero results.  This stub routes the
-search through crw, which renders the page with obscura (a stealth headless
-browser) so the React app hydrates and the organic result cards are present in
+challenge or empty shell instead, yielding zero results. This engine renders
+the page directly in Obscura so the React app hydrates and result cards are present in
 the post-render DOM, which we then parse with XPath.
 
 Only the ``web`` category is implemented here (the high-value target).  The
 stock ``startpage`` / ``startpage news`` / ``startpage images`` entries are
 disabled in settings.yml so SearXNG does not double-query Startpage.
 
-See ``searxng/engines/_crw.py`` for the scrape helper and architecture.
 """
 
 import typing as t
@@ -25,11 +23,12 @@ from lxml import html
 from searx.exceptions import SearxEngineCaptchaException
 from searx.utils import eval_xpath, eval_xpath_list, extract_text
 
-from searx.engines import _crw  # type: ignore  # noqa: E402
+from searx.engines import _obscura  # type: ignore  # noqa: E402
 
 if t.TYPE_CHECKING:
-    from searx.extended_types import SXNG_Response
-    from searx.search.processors import OnlineParams
+    from searx.search.processors import RequestParams
+
+engine_type = "offline"
 
 about = {
     "website": "https://www.startpage.com",
@@ -67,6 +66,7 @@ results_xpath = (
     '//div[contains(concat(" ", normalize-space(@class), " "), " result ")'
     ' and not(contains(concat(" ", normalize-space(@class), " "), " a-bg-result "))]'
 )
+no_results_xpath = '//*[@data-testid="no-results" or contains(concat(" ", normalize-space(@class), " "), " no-results ")]'
 # The clickable title link carries the real result href.
 link_xpath = './/a[@data-testid="gl-title-link"]'
 # Fallback for layout variants where data-testid is empty.
@@ -86,8 +86,8 @@ captcha_xpath = (
 )
 
 
-def request(query: str, params: "OnlineParams") -> None:
-    """Build the Startpage search URL and hand it to crw for stealth rendering."""
+def search(query: str, params: "RequestParams"):
+    """Build the Startpage search URL and navigate it once through Obscura."""
     query_args: t.Dict[str, str] = {"query": query}
     # Startpage paginates via the `page` parameter (1-based).
     if params["pageno"] > 1:
@@ -96,7 +96,7 @@ def request(query: str, params: "OnlineParams") -> None:
     query_args["cat"] = "web"
 
     target_url = "https://www.startpage.com/sp/search?" + urlencode(query_args)
-    _crw.crw_scrape_request(params, target_url)
+    return _parse_html(_obscura.navigate("startpage2", target_url))
 
 
 def _strip_startpage_redirect(href: str) -> str:
@@ -118,22 +118,16 @@ def _strip_startpage_redirect(href: str) -> str:
 
 
 def _raise_if_captcha(dom) -> None:
-    """Startpage can return a captcha page with HTTP 200 / crw success=true."""
+    """Startpage can return a captcha page with HTTP 200."""
     if eval_xpath(dom, captcha_xpath):
         raise SearxEngineCaptchaException(
-            message="startpage2: Startpage returned a captcha page via crw",
+            message="startpage2: Startpage returned a captcha page",
         )
 
 
-def response(resp: "SXNG_Response"):
-    """Parse the rendered Startpage SERP HTML returned by crw."""
-    text = _crw.extract_crw_html(resp)
+def _parse_html(text: str):
     if not text:
-        _crw.raise_no_results(
-            "startpage2",
-            reason="empty CRW HTML",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("startpage2", text, "empty DOM")
 
     results = []
     dom = html.fromstring(text)
@@ -141,11 +135,9 @@ def response(resp: "SXNG_Response"):
 
     result_nodes = eval_xpath_list(dom, results_xpath)
     if not result_nodes:
-        _crw.raise_no_results(
-            "startpage2",
-            reason="result XPath matched zero organic cards",
-            html_text=text,
-        )
+        if eval_xpath(dom, no_results_xpath):
+            return []
+        _obscura.parser_mismatch("startpage2", text, "zero organic cards")
 
     for result in result_nodes:
         link_nodes = eval_xpath(result, link_xpath)
@@ -174,10 +166,6 @@ def response(resp: "SXNG_Response"):
         results.append({"url": url, "title": title, "content": content})
 
     if not results:
-        _crw.raise_no_results(
-            "startpage2",
-            reason="organic cards matched but no valid rows were extracted",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("startpage2", text, "no valid organic rows")
 
     return results

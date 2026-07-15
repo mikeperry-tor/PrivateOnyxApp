@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Bing Web engine (stealth-browser backed via crw + obscura).
+"""Bing Web engine backed by one direct Obscura navigation.
 
 This engine is intentionally configured as a last-resort SearXNG engine in the
 wrapper settings. Bing often returns broad, noisy matches, but it can still
@@ -7,7 +7,6 @@ provide coverage when stricter engines are blocked or sparse. The companion
 SearXNG scoring patch keeps Bing-only results in a fallback tier while allowing
 Bing to confirm results found by other engines.
 
-See ``searxng/engines/_crw.py`` for the scrape helper and architecture.
 """
 
 from __future__ import annotations
@@ -21,11 +20,12 @@ from lxml import html
 from searx.exceptions import SearxEngineCaptchaException
 from searx.utils import eval_xpath, eval_xpath_getindex, eval_xpath_list, extract_text
 
-from searx.engines import _crw  # type: ignore  # noqa: E402
+from searx.engines import _obscura  # type: ignore  # noqa: E402
 
 if t.TYPE_CHECKING:
-    from searx.extended_types import SXNG_Response
-    from searx.search.processors import OnlineParams
+    from searx.search.processors import RequestParams
+
+engine_type = "offline"
 
 about: dict[str, t.Any] = {
     "website": "https://www.bing.com",
@@ -66,6 +66,7 @@ base_url = "https://www.bing.com"
 # widgets still masquerade as b_algo cards, so response() applies an additional
 # non-web-result filter before extracting the title and link.
 results_xpath = '//ol[@id="b_results"]/li[contains(concat(" ", normalize-space(@class), " "), " b_algo ")]'
+no_results_xpath = '//*[@id="b_results"]//*[contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "there are no results")]'
 link_xpath = ".//h2/a[@href]"
 content_xpath = (
     './/div[contains(concat(" ", normalize-space(@class), " "), " b_caption ")]//p'
@@ -103,8 +104,8 @@ non_web_result_block_xpath = (
 )
 
 
-def request(query: str, params: "OnlineParams") -> None:
-    """Build the Bing search URL and hand it to crw for stealth rendering."""
+def search(query: str, params: "RequestParams"):
+    """Build the Bing search URL and navigate it once through Obscura."""
     query_args: dict[str, str | int] = {
         "q": query,
         "adlt": _safesearch_map.get(params.get("safesearch", 0), "off"),
@@ -114,11 +115,7 @@ def request(query: str, params: "OnlineParams") -> None:
         query_args["first"] = (params["pageno"] - 1) * 10 + 1
 
     target_url = f"{base_url}/search?{urlencode(query_args)}"
-    _crw.crw_scrape_request(
-        params,
-        target_url,
-        extra_headers={"Accept-Language": "en-US,en;q=0.9"},
-    )
+    return _parse_html(_obscura.navigate("bing2", target_url))
 
 
 def _strip_bing_redirect(href: str) -> str:
@@ -163,7 +160,7 @@ def _raise_if_captcha(dom) -> None:
     """Bing can return a human-verification page with HTTP 200."""
     if eval_xpath(dom, captcha_xpath):
         raise SearxEngineCaptchaException(
-            message="bing2: Bing returned a captcha / verification page via crw",
+            message="bing2: Bing returned a captcha / verification page",
         )
 
 
@@ -182,15 +179,9 @@ def _extract_content(item) -> str:
     return extract_text(content_els)
 
 
-def response(resp: "SXNG_Response") -> list[dict[str, t.Any]]:
-    """Parse the rendered Bing SERP HTML returned by crw."""
-    text = _crw.extract_crw_html(resp)
+def _parse_html(text: str) -> list[dict[str, t.Any]]:
     if not text:
-        _crw.raise_no_results(
-            "bing2",
-            reason="empty CRW HTML",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("bing2", text, "empty DOM")
 
     dom = html.fromstring(text)
     _raise_if_captcha(dom)
@@ -198,11 +189,9 @@ def response(resp: "SXNG_Response") -> list[dict[str, t.Any]]:
     results: list[dict[str, t.Any]] = []
     result_nodes = eval_xpath_list(dom, results_xpath)
     if not result_nodes:
-        _crw.raise_no_results(
-            "bing2",
-            reason="result XPath matched zero b_algo cards",
-            html_text=text,
-        )
+        if eval_xpath(dom, no_results_xpath):
+            return []
+        _obscura.parser_mismatch("bing2", text, "zero b_algo cards")
 
     for item in result_nodes:
         if _is_non_web_result_block(item):
@@ -228,10 +217,6 @@ def response(resp: "SXNG_Response") -> list[dict[str, t.Any]]:
         )
 
     if not results:
-        _crw.raise_no_results(
-            "bing2",
-            reason="b_algo cards matched but no valid organic rows were extracted",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("bing2", text, "no valid organic rows")
 
     return results

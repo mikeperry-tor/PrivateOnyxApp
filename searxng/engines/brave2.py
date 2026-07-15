@@ -1,13 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Brave Search engine (stealth-browser backed via crw + obscura).
+"""Brave Search engine backed by one direct Obscura navigation.
 
 Brave's SERP is a SvelteKit single-page app: the stock ``brave`` engine fetches
 HTML directly and Brave rate-limits / returns a JS shell with no results.  This
-stub routes the search through crw, which renders the page with obscura (a
-stealth headless browser) so the SvelteKit app hydrates and the organic result
+engine renders the page with Obscura so the SvelteKit app hydrates and the organic result
 cards are present in the DOM.
-
-See ``searxng/engines/_crw.py`` for the scrape helper and architecture.
 """
 
 import typing as t
@@ -17,11 +14,12 @@ from lxml import html
 
 from searx.utils import eval_xpath, eval_xpath_list, extract_text
 
-from searx.engines import _crw  # type: ignore  # noqa: E402
+from searx.engines import _obscura  # type: ignore  # noqa: E402
 
 if t.TYPE_CHECKING:
-    from searx.extended_types import SXNG_Response
-    from searx.search.processors import OnlineParams
+    from searx.search.processors import RequestParams
+
+engine_type = "offline"
 
 about = {
     "website": "https://search.brave.com",
@@ -43,6 +41,7 @@ time_range_dict = {"day": "pd", "week": "pw", "month": "pm", "year": "py"}
 
 # Each organic result is <div class="snippet ..." data-type="web" data-pos="N">.
 results_xpath = '//div[@data-type="web"]'
+no_results_xpath = '//*[@id="no-results" or contains(concat(" ", normalize-space(@class), " "), " no-results ")]'
 # The clickable title link carries the real result href.
 link_xpath = './/a[contains(@class, "l1")]'
 # Title text lives in a div whose class contains "title".
@@ -53,8 +52,8 @@ content_xpath = './/p[contains(@class, "snippet-description")] | .//div[contains
 url_xpath = './/cite[contains(@class, "snippet-url")]'
 
 
-def request(query: str, params: "OnlineParams") -> None:
-    """Build the Brave search URL and hand it to crw for stealth rendering."""
+def search(query: str, params: "RequestParams"):
+    """Build the Brave search URL and navigate it once through Obscura."""
     query_args: t.Dict[str, str] = {"q": query}
     if params.get("time_range") in time_range_dict:
         query_args["tf"] = time_range_dict[params["time_range"]]
@@ -62,29 +61,21 @@ def request(query: str, params: "OnlineParams") -> None:
         query_args["offset"] = str((params["pageno"] - 1) * 10)
 
     target_url = "https://search.brave.com/search?" + urlencode(query_args)
-    _crw.crw_scrape_request(params, target_url)
+    return _parse_html(_obscura.navigate("brave2", target_url))
 
 
-def response(resp: "SXNG_Response"):
-    """Parse the rendered Brave SERP HTML returned by crw."""
-    text = _crw.extract_crw_html(resp)
+def _parse_html(text: str):
     if not text:
-        _crw.raise_no_results(
-            "brave2",
-            reason="empty CRW HTML",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("brave2", text, "empty DOM")
 
     results = []
     dom = html.fromstring(text)
 
     result_nodes = eval_xpath_list(dom, results_xpath)
     if not result_nodes:
-        _crw.raise_no_results(
-            "brave2",
-            reason="result XPath matched zero web cards",
-            html_text=text,
-        )
+        if eval_xpath(dom, no_results_xpath):
+            return []
+        _obscura.parser_mismatch("brave2", text, "zero web cards")
 
     for result in result_nodes:
         link_nodes = eval_xpath(result, link_xpath)
@@ -108,10 +99,6 @@ def response(resp: "SXNG_Response"):
         results.append({"url": url, "title": title, "content": content})
 
     if not results:
-        _crw.raise_no_results(
-            "brave2",
-            reason="web cards matched but no valid organic rows were extracted",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("brave2", text, "no valid organic rows")
 
     return results

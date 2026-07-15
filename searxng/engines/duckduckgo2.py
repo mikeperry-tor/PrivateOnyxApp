@@ -1,13 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""DuckDuckGo (HTML) engine (stealth-browser backed via crw + obscura).
+"""DuckDuckGo HTML engine backed by one direct Obscura navigation.
 
 The stock ``duckduckgo`` engine hits captchas on most exit IPs.  This stub uses
 DuckDuckGo's lightweight HTML endpoint (``html.duckduckgo.com/html/``) rendered
-through crw + obscura.  The HTML endpoint is server-side rendered, so it works
-even via plain HTTP, but routing it through obscura still defeats the captcha
-wall that DDG throws at datacenter / VPN IPs.
-
-See ``searxng/engines/_crw.py`` for the scrape helper and architecture.
+through Obscura. The HTML endpoint is server-side rendered, while the browser
+path retains the wrapper's fingerprint and routing policy.
 """
 
 import typing as t
@@ -17,11 +14,12 @@ from lxml import html
 
 from searx.utils import eval_xpath, eval_xpath_list, extract_text
 
-from searx.engines import _crw  # type: ignore  # noqa: E402
+from searx.engines import _obscura  # type: ignore  # noqa: E402
 
 if t.TYPE_CHECKING:
-    from searx.extended_types import SXNG_Response
-    from searx.search.processors import OnlineParams
+    from searx.search.processors import RequestParams
+
+engine_type = "offline"
 
 about = {
     "website": "https://duckduckgo.com",
@@ -41,18 +39,19 @@ language_support = False
 
 # DDG HTML endpoint result cards: <div class="result results_links ... web-result">
 results_xpath = '//div[contains(@class, "result") and contains(@class, "web-result")]'
+no_results_xpath = '//*[contains(concat(" ", normalize-space(@class), " "), " no-results ")]'
 link_xpath = './/a[contains(@class, "result__a")]'
 snippet_xpath = './/a[contains(@class, "result__snippet")] | .//*[contains(@class, "result__snippet")]'
 
 
-def request(query: str, params: "OnlineParams") -> None:
-    """Build the DuckDuckGo HTML search URL and hand it to crw."""
+def search(query: str, params: "RequestParams"):
+    """Build the DuckDuckGo HTML search URL and navigate it once."""
     query_args: t.Dict[str, str] = {"q": query}
     # DDG HTML endpoint paginates via the next page form, not a clean param;
     # we pass the query and let pageno>1 be a best-effort no-op (DDG HTML
     # returns ~30 results on the first page, enough for SearXNG aggregation).
     target_url = "https://html.duckduckgo.com/html/?" + urlencode(query_args)
-    _crw.crw_scrape_request(params, target_url)
+    return _parse_html(_obscura.navigate("duckduckgo2", target_url))
 
 
 def _strip_ddg_redirect(href: str) -> str:
@@ -68,26 +67,18 @@ def _strip_ddg_redirect(href: str) -> str:
     return href
 
 
-def response(resp: "SXNG_Response"):
-    """Parse the rendered DuckDuckGo HTML SERP returned by crw."""
-    text = _crw.extract_crw_html(resp)
+def _parse_html(text: str):
     if not text:
-        _crw.raise_no_results(
-            "duckduckgo2",
-            reason="empty CRW HTML",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("duckduckgo2", text, "empty DOM")
 
     results = []
     dom = html.fromstring(text)
 
     result_nodes = eval_xpath_list(dom, results_xpath)
     if not result_nodes:
-        _crw.raise_no_results(
-            "duckduckgo2",
-            reason="result XPath matched zero web-result cards",
-            html_text=text,
-        )
+        if eval_xpath(dom, no_results_xpath):
+            return []
+        _obscura.parser_mismatch("duckduckgo2", text, "zero result cards")
 
     for result in result_nodes:
         link_nodes = eval_xpath(result, link_xpath)
@@ -110,10 +101,6 @@ def response(resp: "SXNG_Response"):
         results.append({"url": url, "title": title, "content": content})
 
     if not results:
-        _crw.raise_no_results(
-            "duckduckgo2",
-            reason="web-result cards matched but no valid organic rows were extracted",
-            html_text=text,
-        )
+        _obscura.parser_mismatch("duckduckgo2", text, "no valid organic rows")
 
     return results

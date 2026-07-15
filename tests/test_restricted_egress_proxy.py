@@ -10,19 +10,19 @@ from types import ModuleType
 from unittest.mock import AsyncMock, Mock, patch
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "crw" / "prefetch_blocking_proxy.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "egress" / "final_hop_proxy.py"
 
 
 def _load_module(
-    policy: str = "prefetch", env_overrides: dict[str, str] | None = None
+    route_class: str = "public", env_overrides: dict[str, str] | None = None
 ) -> ModuleType:
     spec = importlib.util.spec_from_file_location(
-        f"restricted_egress_proxy_{policy}", MODULE_PATH
+        f"restricted_egress_proxy_{route_class}", MODULE_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     env = {
-        "EGRESS_PROXY_POLICY": policy,
+        "EGRESS_ROUTE_CLASS": route_class,
         "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "test-bridge",
         "MYST_VPN_ENABLED": "true",
         "EGRESS_UPSTREAM_PROXY_URL": "",
@@ -88,7 +88,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_route_rejects_exact_host_exception(self) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {"EGRESS_ROUTE_CLASS": "public"},
         )
         reason, addresses = await module._validate_destination(
@@ -99,7 +99,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_host_proxy_resolves_exact_host_itself(self) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {"EGRESS_ROUTE_CLASS": "host"},
         )
         with patch.object(
@@ -116,7 +116,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exact_host_exception_rejects_non_unicast_answers(self) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
             },
@@ -144,7 +144,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exact_host_exception_accepts_private_unicast_answer(self) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
             },
@@ -162,7 +162,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     def test_plain_http_private_exceptions_are_host_route_only(self) -> None:
         host_module = _load_module(
-            "onyx-helper",
+            "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_ALLOW_RFC1918": "true",
@@ -193,7 +193,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         )
 
         public_module = _load_module(
-            "onyx-helper",
+            "host",
             {"EGRESS_ROUTE_CLASS": "public"},
         )
         self.assertFalse(
@@ -202,7 +202,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_plain_http_host_exception_bypasses_external_upstream(self) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_ALLOW_RFC1918": "true",
@@ -231,7 +231,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(route_class=route_class, enabled=enabled):
                 module = _load_module(
-                    "onyx-helper",
+                    "host",
                     {
                         "EGRESS_ROUTE_CLASS": route_class,
                         "EGRESS_ALLOW_RFC1918": enabled,
@@ -245,7 +245,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_host_proxy_rejects_mixed_private_public_dns(self) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_ALLOW_RFC1918": "true",
@@ -286,7 +286,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_ALLOW_RFC1918": "true",
@@ -310,7 +310,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_global_operator_local_answer_returns_to_selected_dns(self) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_ALLOW_RFC1918": "true",
@@ -336,7 +336,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         for resolver_result in (set(), OSError("not found")):
             with self.subTest(resolver_result=resolver_result):
                 module = _load_module(
-                    "onyx-helper",
+                    "host",
                     {
                         "EGRESS_ROUTE_CLASS": "host",
                         "EGRESS_ALLOW_RFC1918": "true",
@@ -365,7 +365,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_ALLOW_RFC1918": "true",
@@ -389,7 +389,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_ALLOW_RFC1918": "false",
@@ -409,28 +409,21 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         system_resolver.assert_not_awaited()
         myst_resolver.assert_awaited_once_with("inference.internal", 443)
 
-    def test_browser_policy_allows_search_hosts(self) -> None:
-        module = _load_module("browser")
-        self.assertFalse(module.BLOCK_SEARCH_ENGINES)
-        self.assertTrue(module._is_search_engine("www.google.com"))
-
-    def test_onyx_helper_policy_allows_search_hosts(self) -> None:
+    def test_loopback_listener_needs_no_bridge_allowlist(self) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
-                "PREFETCH_PROXY_HOST": "127.0.0.1",
+                "EGRESS_PROXY_HOST": "127.0.0.1",
                 "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "",
             },
         )
-        self.assertFalse(module.BLOCK_SEARCH_ENGINES)
-        self.assertTrue(module._is_search_engine("www.google.com"))
         self.assertTrue(module._listener_is_loopback_only())
 
     def test_wildcard_listener_is_not_loopback_only(self) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
-                "PREFETCH_PROXY_HOST": "0.0.0.0",
+                "EGRESS_PROXY_HOST": "0.0.0.0",
                 "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "",
             },
         )
@@ -440,9 +433,9 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         module = _load_module(
-            "onyx-helper",
+            "host",
             {
-                "PREFETCH_PROXY_HOST": "127.0.0.1",
+                "EGRESS_PROXY_HOST": "127.0.0.1",
                 "EGRESS_PROXY_ALLOWED_CLIENT_HOSTS": "",
                 "EGRESS_ROUTE_CLASS": "host",
                 "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS": "localhost:8091",
@@ -474,19 +467,10 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         open_connection.assert_awaited_with("127.0.0.1", 8091)
         self.assertFalse(module._is_trusted_internal_destination("localhost", 8080))
 
-    def test_trusted_internal_destination_rejected_for_non_helper_policy(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "allowed only"):
-            _load_module(
-                "browser",
-                {
-                    "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS": "localhost:8091"
-                },
-            )
-
     def test_trusted_internal_destination_rejected_for_public_route(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "host route class"):
             _load_module(
-                "onyx-helper",
+                "host",
                 {
                     "EGRESS_ROUTE_CLASS": "public",
                     "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS": (
@@ -494,11 +478,6 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                     ),
                 },
             )
-
-    def test_search_policy_normalizes_fully_qualified_hostnames(self) -> None:
-        module = _load_module("executor")
-        self.assertTrue(module._is_search_engine("google.com."))
-        self.assertTrue(module._is_search_engine("WWW.GOOGLE.COM."))
 
     def test_default_docker_internal_names_are_blocked(self) -> None:
         module = _load_module()
@@ -530,7 +509,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         module = _load_module()
         for host in (
             "api_server",
-            "crw-service-gateway",
+            "legacy-service-gateway",
             "onyx-api_server-1",
             "executor-egress-bridge",
         ):
@@ -542,7 +521,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     def test_config_cannot_remove_builtin_internal_names(self) -> None:
         module = _load_module(
-            env_overrides={"PREFETCH_BLOCK_INTERNAL_HOSTS": "custom.internal"}
+            env_overrides={"EGRESS_BLOCK_INTERNAL_HOSTS": "custom.internal"}
         )
         self.assertIn("host.docker.internal", module.BLOCKED_HOSTNAMES)
         self.assertIn("custom.internal", module.BLOCKED_HOSTNAMES)
@@ -1102,7 +1081,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(truncated)
 
     async def test_connect_port_80_is_rejected_when_http_is_disabled(self) -> None:
-        module = _load_module("browser")
+        module = _load_module("public")
         writer = self._Writer()
         with patch.object(module, "_connect_via_upstream", AsyncMock()) as connect:
             await module._handle_connect(

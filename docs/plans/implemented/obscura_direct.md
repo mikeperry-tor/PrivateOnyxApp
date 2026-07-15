@@ -1,13 +1,31 @@
 # Direct Obscura Request Handling Plan
 
-> **Status: planned.** The
-> [Onyx application network isolation](implemented/onyx_network_isolation.md) prerequisite
-> is implemented. This plan describes a future atomic migration from CRW and
-> the CDP shim to direct, single-navigation Obscura integrations. Until it is
-> implemented, the normative runtime documents are
-> [Request handling](../request_handling.md),
-> [VPN routing and restricted egress](../vpn_routing_and_proxies.md), and
-> [Internal network security](../internal_network_security.md).
+> **Status: implemented (2026-07-15).** The
+> [Onyx application network isolation](onyx_network_isolation.md) prerequisite
+> was implemented first. This is the implementation record for the atomic
+> migration from CRW and the CDP shim to direct, single-navigation Obscura
+> integrations. Normative runtime behavior is documented in
+> [Request handling](../../request_handling.md),
+> [VPN routing and restricted egress](../../vpn_routing_and_proxies.md), and
+> [Internal network security](../../internal_network_security.md).
+
+### Implementation note
+
+The pinned Obscura 0.1.10 server reuses its flattened session identifier when
+Playwright 1.58 attaches a public page CDP session, causing Playwright's driver
+to reject a duplicate target. The deployed shared client therefore uses the
+pinned raw WebSocket CDP transport rather than `new_cdp_session(page)`. It
+retains the reviewed one-navigation, event-barrier, actual-request body, typed
+failure, and cleanup contracts. Playwright remains pinned and image-validated
+for compatibility auditing; the derived SearXNG image contains no browser.
+
+Deterministic validation passed at implementation time. A live explicit
+no-VPN run returned HTTP 200 for a direct built-in-crawler transport fetch of
+`https://example.com/`; live Google and Brave engine attempts reached their
+providers and surfaced HTTP 429/CAPTCHA through SearXNG. The configured Myst
+provider set did not establish a stable route during validation, so the VPN,
+full-RAG, upstream-proxy, PDF/raw/oversize live matrix remains an operator
+follow-up when those external dependencies are available.
 
 ## Executive decision
 
@@ -1535,14 +1553,9 @@ semantic text results, DNS route,
 egress identity, denial cases, and full-mode local RAG before cleanup. Do not
 run old and new request paths concurrently.
 
-After deployment and acceptance validation, change this plan's status to
-implemented, update its normative-document links, and move it to
-`docs/plans/implemented/obscura_direct.md`. Until then, the status block at the
-top continues to identify the current runtime documents as normative.
-When moving the file, rewrite its prerequisite link from
-`implemented/onyx_network_isolation.md` to `onyx_network_isolation.md`; the
-prerequisite plan's link points back through `../obscura_direct.md` until that
-move and must be updated at the same time.
+Deployment moved this record to `docs/plans/implemented/obscura_direct.md`,
+updated its status and normative-document links, rewrote the prerequisite link
+to `onyx_network_isolation.md`, and updated the prerequisite plan's backlink.
 
 The final documentation must also disclose residual risks without presenting
 them as implementation failures: CDP is powerful and network-confined rather

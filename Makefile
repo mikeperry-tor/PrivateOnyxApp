@@ -36,15 +36,9 @@ ifeq ($(strip $(TAILSCALE_IMAGE)),)
 TAILSCALE_IMAGE := tailscale/tailscale:stable
 endif
 PYTHON_SLIM_IMAGE ?= $(call env_value,PYTHON_SLIM_IMAGE)
-CDP_SHIM_IMAGE ?= $(call env_value,CDP_SHIM_IMAGE)
-CDP_SHIM_DOCKERFILE ?= crw/cdp-shim.Dockerfile
 OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
 ifeq ($(strip $(OBSCURA_IMAGE)),)
 OBSCURA_IMAGE := h4ckf0r0day/obscura:0.1.10
-endif
-CRW_IMAGE ?= $(call env_value,CRW_IMAGE)
-ifeq ($(strip $(CRW_IMAGE)),)
-CRW_IMAGE := ghcr.io/us/crw:0.23.0
 endif
 CONTAINER_BIN ?= $(call env_value,CONTAINER_BIN)
 DOCKER_SOCK_PATH ?= $(call env_value,DOCKER_SOCK_PATH)
@@ -132,6 +126,17 @@ ifeq ($(strip $(SEARXNG_IMAGE_TAG)),)
 $(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass SEARXNG_IMAGE_TAG=... on the make command line)
 endif
 SEARXNG_IMAGE ?= docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)
+SEARXNG_WRAPPER_IMAGE ?= $(call env_value,SEARXNG_WRAPPER_IMAGE)
+SEARXNG_DOCKERFILE ?= searxng/Dockerfile
+ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB ?= $(call env_value,ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)
+ifeq ($(strip $(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)),)
+ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB := 50
+endif
+OBSCURA_RETENTION_FLOOR_BYTES := $(shell python3 -c 'v=int("$(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)"); assert 0 < v <= ((1<<63)-1)//1048576; print(max(v*1048576,20971520))')
+OBSCURA_IO_STREAM_MAX_BYTES := $(shell python3 -c 'v=int("$(OBSCURA_RETENTION_FLOOR_BYTES)"); assert v <= ((1<<63)-1)//5; print(v*5)')
+export SEARXNG_WRAPPER_IMAGE
+export OBSCURA_RETENTION_FLOOR_BYTES
+export OBSCURA_IO_STREAM_MAX_BYTES
 export SEARXNG_IMAGE_TAG
 SEARXNG_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
 USER_AUTH_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
@@ -169,14 +174,14 @@ EMBEDSERV_REQUIREMENTS_IN := $(EMBEDSERV_DIR)/requirements.in
 EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
-CDP_SHIM_REQUIREMENTS_IN := crw/cdp-shim-requirements.in
-CDP_SHIM_REQUIREMENTS := crw/cdp-shim-requirements.txt
+SEARXNG_REQUIREMENTS_IN := searxng/requirements.in
+SEARXNG_REQUIREMENTS := searxng/requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready tailscale-image-ready crw-image-ready cdp-shim-image-ready cdp-shim-build myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -194,6 +199,7 @@ help:
 	@echo "  make onyx-build   # Pull/build Onyx images via onyx/install.sh"
 	@echo "  make myst-build   # Build Myst image from myst/build/Dockerfile"
 	@echo "  make teep-build   # Build teep image from teep/build/Dockerfile"
+	@echo "  make searxng-build # Build the direct-Obscura SearXNG wrapper image"
 	@echo "  make embedserv-install # Create embedserv venv with uv and download the MLX embedding model"
 	@echo "  make embedserv-verify-model # Verify embedserv/models copy for the selected MLX embedding model"
 	@echo "  make embedserv-serve   # Launch mlx-openai-server on ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL"
@@ -218,13 +224,13 @@ help:
 	@echo "Code interpreter network: set ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true in $(ENV_FILE)"
 	@echo "Disable VPN: set MYST_VPN_ENABLED=false in $(ENV_FILE) to idle myst-client without kill-switch/connect"
 	@echo "Proxy: set EGRESS_UPSTREAM_PROXY_URL in $(ENV_FILE) (http/https/socks5)"
-	@echo "       to route Onyx helpers, CRW, Obscura, and network-enabled executor egress"
+	@echo "       to route Onyx helpers, Obscura, and network-enabled executor egress"
 	@echo "Override Myst image: make myst-build MYST_IMAGE=local/myst:docker_host_fixes_with_logs"
 	@echo "Override teep pin: make teep-build TEEP_REF=<commit-sha>"
 	@echo "Override teep image: make teep-build TEEP_IMAGE=local/teep:<tag>"
 	@echo "Override embedding model: make embedserv-install ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL=majentik/harrier-oss-v1-0.6b-MLX-8bit"
 
-upgrade: upgrade-python-deps cdp-shim-build myst-build teep-build searxng-image-ready tailscale-image-ready crw-image-ready upgrade-onyx
+upgrade: upgrade-python-deps myst-build teep-build searxng-build tailscale-image-ready obscura-image-ready upgrade-onyx
 
 upgrade-python-deps:
 	@set -eu; \
@@ -233,28 +239,25 @@ upgrade-python-deps:
 		exit 1; \
 	fi; \
 	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(EMBEDSERV_REQUIREMENTS_IN)" -o "$(EMBEDSERV_REQUIREMENTS)"; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(CDP_SHIM_REQUIREMENTS_IN)" -o "$(CDP_SHIM_REQUIREMENTS)"
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(SEARXNG_REQUIREMENTS_IN)" -o "$(SEARXNG_REQUIREMENTS)"
 
 tailscale-image-ready:
 	@echo "Pulling Tailscale image: $(TAILSCALE_IMAGE)"; \
 	"$(CONTAINER_BIN)" pull "$(TAILSCALE_IMAGE)"
 
-crw-image-ready:
+obscura-image-ready:
 	@echo "Pulling obscura image: $(OBSCURA_IMAGE)"; \
 	"$(CONTAINER_BIN)" pull "$(OBSCURA_IMAGE)"
-	@echo "Pulling crw image: $(CRW_IMAGE)"; \
-	"$(CONTAINER_BIN)" pull "$(CRW_IMAGE)"
 
-cdp-shim-image-ready:
-	@if "$(CONTAINER_BIN)" image inspect "$(CDP_SHIM_IMAGE)" >/dev/null 2>&1; then \
-		echo "CDP shim image already present: $(CDP_SHIM_IMAGE)"; \
+searxng-image-ready:
+	@if "$(CONTAINER_BIN)" image inspect "$(SEARXNG_WRAPPER_IMAGE)" >/dev/null 2>&1; then \
+		echo "SearXNG wrapper image already present: $(SEARXNG_WRAPPER_IMAGE)"; \
 	else \
-		echo "CDP shim image not found: $(CDP_SHIM_IMAGE). Building..."; \
-		$(MAKE) cdp-shim-build CDP_SHIM_IMAGE="$(CDP_SHIM_IMAGE)"; \
+		$(MAKE) searxng-build; \
 	fi
 
-cdp-shim-build:
-	@echo "Building $(CDP_SHIM_IMAGE) using $(CDP_SHIM_DOCKERFILE)..."
+searxng-build:
+	@echo "Building $(SEARXNG_WRAPPER_IMAGE) using $(SEARXNG_DOCKERFILE)..."
 	@set -eu; set --; \
 	[ -z "$${HTTP_PROXY:-}" ] || set -- "$$@" --build-arg HTTP_PROXY; \
 	[ -z "$${HTTPS_PROXY:-}" ] || set -- "$$@" --build-arg HTTPS_PROXY; \
@@ -263,19 +266,20 @@ cdp-shim-build:
 	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
 	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
 	"$(CONTAINER_BIN)" build "$$@" \
-		--file "$(CDP_SHIM_DOCKERFILE)" \
-		--build-arg PYTHON_SLIM_IMAGE="$(PYTHON_SLIM_IMAGE)" \
-		--tag "$(CDP_SHIM_IMAGE)" \
+		--file "$(SEARXNG_DOCKERFILE)" \
+		--build-arg SEARXNG_UPSTREAM_IMAGE="$(SEARXNG_IMAGE)" \
+		--build-arg ONYX_BACKEND_IMAGE="$(ONYX_BACKEND_IMAGE)" \
+		--tag "$(SEARXNG_WRAPPER_IMAGE)" \
 		.
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
-up-lite: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready cdp-shim-image-ready
+up-lite: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
-up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready cdp-shim-image-ready
+up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 ensure-onyx-config:
@@ -357,17 +361,6 @@ upgrade-onyx:
 		$(MAKE) init-onyx-env ONYX_INSTALL_ARGS="$(ONYX_INSTALL_ARGS)"; \
 	fi
 	@$(MAKE) sync-onyx-env
-
-searxng-image-ready:
-	@set -eu; \
-	image=$$("$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) -f "$(SEARXNG_COMPOSE_FILE)" config | sed -n 's/^    image: //p' | head -1); \
-	if [ -z "$$image" ]; then \
-		echo "ERROR: could not resolve SearxNG image from $(SEARXNG_COMPOSE_FILE)"; \
-		exit 1; \
-	fi; \
-	echo "Pulling SearxNG image: $$image"; \
-	"$(CONTAINER_BIN)" pull "$$image"; \
-	echo "SearxNG image ready: $$image"
 
 down-lite:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans

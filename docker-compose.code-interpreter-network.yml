@@ -7,12 +7,11 @@ services:
       executor-policy-upstream:
         aliases: [myst-client]
 
-  # Executor and CRW prefetch traffic have the same public, search-blocking
-  # policy. Extend the existing final-hop process with the optional executor
-  # bridge peer instead of starting a duplicate proxy service.
-  prefetch-blocking-proxy:
+  # Enabled executors use the ordinary public policy. Caller networks remain
+  # separate and host/RFC1918 exceptions remain unavailable.
+  onyx-public-egress-proxy:
     environment:
-      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: "crw-prefetch-bridge,executor-egress-bridge"
+      EGRESS_PROXY_ALLOWED_CLIENT_HOSTS: "onyx-public-egress-bridge,obscura-egress-bridge,executor-egress-bridge"
 
   executor-egress-bridge:
     image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
@@ -24,10 +23,10 @@ services:
     sysctls:
       net.ipv4.ip_forward: "0"
       net.ipv6.conf.all.forwarding: "0"
-    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3128"]
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3132"]
     networks: [executor-egress, executor-policy-upstream]
     depends_on:
-      prefetch-blocking-proxy: {condition: service_healthy}
+      onyx-public-egress-proxy: {condition: service_healthy}
     healthcheck:
       test: ["CMD-SHELL", "printf 'CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n' | socat -T 3 STDIO,ignoreeof TCP:127.0.0.1:3128,connect-timeout=3 | grep -q '^HTTP/1.1 403'"]
       interval: 30s

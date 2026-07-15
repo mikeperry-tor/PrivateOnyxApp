@@ -99,7 +99,47 @@ def _is_processor_available(engine_name: str) -> bool:
     processor = PROCESSORS.get(engine_name)
     if processor is None:
         return False
-    return not processor.suspended_status.is_suspended
+    if processor.suspended_status.is_suspended:
+        return False
+    if engine_name in _ROUND_ROBIN_DEFAULT_PROVIDERS:
+        from searx.engines import _obscura
+        return _obscura.provider_available(engine_name)
+    return True
+
+
+def apply_offline_block_suspension_patch() -> None:
+    """Give blocking offline-engine failures the stock online suspend path."""
+    from searx.exceptions import SearxEngineAccessDeniedException
+    from searx.exceptions import SearxEngineCaptchaException
+    from searx.exceptions import SearxEngineTooManyRequestsException
+    from searx.search.processors.offline import OfflineProcessor
+
+    _require_source(
+        "searx.search.processors.offline.OfflineProcessor.search",
+        OfflineProcessor.search,
+        ("except ValueError as e:", "self.handle_exception(result_container, e)"),
+    )
+    original = OfflineProcessor.search
+
+    def _patched(self, query, params, result_container, start_time, timeout_limit):
+        try:
+            search_results = self.engine.search(query, params)
+            self.extend_container(result_container, start_time, search_results)
+        except ValueError as exc:
+            self.logger.exception("engine %s: invalid input: %s", self.engine.name, exc)
+        except (
+            SearxEngineCaptchaException,
+            SearxEngineTooManyRequestsException,
+            SearxEngineAccessDeniedException,
+        ) as exc:
+            self.handle_exception(result_container, exc, suspend=True)
+            self.logger.exception("engine %s: provider blocked", self.engine.name)
+        except Exception as exc:
+            self.handle_exception(result_container, exc)
+            self.logger.exception("engine %s: exception: %s", self.engine.name, exc.__class__.__name__)
+
+    OfflineProcessor.search = _patched
+    print("sitecustomize: patched offline blocking-condition suspension", flush=True)
 
 
 def _choose_round_robin_engine(engine_names: list[str]) -> str | None:
@@ -209,7 +249,7 @@ def _new_unresponsive_provider_names(
 
 
 def apply_round_robin_search_patch() -> None:
-    """Optionally schedule one CRW-backed web provider per SearXNG request."""
+    """Optionally schedule one direct-Obscura web provider per SearXNG request."""
 
     if not _env_enabled("SEARXNG_ROUND_ROBIN", False):
         return
@@ -561,5 +601,6 @@ def apply_last_resort_scoring_patch() -> None:
     )
 
 
+apply_offline_block_suspension_patch()
 apply_round_robin_search_patch()
 apply_last_resort_scoring_patch()

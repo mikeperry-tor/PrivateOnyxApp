@@ -11,7 +11,8 @@
 > [VPN routing and restricted egress](../vpn_routing_and_proxies.md),
 > [Internal network security](../internal_network_security.md), and
 > [Request handling](../request_handling.md). This remains the prerequisite for
-> [Direct Obscura request handling](../obscura_direct.md).
+> [Direct Obscura request handling](obscura_direct.md), implemented on
+> 2026-07-15.
 
 ## Decision
 

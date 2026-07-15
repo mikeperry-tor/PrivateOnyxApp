@@ -1,6 +1,6 @@
 # Code Agent Instructions for Private Onyx
 
-This repository is a Docker Compose wrapper for running Onyx with private verified inference, VPN/proxy-routed web access, Obscura/CRW browser scraping, SearXNG search, local document RAG, and optional Tailscale exposure.
+This repository is a Docker Compose wrapper for running Onyx with private verified inference, VPN/proxy-routed direct Obscura browser access, SearXNG search, local document RAG, and optional Tailscale exposure.
 
 It is not the upstream Onyx project, nor is it a fork. Most changes here are deployment, Compose, Python sidecar, shell, SearXNG, or runtime-patch changes around upstream projects.
 
@@ -13,11 +13,11 @@ These instructions are intentionally a thin orientation layer. They tell you whe
 Before changing a subsystem, read the matching document below, then inspect the implementation. If the implementation and docs disagree, treat that as a bug to resolve. Do not paper over drift with vague wording.
 
 - `README.md` - user setup, first-run flow, optional features, and host endpoints.
-- `docs/request_handling.md` - `web_search`, `open_url`, CRW, Obscura, CDP shim, prefetch blocking, readiness, cookies, and anti-bot behavior.
+- `docs/request_handling.md` - direct-Obscura `web_search` and built-in `open_url`, lifecycle waits, body/DOM limits, cookies, and anti-bot behavior.
 - `docs/vpn_routing_and_proxies.md` - trusted VPN namespace, restricted component networks, final-hop proxy policies, explicit no-VPN mode, and optional routing switches.
 - `docs/internal_network_security.md` - restricted component reachability, destination validation, bridge boundaries, Onyx SSRF interaction, and residual risks.
 - `docs/onyx_patch_info.md` - why local runtime patches exist.
-- `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/CRW/Obscura/ Teep upgrade checklist and patch validation, for use when image/source pins or runtime Python locks are updated.
+- `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/Obscura/Teep upgrade checklist and patch validation, for use when image/source pins or runtime Python locks are updated.
 - `docs/local_docs_rag_search.md` - full-mode local document RAG, local doc serving, PDF freshness, embedding shim, and diagnostics.
 
 When a request touches more than one path, read each relevant doc first. Prefer small, doc-aligned changes over broad rewrites.
@@ -32,14 +32,13 @@ At a high level:
 - When explicitly enabled, the base `sitecustomize` patch gives nested Deep
   Research agents the tools selected for the current chat Agent and executes
   complete model-emitted tool batches with bounded concurrency.
-- Onyx `web_search` calls SearXNG, which uses custom CRW-backed engines.
-- CRW uses local proxy/CDP/Obscura components to render search and page content. These components exist to reduce 429 and 403 errors at search engines and web pages.
-- CRW, SearXNG, Obscura, CDP shim, and optional executor pods
+- Onyx `web_search` calls SearXNG, whose custom offline engines navigate and parse rendered provider pages through Obscura.
+- The built-in Onyx Web Crawler and custom SearXNG engines share one audited direct-CDP client and perform one Obscura navigation per target, without HTTP prefetch or browser fallback.
+- SearXNG, Obscura, and optional executor pods
   use narrow internal networks. Internet traffic crosses component bridges to
   final-hop policy proxies in the trusted Mysterium routing namespace.
-- CRW's mandatory local URL-safety lookup uses the loopback-only
-  `crw-validation-dns` sidecar. It never forwards target names; authoritative
-  destination DNS and address validation remain at the final-hop policy.
+- Direct callers validate URL syntax without resolving target names;
+  authoritative destination DNS and address validation remain at the final-hop policy.
 - Isolated Obscura allows private-address resolution only so its HTTP client
   can resolve the mandatory Docker egress-bridge proxy.
   Their narrow networks prevent direct Internet egress, and final-hop policy
@@ -68,16 +67,16 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 - `Makefile` - source of truth for stack targets, compose layering, generated local secrets, image builds, upgrades, Myst flows, and embedserv flows.
 - `stack.versions.env` - committed source of truth for stack image tags and source refs.
 - `.env.wrapper.example` - user-facing configuration surface for local runtime options, not routine image pins.
-- `docker-compose.yaml` - base wrapper stack, including the atomic restricted CRW/SearXNG/CDP/Obscura topology, policy proxies, and service gateways.
+- `docker-compose.yaml` - base wrapper stack, including the restricted SearXNG/Obscura control topology, policy proxies, fixed bridges, and service gateways.
 - `docker-compose.full.yml` - full Onyx/RAG mode.
 - `docker-compose.lite.yml` - lite mode.
 - `docker-compose.code-interpreter-network.yml` - optional executor-only internal network and proxy bridge.
 - `docker-compose.*-vpn.yml`, `docker-compose.vpn-autoheal.yml`,
   `docker-compose.proxy.yml`, and Podman overrides
   - optional routing/proxy/container-engine layers selected by the Makefile.
-- `crw/` - CDP shim, CRW validation-DNS sidecar, and the shared final-hop
-  policy-proxy implementation.
-- `searxng/` - custom CRW-backed engines and the minimal SearXNG overlay.
+- `browser/obscura_client/` - shared direct-CDP client used by Onyx and SearXNG.
+- `egress/` - shared final-hop policy-proxy implementation.
+- `searxng/` - derived image, custom direct-Obscura offline engines, and SearXNG overlay.
 - `myst/` - Mysterium image build file, entrypoint, signup compose, and helper CLI.
 - `teep/` - Teep image build file and entrypoint.
 - `onyx/patches/` - runtime `sitecustomize` patches applied inside Onyx and code-interpreter containers.
@@ -104,7 +103,7 @@ debugging the Makefile itself.
   `make vpn-orderstatus`, and `make vpn-balance` - Myst account/payment flows.
 - `make embedserv-install`, `make embedserv-verify-model`, and `make embedserv-serve` - optional local MLX embedding server flow for the full RAG stack.
 
-`make up-lite` and `make up-full` generate ephemeral local secrets on every start, including SearXNG, Onyx auth, CRW API, and MinIO credentials. Do not move those secrets (or any other new ephemeral secrets) into `.env.wrapper.example`.
+`make up-lite` and `make up-full` generate ephemeral local secrets on every start, including SearXNG, Onyx auth, and MinIO credentials. Do not move those secrets (or any other new ephemeral secrets) into `.env.wrapper.example`.
 
 Do not run live network, payment, VPN, or full-stack destructive operations casually. If a check needs credentials, funding, external services, or long runtime, explain what was not run and why.
 
@@ -146,9 +145,9 @@ This stack protects private research, document contents, browsing behavior, infe
   answers return to the selected public final hop. Onyx
   applications must never rejoin `netns-holder` or gain direct fallback when
   VPN, policy-proxy, or bridge connectivity fails.
-- Request handling: keep supported search engines routed through the custom CRW/SearXNG path; preserve CRW/Obscura rendering, prefetch blocking, per-host rate control, anti-bot visibility, and the documented CDP shim behavior. Do not replace this path with plain HTTP fetching or fixed sleeps.
+- Request handling: keep supported search engines and the built-in crawler on the shared direct-Obscura path; preserve one navigation, event-based waits, provider admission, byte/DOM limits, anti-bot visibility, and complete cleanup. Do not add plain HTTP fetching, hidden retries, browser fallback, or fixed sleeps.
 - Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
-- Patch upgrades: before changing Onyx, code-interpreter, SearXNG, CRW, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
+- Patch upgrades: before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
 - Untracked stack files: Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data. Do not read, stage, or rewrite them unless the user explicitly asks.
 
 ### Testing and Validation
@@ -166,7 +165,7 @@ There is no single test framework for this wrapper. Choose checks based on what 
 
 - Compose or Makefile changes: run `make help` and inspect the effective compose model for the affected mode using the Makefile's layering.
 - Stack startup changes: run the relevant `make up-lite` or `make up-full`, then `make ps-*` and targeted logs when practical.
-- Request path changes: test a real `web_search` query and a real `open_url` request; inspect SearXNG, CRW, CDP shim, and Obscura logs as needed.
+- Request path changes: test a real `web_search` query and a real `open_url` request; inspect SearXNG, Obscura, CDP gateway, API, bridge, and final-hop logs as needed.
 - VPN/proxy changes: verify namespace membership, egress path, `NO_PROXY` behavior, and absence of direct host-port or direct-network bypasses.
 - Onyx patch changes: confirm startup logs show patch success in strict mode and exercise the patched behavior.
 - Full-mode RAG changes: test doc-drop crawling, PDF freshness/reindexing, embedding shim health, and `internal_search`.

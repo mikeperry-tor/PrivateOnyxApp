@@ -6,7 +6,7 @@ name: searxng
 services:
   core:
     container_name: searxng-core
-    image: docker.io/searxng/searxng:${SEARXNG_IMAGE_TAG:?SEARXNG_IMAGE_TAG must be set}
+    image: ${SEARXNG_WRAPPER_IMAGE:?SEARXNG_WRAPPER_IMAGE must be set}
     restart: always
     env_file: ./.env
     environment:
@@ -18,14 +18,6 @@ services:
       - ./core-config/:/etc/searxng/:Z
       - core-data:/var/cache/searxng/
       - ./patches:/usr/local/searxng/wrapper-patches:ro
-      # crw + obscura stealth-browser backed stub engines (see _crw.py).
-      # Mounted as individual files to preserve the image's built-in engines.
-      - ./engines/_crw.py:/usr/local/searxng/searx/engines/_crw.py:ro
-      - ./engines/google2.py:/usr/local/searxng/searx/engines/google2.py:ro
-      - ./engines/brave2.py:/usr/local/searxng/searx/engines/brave2.py:ro
-      - ./engines/duckduckgo2.py:/usr/local/searxng/searx/engines/duckduckgo2.py:ro
-      - ./engines/startpage2.py:/usr/local/searxng/searx/engines/startpage2.py:ro
-      - ./engines/bing2.py:/usr/local/searxng/searx/engines/bing2.py:ro
 
 volumes:
   core-data:

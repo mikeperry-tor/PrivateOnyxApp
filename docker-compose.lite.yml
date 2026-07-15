@@ -14,9 +14,11 @@ services:
       AUTH_BACKEND: "postgres"
       USER_AUTH_SECRET: "${USER_AUTH_SECRET:?USER_AUTH_SECRET must be set}"
       WRAPPER_PATCH_STRICT: "true"
-      PYTHONPATH: "/app/wrapper-patches:/app/wrapper-patches-base:${PYTHONPATH:-}"
+      ONYX_FORCE_OPEN_URL_AVAILABLE: "true"
+      PYTHONPATH: "/app/wrapper-patches-api:/app/wrapper-patches-shared:/app/obscura-client:${PYTHONPATH:-}"
     volumes: !override
       - ./docker-data/file-system:/app/file-system
       - api_server_logs:/var/log/onyx
-      - ./onyx/patches/sitecustomize_base:/app/wrapper-patches-base:ro
-      - ./onyx/patches/sitecustomize:/app/wrapper-patches:ro
+      - ./onyx/patches/shared:/app/wrapper-patches-shared:ro
+      - ./onyx/patches/sitecustomize_api_server:/app/wrapper-patches-api:ro
+      - ./browser/obscura_client:/app/obscura-client:ro

@@ -1,4 +1,4 @@
-"""Environment-driven runtime patches for stock Onyx containers.
+"""Explicitly installed environment-driven patches for stock Onyx services.
 
 This module is imported by sitecustomize so wrapper-level env vars can
 adjust hardcoded limits without rebuilding images.

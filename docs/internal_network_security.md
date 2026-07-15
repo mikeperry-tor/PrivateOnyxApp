@@ -1,182 +1,100 @@
-# Internal Network Security
+# Internal network security
 
-This document describes the network-enforced boundaries for attacker-influenced
-and application outbound paths at the pins in `stack.versions.env`.
+The stack uses network separation and fixed-destination bridges to limit which
+components can reach CDP, Onyx data services, host-capable destinations, and
+the Internet. The exact routing policy is in
+[VPN routing and restricted egress](vpn_routing_and_proxies.md).
 
-## Primary boundary
+## Reachability and trust boundaries
 
-Every Onyx application, data, request-gateway, Teep caller, code-interpreter
-control, and RAG network is `internal: true`. Onyx applications do not share
-`netns-holder`; proxy variables are route selectors, not the sandbox. A client
-that ignores them has no external or host-gateway route.
+| Component | Internal reachability | Internet path |
+| --- | --- | --- |
+| `api_server` | Onyx backend/data services; API-only `obscura-cdp-gateway`; Teep | fixed public or saved-level host-capable Onyx bridge |
+| `searxng-core` | SearX service gateway; direct Obscura CDP control | none except browser activity performed by Obscura |
+| `obscura-cdp-gateway` | API-side control network and Obscura control network | none |
+| `obscura` | CDP control networks and its fixed browser bridge | shared public final-hop policy through `obscura-egress-bridge` |
+| enabled executor | executor service/control networks and its fixed bridge | shared public final-hop policy through `executor-egress-bridge` |
+| doc-drop and embedding components | their documented full-mode local networks | only their explicit host/public route where configured |
 
-Only Myst, final-hop policy proxies, and explicitly selected VPN-side services
-share `netns-holder`. Each hardened TCP bridge has exactly one caller network
-and its matching policy-side network. Public and host bridges reach
-route-class-specific listeners with explicit source allowlists. Identical
-policies share a process: generic Onyx and Obscura use the public proxy, while
-CRW prefetch and optional executors use the search-blocking proxy. Their caller
-networks and hardened bridges remain separate; the host proxy is not shared.
+CDP is powerful browser authority. The API and SearXNG are mutually
+non-isolated with respect to the shared Obscura worker pool: either can create
+targets on a worker and concurrent connections do not create a user security
+boundary. The narrow API gateway prevents unrelated Onyx backend peers from
+gaining CDP reachability, but it is not an authorization protocol between the
+two intended callers.
 
-All processes in `netns-holder` share loopback, interfaces, routes, and every
-listener bound in that namespace. Final-hop listeners intentionally accept
-loopback for local health checks, so bridge-peer allowlists authenticate
-traffic arriving from bridge networks, not co-resident processes. Myst and the
-final-hop proxies are trusted on that basis. Enabling Myst routing for Teep or
-Tailscale deliberately promotes that trusted component into the same boundary;
-compromise of a promoted process is trusted-routing-namespace compromise. This
-does not expose namespace loopback to Onyx applications, restricted browser or
-search components, or executor pods.
+Fresh targets and best-effort `Network.clearBrowserCookies` reduce accidental
+carryover; they do not provide per-user isolation. At Obscura 0.1.10 a clear
+may be deferred behind active work on a worker and is not atomic with the
+following target creation across clients. Non-cookie browser state is
+unverified and state is per worker. Capacity is fixed at five workers.
 
-## Reachability
+The pinned server can retain a hidden blank target/session if concurrent
+connection arrival assigns work around an occupied or failed child. Cleanup
+is attempted by the client, but unreachable server-owned state can require a
+worker restart. This is an availability/resource limitation, not a safe retry
+signal; clients do not reconnect or navigate a second time.
 
-- API/background reach explicit backend/data/Teep networks and the public and
-  host egress bridges. They cannot reach routing, policy-side, browser, executor, or
-  restricted-service control networks.
-- Web/nginx use only `onyx-frontend`; a fixed hardened publisher exposes nginx
-  through a non-masqueraded host edge required by Docker Desktop.
-- CRW, SearXNG, CDP shim, and Obscura retain narrow internal networks and fixed
-  gateways. CRW uses the prefetch bridge; Obscura uses the browser bridge.
-- Code-interpreter control is on `onyx-backend` and serves port 8000. Spawned
-  executors use `none` or their dedicated internal network and executor bridge.
-- Full-mode data services use `onyx-data`. `doc-drop-web` is reached only by a
-  fixed gateway from the host proxy; a separate fixed display publisher uses
-  a dedicated internal peer network. The embedding shim reaches its configured
-  upstream only through the host bridge.
-- Optional Tailscale's configured application path reaches nginx only through a
-  fixed HTTP gateway and never joins `onyx-frontend`. Myst-routed Teep similarly
-  uses a fixed gateway for application ingress. When either trusted process is
-  promoted into `netns-holder`, those gateways do not sandbox it from other
-  co-resident listeners or namespace routes.
+## Destination validation
 
-The former bundled Obscura MCP process, gateway, policy, secrets, and networks
-were removed. A saved Onyx MCP record that references it is invalid and should
-be deleted.
+Client-side URL validation accepts only explicit `https`, or `http` when
+`EGRESS_ALLOW_HTTP_URLS=true`; rejects credentials, fragments, invalid IDNA,
+canonical internal names, and `file:`; and deliberately does not perform
+target DNS. Authoritative resolution and address validation stay at the final
+hop so the connection uses the same approved answer.
 
-## Onyx public and host egress
+For wrapper-resolved routes, the final-hop proxy denies loopback, link-local,
+metadata, Docker/Podman internal names, multicast, unspecified, reserved,
+private, mixed-answer, and rebinding destinations. Redirects and browser
+subresources pass through the same policy. Internal service names use Docker
+DNS, but public target names never need to.
 
-The public bridge accepts generic helper, provider-default inference, and
-strict MCP/Web Connector traffic. The host bridge accepts saved-level-approved
-MCP/OAuth and Web Connector traffic, supported configured chat inference
-endpoints, and the embedding shim. Runtime patches create explicit proxy
-transports when HTTPX, MCP SDK, Playwright, or provider SDK construction would
-ignore environment proxy variables. Other private configured provider endpoint
-types are intentionally unsupported rather than given an unverified direct or
-environment-proxy path.
+A remote-DNS upstream proxy is an explicit exception to address observation:
+the wrapper can validate the public-looking hostname but cannot see or pin the
+upstream's answer. A malicious or misconfigured upstream can resolve it
+privately unless that upstream enforces equivalent policy.
 
-Each final-hop proxy validates HTTP framing and destinations, selects its fixed
-route class, resolves where required, pins approved direct addresses, and
-streams the connection. Route class, resolver, upstream, and source address
-are not caller-selectable. There is no intermediate broker protocol or second
-policy process.
+Onyx's own SSRF setting remains an application-layer control for MCP, Web
+Connector, and configured provider choices. It does not replace final-hop
+policy. Saved Admin settings select the public or host-capable route; they do
+not grant browser or executor access to the host listener.
 
-Both routes always reject loopback, link-local, metadata, multicast,
-unspecified/reserved addresses, Docker/Podman internal suffixes and legacy
-aliases, and single-label service names. The host route alone permits:
+## Browser containment and residuals
 
-- exact `host.docker.internal`, resolved and pinned by the host proxy; and
-- RFC1918 literals or all-RFC1918 answers for `.local`, `.internal`, and
-  `.home.arpa` names when `EGRESS_ALLOW_RFC1918=true`.
+Obscura runs read-only as UID/GID 65534 with all capabilities dropped,
+`no-new-privileges`, no private data/secret mounts, no persistent storage,
+and without `--allow-file-access`. These controls limit impact but do not make
+the browser untrusted-safe. The pinned upstream ES-module path has an accepted
+local-file-read limitation, so no sensitive host/container files are mounted
+into it.
 
-Mixed private/global DNS answers fail. Public-only, browser, and executor
-policies never receive these exceptions. Exact host and RFC1918 traffic does
-not traverse an external upstream proxy. Exact `host.docker.internal` and
-opt-in, fully validated RFC1918 destinations are the cleartext exceptions when
-`EGRESS_ALLOW_HTTP_URLS=false`. The host proxy classifies DNS answers before
-opening the connection, so these support local inference, embedding, Web
-Connector, and MCP endpoints without permitting public HTTP targets.
+The browser's main-response retention limit applies per entry, not per
+process. Multiple retained entries, base64 representation, and request/loader
+aliases can multiply memory use. The distinct IO stream store has aggregate
+accounting, while rendered DOM and API body limits are separately enforced.
+Obscura may allocate the full initial response before any of those retained
+limits. None is a complete aggregate process-memory bound.
 
-## SSRF interaction
+The public Onyx, browser, and executor bridges share a final-hop proxy process,
+so that proxy is a failure/contention domain. Their networks and allowed-peer
+checks remain separate. Host-capable policy is a different listener and
+bridge. A compromised caller cannot select another bridge merely by choosing
+a proxy address.
 
-Compose seeds `OPEN_URL_VALIDATE_SSRF=true`,
-`MCP_SERVER_ALLOW_PRIVATE_NETWORK=true`, and
-`MCP_SERVER_ALLOW_LOOPBACK=false`. Saved Admin Security Hardening state takes
-precedence and is read for each new MCP client or Web crawl. Strict levels
-select the public route; levels that permit private networks may select the
-host route. The MCP wrapper transport does not duplicate destination policy:
-the selected final-hop proxy validates initial and SDK-derived requests and
-remains the authoritative resolver.
+Wrapper logs redact query strings, bodies, cookies, credentials, and response
+content. Upstream Obscura does not provide the same guarantee and may expose
+full URLs in some logging modes; its logs are private data. Multi-worker child
+logging can also be incomplete.
 
-The Web connector sends the stack-owned `http://doc-drop-web:8091/` origin
-through the host final-hop proxy. The proxy recognizes that exact authority and
-can reach only its hardened fixed gateway to the real doc-drop service. Browser
-subresources and redirects remain on the selected final-hop proxy instead of
-inheriting a direct backend route. Display links are rewritten to the configured host
-doc-drop origin only in returned search sections, while stored document
-identity remains the internal crawl URL.
+## Verification checklist
 
-## Other restricted components
-
-Browser and generic Onyx traffic share the same public policy process.
-Prefetch and executor traffic share the public, search-blocking policy process.
-All retain the same destination floor. Cleartext targets are
-rejected unless `EGRESS_ALLOW_HTTP_URLS=true`; the host route additionally
-allows exact `host.docker.internal` and RFC1918 destinations explicitly
-enabled by `EGRESS_ALLOW_RFC1918`, as described above.
-CONNECT on another allowed port is an opaque TCP stream and is not
-application-protocol inspected.
-
-CRW's mandatory URL-safety preflight uses `crw-validation-dns` on loopback.
-The sidecar returns a synthetic global address for unresolved public
-multi-label names and never forwards target names. CRW has no direct route;
-authoritative destination DNS and validation happen at the final-hop policy.
-
-Obscura permits private resolution only so its HTTP client can locate its
-mandatory internal egress bridge. Its network has no external route, and the
-browser final-hop policy remains authoritative for navigation targets.
-
-## DNS and upstream proxies
-
-Direct VPN mode uses the source-bound Myst provider resolver; explicit no-VPN
-mode uses the trusted routing namespace's system DNS. HTTP, HTTPS, `socks5`,
-and `socks5h` upstream proxies receive target hostnames without a preliminary
-target lookup. With RFC1918 access enabled, system DNS classification is
-limited to `.local`, `.internal`, and `.home.arpa`; other names never reach
-system DNS in VPN mode.
-
-For those three operator-local target suffixes, an empty answer or resolution
-failure fails closed locally instead of forwarding the name to Myst DNS or an
-external upstream proxy. A non-empty all-global answer returns to the selected
-public final hop; a mixed RFC1918/global answer fails closed.
-
-That DNS rule also applies while locating the configured upstream proxy:
-public proxy names use Myst provider DNS in VPN mode, while the three
-operator-local suffixes use system DNS only with `EGRESS_ALLOW_RFC1918=true`.
-Public proxy addresses inherit the namespace's Myst routes. Exact
-`host.docker.internal` uses the narrow Docker-host route. A configured RFC1918
-IPv4 literal receives an exact `/32` proxy-endpoint route without granting
-general RFC1918 target access; named operator-local proxies require the
-RFC1918 option.
-
-Remote-DNS proxy schemes cannot locally prove what address an upstream will
-choose. A malicious or misconfigured upstream can resolve a public-looking
-name privately; upstream-side policy is required to eliminate that residual
-risk. Proxy credentials and request secrets must not appear in logs.
-
-## Bridge and control-plane risks
-
-Bridges are read-only numeric-nonroot containers, drop all capabilities, use
-`no-new-privileges`, disable IP forwarding, and have no Docker socket or host
-port. They are TCP forwarders, not routers. A future incorrectly shared or
-non-internal network can weaken the boundary and must be caught by effective
-Compose tests.
-
-The code-interpreter control service retains Docker socket access. Compromise
-of that service is compromise of the Docker control plane; executor network
-isolation does not make that socket safe. Likewise, the trusted final-hop proxies
-are security-critical because they own final-hop DNS and connectivity.
-
-Myst-routed Teep and Tailscale are also trusted routing-namespace components,
-not restricted callers. Their fixed gateways preserve narrow normal service
-paths, but namespace co-residence grants raw access to the shared routing
-surface and loopback-bound listeners. Keep their VPN-routing switches off
-unless that trust expansion is intended.
-
-Failure is intentionally closed: stopping a final-hop proxy, bridge, Myst, or
-upstream disables its route without cross-class or direct fallback. Core Onyx
-startup does not wait for optional browsing health; a missing browsing route
-fails when that feature is invoked. Full mode still waits for its required
-embedding shim and upstream route. Only Myst is autohealed in
-VPN-enabled models, preventing dependency restart storms while internal
-application health remains independent. Explicit no-VPN models omit autoheal
-and its Docker socket.
+- CDP has no host port and `obscura-cdp-gateway` is not on `onyx-backend`.
+- Only API/gateway join `onyx-obscura-control`; SearXNG joins browser control.
+- Onyx, browser, executor, and host-capable bridges and caller networks remain
+  distinct and have fixed destinations.
+- Obscura and SearXNG have no direct Internet route.
+- Initial, redirected, subresource, internal, metadata, and mixed-answer
+  destinations fail according to the selected DNS mode.
+- Proxy, VPN, gateway, or bridge failure cannot produce direct application
+  egress.
+- Full-mode doc-drop remains a local path and does not gain browser/CDP access.

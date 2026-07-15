@@ -4,7 +4,7 @@ This stack gets you a private deep research agent with code sub-agents and RAG d
 
 The stack is built around [Onyx](https://github.com/onyx-dot-app/onyx) using [teep](https://github.com/13rac1/teep) for private verified LLM inference.
 
-Search and web traffic is fetched via customized [SearXNG](https://github.com/searxng/searxng) and [fastCRW](https://github.com/us/crw) services connected to [Obscura Browser](https://github.com/h4ckf0r0day/obscura).
+Search and built-in `open_url` traffic is rendered by customized [SearXNG](https://github.com/searxng/searxng) engines and the Onyx Web Crawler through [Obscura Browser](https://github.com/h4ckf0r0day/obscura).
 
 Agent web traffic uses the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, or explicit no-VPN routing mode. Proxy support is available either in addition to Mysterium or instead of it.
 
@@ -28,9 +28,9 @@ The Docker Compose files in this stack relies on the following components:
 
 3. [Mysterium](https://github.com/mysteriumnetwork/node) is a Wireguard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. The use of residential IP addresses reduces the rate of captchas and rate limiting by search engines and websites. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
-4. [Obscura](https://github.com/h4ckf0r0day/obscura) is combined with [crw](https://github.com/us/crw) to provide the Onyx agent with an actual headless browser with anti-fingerprinting defenses, as a Firecrawl-compatible API endpoint. This helps reduce fingerprint-based bans by search engines and pages that CRW renders through the browser. Ordinary non-search `open_url` pages may be returned from CRW's HTTP prefetch without Obscura when the HTTP result is usable; see [`docs/request_handling.md`](docs/request_handling.md#known-limitations). CRW, SearXNG, and Obscura run on narrow internal networks; their internet traffic crosses local bridges to destination-validating final-hop proxies in the selected Myst/proxy/no-VPN routing namespace. A loopback-only DNS sidecar satisfies CRW's mandatory URL-safety preflight without forwarding browsing names; it is not the resolver used for the external connection.
+4. [Obscura](https://github.com/h4ckf0r0day/obscura) provides the built-in Onyx Web Crawler and custom search engines with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy in the selected Myst/proxy/no-VPN routing namespace.
 
-5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine that provides API search for multiple back ends. The Google, Brave, DuckDuckGo, Startpage, and Bing web engines are wrapper-provided CRW-backed variants that use the Obscura+crw instance to fetch their search results, which significantly reduces captchas and bans by these search engines.
+5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. The wrapper-provided Google, Brave, DuckDuckGo, Startpage, and Bing offline engines navigate and parse rendered result pages through Obscura. SearXNG owns provider scheduling, retries after unresponsive providers, and suspension after visible anti-bot failures.
 
 6. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to the Onyx web interface. The TLS key is generated locally and signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
 
@@ -118,7 +118,7 @@ Most likely variables you want to change:
     routing switches; application containers do not share it.
     Explicit no-VPN models omit `autoheal` and its Docker socket entirely.
   - Core Onyx startup is independent of optional browsing and unrelated egress
-    health. If CRW, SearXNG, Obscura, or their route is unavailable, that
+    health. If SearXNG, Obscura, or their route is unavailable, that
     feature fails closed when invoked. Full mode still requires its embedding
     shim and the shim's configured upstream route.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
@@ -295,27 +295,41 @@ Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.2 is t
 
 ### Web Search Provider Configuration
 
-To make use of the provided crw and obscura anti-fingerprinting web search tools, you will need to select SearXNG and Firecrawl from the [Web Search Admin Panel](http://localhost:3000/admin/configuration/web-search):
+To use the wrapper-managed direct Obscura path, select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Panel](http://localhost:3000/admin/configuration/web-search):
 
-For a detailed request-flow map of Web Search, `open_url`, SearXNG, CRW, the CDP shim, and Obscura, see [`docs/request_handling.md`](docs/request_handling.md).
+For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
 
 1. Go to **Admin Panel -> Web Search -> Web Crawler**.
 2. Open **SearXNG** and click **Connect**
 3. Set the **SearXNG Base URL** to `http://searxng-service-gateway:8888`.
-4. Open **Firecrawl** and click **Connect**.
-5. Set **API Base URL** to `http://crw-service-gateway:3010/v1/scrape`.
-6. Set **API Key** to any non-empty placeholder value.
-7. Click **Connect**, then **Set as Default** on the Firecrawl card.
+4. Open **Onyx Web Crawler**, click **Connect**, then **Set as Default**.
 
-The Connect action performs a live scrape of `https://example.com`; it is not
-only a syntax check. If Onyx reports `API key validation failed: content fetch
-returned no results`, inspect `crw-validation-dns`, `crw`,
-`crw-prefetch-bridge`, and the selected final-hop policy health. See the
-[request-path diagnostics](docs/request_handling.md#diagnosing-issues).
+The crawler test performs a live browser navigation of `https://example.com`;
+it is not only a syntax check. If it fails, inspect the API, Obscura, CDP
+gateway, browser bridge, and public final-hop proxy health. See the
+[request-path diagnostics](docs/request_handling.md#diagnostics).
 
-Existing deployments must replace previously saved localhost URLs with these
-gateway URLs after upgrading; saved Onyx Admin values are not rewritten by
-Compose.
+Existing deployments must replace previously saved SearXNG localhost URLs and
+select the built-in crawler after upgrading. Saved Onyx Admin values are not
+rewritten by Compose.
+
+Each built-in crawler fetch performs one main browser navigation. The default
+document limit is 50 MiB (`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB`); larger values
+increase memory exposure across five API fetch permits and five fixed Obscura
+workers. Search and web waits are separately configured by
+`OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` and `OBSCURA_BROWSER_WAIT_UNTIL_WEB`.
+
+Selecting Firecrawl, Exa, or another external provider is still supported via
+Onyx's public route, but is outside this one-navigation guarantee. That
+provider performs the target fetch under its current retention, training, and
+zero-data-retention policy, and its API key associates activity with your
+account.
+
+`SEARXNG_ROUND_ROBIN=true` selects one available normal custom provider and
+may try another only after SearXNG records an unresponsive failure. Disabling
+it restores selected-engine fan-out and can disclose the same query to several
+providers. `open_url`, generic helpers, and enabled executors are not governed
+by the provider scheduler.
 
 ## Optional Configurations
 
@@ -367,7 +381,7 @@ These switches deliberately promote trusted Teep or Tailscale processes into
 the shared routing namespace. A promoted process shares its loopback,
 interfaces, routes, and final-hop proxy listeners; the fixed Teep and frontend
 gateways constrain how Onyx reaches those services, not what a compromised
-promoted process could reach. Onyx applications, CRW, Obscura, SearXNG, and
+promoted process could reach. Onyx applications, Obscura, SearXNG, and
 executor pods remain outside that namespace.
 
 #### Optional: Network Access for the Code-Interpreter
@@ -384,9 +398,10 @@ ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true
 
 Executor pods join only the internal `onyx-code-interpreter-executor` network.
 Their sole peer is an HTTP proxy bridge; raw direct connections have no route
-to the internet, Onyx services, CRW, SearXNG, Obscura, Docker host gateway,
-LAN/private ranges, or metadata addresses. The final-hop proxy blocks direct
-search-engine URLs and preserves the selected VPN/upstream-proxy/no-VPN mode.
+to the internet, Onyx services, SearXNG, Obscura, Docker host gateway,
+LAN/private ranges, or metadata addresses. The final-hop proxy preserves the
+selected VPN/upstream-proxy/no-VPN mode. Public search engines are deliberately
+allowed through that public policy and return their real response or challenge.
 Tool descriptions advertise this restricted capability and do not expose
 stack-local service endpoints.
 
@@ -464,13 +479,6 @@ one exact host final-hop route for the internal `http://doc-drop-web:8091/` craw
 origin through a fixed gateway; no host or public name is added to generic
 `NO_PROXY`, and doc-drop browser subresources remain policy mediated.
 
-CRW 0.23 requires a local lookup before it will hand a URL to its configured
-proxy. Docker's embedded resolver answers known internal service names with
-their real private addresses, which CRW rejects, and forwards other
-multi-label names only to `crw-validation-dns` on loopback. That sidecar never
-forwards a query or opens an external connection; it returns a fixed global A
-record solely for CRW's redundant preflight.
-
 The final-hop policy remains authoritative. Without an upstream proxy, Myst
 mode queries the provider resolver directly through the tunnel and pins the
 connection to the validated answer; explicit no-VPN mode uses system/Docker
@@ -481,7 +489,7 @@ upstream proxy endpoint itself may need bootstrap resolution.
 Invalid upstream proxy URLs fail policy-proxy startup. Startup logs redact
 userinfo and show only the configured scheme, host, and port.
 
-The default SearXNG engines (`google2`, `brave2`, `duckduckgo2`, `startpage2`, `bing2`) POST only to `http://crw:3010/v1/scrape` on the internal search network. SearXNG has no general internet route. Intentionally enabling external engines requires a separately reviewed `searxng-external` proxy policy.
+The default SearXNG engines (`google2`, `brave2`, `duckduckgo2`, `startpage2`, `bing2`) are offline engines that connect only to Obscura over the internal control network. SearXNG has no general Internet route. Their public target DNS and connections occur in Obscura through the selected final hop.
 
 ### Optional: Local Document RAG via Web Connector
 
@@ -591,11 +599,10 @@ Image tags, source refs, and runtime Python lock files are consolidated in
 [`stack.versions.env`](stack.versions.env) plus the committed `requirements.in`
 / hashed `requirements.txt` files. `make upgrade` refreshes the Python locks
 through `make upgrade-python-deps` before rebuilding/pulling the stack
-components. CDP-shim dependencies are installed from their hashed lock into
-`CDP_SHIM_IMAGE` at image-build time; the internal-only runtime container never
-downloads packages. The CRW validation-DNS sidecar uses only the Python Alpine
-image's standard library and likewise performs no runtime installation. Myst,
-Teep, and CDP-shim builds forward standard
+components. The derived SearXNG image installs its pinned Python dependencies
+from hashed locks and validates the shared Obscura client at image-build time;
+the runtime container never downloads packages or a browser. Myst and Teep
+builds forward standard
 `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` build arguments when those
 variables are present. Image builds and host-side `embedserv` installation
 happen before stack readiness and therefore use the host/build network, not

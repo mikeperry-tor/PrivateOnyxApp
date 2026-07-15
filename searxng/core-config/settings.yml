@@ -1,6 +1,6 @@
 use_default_settings:
   engines:
-    # Drop direct stock engines that are replaced by CRW-backed rendered
+    # Drop direct stock engines that are replaced by browser-backed rendered
     # variants below.
     remove:
       - google
@@ -37,42 +37,37 @@ outgoing:
   request_timeout: 6.0
 
 engines:
-  # CRW-backed rendered SERP engines. `enable_http: true` allows the SearXNG
-  # HTTP client to POST to the local CRW endpoint on loopback.
+  # Offline callbacks own one direct Obscura navigation. The normal SearXNG
+  # HTTP client is intentionally not involved.
   - name: google2
     engine: google2
     shortcut: go2
     timeout: 60.0
     disabled: false
-    enable_http: true
 
   - name: brave2
     engine: brave2
     shortcut: br2
     timeout: 60.0
     disabled: false
-    enable_http: true
 
   - name: duckduckgo2
     engine: duckduckgo2
     shortcut: ddg2
     timeout: 60.0
     disabled: false
-    enable_http: true
 
   - name: startpage2
     engine: startpage2
     shortcut: sp2
     timeout: 60.0
     disabled: false
-    enable_http: true
 
   - name: bing2
     engine: bing2
     shortcut: bi2
     timeout: 60.0
     disabled: false
-    enable_http: true
     last_resort: true
     last_resort_fallback_weight: 0.05
     last_resort_confirmation_bonus: 0.15

@@ -52,7 +52,7 @@ services:
       INDEXING_MODEL_SERVER_HOST: "local-embedding-shim"
       INDEXING_MODEL_SERVER_PORT: "9101"
       WRAPPER_PATCH_STRICT: "true"
-      PYTHONPATH: "/app/wrapper-patches-background:/app/wrapper-patches-base:${PYTHONPATH:-}"
+      PYTHONPATH: "/app/wrapper-patches-background:/app/wrapper-patches-shared:${PYTHONPATH:-}"
       ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED: "true"
       ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS: "doc-drop-web"
       ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL: "http://doc-drop-web:8091/"
@@ -89,7 +89,7 @@ services:
       - ./docker-data/model-cache:/app/.cache/huggingface
       - ./docker-data/model-cache:/root/.cache/huggingface
       - ./onyx/patches/sitecustomize_background:/app/wrapper-patches-background:ro
-      - ./onyx/patches/sitecustomize_base:/app/wrapper-patches-base:ro
+      - ./onyx/patches/shared:/app/wrapper-patches-shared:ro
       - background_logs:/var/log/onyx
 
   # Onyx internal/data services (full mode only)

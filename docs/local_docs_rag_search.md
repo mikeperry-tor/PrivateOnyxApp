@@ -8,17 +8,14 @@ steps in `README.md` and the line-oriented upgrade checklist in
 Use this document for operator-facing setup, request flow, and diagnostics. For
 the patch rationale and possible upstream shape, see
 [`docs/onyx_patch_info.md`](onyx_patch_info.md), especially
-[Background Web connector PDF freshness](onyx_patch_info.md#background-web-connector-pdf-freshness),
-[Internal search content caps](onyx_patch_info.md#internal-search-content-caps),
-[Local embedding shim](onyx_patch_info.md#local-embedding-shim), and
-[Docker Compose wrapper modifications](onyx_patch_info.md#docker-compose-wrapper-modifications).
+[Other retained patches](onyx_patch_info.md#other-retained-patches), and
+[Compose wrapper changes](onyx_patch_info.md#compose-wrapper-changes).
 For line-numbered Onyx upgrade checks, use
 [`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md), especially
-[Background Web connector PDF freshness patch](onyx_patches_upgrade.md#background-web-connector-pdf-freshness-patch),
-[Local embedding shim](onyx_patches_upgrade.md#local-embedding-shim), and
-[Full mode](onyx_patches_upgrade.md#full-mode-compose).
+[Other patch regression audit](onyx_patches_upgrade.md#other-patch-regression-audit), and
+[Routing and Compose audit](onyx_patches_upgrade.md#routing-and-compose-audit).
 For the tested interaction between Onyx SSRF defaults, local doc-drop
-reachability, Obscura/CRW private-network blocking, and code-interpreter
+reachability, Obscura private-network blocking, and code-interpreter
 networking, see
 [`docs/internal_network_security.md`](internal_network_security.md).
 
@@ -138,7 +135,7 @@ that source. Do not point the doc-drop connector at arbitrary untrusted local
 services just because the SSRF setting allows the wrapper's document server.
 
 These settings do not govern the local embedding shim's upstream call and are
-not firewall rules for CRW or Obscura browser traffic. The restricted Obscura
+not firewall rules for Obscura browser traffic. The restricted Obscura
 networks and browser final-hop policy provide that path's private-target
 backstop. Browser same-origin/CORS behavior remains defense in depth, not a
 stack-internal access-control boundary.
