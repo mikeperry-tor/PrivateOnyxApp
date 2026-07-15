@@ -109,6 +109,7 @@ def _reason(exc: ObscuraClientError) -> str:
     return {
         FetchFailure.INVALID_URL: "URL is invalid or forbidden by public-only browser policy",
         FetchFailure.POLICY_DENIED: "destination was denied by the final-hop policy",
+        FetchFailure.PRE_NAVIGATION_TIMEOUT: "browser setup timed out before navigation",
         FetchFailure.TRANSPORT: "browser proxy could not resolve or connect to destination",
         FetchFailure.NAVIGATION_TIMEOUT: "browser navigation timed out",
         FetchFailure.OVERSIZE: "response exceeded the configured maximum size",

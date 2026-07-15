@@ -70,6 +70,10 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
         self.assertNotIn("Firecrawl", source)
         self.assertIn('want="both"', source)
         self.assertIn("ACTIVE_FETCHES = threading.BoundedSemaphore(5)", source)
+        self.assertIn(
+            'FetchFailure.PRE_NAVIGATION_TIMEOUT: "browser setup timed out before navigation"',
+            source,
+        )
 
 
 if __name__ == "__main__":

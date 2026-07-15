@@ -65,6 +65,14 @@ Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `load`). Built-in
 validated by the shared client. These are event conditions, not sleeps;
 Obscura also has a finite navigation deadline.
 
+Connection, cookie clearing, target creation, attachment, and CDP domain setup
+share one absolute 45-second pre-navigation deadline. It is not a fresh
+45-second allowance for each command. Expiry closes the connection, returns a
+typed `pre-navigation-timeout`, and leaves headroom beneath SearXNG's 60-second
+engine deadline and Onyx's 120-second invocation deadline. Cleanup CDP commands
+have a separate five-second bound so an unresponsive renderer cannot retain a
+caller permit merely by blocking target or body-stream closure.
+
 Cookie clearing is best effort, not a user-isolation boundary. At the pinned
 server it may wait behind active work assigned to the same renderer, and the
 clear plus subsequent target creation is not atomic across clients. Targets
@@ -125,6 +133,9 @@ setup and again immediately before `Page.navigate`; finalized work cannot send
 a new origin request. A navigation already sent retains its permit through
 cleanup. Admission is process-local and non-FIFO, and waiting caller threads
 are not themselves a durable queue or a cross-process capacity reservation.
+The shared 45-second setup bound means a renderer blocked before navigation
+releases its caller-side permit within that budget; it does not retry or prove
+that the selected Obscura child cleaned up its own pre-dispatch state.
 
 Results remain ordered by requested URL. Failures and snippets are correlated
 with that requested URL even after redirects; successful content and citations
@@ -196,6 +207,10 @@ if Obscura, its bridge, the proxy, Myst, or an upstream proxy fails.
 Wrapper-owned diagnostics omit query strings, request bodies, response
 contents, cookies, credentials, and sensitive headers. They report only a
 stage, typed category, status class, safe host where needed, and bounded sizes.
+Each shared-client attempt has a random opaque correlation ID. Start, completed
+setup, terminal result, typed failure, and cleanup records include that ID plus
+elapsed time; timeout records identify the exact setup or cleanup stage without
+logging the target URL.
 The unmodified upstream Obscura image does not offer equivalent end-to-end
 redaction: single-worker debugging may log full URLs, and multi-worker child
 logs can be incomplete. Treat its logs as private browsing data.

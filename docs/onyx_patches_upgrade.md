@@ -36,6 +36,9 @@ Audit these Obscura 0.1.10 areas (or their new equivalents):
 - per-body network retention, entry/alias/base64 amplification, aggregate IO
   stream accounting, and initial full-body allocation before retention;
 - `Network.clearBrowserCookies` deferral and cross-client non-atomicity;
+- the cumulative 45-second pre-navigation deadline across connect, cookie
+  clear, target creation, attachment, and domain setup; the separate bounded
+  cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
 - proxy resolution, redirect/subresource enforcement, logging/full-URL
   exposure, file-access guards, and the accepted ES-module local-file path.
 

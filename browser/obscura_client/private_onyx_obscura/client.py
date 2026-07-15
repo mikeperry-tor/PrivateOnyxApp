@@ -11,15 +11,19 @@ import base64
 import ipaddress
 import json
 import logging
+import math
 import re
 import socket
 import time
+import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable, Literal
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 LOGGER = logging.getLogger("private_onyx_obscura")
+PRE_NAVIGATION_TIMEOUT_SECONDS = 45.0
+CLEANUP_COMMAND_TIMEOUT_SECONDS = 5.0
 ALLOWED_WAIT_UNTIL = frozenset(
     {"domcontentloaded", "load", "networkidle0", "networkidle2"}
 )
@@ -46,6 +50,7 @@ INTERNAL_NAMES = frozenset(
 class FetchFailure(StrEnum):
     INVALID_URL = "invalid-url"
     POLICY_DENIED = "final-hop-policy-denied"
+    PRE_NAVIGATION_TIMEOUT = "pre-navigation-timeout"
     NAVIGATION_TIMEOUT = "navigation-timeout"
     HTTP_STATUS = "http-status"
     ACCESS_DENIED = "access-denied"
@@ -238,7 +243,15 @@ def _challenge(status: int, final_url: str, html: str | None) -> FetchFailure | 
     return None
 
 
-async def _drain_body(session, request_id: str, expected: int, limit: int) -> bytes:
+async def _drain_body(
+    session,
+    request_id: str,
+    expected: int,
+    limit: int,
+    *,
+    diagnostic_id: str,
+    cleanup_command_timeout_seconds: float,
+) -> bytes:
     handle: str | None = None
     data = bytearray()
     try:
@@ -288,9 +301,23 @@ async def _drain_body(session, request_id: str, expected: int, limit: int) -> by
     finally:
         if handle is not None:
             try:
-                await session.send("IO.close", {"handle": handle})
-            except Exception:
-                LOGGER.warning("obscura cleanup failed stage=body-close")
+                await session.send(
+                    "IO.close",
+                    {"handle": handle},
+                    timeout_seconds=cleanup_command_timeout_seconds,
+                    timeout_stage="cleanup-body-close",
+                )
+            except Exception as exc:
+                category = (
+                    exc.category.value
+                    if isinstance(exc, ObscuraClientError)
+                    else FetchFailure.TRANSPORT.value
+                )
+                LOGGER.warning(
+                    "obscura cleanup failed request_id=%s stage=body-close category=%s",
+                    diagnostic_id,
+                    category,
+                )
 
 
 class _RawCdp:
@@ -308,64 +335,85 @@ class _RawCdp:
         self.events: list[dict] = []
 
     async def send(
-        self, method: str, params: dict | None = None, *, session_id: str | None = None
+        self,
+        method: str,
+        params: dict | None = None,
+        *,
+        session_id: str | None = None,
+        timeout_seconds: float | None = None,
+        timeout_category: FetchFailure = FetchFailure.TRANSPORT,
+        timeout_stage: str = "cdp-command",
     ) -> dict:
         self.next_id += 1
         command_id = self.next_id
         command = {"id": command_id, "method": method, "params": params or {}}
         if session_id is not None:
             command["sessionId"] = session_id
-        await self.websocket.send(json.dumps(command, separators=(",", ":")))
-        while True:
-            message = await self.websocket.recv()
-            if isinstance(message, bytes):
-                message = message.decode("utf-8", "strict")
-            packet = json.loads(message)
-            if packet.get("id") == command_id:
-                error = packet.get("error")
-                if error:
-                    error_message = (
-                        str(error.get("message", ""))
-                        if isinstance(error, dict)
-                        else ""
-                    ).upper()
-                    navigation_transport_failure = (
-                        method == "Page.navigate"
-                        and any(
-                            token in error_message
-                            for token in (
-                                "NETWORK ERROR:",
-                                "ERR_TUNNEL_CONNECTION_FAILED",
-                                "ERR_PROXY_CONNECTION_FAILED",
-                                "ERR_NAME_NOT_RESOLVED",
+        async def _exchange() -> dict:
+            await self.websocket.send(json.dumps(command, separators=(",", ":")))
+            while True:
+                message = await self.websocket.recv()
+                if isinstance(message, bytes):
+                    message = message.decode("utf-8", "strict")
+                packet = json.loads(message)
+                if packet.get("id") == command_id:
+                    error = packet.get("error")
+                    if error:
+                        error_message = (
+                            str(error.get("message", ""))
+                            if isinstance(error, dict)
+                            else ""
+                        ).upper()
+                        navigation_transport_failure = (
+                            method == "Page.navigate"
+                            and any(
+                                token in error_message
+                                for token in (
+                                    "NETWORK ERROR:",
+                                    "ERR_TUNNEL_CONNECTION_FAILED",
+                                    "ERR_PROXY_CONNECTION_FAILED",
+                                    "ERR_NAME_NOT_RESOLVED",
+                                )
                             )
                         )
-                    )
-                    raise ObscuraClientError(
-                        (
-                            FetchFailure.TRANSPORT
-                            if navigation_transport_failure
-                            else FetchFailure.PROTOCOL
-                        ),
-                        (
-                            "navigation-transport"
-                            if navigation_transport_failure
-                            else "cdp-command"
-                        ),
-                        (
-                            "browser proxy could not resolve or connect to destination"
-                            if navigation_transport_failure
-                            else f"Obscura rejected {method}"
-                        ),
-                    )
-                result = packet.get("result", {})
-                if not isinstance(result, dict):
-                    raise ObscuraClientError(
-                        FetchFailure.PROTOCOL, "cdp-command", "invalid CDP result"
-                    )
-                return result
-            if isinstance(packet, dict) and isinstance(packet.get("method"), str):
-                self.events.append(packet)
+                        raise ObscuraClientError(
+                            (
+                                FetchFailure.TRANSPORT
+                                if navigation_transport_failure
+                                else FetchFailure.PROTOCOL
+                            ),
+                            (
+                                "navigation-transport"
+                                if navigation_transport_failure
+                                else "cdp-command"
+                            ),
+                            (
+                                "browser proxy could not resolve or connect to destination"
+                                if navigation_transport_failure
+                                else f"Obscura rejected {method}"
+                            ),
+                        )
+                    result = packet.get("result", {})
+                    if not isinstance(result, dict):
+                        raise ObscuraClientError(
+                            FetchFailure.PROTOCOL, "cdp-command", "invalid CDP result"
+                        )
+                    return result
+                if isinstance(packet, dict) and isinstance(packet.get("method"), str):
+                    self.events.append(packet)
+
+        try:
+            if timeout_seconds is None:
+                return await _exchange()
+            if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+                raise asyncio.TimeoutError
+            return await asyncio.wait_for(_exchange(), timeout=timeout_seconds)
+        except asyncio.TimeoutError as exc:
+            raise ObscuraClientError(
+                timeout_category,
+                timeout_stage,
+                f"Obscura did not complete {timeout_stage} before its deadline",
+            ) from exc
 
     async def wait_for_event(self, method: str, predicate, timeout: float) -> dict:
         async def _wait() -> dict:
@@ -388,8 +436,10 @@ class _Session:
         self.cdp = cdp
         self.session_id = session_id
 
-    async def send(self, method: str, params: dict | None = None) -> dict:
-        return await self.cdp.send(method, params, session_id=self.session_id)
+    async def send(self, method: str, params: dict | None = None, **kwargs) -> dict:
+        return await self.cdp.send(
+            method, params, session_id=self.session_id, **kwargs
+        )
 
 
 async def fetch(
@@ -402,30 +452,109 @@ async def fetch(
     dom_limit: int,
     want: Literal["dom", "body", "both"] = "dom",
     event_timeout_seconds: float = 5.0,
+    pre_navigation_timeout_seconds: float = PRE_NAVIGATION_TIMEOUT_SECONDS,
+    cleanup_command_timeout_seconds: float = CLEANUP_COMMAND_TIMEOUT_SECONDS,
     pre_navigation_guard: Callable[[], bool] | None = None,
 ) -> FetchResult:
     """Perform exactly one Obscura navigation and consume only its output."""
     if body_limit <= 0 or dom_limit <= 0:
         raise ValueError("body and DOM limits must be positive")
+    if not math.isfinite(pre_navigation_timeout_seconds) or pre_navigation_timeout_seconds <= 0:
+        raise ValueError("pre-navigation timeout must be positive and finite")
+    if not math.isfinite(cleanup_command_timeout_seconds) or cleanup_command_timeout_seconds <= 0:
+        raise ValueError("cleanup command timeout must be positive and finite")
     wait_until = validate_wait_until(wait_until)
     navigation_url, _fragment = normalize_public_url(url, allow_http=allow_http)
     started = time.monotonic()
+    diagnostic_id = uuid.uuid4().hex[:12]
+    pre_navigation_deadline = started + pre_navigation_timeout_seconds
     websocket = cdp = session = None
     target_id: str | None = None
     stream_started = started
+    stage = "connect"
+
+    def _setup_remaining(next_stage: str) -> float:
+        nonlocal stage
+        stage = next_stage
+        remaining = pre_navigation_deadline - time.monotonic()
+        if remaining <= 0:
+            raise ObscuraClientError(
+                FetchFailure.PRE_NAVIGATION_TIMEOUT,
+                stage,
+                f"Obscura did not complete {stage} before its deadline",
+            )
+        return remaining
+
+    async def _setup_send(
+        transport: _RawCdp,
+        method: str,
+        params: dict | None = None,
+        *,
+        session_id: str | None = None,
+        setup_stage: str,
+    ) -> dict:
+        return await transport.send(
+            method,
+            params,
+            session_id=session_id,
+            timeout_seconds=_setup_remaining(setup_stage),
+            timeout_category=FetchFailure.PRE_NAVIGATION_TIMEOUT,
+            timeout_stage=setup_stage,
+        )
+
+    def _log_failure(exc: ObscuraClientError) -> None:
+        log = (
+            LOGGER.warning
+            if exc.category
+            in {FetchFailure.PRE_NAVIGATION_TIMEOUT, FetchFailure.NAVIGATION_TIMEOUT}
+            or exc.stage == "event-barrier"
+            else LOGGER.info
+        )
+        log(
+            "obscura fetch failed request_id=%s category=%s stage=%s "
+            "elapsed_seconds=%.3f target_created=%s",
+            diagnostic_id,
+            exc.category.value,
+            exc.stage,
+            time.monotonic() - started,
+            bool(target_id),
+        )
+
+    LOGGER.info(
+        "obscura fetch started request_id=%s wait_until=%s want=%s "
+        "pre_navigation_timeout_seconds=%.1f",
+        diagnostic_id,
+        wait_until,
+        want,
+        pre_navigation_timeout_seconds,
+    )
     try:
         from websockets.asyncio.client import connect
 
-        websocket = await connect(
-            cdp_url,
-            proxy=None,
-            open_timeout=10,
-            close_timeout=5,
-            max_size=max(body_limit, dom_limit) + (1 << 20),
-        )
+        try:
+            websocket = await connect(
+                cdp_url,
+                proxy=None,
+                open_timeout=min(10.0, _setup_remaining("connect")),
+                close_timeout=cleanup_command_timeout_seconds,
+                max_size=max(body_limit, dom_limit) + (1 << 20),
+            )
+        except asyncio.TimeoutError as exc:
+            raise ObscuraClientError(
+                FetchFailure.PRE_NAVIGATION_TIMEOUT,
+                "connect",
+                "Obscura did not complete connect before its deadline",
+            ) from exc
         cdp = _RawCdp(websocket)
-        await cdp.send("Network.clearBrowserCookies")
-        created = await cdp.send("Target.createTarget", {"url": "about:blank"})
+        await _setup_send(
+            cdp, "Network.clearBrowserCookies", setup_stage="clear-browser-cookies"
+        )
+        created = await _setup_send(
+            cdp,
+            "Target.createTarget",
+            {"url": "about:blank"},
+            setup_stage="create-target",
+        )
         target_id = str(created.get("targetId", ""))
         attached = next(
             (
@@ -443,26 +572,49 @@ async def fetch(
                 FetchFailure.PROTOCOL, "target", "Obscura target attachment is incomplete"
             )
         session = _Session(cdp, session_id)
-        await session.send("Network.enable")
-        await session.send("Page.enable")
-        await session.send("Page.setLifecycleEventsEnabled", {"enabled": True})
-        frame_tree = await session.send("Page.getFrameTree")
+        await _setup_send(
+            cdp, "Network.enable", session_id=session_id, setup_stage="network-enable"
+        )
+        await _setup_send(
+            cdp, "Page.enable", session_id=session_id, setup_stage="page-enable"
+        )
+        await _setup_send(
+            cdp,
+            "Page.setLifecycleEventsEnabled",
+            {"enabled": True},
+            session_id=session_id,
+            setup_stage="lifecycle-enable",
+        )
+        frame_tree = await _setup_send(
+            cdp,
+            "Page.getFrameTree",
+            session_id=session_id,
+            setup_stage="frame-tree",
+        )
         frame_id = frame_tree["frameTree"]["frame"]["id"]
         if pre_navigation_guard is not None and not pre_navigation_guard():
             raise ObscuraClientError(
                 FetchFailure.FINALIZED, "pre-navigation", "request invocation is finalized"
             )
+        stage = "navigate"
+        LOGGER.info(
+            "obscura pre-navigation completed request_id=%s elapsed_seconds=%.3f",
+            diagnostic_id,
+            time.monotonic() - started,
+        )
         nav_started = time.monotonic()
         nav = await session.send(
             "Page.navigate", {"url": navigation_url, "waitUntil": wait_until}
         )
         loader_id = str(nav.get("loaderId", ""))
+        stage = "event-barrier"
         await cdp.wait_for_event(
             "Page.frameStoppedLoading",
             lambda event: event.get("frameId") == frame_id,
             event_timeout_seconds,
         )
         navigation_seconds = time.monotonic() - nav_started
+        stage = "terminal-events"
         documents = [
             event.get("params", {})
             for event in cdp.events
@@ -505,8 +657,10 @@ async def fetch(
             )
         rendered_html = None
         if want in {"dom", "both"}:
+            stage = "dom-document"
             document_node = await session.send("DOM.getDocument", {"depth": 0})
             node_id = document_node.get("root", {}).get("nodeId")
+            stage = "dom-outer-html"
             outer = await session.send("DOM.getOuterHTML", {"nodeId": node_id})
             rendered_html = outer.get("outerHTML")
             if not isinstance(rendered_html, str):
@@ -520,13 +674,31 @@ async def fetch(
         body = None
         stream_started = time.monotonic()
         if want in {"body", "both"}:
-            body = await _drain_body(session, request_id, completed, body_limit)
+            stage = "body-stream"
+            body = await _drain_body(
+                session,
+                request_id,
+                completed,
+                body_limit,
+                diagnostic_id=diagnostic_id,
+                cleanup_command_timeout_seconds=cleanup_command_timeout_seconds,
+            )
         classification = (
             BodyClassification.TEXT
             if is_text_like_content_type(headers.get("content-type"))
             else BodyClassification.BINARY
         )
         challenge = _challenge(status, final_url, rendered_html)
+        LOGGER.info(
+            "obscura fetch completed request_id=%s status_class=%sxx navigation_seconds=%.3f "
+            "body_read_seconds=%.3f completed_body_bytes=%s challenge=%s",
+            diagnostic_id,
+            status // 100,
+            navigation_seconds,
+            time.monotonic() - stream_started,
+            completed,
+            challenge.value if challenge is not None else "none",
+        )
         return FetchResult(
             requested_url=url,
             navigation_url=navigation_url,
@@ -549,12 +721,15 @@ async def fetch(
             body_read_seconds=time.monotonic() - stream_started,
             challenge=challenge,
         )
-    except ObscuraClientError:
+    except ObscuraClientError as exc:
+        _log_failure(exc)
         raise
     except asyncio.TimeoutError as exc:
-        raise ObscuraClientError(
+        mapped = ObscuraClientError(
             FetchFailure.TRANSPORT, "event-barrier", "Obscura event barrier timed out"
-        ) from exc
+        )
+        _log_failure(mapped)
+        raise mapped from exc
     except Exception as exc:
         message = str(exc).lower()
         category = (
@@ -564,18 +739,46 @@ async def fetch(
             if "timeout" in message
             else FetchFailure.TRANSPORT
         )
-        raise ObscuraClientError(category, "cdp", "Obscura request failed") from exc
+        mapped = ObscuraClientError(category, stage, "Obscura request failed")
+        _log_failure(mapped)
+        raise mapped from exc
     finally:
         if cdp is not None and target_id:
             try:
-                await cdp.send("Target.closeTarget", {"targetId": target_id})
-            except Exception:
-                LOGGER.warning("obscura cleanup failed stage=target-close")
+                await cdp.send(
+                    "Target.closeTarget",
+                    {"targetId": target_id},
+                    timeout_seconds=cleanup_command_timeout_seconds,
+                    timeout_stage="cleanup-target-close",
+                )
+            except Exception as exc:
+                category = (
+                    exc.category.value
+                    if isinstance(exc, ObscuraClientError)
+                    else FetchFailure.TRANSPORT.value
+                )
+                LOGGER.warning(
+                    "obscura cleanup failed request_id=%s stage=target-close "
+                    "category=%s elapsed_seconds=%.3f",
+                    diagnostic_id,
+                    category,
+                    time.monotonic() - started,
+                )
         if websocket is not None:
             try:
                 await websocket.close()
             except Exception:
-                LOGGER.warning("obscura cleanup failed stage=connection-close")
+                LOGGER.warning(
+                    "obscura cleanup failed request_id=%s stage=connection-close "
+                    "elapsed_seconds=%.3f",
+                    diagnostic_id,
+                    time.monotonic() - started,
+                )
+        LOGGER.info(
+            "obscura cleanup completed request_id=%s elapsed_seconds=%.3f",
+            diagnostic_id,
+            time.monotonic() - started,
+        )
 
 
 def fetch_sync(*args, **kwargs) -> FetchResult:

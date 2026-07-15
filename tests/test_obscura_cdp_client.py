@@ -100,6 +100,30 @@ class ObscuraClientTests(unittest.TestCase):
 
         asyncio.run(exercise())
 
+    def test_cdp_command_timeout_is_typed_and_stage_specific(self):
+        class WebSocket:
+            async def send(self, _message):
+                return None
+
+            async def recv(self):
+                await asyncio.Future()
+
+        async def exercise():
+            with self.assertRaises(ObscuraClientError) as raised:
+                await _RawCdp(WebSocket()).send(
+                    "Network.clearBrowserCookies",
+                    timeout_seconds=0.001,
+                    timeout_category=FetchFailure.PRE_NAVIGATION_TIMEOUT,
+                    timeout_stage="clear-browser-cookies",
+                )
+            self.assertEqual(
+                raised.exception.category, FetchFailure.PRE_NAVIGATION_TIMEOUT
+            )
+            self.assertEqual(raised.exception.stage, "clear-browser-cookies")
+            self.assertNotIn("Network.clearBrowserCookies", str(raised.exception))
+
+        asyncio.run(exercise())
+
 
 if __name__ == "__main__":
     unittest.main()
