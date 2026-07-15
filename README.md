@@ -113,8 +113,9 @@ Most likely variables you want to change:
   - With the VPN enabled, Myst readiness requires a connected daemon, a usable
     `myst0` subnet, and a source-bound query to the provider resolver. Docker
     autoheal restarts only `myst-client` when that data-plane check fails; the
-    stable `netns-holder` namespace contains only final-hop route owners and
-    proxies; application containers do not share it.
+    stable `netns-holder` namespace contains final-hop route owners and proxies,
+    plus only Teep or Tailscale processes explicitly promoted by their Myst
+    routing switches; application containers do not share it.
     Explicit no-VPN models omit `autoheal` and its Docker socket entirely.
   - Core Onyx startup is independent of optional browsing and unrelated egress
     health. If CRW, SearXNG, Obscura, or their route is unavailable, that
@@ -123,7 +124,7 @@ Most likely variables you want to change:
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
   - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, dedicated embedding-shim upstream, and supported configured chat inference destinations through the host-capable final-hop proxy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
-  - Use an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`. Only those operator-local suffixes are queried through system/Docker DNS for complete-answer-set RFC1918 classification. Arbitrary names are never sent to system DNS merely because this option is enabled.
+  - Use an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`. Only those operator-local suffixes are queried through system/Docker DNS for complete-answer-set RFC1918 classification. An empty answer or resolution failure stops locally; a non-empty all-global answer returns to the selected public final hop, and a mixed answer fails. Arbitrary names are never sent to system DNS merely because this option is enabled.
   - With an upstream proxy, all other target names are given directly to that proxy. Without one, Myst provider DNS resolves them; explicit no-VPN mode uses system DNS.
   - Exact `host.docker.internal` is a narrower host-route exception and does not require the RFC1918 option. New installs seed Onyx SSRF protection to **Allow Private Network**, with loopback disabled; saved Admin Security Hardening settings remain authoritative and select the public or host-capable route for new MCP clients and Web crawls.
 
@@ -330,6 +331,7 @@ To set this up, in `.env.wrapper`, set `TAILSCALE_FUNNEL_ENABLED=true` and set `
 - By default, the tailscale service does not route through Mysterium VPN, to avoid linking your tailscale account to your search actvity at the Myst VPN exit server.
 - Tailscale uses the userspace networking mode, so no VPN activity is involved.
 - To route Tailscale through the VPN namespace instead, set `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` in `.env.wrapper`. **Warning:** this links your Tailscale identity to the VPN exit IP.
+- Selecting that override promotes the trusted Tailscale process into the shared routing namespace. Its configured application path still reaches nginx through the fixed frontend gateway, but the process shares the namespace's loopback, interfaces, routes, and policy listeners. Do not use this option for a component you do not trust with that network capability.
 
 Tailscale Funnel prerequisites:
 
@@ -360,6 +362,13 @@ TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true
 ```
 
 The Makefile conditionally applies `docker-compose.teep-vpn.yml` and/or `docker-compose.tailscale-vpn.yml` override files when these are set to `true`. These override files properly adjust host and port mappings of teep and tailscale for the VPN interface. Restart the stack after changing these settings.
+
+These switches deliberately promote trusted Teep or Tailscale processes into
+the shared routing namespace. A promoted process shares its loopback,
+interfaces, routes, and final-hop proxy listeners; the fixed Teep and frontend
+gateways constrain how Onyx reaches those services, not what a compromised
+promoted process could reach. Onyx applications, CRW, Obscura, SearXNG, and
+executor pods remain outside that namespace.
 
 #### Optional: Network Access for the Code-Interpreter
 

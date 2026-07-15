@@ -123,11 +123,20 @@ Use the same final-hop model as the isolation prerequisite:
 
 - clients reach only hardened fixed TCP bridges;
 - bridges forward to fixed listener ports in `netns-holder`;
-- final-hop proxy processes accept only their configured bridge peers;
+- final-hop proxy processes accept their configured bridge peers from
+  non-loopback networks and trusted co-residents through shared namespace
+  loopback;
 - the proxy parses HTTP framing, validates destinations, selects DNS/upstream
   behavior, pins direct addresses, and establishes the connection; and
 - no caller can select a resolver, upstream proxy, source address, or route
   class.
+
+Bridge-peer authentication is not isolation between `netns-holder`
+co-residents. Myst and the final-hop proxies remain trusted, and any Teep or
+Tailscale process deliberately promoted by its Myst-routing switch shares the
+namespace's loopback, interfaces, routes, and listeners. This plan must retain
+that explicit trust model or move such a component out of the namespace; it
+must not describe fixed gateways as a co-resident sandbox.
 
 As part of the atomic migration, move the generic implementation from the
 legacy `crw/` path to a neutral location and rename `PREFETCH_*` vocabulary.
@@ -263,6 +272,8 @@ Add deterministic unit and effective-Compose tests for:
   denial of all host-route exceptions;
 - exact host and opt-in RFC1918 behavior only on the host proxy;
 - HTTP request-smuggling/framing defenses and bridge source authentication;
+- CRLF-only field framing, forbidden-control rejection, strict chunk-extension
+  and trailer validation, and fail-closed empty/error operator-local DNS;
 - absence of any broker protocol, credential, capacity lease, or total tunnel
   deadline;
 - bridge hardening, fixed destinations, network separation, and inability to

@@ -732,9 +732,11 @@ CRW :3010 ──HTTP proxy──> crw-prefetch-bridge :3128
      may then escalate to CDP.
    - **Request framing**: rejects conflicting or malformed `Content-Length`,
      rejects requests that combine `Content-Length` with `Transfer-Encoding`,
-     and requires transfer codings to end in exactly one `chunked` coding.
-     Valid fixed-length and chunked bodies, chunk extensions, and trailers are
-     streamed without imposing a wrapper size cap.
+     requires transfer codings to end in exactly one `chunked` coding, requires
+     CRLF field lines, and rejects forbidden control characters. Chunk-size
+     lines use validated extension syntax, and trailers receive the same field
+     validation plus a framing-field denylist. Valid fixed-length and chunked
+     bodies are streamed without imposing a wrapper size cap.
 5. The CDP shim strips `proxyServer` from `Target.createBrowserContext` as a
    safety net. In the compose default, CRW uses `HTTP_PROXY`/`HTTPS_PROXY`
    rather than `CRW_CRAWLER__PROXY`, so `REQUEST_PROXY` is not set and CRW
@@ -747,12 +749,20 @@ Direct sockets have no internet or stack route; the bridge reaches a separate
 caller network and the shared search-blocking public policy. Only its
 final-hop route owner shares the trusted routing namespace.
 
-Each final-hop proxy listener resolves and accepts only its configured bridge
-peers, plus loopback for its local healthcheck. Generic Onyx and Obscura
+Each final-hop proxy listener resolves its configured bridge peers while
+authenticating each connection and accepts those peers plus loopback for local
+health checks. Generic Onyx and Obscura
 bridges share the same public listener; CRW prefetch and optional executor
 bridges share the search-blocking listener. Their caller and policy-side
 networks remain separate. The host listener has an immutable host route class
 and is inaccessible to browser, prefetch, and executor bridges.
+
+Loopback is shared by every trusted process in `netns-holder`; bridge-peer
+authentication does not isolate co-resident processes. Myst and the final-hop
+proxies are trusted accordingly. Enabling Myst routing for Teep or Tailscale
+deliberately promotes that trusted component into the same namespace, with
+access to its loopback listeners, interfaces, and routes. Restricted callers
+and executor pods remain outside it.
 
 The local policy healthcheck is routing-aware. In direct VPN mode it verifies
 the fixed provider-DNS path; in explicit no-VPN mode it uses the explicitly
@@ -774,8 +784,11 @@ In VPN mode, a public upstream-proxy hostname is bootstrapped through the Myst
 provider resolver and connected by IP. An RFC1918 IPv4 literal needs no DNS
 and receives only its exact Myst route exemption; `host.docker.internal` uses
 Docker resolution and its existing narrow route. The three operator-local
-suffixes use system DNS only with `EGRESS_ALLOW_RFC1918=true`. The
-final-hop policy never sends browsing target hostnames to Docker DNS in
+suffixes use system DNS only with `EGRESS_ALLOW_RFC1918=true`. The target path
+fails closed on an empty or failed operator-local lookup instead of forwarding
+that name to Myst DNS or the upstream proxy. A non-empty all-global answer
+returns to the selected public final hop; mixed answers fail. The final-hop
+policy never sends browsing target hostnames to Docker DNS in
 upstream-proxy mode. CRW's earlier synthetic preflight may pass through
 Docker's embedded resolver, but its only upstream is the loopback-only
 `crw-validation-dns` process and no target query leaves CRW's namespace.
@@ -1532,7 +1545,7 @@ COMPOSE_FILE=docker-compose.yaml:docker-compose.full.yml \
 |----------|---------|-------------|
 | `PREFETCH_PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PREFETCH_PROXY_PORT` | `3128` | Listen port |
-| `EGRESS_PROXY_ALLOWED_CLIENT_HOSTS` | required except for literal-loopback listeners | Comma-separated dedicated bridge service names allowed to connect; an empty list is valid only when `PREFETCH_PROXY_HOST` is a literal loopback address. |
+| `EGRESS_PROXY_ALLOWED_CLIENT_HOSTS` | required except for literal-loopback listeners | Comma-separated dedicated bridge service names resolved while authenticating each connection. An empty list is valid only when `PREFETCH_PROXY_HOST` is a literal loopback address. Co-resident trusted processes are accepted through shared loopback. |
 | `EGRESS_ROUTE_CLASS` | `public` | Fixed listener route class: `public` or `host`. Compose sets it explicitly on every restricted listener; it is not a user-selected request field. |
 | `EGRESS_ALLOW_RFC1918` | `false` | Enables the documented RFC1918 literal/operator-local-name exceptions only when `EGRESS_ROUTE_CLASS=host`; public listeners set it explicitly to `false`. |
 | `EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS` | empty; the full stack sets exact `doc-drop-web:8091` authority on the host final-hop proxy | Exact stack-owned `host:port` authorities allowed through their fixed internal gateway despite normal private/cleartext blocking. Valid only for the `onyx-helper` host route; configuring it on a public route or another policy fails startup. This is not a general bypass list. |

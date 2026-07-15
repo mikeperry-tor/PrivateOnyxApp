@@ -35,7 +35,9 @@ policy-side networks under the `myst-client` alias. The host-capable proxy is se
 Identical public policies share a process: generic Onyx and Obscura use one
 listener, while CRW prefetch and optional executors use the search-blocking
 listener. Each listener has an explicit bridge-peer allowlist and immutable
-route-class configuration; the caller networks remain separate.
+route-class configuration; the caller networks remain separate. Local health
+checks and other trusted `netns-holder` co-residents share namespace loopback
+and are intentionally outside bridge-peer authentication.
 
 The final-hop proxy itself performs HTTP framing checks, destination policy,
 authoritative target DNS, address pinning for direct connections, upstream
@@ -49,8 +51,10 @@ The security boundary is application network placement, not the number of
 proxy processes between an application and the Internet. Applications cannot
 address `netns-holder` directly; they can address only their fixed bridge. A
 bridge cannot select a different listener. Each listener accepts only the
-resolved address of its configured bridge peer and has a fixed public or host
-route class.
+resolved address of its configured bridge peer from non-loopback networks and
+has a fixed public or host route class. Trusted co-residents can reach all
+namespace loopback listeners; placing a service in `netns-holder` accepts that
+broader trust boundary.
 
 The previous broker repeated policy after an isolated policy process, but both
 components were custom Python parsers handling attacker-influenced streams.
@@ -121,9 +125,12 @@ Required service traffic uses explicit internal networks and service DNS:
 Docker Desktop does not activate published ports on containers attached only
 to internal networks. Nginx and doc-drop therefore remain internal and use
 hardened fixed-destination publishers on a non-masqueraded host edge. Optional
-Tailscale reaches nginx only through a fixed frontend gateway. Myst-routed
-Teep likewise uses a fixed gateway rather than sharing a caller network with
-`netns-holder`.
+Tailscale's configured path reaches nginx only through a fixed frontend
+gateway. Myst-routed Teep likewise uses a fixed gateway rather than sharing an
+Onyx caller network with `netns-holder`. Selecting either routing override
+deliberately promotes that trusted process into `netns-holder`, where it shares
+loopback, interfaces, routes, and policy listeners; the fixed gateway is an
+application-ingress boundary, not a sandbox between co-residents.
 
 The Web Connector sends the stable `http://doc-drop-web:8091/` identity through
 the host proxy. A fixed gateway with that alias joins only the host policy-side
@@ -145,8 +152,9 @@ Current request/setup bounds are:
 - each client proxy header line: 10 seconds.
 
 Framed request bodies, chunk-size lines, trailers, and established tunnel
-relay have no proxy-imposed deadline. Framing validation still rejects
-ambiguous, malformed, or prematurely closed bodies.
+relay have no proxy-imposed deadline. Framing validation requires CRLF field
+lines, rejects forbidden control characters, validates chunk extensions and
+trailers, and rejects ambiguous, malformed, or prematurely closed bodies.
 
 The 15-second timer covers reaching the configured proxy endpoint, not the
 remote circuit construction performed after a connection to a local Tor
@@ -185,15 +193,18 @@ The implementation is accepted only while tests prove:
 - public and host bridges have distinct caller/policy-side networks and fixed
   destination ports;
 - final-hop proxies share only the trusted namespace, run hardened, enforce
-  explicit bridge-peer allowlists and route classes, and expose no host port;
+  explicit bridge-peer allowlists for non-loopback callers and route classes,
+  and expose no host port; trusted co-residents and local health checks share
+  namespace loopback intentionally;
 - application, browser, and executor networks cannot reach alternate route
   listeners or trusted namespace networks;
 - public/private destination classification, mixed-answer rejection, exact
   host behavior, RFC1918 opt-in, upstream modes, and HTTP framing fail closed;
 - every restricted listener declares its public or host route class explicitly,
   and exact trusted internal authorities fail startup outside the host route;
-- VPN and no-VPN upstream-proxy bootstrap use their documented resolvers, and
-  all-global operator-local answers return to the selected final-hop resolver;
+- VPN and no-VPN upstream-proxy bootstrap use their documented resolvers,
+  failed or empty operator-local lookups fail locally, and non-empty all-global
+  operator-local answers return to the selected final-hop resolver;
 - doc-drop uses only its exact host proxy gateway;
 - VPN/no-VPN Compose models and the combined upstream-proxy, executor-network,
   Myst-routed Teep, and Myst-routed Tailscale overlays preserve route isolation;

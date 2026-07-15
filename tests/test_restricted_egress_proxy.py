@@ -330,6 +330,37 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         system_resolver.assert_awaited_once_with("public.internal", 443)
         myst_resolver.assert_awaited_once_with("public.internal", 443)
 
+    async def test_unresolved_operator_local_name_fails_without_external_fallback(
+        self,
+    ) -> None:
+        for resolver_result in (set(), OSError("not found")):
+            with self.subTest(resolver_result=resolver_result):
+                module = _load_module(
+                    "onyx-helper",
+                    {
+                        "EGRESS_ROUTE_CLASS": "host",
+                        "EGRESS_ALLOW_RFC1918": "true",
+                        "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080",
+                    },
+                )
+                system_resolver = AsyncMock()
+                if isinstance(resolver_result, Exception):
+                    system_resolver.side_effect = resolver_result
+                else:
+                    system_resolver.return_value = resolver_result
+                myst_resolver = AsyncMock()
+                with patch.object(
+                    module, "_resolve_system_host", system_resolver
+                ), patch.object(module, "_resolve_target_host", myst_resolver):
+                    reason, addresses = await module._validate_destination(
+                        "missing.internal", 443
+                    )
+
+                self.assertIn("operator-local DNS resolution", reason or "")
+                self.assertEqual(addresses, ())
+                system_resolver.assert_awaited_once_with("missing.internal", 443)
+                myst_resolver.assert_not_awaited()
+
     async def test_rfc1918_enabled_does_not_system_resolve_arbitrary_name(
         self,
     ) -> None:
@@ -568,11 +599,27 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 [("transfer-encoding", "chunked, gzip")]
             )
 
+    def test_header_line_requires_crlf_and_rejects_control_characters(self) -> None:
+        module = _load_module()
+        self.assertEqual(
+            module._parse_header_line(b"X-Test: value\twith-tab\r\n"),
+            ("x-test", "value\twith-tab"),
+        )
+        for line in (
+            b"X-Test: value\n",
+            b"X-Test : value\r\n",
+            b"X-Test: value\rInjected: true\r\n",
+            b"X-Test: value\x00hidden\r\n",
+            b"X-Test: value\x7fhidden\r\n",
+        ):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                module._parse_header_line(line)
+
     async def test_chunked_request_body_is_forwarded_with_trailers(self) -> None:
         module = _load_module()
         encoded = (
             b"4\r\nWiki\r\n"
-            b"5;source=test\r\npedia\r\n"
+            b'5;source=test; note="a;b"\r\npedia\r\n'
             b"0\r\nX-Checksum: yes\r\n\r\n"
         )
         reader = module.asyncio.StreamReader()
@@ -583,6 +630,28 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         await module._forward_request_body(reader, writer, None, ("chunked",))
 
         self.assertEqual(bytes(writer.data), encoded)
+
+    async def test_chunked_request_rejects_malformed_extensions_and_trailers(
+        self,
+    ) -> None:
+        module = _load_module()
+        malformed_bodies = (
+            b"4;bad=\r\ntest\r\n0\r\n\r\n",
+            b'4;bad="unterminated\r\ntest\r\n0\r\n\r\n',
+            b"4;bad=value\rhidden=true\r\ntest\r\n0\r\n\r\n",
+            b"0\r\nX-Test: value\rInjected: true\r\n\r\n",
+            b"0\r\nX-Test: value\n\r\n",
+        )
+        for encoded in malformed_bodies:
+            with self.subTest(encoded=encoded):
+                reader = module.asyncio.StreamReader()
+                reader.feed_data(encoded)
+                reader.feed_eof()
+                writer = self._Writer()
+                with self.assertRaisesRegex(ValueError, "invalid"):
+                    await module._forward_request_body(
+                        reader, writer, None, ("chunked",)
+                    )
 
     async def test_request_body_streaming_has_no_proxy_deadline(self) -> None:
         module = _load_module()

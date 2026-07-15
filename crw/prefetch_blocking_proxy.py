@@ -45,6 +45,9 @@ the proxy protocol. The host route consults system/Docker DNS for arbitrary
 targets only when explicit no-VPN mode is selected. With RFC1918 access
 enabled, VPN mode additionally permits classification of names ending in
 ``.local``, ``.internal``, or ``.home.arpa``.
+Failed or empty lookups for those operator-local names fail closed instead of
+falling through to Myst DNS or an external upstream proxy. Non-empty all-global
+answers return to the selected public final hop; mixed answers fail.
 
 When ``EGRESS_UPSTREAM_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
 routes its own upstream requests through that proxy. Restricted components
@@ -75,6 +78,11 @@ that path is enabled later.
 Code-interpreter executor pods use their own bridge into the same
 search-blocking policy process as CRW prefetch. They always see an ordinary
 local HTTP proxy, regardless of upstream proxy scheme.
+
+HTTP forwarding requires CRLF field lines, rejects forbidden control
+characters, validates chunk-extension and trailer syntax, and rejects
+ambiguous header framing before opening an origin connection. Chunked body
+syntax is validated incrementally before each line is forwarded.
 
 See ``docs/request_handling.md`` §1.6 for the full wait strategy and §1.7
 for the prefetch-blocking proxy design.
@@ -848,16 +856,15 @@ async def _validate_destination(
     ):
         try:
             candidate_ips = await _resolve_system_host(host, port)
-        except (socket.gaierror, OSError, ValueError):
-            candidate_ips = set()
-        if candidate_ips:
-            private = {_is_rfc1918(ip) for ip in candidate_ips}
-            if private == {True}:
-                return None, tuple(sorted(candidate_ips))
-            if private == {False}:
-                pass
-            else:
-                return "DNS returned mixed RFC1918 and non-RFC1918 addresses", ()
+        except (socket.gaierror, OSError, ValueError) as e:
+            return f"operator-local DNS resolution failed: {e}", ()
+        if not candidate_ips:
+            return "operator-local DNS resolution returned no addresses", ()
+        private = {_is_rfc1918(ip) for ip in candidate_ips}
+        if private == {True}:
+            return None, tuple(sorted(candidate_ips))
+        if private != {False}:
+            return "DNS returned mixed RFC1918 and non-RFC1918 addresses", ()
 
     if UPSTREAM_PROXY:
         # Every supported proxy protocol can carry a target hostname. Keep
@@ -1456,6 +1463,41 @@ def _is_search_engine(host: str) -> bool:
 
 
 _TOKEN_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+_BYTE_TOKEN = rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+_CHUNK_QUOTED_VALUE = (
+    rb'"(?:[\t !#-\[\]-~\x80-\xff]|\\[\t !-~\x80-\xff])*"'
+)
+_CHUNK_SIZE_LINE_RE = re.compile(
+    rb"^(" + rb"[0-9A-Fa-f]+" + rb")"
+    rb"(?:[ \t]*;[ \t]*"
+    + _BYTE_TOKEN
+    + rb"(?:[ \t]*=[ \t]*(?:"
+    + _BYTE_TOKEN
+    + rb"|"
+    + _CHUNK_QUOTED_VALUE
+    + rb"))?)*[ \t]*\r\n$"
+)
+
+
+def _parse_header_line(line: bytes) -> tuple[str, str]:
+    """Parse one strict CRLF-terminated HTTP field line."""
+    if not line.endswith(b"\r\n"):
+        raise ValueError("HTTP header line must end with CRLF")
+    field = line[:-2]
+    if field[:1] in (b" ", b"\t"):
+        raise ValueError("obsolete folded headers are not accepted")
+    if b":" not in field:
+        raise ValueError("malformed HTTP request header")
+    raw_name, raw_value = field.split(b":", 1)
+    try:
+        name = raw_name.decode("ascii").lower()
+    except UnicodeDecodeError as exc:
+        raise ValueError("invalid HTTP header name") from exc
+    if not _TOKEN_RE.fullmatch(name):
+        raise ValueError("invalid HTTP header name")
+    if any(byte < 0x20 and byte != 0x09 or byte == 0x7F for byte in raw_value):
+        raise ValueError("HTTP header value contains a forbidden control character")
+    return name, raw_value.decode("utf-8", errors="replace").strip(" \t")
 
 
 def _header_values(headers: list[tuple[str, str]], name: str) -> list[str]:
@@ -1524,12 +1566,10 @@ async def _forward_request_body(
 
     while True:
         size_line = await client_reader.readline()
-        if not size_line.endswith(b"\r\n"):
-            raise ValueError("invalid chunk-size line ending")
-        size_token = size_line[:-2].split(b";", 1)[0].strip()
-        if not size_token or any(ch not in b"0123456789abcdefABCDEF" for ch in size_token):
-            raise ValueError("invalid chunk size")
-        chunk_size = int(size_token, 16)
+        size_match = _CHUNK_SIZE_LINE_RE.fullmatch(size_line)
+        if size_match is None:
+            raise ValueError("invalid chunk-size line or extension")
+        chunk_size = int(size_match.group(1), 16)
         upstream_writer.write(size_line)
         await upstream_writer.drain()
 
@@ -1540,13 +1580,10 @@ async def _forward_request_body(
                     upstream_writer.write(trailer_line)
                     await upstream_writer.drain()
                     return
-                if not trailer_line.endswith(b"\r\n") or b":" not in trailer_line:
-                    raise ValueError("invalid chunk trailer")
-                trailer_name = trailer_line.split(b":", 1)[0].decode(
-                    "ascii", errors="strict"
-                ).lower()
-                if not _TOKEN_RE.fullmatch(trailer_name):
-                    raise ValueError("invalid chunk trailer name")
+                try:
+                    trailer_name, _trailer_value = _parse_header_line(trailer_line)
+                except ValueError as exc:
+                    raise ValueError(f"invalid chunk trailer: {exc}") from exc
                 if trailer_name in {
                     "connection",
                     "content-length",
@@ -1645,20 +1682,11 @@ async def handle_request(
                 return
             if line == b"\r\n":
                 break
-            if line[:1] in (b" ", b"\t"):
-                await _write_text_response(
-                    writer, 400, "Bad Request", "Obsolete folded headers are not accepted."
-                )
-                return
             try:
-                name, value = line.decode("utf-8", errors="replace").split(":", 1)
-                normalized_name = name.strip().lower()
-                if not _TOKEN_RE.fullmatch(normalized_name):
-                    raise ValueError("invalid header name")
-                headers.append((normalized_name, value.strip()))
-            except ValueError:
+                headers.append(_parse_header_line(line))
+            except ValueError as exc:
                 await _write_text_response(
-                    writer, 400, "Bad Request", "Malformed HTTP request header."
+                    writer, 400, "Bad Request", str(exc)
                 )
                 return
 

@@ -18,6 +18,16 @@ policies share a process: generic Onyx and Obscura use the public proxy, while
 CRW prefetch and optional executors use the search-blocking proxy. Their caller
 networks and hardened bridges remain separate; the host proxy is not shared.
 
+All processes in `netns-holder` share loopback, interfaces, routes, and every
+listener bound in that namespace. Final-hop listeners intentionally accept
+loopback for local health checks, so bridge-peer allowlists authenticate
+traffic arriving from bridge networks, not co-resident processes. Myst and the
+final-hop proxies are trusted on that basis. Enabling Myst routing for Teep or
+Tailscale deliberately promotes that trusted component into the same boundary;
+compromise of a promoted process is trusted-routing-namespace compromise. This
+does not expose namespace loopback to Onyx applications, restricted browser or
+search components, or executor pods.
+
 ## Reachability
 
 - API/background reach explicit backend/data/Teep networks and the public and
@@ -33,8 +43,11 @@ networks and hardened bridges remain separate; the host proxy is not shared.
   fixed gateway from the host proxy; a separate fixed display publisher uses
   a dedicated internal peer network. The embedding shim reaches its configured
   upstream only through the host bridge.
-- Optional Tailscale reaches nginx only through a fixed HTTP gateway and never
-  joins `onyx-frontend`. Myst-routed Teep similarly uses a fixed gateway.
+- Optional Tailscale's configured application path reaches nginx only through a
+  fixed HTTP gateway and never joins `onyx-frontend`. Myst-routed Teep similarly
+  uses a fixed gateway for application ingress. When either trusted process is
+  promoted into `netns-holder`, those gateways do not sandbox it from other
+  co-resident listeners or namespace routes.
 
 The former bundled Obscura MCP process, gateway, policy, secrets, and networks
 were removed. A saved Onyx MCP record that references it is invalid and should
@@ -121,6 +134,11 @@ target lookup. With RFC1918 access enabled, system DNS classification is
 limited to `.local`, `.internal`, and `.home.arpa`; other names never reach
 system DNS in VPN mode.
 
+For those three operator-local target suffixes, an empty answer or resolution
+failure fails closed locally instead of forwarding the name to Myst DNS or an
+external upstream proxy. A non-empty all-global answer returns to the selected
+public final hop; a mixed RFC1918/global answer fails closed.
+
 That DNS rule also applies while locating the configured upstream proxy:
 public proxy names use Myst provider DNS in VPN mode, while the three
 operator-local suffixes use system DNS only with `EGRESS_ALLOW_RFC1918=true`.
@@ -147,6 +165,12 @@ The code-interpreter control service retains Docker socket access. Compromise
 of that service is compromise of the Docker control plane; executor network
 isolation does not make that socket safe. Likewise, the trusted final-hop proxies
 are security-critical because they own final-hop DNS and connectivity.
+
+Myst-routed Teep and Tailscale are also trusted routing-namespace components,
+not restricted callers. Their fixed gateways preserve narrow normal service
+paths, but namespace co-residence grants raw access to the shared routing
+surface and loopback-bound listeners. Keep their VPN-routing switches off
+unless that trust expansion is intended.
 
 Failure is intentionally closed: stopping a final-hop proxy, bridge, Myst, or
 upstream disables its route without cross-class or direct fallback. Core Onyx

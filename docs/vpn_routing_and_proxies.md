@@ -16,7 +16,12 @@ enabled, and `docker-compose.proxy.yml` when `EGRESS_UPSTREAM_PROXY_URL` is
 non-empty. `EGRESS_ALLOW_HTTP_URLS` controls cleartext target URLs.
 
 No application-to-proxy credential or custom stream protocol is used. Network
-placement and each proxy's resolved bridge-peer allowlist authenticate callers.
+placement and each proxy's bridge-peer allowlist authenticate callers arriving
+from bridge networks. Peer names are resolved while each connection is
+authenticated, so bridge restarts do not leave a stale startup address.
+Loopback is intentionally accepted for local health checks and is shared by
+every trusted process in `netns-holder`; the allowlist is not a sandbox between
+co-resident processes.
 
 ## Network-enforced application isolation
 
@@ -56,7 +61,8 @@ Each bridge is a hardened numeric-nonroot TCP forwarder with exactly two
 internal networks: one application-side network and one dedicated
 policy-upstream network. The public and host bridges forward to distinct
 final-hop listeners in `netns-holder`. Each proxy resolves its configured
-bridge peers at startup and rejects every other source address. The public
+bridge peers while authenticating a connection and rejects every other
+non-loopback source address. The public
 proxy is shared by the generic Onyx and Obscura bridges because they enforce
 the same policy; their caller networks remain separate. The search-blocking
 proxy is likewise shared by the CRW prefetch and optional executor bridges.
@@ -134,8 +140,10 @@ upstream. Exact host and RFC1918 exceptions are never sent through it.
 
 When `EGRESS_ALLOW_RFC1918=true`, only names ending in `.local`, `.internal`,
 or `.home.arpa` are queried through system/Docker DNS for RFC1918
-classification. All-global answers are discarded and follow the normal
-selected final hop; mixed private/global answers fail closed. All other names
+classification. Empty answers and resolution failures fail closed locally and
+are not forwarded to Myst DNS or an external upstream proxy. Non-empty
+all-global answers are discarded and follow the normal selected final hop;
+mixed private/global answers fail closed. All other names
 remain private from the system resolver: they go directly to the configured
 upstream proxy, or through Myst provider DNS when no upstream is set. Users
 must use one of these operator-local suffixes or an RFC1918 IP literal for LAN
@@ -180,6 +188,13 @@ HTTP frontend gateway; the Tailscale process never joins
 `onyx-frontend`. Ordinary Teep uses `onyx-teep` plus its selected uplink;
 Myst-routed Teep is exposed through a fixed internal gateway instead of
 sharing the Onyx caller network with `netns-holder`.
+
+Routing Teep or Tailscale through Myst intentionally places that trusted
+process in `netns-holder`. It then shares the namespace's loopback, interfaces,
+routes, and final-hop listeners. The fixed gateways above constrain the normal
+application ingress path; they do not isolate a compromised promoted process
+from the trusted routing namespace. Onyx applications and restricted request
+components remain outside it.
 
 `autoheal` is selected as a VPN-only Compose layer and has only the narrow Myst
 recovery role. Explicit no-VPN models omit the service and Docker socket mount.

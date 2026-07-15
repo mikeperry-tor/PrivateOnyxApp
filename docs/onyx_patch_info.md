@@ -1179,11 +1179,13 @@ proxy discovery. When general cleartext URLs are disabled, the host final-hop pr
 permits plain HTTP for exact, proxy-resolved `host.docker.internal` and for
 RFC1918 literals or `.local`, `.internal`, and `.home.arpa` names whose
 complete proxy-validated answer set is entirely RFC1918 when
-`EGRESS_ALLOW_RFC1918=true`. Other target names never use system DNS in VPN
-mode: they go directly to a configured upstream proxy or use Myst provider
-DNS. This supports host and explicitly allowed LAN embedding endpoints without
-opening public HTTP destinations. The shim verifies upstream TLS, reuses
-connections, and fails closed.
+`EGRESS_ALLOW_RFC1918=true`. Empty or failed lookups for those operator-local
+suffixes fail closed without external fallback; non-empty all-global answers
+return to the selected public final hop, and mixed answers fail. Other target
+names never use system DNS in VPN mode: they go directly to a configured
+upstream proxy or use Myst provider DNS. This supports host and explicitly
+allowed LAN embedding endpoints without opening public HTTP destinations. The
+shim verifies upstream TLS, reuses connections, and fails closed.
 
 The shim implements the endpoints Onyx needs for local embedding startup and
 embedding requests:

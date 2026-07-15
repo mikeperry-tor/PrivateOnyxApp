@@ -761,8 +761,9 @@ Patch behavior:
   Teep base with a direct `trust_env=False` client, and fails on an unsupported
   configured chat-provider transport shape. Private image, speech, arbitrary
   embedding/reranking, and provider-discovery endpoints remain unsupported.
-- The public and host final-hop proxy processes accept only their configured
-  bridge peers, use fixed route classes, perform destination/DNS validation,
+- The public and host final-hop proxy processes accept configured bridge peers
+  from non-loopback networks and trusted `netns-holder` co-residents through
+  shared loopback, use fixed route classes, perform destination/DNS validation,
   and establish the authoritative connection. There is no intermediate stream
   protocol, generated route credential, admission lease, or fixed total
   CONNECT lifetime.
@@ -779,8 +780,9 @@ Upgrade checks:
   application direct egress.
 - Test every saved SSRF level, exact host, RFC1918 off/on, literal targets,
   `.local`/`.internal`/`.home.arpa` classification, arbitrary-name non-use of
-  system DNS, mixed DNS answers, loopback/link-local/metadata denial, and a
-  saved-level change between new clients or crawls.
+  system DNS, empty/error operator-local fail-closed behavior, mixed DNS
+  answers, loopback/link-local/metadata denial, and a saved-level change
+  between new clients or crawls.
 - Test wrong bridge peer, route class, peer network, malformed/oversized HTTP
   framing, cancellation, and half-close behavior. Public and host bridges must
   remain on distinct caller and policy-side networks and fixed listener ports.
@@ -1645,14 +1647,16 @@ Behavior:
   configured RFC1918 proxy literal.
 - Restricted components and executor pods always receive local bridge URLs.
 - Default SearXNG remains without general internet egress.
-- Each policy listener accepts only loopback health checks and its configured
-  bridge service. Onyx public/host routes use distinct bridge networks,
-  listener ports, source allowlists, and final-hop proxy processes. Upstream
-  proxy configuration is startup-validated and credentials are redacted from
-  logs.
+- Each policy listener accepts configured bridge services from non-loopback
+  networks and any trusted process sharing `netns-holder` loopback. Onyx
+  public/host routes use distinct bridge networks, listener ports, source
+  allowlists, and final-hop proxy processes. Promoting Teep or Tailscale into
+  the namespace is an explicit trust expansion. Upstream proxy configuration
+  is startup-validated and credentials are redacted from logs.
 - HTTP forwarding rejects ambiguous `Content-Length`/`Transfer-Encoding`
-  framing and streams valid fixed-length and chunked bodies without a
-  proxy-imposed body/chunk deadline.
+  framing, LF-only field lines, forbidden controls, malformed chunk extensions,
+  and malformed/forbidden trailers. It streams valid fixed-length and chunked
+  bodies without a proxy-imposed body/chunk deadline.
 
 Upgrade notes:
 
@@ -1667,8 +1671,9 @@ Upgrade notes:
   HTTP and SOCKS proxy modes. Keep deterministic regression cases for hostname
   normalization, bridge-client enforcement, explicit public/host route classes,
   host-only trusted authorities, startup validation, credential redaction,
-  request framing and deadline-free body streaming, provider-DNS use for public
-  proxy names, no-VPN system-DNS bootstrap, VPN routing for public proxy
+  strict field/chunk/trailer framing and deadline-free body streaming,
+  fail-closed empty/error operator-local resolution, provider-DNS use for
+  public proxy names, no-VPN system-DNS bootstrap, VPN routing for public proxy
   addresses, the optional-overlay Compose matrix, and the endpoint-scoped
   RFC1918 route.
 

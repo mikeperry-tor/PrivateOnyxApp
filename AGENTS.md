@@ -54,6 +54,11 @@ At a high level:
   Onyx exceptions. The exact internal Teep chat base is a startup-validated
   direct-service exception, and doc-drop Web Connector traffic uses an exact
   host final-hop gateway rather than a process-wide direct crawl.
+- Myst and the final-hop proxies are trusted routing-namespace processes.
+  Enabling Myst routing for Teep or Tailscale deliberately promotes that
+  trusted component into the same namespace, including its loopback,
+  interfaces, routes, and policy listeners. Their fixed gateways constrain
+  application ingress; they are not a sandbox between co-resident processes.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 
 Those bullets are only a map. Read the docs above before changing any runtime path.
@@ -136,7 +141,9 @@ This stack protects private research, document contents, browsing behavior, infe
   Public upstream-proxy names and addresses must use provider DNS and the VPN
   route in VPN mode; exact host and RFC1918-literal proxy endpoints use only
   their documented narrow route exceptions, while named operator-local
-  proxies require the RFC1918 opt-in. Onyx
+  proxies require the RFC1918 opt-in. Empty or failed operator-local target
+  lookups fail closed without external fallback; only non-empty all-global
+  answers return to the selected public final hop. Onyx
   applications must never rejoin `netns-holder` or gain direct fallback when
   VPN, policy-proxy, or bridge connectivity fails.
 - Request handling: keep supported search engines routed through the custom CRW/SearXNG path; preserve CRW/Obscura rendering, prefetch blocking, per-host rate control, anti-bot visibility, and the documented CDP shim behavior. Do not replace this path with plain HTTP fetching or fixed sleeps.

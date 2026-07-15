@@ -276,7 +276,8 @@ fixed exact-host exception even when public cleartext URLs are disabled;
 arbitrary public HTTP destinations remain blocked. RFC1918 HTTP destinations
 are allowed only on the host route when `EGRESS_ALLOW_RFC1918=true`. Use an
 RFC1918 literal or a `.local`, `.internal`, or `.home.arpa` name whose complete
-DNS answer set validates as RFC1918.
+DNS answer set validates as RFC1918. Empty or failed lookups for those
+operator-local suffixes fail closed without external DNS/proxy fallback.
 
 ## Why The Shim Exists
 
