@@ -41,6 +41,10 @@ Audit these Obscura 0.1.10 areas (or their new equivalents):
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
 - proxy resolution, redirect/subresource enforcement, logging/full-URL
   exposure, file-access guards, and the accepted ES-module local-file path.
+- bounded structural challenge parsing that excludes script/style/template/
+  noscript content; positive status, route, title, visible-prompt, and combined
+  visible-plus-structure fixtures; and negative script-only, iframe-only, and
+  ordinary article-text fixtures.
 
 Run tagged-image capability tests, not only fake CDP fixtures. Prove static and
 JS HTML, HTTP and JavaScript redirects, PDF, accepted raw text, unsupported and

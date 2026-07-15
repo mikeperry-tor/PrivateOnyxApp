@@ -47,13 +47,7 @@ BLOCK_MARKER_XPATH = (
     'or contains(translate(@action, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", '
     '"abcdefghijklmnopqrstuvwxyz"), "/sp/captcha") '
     'or contains(translate(@action, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", '
-    '"abcdefghijklmnopqrstuvwxyz"), "turing")] '
-    '| //iframe[contains(translate(@src, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", '
-    '"abcdefghijklmnopqrstuvwxyz"), "recaptcha") '
-    'or contains(translate(@src, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", '
-    '"abcdefghijklmnopqrstuvwxyz"), "hcaptcha") '
-    'or contains(translate(@src, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", '
-    '"abcdefghijklmnopqrstuvwxyz"), "challenge")]'
+    '"abcdefghijklmnopqrstuvwxyz"), "turing")]'
 )
 
 

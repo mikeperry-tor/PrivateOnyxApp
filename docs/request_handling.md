@@ -88,6 +88,15 @@ an unconditional `IO.close`. Plain and base64 chunks are counted as actual
 bytes. The client drains and closes an oversized stream before returning a
 typed failure.
 
+Challenge classification uses terminal HTTP status, terminal route, and a
+bounded structural parse of at most 256 KiB of rendered HTML. HTTP 401/402/403
+and 429 remain authoritative denial/rate-limit signals. CAPTCHA classification
+requires a challenge route or title, a strong visible verification phrase, or
+visible CAPTCHA text paired with challenge form/iframe structure. Script,
+style, template, and noscript text is excluded, and an embedded CAPTCHA iframe
+or library alone is not a challenge. Diagnostics report only the sanitized
+signal name, never matching page text or markup.
+
 The built-in crawler dispatches the same-navigation result as follows:
 
 - PDF is recognized by terminal URL, MIME type, or PDF magic and parsed with

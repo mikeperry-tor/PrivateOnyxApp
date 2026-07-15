@@ -18,8 +18,9 @@ import time
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
+from html.parser import HTMLParser
 from typing import Callable, Literal
-from urllib.parse import SplitResult, urlsplit, urlunsplit
+from urllib.parse import SplitResult, unquote, urlsplit, urlunsplit
 
 LOGGER = logging.getLogger("private_onyx_obscura")
 PRE_NAVIGATION_TIMEOUT_SECONDS = 45.0
@@ -232,15 +233,125 @@ def _content_type(headers: dict[str, str]) -> tuple[str | None, str | None]:
     return essence, charset
 
 
-def _challenge(status: int, final_url: str, html: str | None) -> FetchFailure | None:
+class _ChallengeSignals(HTMLParser):
+    """Extract bounded challenge signals without treating script text as content."""
+
+    _IGNORED = frozenset({"script", "style", "template", "noscript"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.ignored_depth = 0
+        self.title_depth = 0
+        self.visible: list[str] = []
+        self.title: list[str] = []
+        self.challenge_structure = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in self._IGNORED:
+            self.ignored_depth += 1
+            return
+        if self.ignored_depth:
+            return
+        if tag == "title":
+            self.title_depth += 1
+        values = {name.lower(): (value or "").lower() for name, value in attrs}
+        candidate = values.get("action", "") if tag == "form" else values.get("src", "")
+        if tag == "form" and any(
+            marker in candidate for marker in ("/sorry/", "/captcha", "/sp/captcha", "turing")
+        ):
+            self.challenge_structure = True
+        if tag == "iframe" and any(
+            marker in candidate for marker in ("recaptcha", "hcaptcha", "/challenge")
+        ):
+            self.challenge_structure = True
+
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in self._IGNORED:
+            self.ignored_depth = max(0, self.ignored_depth - 1)
+            return
+        if not self.ignored_depth and tag == "title":
+            self.title_depth = max(0, self.title_depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self.ignored_depth or not data.strip():
+            return
+        self.visible.append(data)
+        if self.title_depth:
+            self.title.append(data)
+
+
+def _challenge_details(
+    status: int, final_url: str, html: str | None
+) -> tuple[FetchFailure | None, str]:
     if status == 429:
-        return FetchFailure.RATE_LIMITED
+        return FetchFailure.RATE_LIMITED, "http-429"
     if status in {401, 402, 403}:
-        return FetchFailure.ACCESS_DENIED
-    bounded = (html or "")[:262_144].lower()
-    if any(token in bounded for token in ("captcha", "verify you are human", "unusual traffic")):
-        return FetchFailure.CAPTCHA
-    return None
+        return FetchFailure.ACCESS_DENIED, "http-denial-status"
+
+    parser = _ChallengeSignals()
+    try:
+        parser.feed((html or "")[:262_144])
+        parser.close()
+    except Exception:
+        return None, "html-signal-parse-failed"
+
+    visible = " ".join(" ".join(parser.visible).lower().split())
+    title = " ".join(" ".join(parser.title).lower().split())
+    parsed_url = urlsplit(final_url)
+    route = unquote(f"{parsed_url.path}?{parsed_url.query}").lower()
+
+    if any(
+        marker in route
+        for marker in ("/sorry/", "/captcha", "/sp/captcha", "/challenge/", "/verify/")
+    ):
+        return FetchFailure.CAPTCHA, "terminal-challenge-route"
+    if any(
+        marker in title
+        for marker in (
+            "verify you are human",
+            "captcha",
+            "attention required",
+            "security check",
+            "just a moment",
+        )
+    ):
+        return FetchFailure.CAPTCHA, "challenge-title"
+    if any(
+        marker in visible
+        for marker in (
+            "verify you are human",
+            "complete the captcha",
+            "solve the captcha",
+            "unusual traffic from your computer network",
+            "checking your browser before accessing",
+        )
+    ):
+        return FetchFailure.CAPTCHA, "visible-human-verification"
+    if parser.challenge_structure and any(
+        marker in visible
+        for marker in (
+            "captcha",
+            "i am not a robot",
+            "i'm not a robot",
+            "verification required",
+        )
+    ):
+        return FetchFailure.CAPTCHA, "visible-structured-challenge"
+    if any(marker in title for marker in ("access denied", "request blocked", "forbidden")):
+        return FetchFailure.ACCESS_DENIED, "denial-title"
+    return None, "none"
+
+
+def _challenge(status: int, final_url: str, html: str | None) -> FetchFailure | None:
+    return _challenge_details(status, final_url, html)[0]
 
 
 async def _drain_body(
@@ -688,16 +799,21 @@ async def fetch(
             if is_text_like_content_type(headers.get("content-type"))
             else BodyClassification.BINARY
         )
-        challenge = _challenge(status, final_url, rendered_html)
-        LOGGER.info(
+        challenge, challenge_signal = _challenge_details(
+            status, final_url, rendered_html
+        )
+        completion_log = LOGGER.warning if challenge is not None else LOGGER.info
+        completion_log(
             "obscura fetch completed request_id=%s status_class=%sxx navigation_seconds=%.3f "
-            "body_read_seconds=%.3f completed_body_bytes=%s challenge=%s",
+            "body_read_seconds=%.3f completed_body_bytes=%s challenge=%s "
+            "challenge_signal=%s",
             diagnostic_id,
             status // 100,
             navigation_seconds,
             time.monotonic() - stream_started,
             completed,
             challenge.value if challenge is not None else "none",
+            challenge_signal,
         )
         return FetchResult(
             requested_url=url,

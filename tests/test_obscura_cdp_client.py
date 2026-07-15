@@ -15,6 +15,7 @@ from private_onyx_obscura import is_text_like_content_type  # noqa: E402
 from private_onyx_obscura import normalize_public_url  # noqa: E402
 from private_onyx_obscura import validate_wait_until  # noqa: E402
 from private_onyx_obscura.client import _RawCdp  # noqa: E402
+from private_onyx_obscura.client import _challenge_details  # noqa: E402
 
 
 class ObscuraClientTests(unittest.TestCase):
@@ -123,6 +124,59 @@ class ObscuraClientTests(unittest.TestCase):
             self.assertNotIn("Network.clearBrowserCookies", str(raised.exception))
 
         asyncio.run(exercise())
+
+    def test_challenge_detection_ignores_script_only_captcha_markers(self):
+        challenge, signal = _challenge_details(
+            200,
+            "https://example.com/article",
+            """
+            <html><head><title>Animal reaction times</title>
+            <script src="https://captcha.example/api.js">
+            const provider = "recaptcha";
+            </script></head>
+            <body><p>Cats can react faster than humans.</p>
+            <iframe src="https://captcha.example/recaptcha/widget"></iframe>
+            </body></html>
+            """,
+        )
+        self.assertIsNone(challenge)
+        self.assertEqual(signal, "none")
+
+    def test_challenge_detection_requires_visible_or_terminal_signal(self):
+        fixtures = (
+            (
+                "https://example.com/article",
+                "<title>Verify you are human</title><body>Please wait</body>",
+                "challenge-title",
+            ),
+            (
+                "https://example.com/challenge/managed",
+                "<title>Example</title><body></body>",
+                "terminal-challenge-route",
+            ),
+            (
+                "https://example.com/article",
+                "<body><form action='/captcha'>Complete the captcha</form></body>",
+                "visible-human-verification",
+            ),
+        )
+        for url, markup, expected_signal in fixtures:
+            with self.subTest(expected_signal=expected_signal):
+                challenge, signal = _challenge_details(200, url, markup)
+                self.assertEqual(challenge, FetchFailure.CAPTCHA)
+                self.assertEqual(signal, expected_signal)
+
+    def test_challenge_detection_preserves_http_status_classification(self):
+        challenge, signal = _challenge_details(
+            403, "https://example.com/", "<html></html>"
+        )
+        self.assertEqual(challenge, FetchFailure.ACCESS_DENIED)
+        self.assertEqual(signal, "http-denial-status")
+
+    def test_searxng_detector_does_not_block_on_iframe_alone(self):
+        source = (ROOT / "searxng/engines/_obscura.py").read_text()
+        self.assertNotIn("| //iframe", source)
+        self.assertIn('"abcdefghijklmnopqrstuvwxyz"), "/captcha")', source)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,43 @@ retains the reviewed one-navigation, event-barrier, actual-request body, typed
 failure, and cleanup contracts. Playwright remains pinned and image-validated
 for compatibility auditing; the derived SearXNG image contains no browser.
 
+### Initial-testing correction ledger
+
+This implemented plan is also the completion-audit record. During initial and
+subsequent testing, every correction within this plan's scope must update this
+ledger in the same change set as the code and the normative `docs/` files.
+Ledger entries supersede an earlier design statement in this plan where they
+conflict; reviewers should treat an unrecorded behavior correction as an
+incomplete plan update.
+
+- **2026-07-15 — resolver failures versus policy denials.** Final-hop CONNECT
+  and absolute-form HTTP forwarding now return HTTP 502 for NXDOMAIN, empty
+  answer sets, and resolver failures. HTTP 403 remains reserved for destination
+  policy denials. Browser navigation tunnel failures caused by resolution or
+  connection failure map to the typed transport result rather than a CDP
+  protocol error. Deterministic proxy/client tests and a live `myp.wtf`
+  NXDOMAIN attempt verified the distinction.
+- **2026-07-15 — bounded pre-navigation setup and diagnostics.** One cumulative
+  45-second client deadline now covers CDP connection, cookie clearing, target
+  creation/attachment, domain enablement, and frame-tree setup. Cleanup CDP
+  commands have a separate five-second bound. URL-free opaque correlation IDs,
+  exact stages, typed categories, elapsed times, status classes, bounded sizes,
+  challenge signals, and cleanup outcomes provide caller-side evidence despite
+  the pinned multi-worker child-log gap. This correction prevents one deferred
+  setup command from consuming Onyx's complete 120-second invocation and leaves
+  headroom below a SearXNG engine's 60-second outer timeout.
+- **2026-07-15 — CAPTCHA false positives from inactive page scripts.** The
+  shared detector no longer searches raw HTML for the substring `captcha`.
+  It parses at most 256 KiB, excludes script/style/template/noscript content,
+  and requires a terminal challenge route, challenge title, strong visible
+  verification phrase, or visible CAPTCHA prompt combined with challenge
+  form/iframe structure. The SearXNG post-fetch detector no longer treats an
+  iframe source alone as a blocking page; its title and challenge-form markers
+  remain. Three live article pages that previously failed because only bundled
+  scripts mentioned CAPTCHA returned HTTP 200 and became negative fixtures;
+  HTTP 403, visible verification, challenge-title/route, and structured prompt
+  cases remain positive fixtures.
+
 Deterministic validation passed at implementation time. A live explicit
 no-VPN run returned HTTP 200 for a direct built-in-crawler transport fetch of
 `https://example.com/`; live Google and Brave engine attempts reached their
@@ -1089,13 +1126,16 @@ Do not infer “no results” merely from zero parsed result cards. Each engine 
 commit a narrow `no_results_xpath` backed by a captured sanitized fixture; if
 no reviewed selector exists, zero cards take the selector-incompatibility row.
 Before either the no-results or organic-result selector, evaluate the exact
-shared block-marker XPath for: a title containing case-insensitive `captcha`,
+shared block-marker XPath for a title containing case-insensitive `captcha`,
 `access denied`, `verify you are human`, `unusual traffic`, or `too many
-requests`; a form action containing `/sorry/`, `/captcha`, `/sp/captcha`, or
-`turing`; or an iframe source containing `recaptcha`, `hcaptcha`, or
-`challenge`. Retain the existing narrower Bing and Startpage CAPTCHA selectors
-as additional engine-specific markers. Any marker change requires a sanitized
-positive and negative fixture so ordinary result text cannot trigger it.
+requests`, or a form action containing `/sorry/`, `/captcha`, `/sp/captcha`, or
+`turing`. The direct client has already evaluated bounded visible text, terminal
+challenge routes/titles, and visible prompts paired with challenge form/iframe
+structure while excluding inactive script/style/template/noscript content.
+An iframe source alone is not a blocking signal. Retain the existing narrower
+Bing and Startpage CAPTCHA selectors as additional engine-specific markers.
+Any marker change requires a sanitized positive and negative fixture so
+ordinary result text or bundled challenge libraries cannot trigger it.
 
 Return `EngineResults` or the exact result-list form required by the pinned
 offline processor. Remove CRW API URL/key handling, CRW JSON-envelope parsing,
