@@ -562,6 +562,14 @@ automatically launches `make embedserv-serve` when the shim uses the bundled
 default endpoint, `http://host.docker.internal:3210/v1/embeddings`. It leaves
 Teep and other custom upstream URLs alone. You can still run
 `make embedserv-serve` directly when you want the server in the foreground.
+`make down-full` stops only the bundled server that `make up-full` started; it
+does not stop a server that was launched manually.
+
+When the default endpoint is selected but neither an installed bundled server
+nor an already-running server is available, `make up-full` fails immediately
+with setup guidance. It also waits for an automatically launched server to
+listen and prints recent `embedserv/serve.log` output if startup fails, instead
+of surfacing only a later Compose health-check error.
 
 Installation and model download run on the host before the embedding shim is
 ready; they are not routed through the stack VPN. Standard `HTTP_PROXY`,

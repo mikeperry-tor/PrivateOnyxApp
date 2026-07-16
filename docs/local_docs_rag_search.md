@@ -349,10 +349,16 @@ make embedserv-serve
 
 Once the selected model is installed, `make up-full` automatically launches
 `make embedserv-serve` in the background when the shim uses the bundled default
-URL. It skips this startup when the selected model is not installed or when
-`ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` selects Teep or another custom service.
+URL. It skips this startup when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` selects
+Teep or another custom service. If the default URL is selected without an
+installed or already-running server, startup fails immediately with setup
+guidance. Automatic startup waits for the listener and shows recent log output
+directly if the process exits or times out.
 The background server writes to `embedserv/serve.log`; direct
-`make embedserv-serve` remains the foreground form.
+`make embedserv-serve` remains the foreground form. `make down-full` validates
+the recorded process identity before stopping an automatically launched
+server. Missing, stale, or reused PIDs are reported and ignored; manually
+launched servers are never stopped by this lifecycle hook.
 
 `make embedserv-install` installs from the hashed lock file with
 `--require-hashes`. To upgrade package versions during a stack upgrade, edit

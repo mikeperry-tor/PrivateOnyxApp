@@ -203,7 +203,7 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -388,6 +388,7 @@ down-lite:
 
 down-full:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
+	@"$${MAKE:-make}" embedserv-stop-if-started
 
 ps-lite:
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) ps
@@ -592,18 +593,89 @@ embedserv-start-if-installed:
 		echo "Embedding shim uses a custom upstream; not starting bundled MLX server: $$embeddings_url"; \
 		exit 0; \
 	fi; \
-	if [ ! -x "$$venv_server" ] || [ ! -d "$$model_dir" ]; then \
-		echo "Bundled MLX embedding server is not installed for $$model_repo; not starting it"; \
-		echo "Run 'make embedserv-install' to enable automatic startup with make up-full"; \
+	if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 3210), timeout=1); s.close()' >/dev/null 2>&1; then \
+		echo "An embedding server is already listening on 127.0.0.1:3210; not starting another one"; \
 		exit 0; \
 	fi; \
-	if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 3210), timeout=1); s.close()' >/dev/null 2>&1; then \
-		echo "Bundled MLX embedding server is already listening on 127.0.0.1:3210"; \
-		exit 0; \
+	if [ ! -x "$$venv_server" ] || [ ! -d "$$model_dir" ]; then \
+		echo "ERROR: the default embedding upstream is selected, but the bundled MLX server is not installed for $$model_repo"; \
+		echo "Run 'make embedserv-install' or configure ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL for Teep/custom embeddings"; \
+		exit 1; \
 	fi; \
 	echo "Starting bundled MLX embedding server for $$model_repo (log: $(EMBEDSERV_LOG))"; \
 	nohup "$${MAKE:-make}" embedserv-serve EMBEDSERV_SKIP_INSTALL=true >"$(EMBEDSERV_LOG)" 2>&1 & \
-	printf '%s\n' "$$!" >"$(EMBEDSERV_PID_FILE)"
+	pid=$$!; \
+	printf '%s\n' "$$pid" >"$(EMBEDSERV_PID_FILE)"; \
+	attempt=0; \
+	while [ "$$attempt" -lt 240 ]; do \
+		if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 3210), timeout=1); s.close()' >/dev/null 2>&1; then \
+			echo "Bundled MLX embedding server is listening on 127.0.0.1:3210"; \
+			exit 0; \
+		fi; \
+		if ! kill -0 "$$pid" 2>/dev/null; then \
+			echo "ERROR: bundled MLX embedding server exited during startup; recent log output follows:"; \
+			tail -n 40 "$(EMBEDSERV_LOG)"; \
+			rm -f -- "$(EMBEDSERV_PID_FILE)"; \
+			exit 1; \
+		fi; \
+		sleep 0.5; \
+		attempt=$$((attempt + 1)); \
+	done; \
+	echo "ERROR: bundled MLX embedding server did not listen on 127.0.0.1:3210 within 120 seconds"; \
+	tail -n 40 "$(EMBEDSERV_LOG)"; \
+	kill -TERM "$$pid"; \
+	exit 1
+
+# Stop only the make process recorded by the automatic full-mode startup. An
+# absent, exited, malformed, or reused PID is a diagnosed no-op so down-full is
+# not made brittle by stale host state. Foreground/manual servers are untouched.
+embedserv-stop-if-started:
+	@set -eu; \
+	if [ ! -f "$(EMBEDSERV_PID_FILE)" ]; then \
+		echo "No automatically started MLX embedding server PID is recorded"; \
+		exit 0; \
+	fi; \
+	pid=$$(sed -n '1p' "$(EMBEDSERV_PID_FILE)"); \
+	case "$$pid" in \
+		''|*[!0-9]*) \
+			echo "Ignoring malformed MLX embedding server PID file: $(EMBEDSERV_PID_FILE)"; \
+			rm -f -- "$(EMBEDSERV_PID_FILE)"; \
+			exit 0; \
+			;; \
+	esac; \
+	command_line=""; \
+	if current_command=$$(ps -p "$$pid" -o command= 2>/dev/null); then \
+		command_line="$$current_command"; \
+	fi; \
+	if [ -z "$$command_line" ]; then \
+		echo "Automatically started MLX embedding server is no longer running (stale PID $$pid)"; \
+		rm -f -- "$(EMBEDSERV_PID_FILE)"; \
+		exit 0; \
+	fi; \
+	case "$$command_line" in \
+		*' embedserv-serve EMBEDSERV_SKIP_INSTALL=true'*) ;; \
+		*) \
+			echo "PID $$pid no longer belongs to the automatically started MLX embedding server; leaving it untouched"; \
+			rm -f -- "$(EMBEDSERV_PID_FILE)"; \
+			exit 0; \
+			;; \
+	esac; \
+	echo "Stopping automatically started MLX embedding server (PID $$pid)"; \
+	if ! kill -TERM "$$pid"; then \
+		echo "ERROR: could not signal automatically started MLX embedding server PID $$pid"; \
+		exit 1; \
+	fi; \
+	attempt=0; \
+	while kill -0 "$$pid" 2>/dev/null && [ "$$attempt" -lt 50 ]; do \
+		sleep 0.1; \
+		attempt=$$((attempt + 1)); \
+	done; \
+	if kill -0 "$$pid" 2>/dev/null; then \
+		echo "ERROR: MLX embedding server PID $$pid did not stop after SIGTERM; inspect $(EMBEDSERV_LOG)"; \
+		exit 1; \
+	fi; \
+	rm -f -- "$(EMBEDSERV_PID_FILE)"; \
+	echo "Automatically started MLX embedding server stopped"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # VPN signup, order status, and balance
