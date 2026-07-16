@@ -51,6 +51,37 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
         self.assertEqual(expired.remaining(), 0.0)
         self.assertFalse(expired.permits_navigation())
 
+    def test_invocation_state_copies_partial_failure_records(self):
+        state = self.module.InvocationState(time.monotonic() + 10)
+        failures = [SimpleNamespace(url="https://example.com", failure_reason="denied")]
+        state.record_partial_failures(failures)
+        failures.clear()
+        recorded = state.get_partial_failures()
+        self.assertEqual(len(recorded), 1)
+        recorded.clear()
+        self.assertEqual(len(state.get_partial_failures()), 1)
+
+    def test_partial_failure_report_is_appended_only_to_partial_success(self):
+        response = SimpleNamespace(rich_response=object(), llm_facing_response="documents")
+        failures = [SimpleNamespace(url="https://example.com", failure_reason="denied")]
+
+        def build_failure_message(**kwargs):
+            self.assertEqual(kwargs["missing_document_ids"], [])
+            self.assertIs(kwargs["failed_web_fetches"], failures)
+            return "Failed to fetch content from URLs https://example.com (denied)"
+
+        result = self.module._append_partial_failure_report(
+            response, failures, build_failure_message
+        )
+        self.assertIn("documents\n\nPartial open_url failure report:", result.llm_facing_response)
+        self.assertIn("https://example.com (denied)", result.llm_facing_response)
+
+        all_failed = SimpleNamespace(rich_response=None, llm_facing_response="failed")
+        self.module._append_partial_failure_report(
+            all_failed, failures, build_failure_message
+        )
+        self.assertEqual(all_failed.llm_facing_response, "failed")
+
     def test_raw_text_decoding_is_strict_and_charset_bounded(self):
         result = SimpleNamespace(
             body=b"hello", body_classification=BodyClassification.TEXT, charset="utf-8"
@@ -74,6 +105,7 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
             'FetchFailure.PRE_NAVIGATION_TIMEOUT: "browser setup timed out before navigation"',
             source,
         )
+        self.assertIn("Partial open_url failure report:", source)
 
 
 if __name__ == "__main__":

@@ -82,6 +82,9 @@ finalization races before navigation, one release on every path, partial
 results, stable ordering, redirect correlation, content dispatch, limits, and
 external-provider non-interference. Do not add database/provider-row migration
 or startup enforcement of the operator's saved crawler choice.
+Verify mixed-success batches retain successful documents and citations while
+appending the final post-fallback per-URL failure reasons to the LLM-facing
+response; all-failure and timeout-only response forms must remain unchanged.
 
 ## SearXNG audit
 

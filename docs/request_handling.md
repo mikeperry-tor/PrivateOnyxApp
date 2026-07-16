@@ -153,6 +153,13 @@ status, challenge, type, parse, limit, and timeout failures become the normal
 unsuccessful `WebContent` result without hiding the reason or discarding other
 successful URLs.
 
+For a mixed result, successful documents and citations remain the primary tool
+response and a trailing `Partial open_url failure report` lists each final
+post-fallback failed URL with its sanitized reason. This closes an upstream
+presentation gap where per-URL reasons were emitted only when every URL failed.
+Timeout-only and all-failure responses keep their normal upstream form, and
+denial/challenge response bodies are never passed to the model.
+
 Operators must select **Onyx Web Crawler** in the Web Search Admin page to use
 this path. The wrapper does not rewrite saved provider rows or enforce a
 provider choice at startup. Deliberately selecting Firecrawl, Exa, or another

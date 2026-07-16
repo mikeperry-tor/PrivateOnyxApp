@@ -55,6 +55,15 @@ incomplete plan update.
   scripts mentioned CAPTCHA returned HTTP 200 and became negative fixtures;
   HTTP 403, visible verification, challenge-title/route, and structured prompt
   cases remain positive fixtures.
+- **2026-07-16 — partial-success failure visibility.** The pinned upstream
+  `OpenURLTool` formats per-URL failures only when every requested resource
+  fails; a mixed result previously returned successful documents while hiding
+  blocked, timed-out, or otherwise failed URLs from the model. The API patch
+  now records the final post-fallback `FailedFetch` list during result merging
+  and appends the existing sanitized upstream failure report to the LLM-facing
+  response whenever rich successful results also exist. All-failure and timeout
+  responses retain their upstream forms, successful documents/citations remain
+  unchanged, and no failure page body is exposed.
 
 Deterministic validation passed at implementation time. A live explicit
 no-VPN run returned HTTP 200 for a direct built-in-crawler transport fetch of
