@@ -162,9 +162,11 @@ finalization races before navigation, one release on every path, partial
 results, stable ordering, redirect correlation, content dispatch, limits, and
 external-provider non-interference. Do not add database/provider-row migration
 or startup enforcement of the operator's saved crawler choice.
-Verify mixed-success batches retain successful documents and citations while
-appending the final post-fallback per-URL failure reasons to the LLM-facing
-response; all-failure and timeout-only response forms must remain unchanged.
+In both stock and direct Obscura modes, verify mixed-success batches retain
+successful documents and citations while appending the final post-fallback
+per-URL failure reasons to the LLM-facing response; all-success, all-failure,
+and timeout-only response forms must remain unchanged. Confirm the shared
+failure-reporting patch is installed before the selected crawler transport.
 Inject a permanently blocked per-URL worker and prove completed siblings return
 in order before the outer deadline, the unfinished URL receives a visible
 failure, queued work cannot navigate after collection finalization, and the
@@ -182,17 +184,21 @@ For every custom engine verify:
 - URL/query/locale/safe-search/time/page construction;
 - sanitized selector fixtures, normalization, explicit no-results marker,
   parser mismatch, exact terminal hosts, and shared block markers;
-- one provider lease held through cleanup, exact monotonic 3.0-second start
-  interval, no queued busy-provider thread, and different-provider concurrency;
+- one atomic pre-thread reservation consumed only by its exact engine attempt,
+  one provider lease held through cleanup, exact monotonic 3.0-second start
+  interval, no queued busy-provider thread, no all-unavailable fan-out, and
+  visible unresponsive records for pre-execution unavailability, and
+  different-provider concurrency;
 - CAPTCHA, rate-limit, and access-denied exceptions use the ordinary offline
   suspension path; non-blocking failures become unresponsive records;
 - engines and the CDP client never retry or select another provider;
 - enabled round-robin normal/last-resort order and same-request retry, plus
   disabled-round-robin selected-engine fan-out and disclosure warning.
 
-The derived SearXNG image must use hashed dependencies, one Granian process,
-one replica, no Chromium/browser download, no runtime installation, and a
-successful shared-client import validation.
+The derived SearXNG image must install its complete Python dependency set from
+the generated hashed `searxng/requirements.txt` lock, use one Granian process,
+one replica, perform no Chromium/browser download or runtime installation, and
+pass the shared-client import validation.
 
 ## Routing and Compose audit
 

@@ -115,7 +115,13 @@ def search(query: str, params: "RequestParams"):
         query_args["first"] = (params["pageno"] - 1) * 10 + 1
 
     target_url = f"{base_url}/search?{urlencode(query_args)}"
-    return _parse_html(_obscura.navigate("bing2", target_url))
+    return _parse_html(
+        _obscura.navigate(
+            "bing2",
+            target_url,
+            params.get(_obscura.RESERVATION_PARAM),
+        )
+    )
 
 
 def _strip_bing_redirect(href: str) -> str:

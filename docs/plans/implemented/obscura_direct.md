@@ -120,6 +120,32 @@ incomplete plan update.
   decision: every Obscura upgrade must repeat comparable blocked,
   empty-content, timeout, and success testing and reconsider the default as
   Obscura improves.
+- **2026-07-16 — atomic search admission and no unavailable fan-out.** The
+  pre-thread availability check and later provider lease were previously a
+  time-of-check/time-of-use pair: concurrent searches could both select one
+  provider, create two engine threads, and make the loser fail as busy. Provider
+  selection now atomically creates a tokenized reservation, the selected engine
+  consumes only that token when acquiring its cleanup-scoped lease, and every
+  pre-execution failure releases it. If all selected providers are busy,
+  cooling, or suspended, the request creates no provider thread instead of
+  disclosing the query to every candidate, and reports visible unavailable
+  provider records instead of a silent empty success.
+- **2026-07-16 — transport-independent mixed-result reporting.** Mixed-success
+  failure presentation is now installed before crawler transport selection, so
+  the default stock crawler and direct Obscura crawler both expose final
+  post-fallback per-URL failures while retaining successful documents and
+  citations. Direct-only document and wait configuration is imported and
+  validated only when direct mode is selected.
+- **2026-07-16 — configured direct main-response limit is authoritative.**
+  `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` now caps every retained direct-Obscura
+  main-response body, including HTML. The earlier fixed 20 MiB HTML response cap
+  is removed; the fixed 20 MiB serialized rendered-DOM and search-DOM caps remain.
+  An oversized stream is closed immediately rather than drained.
+- **2026-07-16 — generated SearXNG lock is the runtime source of truth.** The
+  derived image now installs its full Python dependency set from the generated,
+  hashed `searxng/requirements.txt`. The manually maintained runtime lock and
+  duplicate copied Playwright package were removed, so `make upgrade-python-deps`
+  updates the file actually consumed by the image build.
 
 ### Resolved initial-testing finding
 
@@ -853,7 +879,7 @@ category. SearXNG, not the shared client, logs any resulting suspension
 decision. Redact query values in these wrapper logs and
 never deliberately log bodies, DOM, cookies, authorization headers, proxy
 credentials, API keys, document contents, or CDP stream chunks. Identify
-connect, state clear, navigate, wait, body drain, parse, cleanup, and
+connect, state clear, navigate, wait, body stream, parse, cleanup, and
 final-hop-policy failures without exposing private content.
 
 Do not claim that this constitutes end-to-end log redaction. At Obscura
@@ -896,15 +922,16 @@ For retained-body access:
 3. open `Fetch.takeResponseBodyAsStream` at most once;
 4. call bounded `IO.read` repeatedly, decode only chunks explicitly marked
    base64, and increment the decoded entity-byte count before appending;
-5. reject as soon as the count exceeds the limit and require the drained count
-   to match the completed count when the protocol supplies one; and
+5. reject as soon as the count exceeds the limit and close immediately; at EOF,
+   require the streamed count to match the completed count when the protocol
+   supplies one; and
 6. call `IO.close` on success, EOF, timeout, oversize, decode failure,
    transport loss, and caller exception.
 
 Treat every Obscura text-classified retained body as potentially lossy
 semantic UTF-8. Report `original_byte_identity=false` and
 `lossy_conversion_possible=true` even when the authoritative pre-conversion
-count equals the drained UTF-8 count; equality validates only count accounting
+count equals the streamed UTF-8 count; equality validates only count accounting
 and never proves byte preservation. A mismatch proves conversion, truncation,
 or protocol inconsistency and is a typed failure. Accept text-classified raw
 content only when the declared charset is absent or normalizes to `utf-8`,
@@ -933,15 +960,15 @@ input, and diagnostics. Count actual bytes even when `Content-Length` is
 missing, false, duplicated, compressed, or combined unsafely with transfer
 encoding. Let the pinned Obscura HTTP stack reject invalid response framing;
 the client rejects ambiguous header metadata when it remains observable and
-always treats its completed/drained actual-byte count as authoritative.
+always treats its completed/streamed actual-byte count as authoritative.
 
-Preserve Onyx's separate 20 MiB HTML safety limit. Enforce it against both the
-completed main-response body and the UTF-8 byte size of serialized rendered
-DOM, because scripts may expand the DOM after the response. Document that the
-DOM-size check occurs after the current API has serialized it and therefore
-cannot prevent that transient allocation. Set both the internal search-body
-and serialized rendered-DOM limits to exactly 20 MiB. Increasing the
-raw-document limit must not raise either HTML or search limit.
+Use the configured raw-document limit for every completed main-response body,
+including HTML. Preserve a separate fixed 20 MiB limit for the UTF-8 byte size
+of serialized rendered DOM, because scripts may expand the DOM after the
+response. Document that the DOM-size check occurs after the current API has
+serialized it and therefore cannot prevent that transient allocation. Keep
+search DOM at exactly 20 MiB. Increasing the raw-document limit must not raise
+either rendered-DOM or search-DOM limit.
 
 Retain five as both the stack-owned internal `OnyxWebCrawler` per-invocation
 fetch-worker limit and the API-process-global browser admission limit, matching
@@ -1769,9 +1796,10 @@ Add deterministic unit and effective-Compose tests for:
   rendered DOM never marked response-byte-identical, unequal-count failure,
   exact MIME/extension/charset allowlists, declared
   non-UTF-8 text-classified failure, strict exact-byte charset decoding,
-  prefix-then-drain/close behavior, and `IO.close` on every failure path;
-- the separate 20 MiB main-response and rendered-DOM limit, script-expanded
-  DOM, bounded search DOM, raw-document limit parsing/overflow, canonical MiB
+  prefix-then-close behavior, and `IO.close` on every failure path;
+- the configured main-response limit including HTML, separate fixed 20 MiB
+  rendered-DOM limit, script-expanded DOM, bounded search DOM,
+  raw-document limit parsing/overflow, canonical MiB
   propagation, stream-retention consistency, and bounded active fetch
   concurrency;
 - Onyx strict patch success/drift failure in lite and full modes, built-in
@@ -1812,8 +1840,10 @@ Add deterministic unit and effective-Compose tests for:
 - SearXNG provider serialization by stable identity, an exact monotonic
   3.0-second minimum start interval with zero jitter, redirect accounting,
   different-provider concurrency, retained leases and eventual target cleanup,
-  busy/cooling-provider skipping before thread creation, absence of queued
-  provider threads, and single-Granian-process/single-replica topology; current
+  atomic tokenized reservation before thread creation, reservation release on
+  pre-execution failure, busy/cooling-provider skipping, no all-unavailable
+  fan-out, absence of queued provider threads, and single-Granian-process/
+  single-replica topology; current
   enabled round-robin selection and same-request retry, normal-before-last-
   resort ordering, removal of other selected engines when the custom pool is
   present, disabled-round-robin selected-engine fan-out, stock timeout/late-
@@ -1982,8 +2012,9 @@ The migration is complete only when:
 5. Final-hop proxies are the only custom egress enforcement processes; no
    broker or isolated duplicate policy stage exists.
 6. Long-lived CONNECT tunnels have no arbitrary proxy total lifetime.
-7. Document input byte limits, full-buffer residual memory risk, separate
-   HTML/DOM limits, fetch concurrency, and error reporting are tested without a
+7. The configured document input byte limit, including for HTML main responses,
+   full-buffer residual memory risk, separate fixed rendered-DOM limit, fetch
+   concurrency, and error reporting are tested without a
    parser sidecar or IPC protocol. PDF parsing stays close to pinned Onyx
    behavior, and its in-process pypdf paths are documented as not having a
    complete CPU, transient-memory, or wall-time bound. Text-classified bodies

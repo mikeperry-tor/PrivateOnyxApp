@@ -21,7 +21,7 @@ from private_onyx_obscura import validate_wait_until
 OPEN_URL_TIMEOUT_SECONDS = 120
 BROWSER_ATTEMPT_TIMEOUT_SECONDS = 105.0
 RESULT_COLLECTION_HEADROOM_SECONDS = 5.0
-HTML_LIMIT_BYTES = 20 * 1024 * 1024
+RENDERED_DOM_LIMIT_BYTES = 20 * 1024 * 1024
 ACTIVE_FETCHES = threading.BoundedSemaphore(5)
 _STATE: contextvars.ContextVar["InvocationState | None"] = contextvars.ContextVar(
     "wrapper_open_url_invocation_state", default=None
@@ -56,7 +56,6 @@ class InvocationState:
     deadline: float
     finalized: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
-    partial_failures: list[object] = field(default_factory=list)
 
     def finish(self) -> None:
         with self.lock:
@@ -68,15 +67,6 @@ class InvocationState:
     def permits_navigation(self) -> bool:
         with self.lock:
             return not self.finalized and self.deadline > time.monotonic()
-
-    def record_partial_failures(self, failures) -> None:
-        with self.lock:
-            self.partial_failures = list(failures)
-
-    def get_partial_failures(self) -> list[object]:
-        with self.lock:
-            return list(self.partial_failures)
-
 
 @dataclass(frozen=True)
 class CrawledSection:
@@ -132,20 +122,6 @@ def _reason(exc: ObscuraClientError) -> str:
         FetchFailure.PROTOCOL: f"browser protocol failed during {exc.stage}",
         FetchFailure.FINALIZED: "open_url invocation timed out before navigation",
     }.get(exc.category, "browser request failed")
-
-
-def _append_partial_failure_report(response, failures, build_failure_message):
-    if not failures or response.rich_response is None:
-        return response
-    failure_report = build_failure_message(
-        missing_document_ids=[], failed_web_fetches=failures
-    )
-    response.llm_facing_response = (
-        response.llm_facing_response
-        + "\n\nPartial open_url failure report: "
-        + failure_report
-    )
-    return response
 
 
 def _collect_url_results(
@@ -230,7 +206,7 @@ def _direct_fetch(url: str, state: InvocationState):
             wait_until=WAIT_UNTIL,
             allow_http=ALLOW_HTTP,
             body_limit=DOCUMENT_LIMIT_BYTES,
-            dom_limit=HTML_LIMIT_BYTES,
+            dom_limit=RENDERED_DOM_LIMIT_BYTES,
             want="both",
             request_timeout_seconds=attempt_timeout,
             pre_navigation_guard=state.permits_navigation,
@@ -264,8 +240,6 @@ def _direct_fetch(url: str, state: InvocationState):
             )
 
         if result.content_type in HTML_TYPES:
-            if result.completed_body_bytes > HTML_LIMIT_BYTES:
-                return _failure(url, "HTML response exceeded the 20 MiB safety limit")
             if not result.rendered_html:
                 return _failure(url, "rendered page was empty")
             parsed = web_html_cleanup(result.rendered_html)
@@ -332,11 +306,7 @@ def install() -> None:
         timer.daemon = True
         timer.start()
         try:
-            response = original_run(self, *args, **kwargs)
-            failures = state.get_partial_failures()
-            return _append_partial_failure_report(
-                response, failures, open_url_tool._build_failure_message
-            )
+            return original_run(self, *args, **kwargs)
         finally:
             state.finish()
             timer.cancel()
@@ -404,9 +374,6 @@ def install() -> None:
         all_urls,
         failed_web_fetches,
     ):
-        state = _STATE.get()
-        if state is not None:
-            state.record_partial_failures(failed_web_fetches)
         if not crawled_sections or not all(
             isinstance(item, CrawledSection) for item in crawled_sections
         ):
@@ -414,6 +381,9 @@ def install() -> None:
                 self, indexed_sections, crawled_sections, url_to_doc_id,
                 all_urls, failed_web_fetches,
             )
+        from open_url_failure_reporting_patch import record_failures
+
+        record_failures(failed_web_fetches)
         indexed_by_doc_id = {
             section.center_chunk.document_id: section for section in indexed_sections
         }

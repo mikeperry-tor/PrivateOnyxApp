@@ -46,6 +46,7 @@ class SearxngObscuraEngineTests(unittest.TestCase):
     def setUpClass(cls):
         obscura = types.ModuleType("searx.engines._obscura")
         obscura.navigate = lambda *_args: ""
+        obscura.RESERVATION_PARAM = "_wrapper_obscura_reservation_token"
 
         def mismatch(engine, _text, reason):
             raise ParserMismatch(f"{engine}: {reason}")
@@ -80,9 +81,10 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         with patch.object(self.obscura, "navigate", return_value=dom) as navigate:
             self.brave.search("private query", {"pageno": 1, "time_range": None})
         navigate.assert_called_once()
-        engine, target = navigate.call_args.args
+        engine, target, reservation = navigate.call_args.args
         self.assertEqual(engine, "brave2")
         self.assertIn("q=private+query", target)
+        self.assertIsNone(reservation)
 
     def test_every_custom_engine_declares_offline_contract(self):
         for path in sorted((ROOT / "searxng/engines").glob("*2.py")):

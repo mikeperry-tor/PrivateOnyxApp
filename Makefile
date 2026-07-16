@@ -268,7 +268,6 @@ searxng-build:
 	"$(CONTAINER_BIN)" build "$$@" \
 		--file "$(SEARXNG_DOCKERFILE)" \
 		--build-arg SEARXNG_UPSTREAM_IMAGE="$(SEARXNG_IMAGE)" \
-		--build-arg ONYX_BACKEND_IMAGE="$(ONYX_BACKEND_IMAGE)" \
 		--tag "$(SEARXNG_WRAPPER_IMAGE)" \
 		.
 

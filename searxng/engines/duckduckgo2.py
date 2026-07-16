@@ -51,7 +51,13 @@ def search(query: str, params: "RequestParams"):
     # we pass the query and let pageno>1 be a best-effort no-op (DDG HTML
     # returns ~30 results on the first page, enough for SearXNG aggregation).
     target_url = "https://html.duckduckgo.com/html/?" + urlencode(query_args)
-    return _parse_html(_obscura.navigate("duckduckgo2", target_url))
+    return _parse_html(
+        _obscura.navigate(
+            "duckduckgo2",
+            target_url,
+            params.get(_obscura.RESERVATION_PARAM),
+        )
+    )
 
 
 def _strip_ddg_redirect(href: str) -> str:

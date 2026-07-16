@@ -13,6 +13,9 @@
 > [Request handling](../request_handling.md). This remains the prerequisite for
 > [Direct Obscura request handling](obscura_direct.md), implemented on
 > 2026-07-15.
+> That later migration removed CRW and the CDP shim. References below to those
+> components describe the prerequisite's historical implementation state, not
+> the current runtime topology.
 
 ## Decision
 
@@ -33,10 +36,10 @@ Onyx application explicitly authorized for private destinations
 Each bridge is a fixed numeric-nonroot TCP forwarder with one caller network
 and one dedicated policy-side network. `netns-holder` joins the required
 policy-side networks under the `myst-client` alias. The host-capable proxy is separate.
-Identical public policies share a process: generic Onyx and Obscura use one
-listener, while CRW prefetch and optional executors use the search-blocking
-listener. Each listener has an explicit bridge-peer allowlist and immutable
-route-class configuration; the caller networks remain separate. Local health
+Identical public policies share a process: generic Onyx, Obscura, and optional
+executors use the public listener through distinct bridges and caller networks.
+Each listener has an explicit bridge-peer allowlist and immutable route-class
+configuration; the caller networks remain separate. Local health
 checks and other trusted `netns-holder` co-residents share namespace loopback
 and are intentionally outside bridge-peer authentication.
 
@@ -117,7 +120,7 @@ limited to the three documented suffixes and requires the RFC1918 opt-in.
 Required service traffic uses explicit internal networks and service DNS:
 
 - SearXNG through `searxng-service-gateway:8888`;
-- CRW through `crw-service-gateway:3010`;
+- Obscura CDP through the API-only `obscura-cdp-gateway:9222`;
 - code interpreter control at `code-interpreter:8000`;
 - Teep at `teep:8337`;
 - full-mode doc-drop identity at `doc-drop-web:8091`; and
@@ -177,9 +180,10 @@ upstream route.
 
 ## Removed scope
 
-The implementation also removed the bundled Obscura MCP service, unused
-SearXNG Valkey, bypassed upstream Onyx model-server services, fake CRW API
-credential, and duplicate browser/executor proxy processes. Existing saved MCP
+The implementation removed the bundled Obscura MCP service, unused SearXNG
+Valkey, bypassed upstream Onyx model-server services, and duplicate
+browser/executor proxy processes. The later direct-Obscura migration also
+removed CRW, its fake API credential, and the CDP shim. Existing saved MCP
 records that reference the removed service are invalid. Executor pods remain
 networkless by default;
 when enabled, they use their own restricted bridge and final-hop policy and do

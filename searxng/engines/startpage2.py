@@ -96,7 +96,13 @@ def search(query: str, params: "RequestParams"):
     query_args["cat"] = "web"
 
     target_url = "https://www.startpage.com/sp/search?" + urlencode(query_args)
-    return _parse_html(_obscura.navigate("startpage2", target_url))
+    return _parse_html(
+        _obscura.navigate(
+            "startpage2",
+            target_url,
+            params.get(_obscura.RESERVATION_PARAM),
+        )
+    )
 
 
 def _strip_startpage_redirect(href: str) -> str:

@@ -48,11 +48,9 @@ built-in `OnyxWebCrawler` URL-fetch path. It imports the single client in
   URLs retained for successful content and citations after redirects;
 - same-navigation PDF, HTML, and exact raw-text dispatch using pinned Onyx
   extractors;
-- mixed-result failure reporting that preserves successful documents while
-  appending sanitized per-URL reasons for blocked, unavailable, protocol, and
-  timed-out siblings;
-- a positive finite document byte limit, separate 20 MiB HTML/DOM bound,
-  existing post-parse character budgets, and normal unsuccessful
+- a positive finite configured main-response byte limit, including for HTML,
+  a separate fixed 20 MiB serialized-DOM bound, existing post-parse character
+  budgets, and normal unsuccessful
   `WebContent` results for per-URL failures;
 - strict source and result-cardinality validation.
 
@@ -80,6 +78,13 @@ failure and local Chromium's weaker containment inside `api_server`. Obscura
 document/wait settings do not apply. Wrapper character limits and
 mixed-success failure presentation remain separate retained patches.
 
+`sitecustomize_api_server/open_url_failure_reporting_patch.py` is installed
+before either transport is selected. It records the final post-fallback
+per-URL failures and appends the pinned upstream sanitized failure message when
+a batch also has rich successful results. It leaves all-success, all-failure,
+and timeout-only response forms unchanged, so the behavior is identical in
+stock and direct Obscura modes.
+
 The shared CDP client validates URL syntax without public DNS, tracks the
 terminal main-frame Document request, reads retained body streams with actual
 byte accounting, obtains rendered DOM, returns typed warning-level failures,
@@ -92,9 +97,10 @@ DOM, while PDF/raw/binary paths remain strict. See
 
 ## SearXNG overlay
 
-The derived `searxng/Dockerfile` installs build-time pinned, hashed Python
-dependencies and copies the audited Playwright 1.58 package from the pinned
-Onyx image. It downloads neither a browser nor packages at runtime. The
+The derived `searxng/Dockerfile` installs all build-time pinned Python
+dependencies, including the audited Playwright 1.58 client, from the generated
+hashed `searxng/requirements.txt` lock. It downloads neither a browser nor
+packages at runtime. The
 runtime direct client uses pinned WebSockets because Playwright's public page
 session attachment is incompatible with Obscura 0.1.10's reused flattened
 session identifier.
@@ -107,8 +113,11 @@ normalization, and explicit no-results detection. Parser mismatch is an
 unresponsive failure, not empty success.
 
 The SearXNG startup patch keeps the existing round-robin selection/retry and
-last-resort scoring behavior. It checks busy/cooling providers before thread
-creation and extends the ordinary offline processor's suspension path to
+last-resort scoring behavior. It atomically reserves a provider before thread
+creation, passes its opaque exact reservation token to that engine attempt, and
+does not fan out when every provider is busy, cooling, or suspended. That path
+adds visible unresponsive-engine records without creating browser threads. It
+extends the ordinary offline processor's suspension path to
 CAPTCHA, rate-limit, and access-denied exceptions. SearXNG continues to own
 timeouts, late results, unresponsive records, retry selection, and suspension.
 Disabling round robin deliberately restores ordinary selected-engine fan-out.

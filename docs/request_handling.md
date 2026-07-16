@@ -96,8 +96,8 @@ not per-user isolation.
 Rendered HTML comes from `DOM.getOuterHTML`. The terminal main-resource body
 comes from `Fetch.takeResponseBodyAsStream` followed by bounded `IO.read` and
 an unconditional `IO.close`. Plain and base64 chunks are counted as actual
-bytes. The client drains and closes an oversized stream before returning a
-typed failure.
+bytes. The client closes an oversized stream immediately and returns a typed
+failure; it does not continue consuming attacker-controlled bytes.
 
 Obscura 0.1.10 has a pinned retained-body limitation. Its per-page response
 cache evicts the oldest entry after `OBSCURA_NETWORK_BODY_BUFFER_ENTRIES`
@@ -145,10 +145,11 @@ identical. Declared non-UTF-8 text must satisfy the strict permitted decoding
 contract.
 
 `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` defaults to 50 MiB and is a positive
-integer. It bounds a retained main-resource body and drives Obscura retention
-floors. Rendered DOM has a separate 20 MiB cap; search DOM also has a 20 MiB
-cap. Existing Onyx character budgets apply after parsing. Increasing the
-document limit increases potential memory use across five simultaneous API
+integer. In direct Obscura mode it is the sole main-resource response-body cap,
+including HTML responses, and it drives Obscura retention floors. Serialized
+rendered DOM has a separate fixed 20 MiB cap; search DOM also has a fixed
+20 MiB cap. Existing Onyx character budgets apply after parsing. Increasing
+the document limit increases potential memory use across five simultaneous API
 fetches and five browser workers.
 
 These limits do not bound Obscura's initial response allocation. The pinned
@@ -278,10 +279,13 @@ selectors return no results; missing expected structure is an unresponsive
 parser mismatch. The engines cannot call SearXNG's normal HTTP transport,
 retry internally, or choose another provider.
 
-One Granian process owns scheduling. Each provider has one active lease and an
-exact 3.0-second minimum interval between navigation starts, with zero jitter.
-Busy and cooling providers are skipped before an engine thread is created;
-the lease is retained through target cleanup.
+One Granian process owns scheduling. Each provider has one atomic pre-thread
+reservation, one active lease, and an exact 3.0-second minimum interval between
+navigation starts, with zero jitter. The engine thread must consume its exact
+reservation token. Busy and cooling providers are skipped before an engine
+thread is created; if no provider can be reserved, the request does not fan out.
+It reports the selected providers as unavailable without creating their engine
+threads. The lease is retained through target cleanup.
 
 With `SEARXNG_ROUND_ROBIN=true` (default), the existing orchestration selects
 one available normal custom provider, removes the other selected engines from

@@ -623,8 +623,9 @@ Image tags, source refs, and runtime Python lock files are consolidated in
 [`stack.versions.env`](stack.versions.env) plus the committed `requirements.in`
 / hashed `requirements.txt` files. `make upgrade` refreshes the Python locks
 through `make upgrade-python-deps` before rebuilding/pulling the stack
-components. The derived SearXNG image installs its pinned Python dependencies
-from hashed locks and validates the shared Obscura client at image-build time;
+components. The derived SearXNG image installs its complete pinned Python
+dependency set from the generated hashed `searxng/requirements.txt` lock and
+validates the shared Obscura client at image-build time;
 the runtime container never downloads packages or a browser. Myst and Teep
 builds forward standard
 `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` build arguments when those

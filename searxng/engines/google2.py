@@ -68,7 +68,13 @@ def search(query: str, params: "RequestParams"):
         query_args["tbs"] = "qdr:" + time_range_dict[params["time_range"]]
 
     target_url = "https://www.google.com/search?" + urlencode(query_args)
-    return _parse_html(_obscura.navigate("google2", target_url))
+    return _parse_html(
+        _obscura.navigate(
+            "google2",
+            target_url,
+            params.get(_obscura.RESERVATION_PARAM),
+        )
+    )
 
 
 def _parse_html(text: str):

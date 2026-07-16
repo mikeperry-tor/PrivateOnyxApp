@@ -27,7 +27,9 @@ try:
     from wrapper_env_patches import apply_reasoning_content_preservation_patch
     from wrapper_env_patches import apply_reasoning_mode_trace_patch
     from wrapper_env_patches import apply_vllm_glm_auto_tool_choice_patch
-    from obscura_crawler_patch import install as install_obscura_crawler
+    from open_url_failure_reporting_patch import (
+        install as install_open_url_failure_reporting,
+    )
     from onyx_crawler_egress_patch import install as install_onyx_crawler
     from onyx_crawler_egress_patch import use_obscura_browser
 
@@ -46,7 +48,10 @@ try:
     apply_reasoning_content_preservation_patch()
     apply_coding_agent_final_answer_fallback_patch()
     apply_preserve_tool_results_patch()
+    install_open_url_failure_reporting()
     if use_obscura_browser():
+        from obscura_crawler_patch import install as install_obscura_crawler
+
         install_obscura_crawler()
     else:
         install_onyx_crawler()

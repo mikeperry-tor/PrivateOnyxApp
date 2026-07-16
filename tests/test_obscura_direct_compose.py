@@ -13,6 +13,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         cls.lite = (ROOT / "docker-compose.lite.yml").read_text()
         cls.manifest = (ROOT / "stack.versions.env").read_text()
         cls.no_proxy = (ROOT / "onyx/helper-egress.env").read_text()
+        cls.searxng_dockerfile = (ROOT / "searxng/Dockerfile").read_text()
+        cls.makefile = (ROOT / "Makefile").read_text()
 
     def test_direct_topology_literals(self):
         self.assertIn(
@@ -43,6 +45,18 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertIn("sitecustomize_api_server", self.compose)
         self.assertIn("sitecustomize_api_server", self.lite)
         self.assertNotIn("./onyx/patches/sitecustomize:/app/wrapper-patches", self.lite)
+
+    def test_searxng_build_consumes_generated_dependency_lock(self):
+        self.assertIn(
+            "COPY searxng/requirements.txt /tmp/requirements.txt",
+            self.searxng_dockerfile,
+        )
+        self.assertNotIn("runtime-requirements.txt", self.searxng_dockerfile)
+        self.assertNotIn("playwright-client", self.searxng_dockerfile)
+        self.assertNotIn(
+            '--build-arg ONYX_BACKEND_IMAGE="$(ONYX_BACKEND_IMAGE)"',
+            self.makefile,
+        )
 
 
 if __name__ == "__main__":

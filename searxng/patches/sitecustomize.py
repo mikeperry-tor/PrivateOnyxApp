@@ -101,9 +101,6 @@ def _is_processor_available(engine_name: str) -> bool:
         return False
     if processor.suspended_status.is_suspended:
         return False
-    if engine_name in _ROUND_ROBIN_DEFAULT_PROVIDERS:
-        from searx.engines import _obscura
-        return _obscura.provider_available(engine_name)
     return True
 
 
@@ -122,6 +119,9 @@ def apply_offline_block_suspension_patch() -> None:
     original = OfflineProcessor.search
 
     def _patched(self, query, params, result_container, start_time, timeout_limit):
+        from searx.engines import _obscura
+
+        reservation_token = params.get(_obscura.RESERVATION_PARAM)
         try:
             search_results = self.engine.search(query, params)
             self.extend_container(result_container, start_time, search_results)
@@ -137,21 +137,34 @@ def apply_offline_block_suspension_patch() -> None:
         except Exception as exc:
             self.handle_exception(result_container, exc)
             self.logger.exception("engine %s: exception: %s", self.engine.name, exc.__class__.__name__)
+        finally:
+            _obscura.release_provider_reservation(
+                self.engine.name, reservation_token
+            )
 
     OfflineProcessor.search = _patched
     print("sitecustomize: patched offline blocking-condition suspension", flush=True)
 
 
-def _choose_round_robin_engine(engine_names: list[str]) -> str | None:
+def _reserve_round_robin_engine(
+    engine_names: list[str],
+) -> tuple[str | None, str | None]:
     global _ROUND_ROBIN_CURSOR
 
     if not engine_names:
-        return None
+        return None, None
+
+    from searx.engines import _obscura
 
     with _ROUND_ROBIN_LOCK:
-        engine_name = engine_names[_ROUND_ROBIN_CURSOR % len(engine_names)]
-        _ROUND_ROBIN_CURSOR += 1
-        return engine_name
+        for offset in range(len(engine_names)):
+            index = (_ROUND_ROBIN_CURSOR + offset) % len(engine_names)
+            engine_name = engine_names[index]
+            token = _obscura.reserve_provider(engine_name)
+            if token is not None:
+                _ROUND_ROBIN_CURSOR = index + 1
+                return engine_name, token
+        return None, None
 
 
 def _round_robin_ref_map(
@@ -180,19 +193,19 @@ def _round_robin_selected_refs(
     engineref_list: list[object],
     *,
     exclude: set[str] | None = None,
-) -> list[object]:
+) -> tuple[list[object], dict[str, str]]:
     first_ref_by_name, selected_provider_order = _round_robin_ref_map(
         engineref_list
     )
     if not first_ref_by_name:
-        return engineref_list
+        return engineref_list, {}
 
     excluded = exclude or set()
     candidate_provider_order = [
         name for name in selected_provider_order if name not in excluded
     ]
     if not candidate_provider_order:
-        return []
+        return [], {}
 
     available_regular = [
         name
@@ -204,13 +217,13 @@ def _round_robin_selected_refs(
         for name in candidate_provider_order
         if _is_last_resort_engine(name) and _is_processor_available(name)
     ]
-    chosen = _choose_round_robin_engine(
-        available_regular or available_last_resort
-    )
+    chosen, token = _reserve_round_robin_engine(available_regular)
     if chosen is None:
-        return [first_ref_by_name[name] for name in candidate_provider_order]
+        chosen, token = _reserve_round_robin_engine(available_last_resort)
+    if chosen is None or token is None:
+        return [], {}
 
-    return [first_ref_by_name[chosen]]
+    return [first_ref_by_name[chosen]], {chosen: token}
 
 
 def _has_round_robin_provider_pool(engineref_list: list[object]) -> bool:
@@ -218,6 +231,30 @@ def _has_round_robin_provider_pool(engineref_list: list[object]) -> bool:
         engineref_list
     )
     return bool(first_ref_by_name)
+
+
+def _record_unavailable_round_robin_providers(
+    *,
+    engineref_list: list[object],
+    exclude: set[str],
+    result_container: object,
+) -> None:
+    from searx.search.processors import PROCESSORS
+
+    _first_ref_by_name, selected_provider_order = _round_robin_ref_map(
+        engineref_list
+    )
+    for engine_name in selected_provider_order:
+        if engine_name not in exclude:
+            processor = PROCESSORS.get(engine_name)
+            if processor is not None and processor.extend_container_if_suspended(
+                result_container
+            ):
+                continue
+            result_container.add_unresponsive_engine(
+                engine_name,
+                "searx.exceptions.SearxEngineTooManyRequestsException",
+            )
 
 
 def _has_untried_round_robin_provider(
@@ -291,16 +328,41 @@ def apply_round_robin_search_patch() -> None:
 
     def _patched_get_requests(self):
         original_refs = self.search_query.engineref_list
-        selected_refs = _round_robin_selected_refs(
+        excluded = getattr(self, "_wrapper_round_robin_attempted", set())
+        selected_refs, reservations = _round_robin_selected_refs(
             original_refs,
-            exclude=getattr(self, "_wrapper_round_robin_attempted", set()),
+            exclude=excluded,
         )
         if selected_refs is original_refs:
             return original_get_requests(self)
+        if not selected_refs:
+            _record_unavailable_round_robin_providers(
+                engineref_list=original_refs,
+                exclude=excluded,
+                result_container=self.result_container,
+            )
 
         self.search_query.engineref_list = selected_refs
         try:
-            return original_get_requests(self)
+            requests, actual_timeout = original_get_requests(self)
+            if not reservations:
+                return requests, actual_timeout
+            from searx.engines import _obscura
+
+            reserved_name, token = next(iter(reservations.items()))
+            for engine_name, _query, params in requests:
+                if engine_name == reserved_name:
+                    params[_obscura.RESERVATION_PARAM] = token
+                    return requests, actual_timeout
+            _obscura.release_provider_reservation(reserved_name, token)
+            return requests, actual_timeout
+        except Exception:
+            if reservations:
+                from searx.engines import _obscura
+
+                for engine_name, token in reservations.items():
+                    _obscura.release_provider_reservation(engine_name, token)
+            raise
         finally:
             self.search_query.engineref_list = original_refs
 

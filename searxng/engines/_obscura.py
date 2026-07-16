@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from urllib.parse import urlsplit
 
@@ -25,6 +26,7 @@ ALLOW_HTTP = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in {
 SEARCH_DOM_LIMIT = 20 * 1024 * 1024
 SEARCH_BROWSER_ATTEMPT_TIMEOUT_SECONDS = 50.0
 MINIMUM_START_INTERVAL = 3.0
+RESERVATION_PARAM = "_wrapper_obscura_reservation_token"
 
 TERMINAL_HOSTS = {
     "google2": frozenset({"www.google.com", "google.com", "consent.google.com"}),
@@ -56,6 +58,7 @@ class _ProviderState:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.active = False
+        self.reservation: str | None = None
         self.last_start = float("-inf")
 
 
@@ -65,17 +68,55 @@ _PROVIDERS = {name: _ProviderState() for name in TERMINAL_HOSTS}
 def provider_available(name: str) -> bool:
     state = _PROVIDERS[name]
     with state.lock:
-        return not state.active and time.monotonic() - state.last_start >= MINIMUM_START_INTERVAL
+        return (
+            not state.active
+            and state.reservation is None
+            and time.monotonic() - state.last_start >= MINIMUM_START_INTERVAL
+        )
+
+
+def reserve_provider(name: str) -> str | None:
+    """Atomically reserve a provider before SearXNG creates its engine thread."""
+    state = _PROVIDERS[name]
+    with state.lock:
+        if (
+            state.active
+            or state.reservation is not None
+            or time.monotonic() - state.last_start < MINIMUM_START_INTERVAL
+        ):
+            return None
+        token = uuid.uuid4().hex
+        state.reservation = token
+        return token
+
+
+def release_provider_reservation(name: str, token: str | None) -> None:
+    if not token or name not in _PROVIDERS:
+        return
+    state = _PROVIDERS[name]
+    with state.lock:
+        if state.reservation == token:
+            state.reservation = None
 
 
 @contextmanager
-def _lease(name: str):
+def _lease(name: str, reservation_token: str | None = None):
     from searx.exceptions import SearxEngineResponseException
 
     state = _PROVIDERS[name]
     with state.lock:
         now = time.monotonic()
-        if state.active or now - state.last_start < MINIMUM_START_INTERVAL:
+        if reservation_token is not None:
+            if state.reservation != reservation_token or state.active:
+                raise SearxEngineResponseException(
+                    f"{name}: provider reservation is invalid or no longer active"
+                )
+            state.reservation = None
+        elif (
+            state.active
+            or state.reservation is not None
+            or now - state.last_start < MINIMUM_START_INTERVAL
+        ):
             raise SearxEngineResponseException(f"{name}: provider is busy or cooling down")
         state.active = True
     try:
@@ -103,14 +144,18 @@ def _mapped_failure(engine_name: str, exc: ObscuraClientError):
     return SearxEngineResponseException(f"{engine_name}: browser request failed ({exc.category.value})")
 
 
-def navigate(engine_name: str, target_url: str) -> str:
+def navigate(
+    engine_name: str,
+    target_url: str,
+    reservation_token: str | None = None,
+) -> str:
     """Navigate once and return a bounded rendered DOM; never retry."""
     from searx.exceptions import SearxEngineAccessDeniedException
     from searx.exceptions import SearxEngineCaptchaException
     from searx.exceptions import SearxEngineResponseException
     from searx.exceptions import SearxEngineTooManyRequestsException
 
-    with _lease(engine_name) as record_start:
+    with _lease(engine_name, reservation_token) as record_start:
         try:
             result = fetch_sync(
                 target_url,

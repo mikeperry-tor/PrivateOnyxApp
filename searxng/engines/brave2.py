@@ -61,7 +61,13 @@ def search(query: str, params: "RequestParams"):
         query_args["offset"] = str((params["pageno"] - 1) * 10)
 
     target_url = "https://search.brave.com/search?" + urlencode(query_args)
-    return _parse_html(_obscura.navigate("brave2", target_url))
+    return _parse_html(
+        _obscura.navigate(
+            "brave2",
+            target_url,
+            params.get(_obscura.RESERVATION_PARAM),
+        )
+    )
 
 
 def _parse_html(text: str):
