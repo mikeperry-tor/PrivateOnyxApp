@@ -512,7 +512,7 @@ Recommended patch behavior:
 - never propagate trusted-service `NO_PROXY_INTERNAL` into executor pods.
 
 The API-server prompt/capability patch in
-`onyx/patches/sitecustomize_base/wrapper_env_patches.py` must change alongside
+`onyx/patches/shared/wrapper_env_patches.py` must change alongside
 this. It currently rewrites Python, Bash, and coding-agent tool descriptions
 when `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`; after isolation, those
 descriptions must not advertise shared-namespace CRW, SearXNG, or CDP loopback

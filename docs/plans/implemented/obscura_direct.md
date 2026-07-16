@@ -146,6 +146,14 @@ incomplete plan update.
   hashed `searxng/requirements.txt`. The manually maintained runtime lock and
   duplicate copied Playwright package were removed, so `make upgrade-python-deps`
   updates the file actually consumed by the image build.
+- **2026-07-16 — isolated-runner stdout remains protocol-clean.** API and
+  background bootstrap diagnostics are redirected to stderr because Onyx
+  reserves isolated child stdout for its pickled result. This restores PDF
+  extraction through the direct Obscura crawler.
+- **2026-07-16 — derived SearXNG tags track embedded inputs.** The Makefile now
+  hashes the pinned upstream tag plus the Dockerfile, generated dependency
+  lock, shared Obscura client, and custom engines into the local image tag, so
+  source-only changes cannot silently reuse an older derived image.
 
 ### Resolved initial-testing finding
 

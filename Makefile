@@ -126,8 +126,25 @@ ifeq ($(strip $(SEARXNG_IMAGE_TAG)),)
 $(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass SEARXNG_IMAGE_TAG=... on the make command line)
 endif
 SEARXNG_IMAGE ?= docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)
-SEARXNG_WRAPPER_IMAGE ?= $(call env_value,SEARXNG_WRAPPER_IMAGE)
 SEARXNG_DOCKERFILE ?= searxng/Dockerfile
+SEARXNG_WRAPPER_IMAGE_REPOSITORY ?= $(call env_value,SEARXNG_WRAPPER_IMAGE_REPOSITORY)
+ifeq ($(strip $(SEARXNG_WRAPPER_IMAGE_REPOSITORY)),)
+$(error SEARXNG_WRAPPER_IMAGE_REPOSITORY is not set. Add it to $(VERSION_FILE) or override it on the make command line)
+endif
+SEARXNG_WRAPPER_BUILD_INPUTS := \
+	$(SEARXNG_DOCKERFILE) \
+	searxng/requirements.txt \
+	$(sort $(wildcard browser/obscura_client/private_onyx_obscura/*.py)) \
+	$(sort $(wildcard searxng/engines/*.py))
+SEARXNG_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(); [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[1:]]; print(h.hexdigest()[:12])' $(SEARXNG_WRAPPER_BUILD_INPUTS))
+ifeq ($(strip $(SEARXNG_WRAPPER_SOURCE_HASH)),)
+$(error could not compute the SearXNG wrapper source hash)
+endif
+# Couple the local tag to both the upstream pin and every source copied into
+# the derived image. `make up-*` therefore cannot reuse an older image after a
+# client, engine, dependency-lock, or Dockerfile change. A command-line
+# SEARXNG_IMAGE_TAG override also selects a distinct derived tag.
+SEARXNG_WRAPPER_IMAGE ?= $(SEARXNG_WRAPPER_IMAGE_REPOSITORY):$(SEARXNG_IMAGE_TAG)-$(SEARXNG_WRAPPER_SOURCE_HASH)
 ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB ?= $(call env_value,ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)
 ifeq ($(strip $(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)),)
 ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB := 50
@@ -135,6 +152,8 @@ endif
 OBSCURA_RETENTION_FLOOR_BYTES := $(shell python3 -c 'v=int("$(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)"); assert 0 < v <= ((1<<63)-1)//1048576; print(max(v*1048576,20971520))')
 OBSCURA_IO_STREAM_MAX_BYTES := $(shell python3 -c 'v=int("$(OBSCURA_RETENTION_FLOOR_BYTES)"); assert v <= ((1<<63)-1)//5; print(v*5)')
 export SEARXNG_WRAPPER_IMAGE
+export SEARXNG_WRAPPER_IMAGE_REPOSITORY
+export SEARXNG_WRAPPER_SOURCE_HASH
 export OBSCURA_RETENTION_FLOOR_BYTES
 export OBSCURA_IO_STREAM_MAX_BYTES
 export SEARXNG_IMAGE_TAG

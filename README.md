@@ -537,14 +537,10 @@ Notes:
 - Browser-visible result links are rewritten to the host display origin,
   `http://localhost:8091/` by default. That host URL is for display, not the
   saved connector crawl origin.
-- Onyx v4.2.5 has SSRF Protection that can block this service if you save a
-  Security Hardening override in the Admin UI.
-- The defaults in `.env.wrapper.example` seed the `Allow Private Network` posture
-  in the Security Hardening UI. That is enough for this Web connector because
-  Onyx only enforces Web connector SSRF checks at strict `Validate All`.
-- If you already saved a different value in Onyx Admin -> Security Hardening,
-  that saved setting takes precedence. For doc-drop crawling, avoid the strict
-  `Validate All` setting.
+- Saved Security Hardening settings continue to govern external Web connector
+  targets. The exact stack-owned `http://doc-drop-web:8091/` crawl origin remains
+  available under strict `Validate All` through its dedicated host final-hop
+  gateway; the exception does not grant general private-network access.
 
 ### Optional: Running a Local Embedding Model Server (Mac)
 
@@ -625,7 +621,9 @@ Image tags, source refs, and runtime Python lock files are consolidated in
 through `make upgrade-python-deps` before rebuilding/pulling the stack
 components. The derived SearXNG image installs its complete pinned Python
 dependency set from the generated hashed `searxng/requirements.txt` lock and
-validates the shared Obscura client at image-build time;
+validates the shared Obscura client at image-build time. The Makefile derives
+the local image tag from the upstream SearXNG pin and every embedded Dockerfile,
+lock, shared-client, and engine input, so a source change selects a fresh image;
 the runtime container never downloads packages or a browser. Myst and Teep
 builds forward standard
 `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` build arguments when those

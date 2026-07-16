@@ -21,6 +21,10 @@ contains read-only audit checkouts when present.
 7. Remove a wrapper patch only when the pinned upstream behavior provides the
    same strict, fail-closed semantics and tests prove it.
 
+Keep API and background bootstrap diagnostics on stderr. Onyx isolated child
+processes reserve stdout for their pickled result; validate at least one real
+PDF extraction after changing bootstrap or process-isolation behavior.
+
 ## Direct Obscura audit
 
 Audit these Obscura 0.1.10 areas (or their new equivalents):
@@ -200,7 +204,9 @@ For every custom engine verify:
 The derived SearXNG image must install its complete Python dependency set from
 the generated hashed `searxng/requirements.txt` lock, use one Granian process,
 one replica, perform no Chromium/browser download or runtime installation, and
-pass the shared-client import validation. Its explicit `PYTHONPATH` must expose
+pass the shared-client import validation. Its local image tag must change when
+the upstream pin or any embedded Dockerfile, lock, shared-client, or engine
+input changes. Its explicit `PYTHONPATH` must expose
 the wrapper patches, SearXNG application root, and shared client before the
 embedded interpreter imports `sitecustomize`; verify the real Granian
 entrypoint logs every strict patch success and loads every custom engine.

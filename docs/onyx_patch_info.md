@@ -17,6 +17,11 @@ but is not executable bootstrap code. Compose imports it explicitly through
 This split prevents a base bootstrap from running service-inappropriate code
 and makes missing API-only behavior startup-visible.
 
+Both Onyx bootstraps redirect their installation diagnostics to stderr. This is
+part of the isolated-process protocol: Onyx reserves child stdout for the
+pickled return value, so even a successful startup message on stdout corrupts
+PDF extraction and other isolated results.
+
 ## Selectable built-in crawler
 
 `ONYX_AGENT_USE_OBSCURA_BROWSER` accepts exactly `true` or `false` and defaults
@@ -103,13 +108,15 @@ container, timeout, and exception shapes used by its runtime patches. The
 derived `searxng/Dockerfile` installs all build-time pinned Python
 dependencies, including the audited Playwright 1.58 client, from the generated
 hashed `searxng/requirements.txt` lock. It downloads neither a browser nor
-packages at runtime. Compose explicitly exposes the wrapper patch directory,
+packages at runtime. The Makefile derives the local image tag from the pinned
+upstream tag and the complete set of embedded Dockerfile, lock, shared-client,
+and engine inputs, preventing a stale manually tagged image from surviving a
+source-only change. Compose explicitly exposes the wrapper patch directory,
 the SearXNG application root, and the shared client directory to the embedded
 Python interpreter so patch or client import failure remains startup-visible.
-The
-runtime direct client uses pinned WebSockets because Playwright's public page
-session attachment is incompatible with Obscura 0.1.10's reused flattened
-session identifier.
+The runtime direct client uses pinned WebSockets because Playwright's public
+page session attachment is incompatible with Obscura 0.1.10's reused
+flattened session identifier.
 
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are offline
 engines. `_obscura.py` owns one-navigation transport, exact terminal hosts,

@@ -59,12 +59,13 @@ Connector, and configured provider choices. It does not replace final-hop
 policy. Saved Admin settings select the public or host-capable route; they do
 not grant browser or executor access to the host listener.
 
-By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` makes the LLM-controlled stock crawler
-does not inherit that Admin private-network allowance. Its requests adapter
-and scoped Playwright validation accept public URL shapes only, avoid local
-target DNS, and force the fixed public bridge. Requests environment proxy and
-`NO_PROXY` selection are disabled; Chromium's implicit loopback bypass is
-explicitly disabled. Redirects and subresources therefore remain under the
+By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` means the LLM-controlled
+stock crawler does not inherit that Admin private-network allowance. Its
+requests adapter and scoped Playwright validation accept public URL shapes
+only, avoid local target DNS, and force the fixed public bridge. Requests
+environment proxy and `NO_PROXY` selection are disabled; Chromium's implicit
+loopback bypass is explicitly disabled. Redirects and subresources remain
+under the
 public final-hop policy, and the stock mode cannot reach the
 host-capable listener.
 

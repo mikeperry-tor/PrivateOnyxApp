@@ -37,7 +37,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertNotIn("--allow-file-access", self.compose)
 
     def test_new_manifest_and_no_proxy_names(self):
-        self.assertIn("SEARXNG_WRAPPER_IMAGE=", self.manifest)
+        self.assertIn("SEARXNG_WRAPPER_IMAGE_REPOSITORY=", self.manifest)
+        self.assertNotIn("SEARXNG_WRAPPER_IMAGE=", self.manifest)
         self.assertNotIn("CRW_IMAGE=", self.manifest)
         self.assertNotIn("CDP_SHIM_IMAGE=", self.manifest)
         self.assertIn("obscura-cdp-gateway", self.no_proxy)
@@ -65,6 +66,18 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertNotIn("playwright-client", self.searxng_dockerfile)
         self.assertNotIn(
             '--build-arg ONYX_BACKEND_IMAGE="$(ONYX_BACKEND_IMAGE)"',
+            self.makefile,
+        )
+
+    def test_searxng_wrapper_tag_tracks_every_embedded_input(self):
+        self.assertIn("SEARXNG_WRAPPER_BUILD_INPUTS :=", self.makefile)
+        self.assertIn(
+            "browser/obscura_client/private_onyx_obscura/*.py", self.makefile
+        )
+        self.assertIn("searxng/engines/*.py", self.makefile)
+        self.assertIn("searxng/requirements.txt", self.makefile)
+        self.assertIn(
+            "$(SEARXNG_WRAPPER_IMAGE_REPOSITORY):$(SEARXNG_IMAGE_TAG)-$(SEARXNG_WRAPPER_SOURCE_HASH)",
             self.makefile,
         )
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 import os
+import sys
 
 
 def _strict() -> bool:
@@ -11,7 +13,7 @@ def _strict() -> bool:
     }
 
 
-try:
+def _install() -> None:
     from wrapper_env_patches import apply_code_interpreter_network_description_patches
     from wrapper_env_patches import apply_coding_agent_final_answer_fallback_patch
     from wrapper_env_patches import apply_coding_agent_repo_download_limit_patch
@@ -61,7 +63,21 @@ try:
     }:
         from onyx.tools.tool_implementations.open_url.open_url_tool import OpenURLTool
         OpenURLTool.is_available = classmethod(lambda cls, db_session: True)
+
+
+try:
+    # Onyx's isolated-process protocol reserves child stdout for one pickled
+    # result. Python imports sitecustomize before running that child module, so
+    # every wrapper startup diagnostic must use stderr or it corrupts PDF and
+    # other isolated-call results. Docker captures stderr in the same service
+    # log stream, preserving operator visibility.
+    with redirect_stdout(sys.stderr):
+        _install()
 except Exception as exc:
-    print(f"sitecustomize_api_server: patch initialization failed: {exc}", flush=True)
+    print(
+        f"sitecustomize_api_server: patch initialization failed: {exc}",
+        file=sys.stderr,
+        flush=True,
+    )
     if _strict():
         raise

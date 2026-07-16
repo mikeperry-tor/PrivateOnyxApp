@@ -31,9 +31,8 @@ Onyx fork:
 - `onyx/patches/sitecustomize_background/sitecustomize.py` adds internal-origin
   PDF freshness, exact crawl routing, saved-level external routing, and
   display-only source-link rewriting.
-- `onyx/patches/sitecustomize_base/sitecustomize.py` can apply optional
-  internal-search content caps so selected chunks do not overwhelm the
-  answering model.
+- The API `sitecustomize` bootstrap invokes the shared optional internal-search
+  content-cap patch so selected chunks do not overwhelm the answering model.
 - `local-embedding-shim` implements the subset of Onyx's model-server HTTP API
   that indexing and search need for embeddings, then forwards the actual
   embedding work to an OpenAI-compatible `/v1/embeddings` endpoint.
@@ -179,7 +178,8 @@ patch.
 Implementation:
 
 - Compose env: `docker-compose.full.yml`
-- Runtime patch: `onyx/patches/sitecustomize_base/wrapper_env_patches.py`
+- Runtime patch: `onyx/patches/shared/wrapper_env_patches.py`, installed by the
+  API bootstrap
 - User-facing env:
   `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
   `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`

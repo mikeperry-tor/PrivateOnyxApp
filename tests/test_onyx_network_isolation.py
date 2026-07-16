@@ -10,6 +10,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SECRET_ENV = {
+    # Production Make invocations export the content-derived image name before
+    # Compose interpolation. Direct Compose-model tests supply a inert value.
+    "SEARXNG_WRAPPER_IMAGE": "local/private-onyx-searxng:test-model",
     "SEARXNG_SECRET": "test",
     "USER_AUTH_SECRET": "test",
     "MINIO_ROOT_USER": "test",

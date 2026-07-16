@@ -65,7 +65,9 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 ## Key Locations
 
 - `Makefile` - source of truth for stack targets, compose layering, generated local secrets, image builds, upgrades, Myst flows, and embedserv flows.
-- `stack.versions.env` - committed source of truth for stack image tags and source refs.
+- `stack.versions.env` - committed source of truth for stack image tags, source
+  refs, and the derived SearXNG image repository. The Makefile adds a digest of
+  every embedded SearXNG wrapper input to that derived image's tag.
 - `.env.wrapper.example` - user-facing configuration surface for local runtime options, not routine image pins.
 - `docker-compose.yaml` - base wrapper stack, including the restricted SearXNG/Obscura control topology, policy proxies, fixed bridges, and service gateways.
 - `docker-compose.full.yml` - full Onyx/RAG mode.
@@ -148,6 +150,9 @@ This stack protects private research, document contents, browsing behavior, infe
 - Request handling: keep supported search engines on the shared direct-Obscura path and preserve their atomic pre-thread provider reservation. The built-in crawler defaults to the stock requests/local-Chromium mode because it was blocked less often in Obscura 0.1.10 testing; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path. When explicitly switched to Obscura, preserve one navigation, event-based waits, the configured main-response byte limit (including HTML), the separate fixed DOM limit, anti-bot visibility, and complete cleanup. Re-test the default on Obscura upgrades. Do not add other hidden retries, fallbacks, or fixed sleeps.
 - Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
 - Patch upgrades: before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
+- Onyx bootstrap diagnostics must stay on stderr because isolated child stdout
+  carries a pickled result. Bootstrap or process-isolation changes require a
+  real PDF extraction test.
 - Untracked stack files: Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data. Do not read, stage, or rewrite them unless the user explicitly asks.
 
 ### Testing and Validation

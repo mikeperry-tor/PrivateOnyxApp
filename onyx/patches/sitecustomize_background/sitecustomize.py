@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import functools
 import os
+import sys
+from contextlib import redirect_stdout
 from contextvars import ContextVar
 from datetime import datetime
 from datetime import timezone
@@ -926,7 +928,15 @@ def _apply_web_connector_http_freshness_patch() -> None:
     )
 
 
-_apply_playwright_helper_proxy_patch()
-_apply_configured_inference_proxy_patch()
-_apply_web_connector_egress_patch()
-_apply_web_connector_http_freshness_patch()
+def _install() -> None:
+    _apply_playwright_helper_proxy_patch()
+    _apply_configured_inference_proxy_patch()
+    _apply_web_connector_egress_patch()
+    _apply_web_connector_http_freshness_patch()
+
+
+# Keep stdout clean for Onyx subprocess protocols such as
+# onyx.utils.isolated_runner, which imports sitecustomize before writing its
+# single pickled result. Docker captures stderr alongside stdout.
+with redirect_stdout(sys.stderr):
+    _install()
