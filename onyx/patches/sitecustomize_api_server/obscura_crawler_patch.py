@@ -127,6 +127,9 @@ def _reason(exc: ObscuraClientError) -> str:
         FetchFailure.OVERSIZE: "response exceeded the configured maximum size",
         FetchFailure.BODY_UNAVAILABLE: "same-navigation response body was unavailable",
         FetchFailure.BYTE_IDENTITY_UNAVAILABLE: "original document bytes were unavailable",
+        FetchFailure.UNSUPPORTED_CHARSET: "response charset is unsupported",
+        FetchFailure.EMPTY_CONTENT: "browser response was empty",
+        FetchFailure.PROTOCOL: f"browser protocol failed during {exc.stage}",
         FetchFailure.FINALIZED: "open_url invocation timed out before navigation",
     }.get(exc.category, "browser request failed")
 

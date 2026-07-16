@@ -51,7 +51,8 @@ For each accepted target the shared client:
 7. identifies the terminal main-frame Document request across redirects and
    JavaScript navigation, retaining its actual request id, status, headers,
    final frame URL, and challenge state;
-8. obtains rendered DOM and/or that same navigation's retained response body;
+8. obtains rendered DOM and, when Obscura retained it, that same navigation's
+   response body;
 9. closes every IO stream, target, and WebSocket on success or failure.
 
 The client does not issue `HEAD`, `GET`, range, MIME-probe, CLI, normal
@@ -87,6 +88,26 @@ comes from `Fetch.takeResponseBodyAsStream` followed by bounded `IO.read` and
 an unconditional `IO.close`. Plain and base64 chunks are counted as actual
 bytes. The client drains and closes an oversized stream before returning a
 typed failure.
+
+Obscura 0.1.10 has a pinned retained-body limitation. Its per-page response
+cache evicts the oldest entry after `OBSCURA_NETWORK_BODY_BUFFER_ENTRIES`
+(fixed at 16 here), but it does not protect the main Document entry. It creates
+the loader-id alias only after navigation and network collection complete. On
+a page with enough subresources, the main body can therefore be evicted before
+the alias is created and before any CDP client can call
+`Fetch.takeResponseBodyAsStream`; moving the client call earlier cannot repair
+this ordering.
+
+The shared client recognizes Obscura's exact `no cached body` rejection as a
+typed `body-unavailable` result. For an HTML/XHTML response requested with both
+DOM and body, Onyx preserves the rendered DOM from that same navigation and
+logs `body_state=unavailable`; HTML processing never requires response-byte
+identity and this is not a refetch or fallback navigation. PDF, raw text, and
+other binary paths still fail closed when the retained body is unavailable.
+Do not raise the response-entry count as a workaround: the byte limit is per
+entry, so doing so multiplies worst-case retained memory. Re-audit and remove
+this narrow HTML-only workaround when an Obscura upgrade protects or separately
+retains the main Document body.
 
 Challenge classification uses terminal HTTP status, terminal route, and a
 bounded structural parse of at most 256 KiB of rendered HTML. HTTP 401/402/403
@@ -149,9 +170,11 @@ that the selected Obscura child cleaned up its own pre-dispatch state.
 Results remain ordered by requested URL. Failures and snippets are correlated
 with that requested URL even after redirects; successful content and citations
 use the terminal URL. Cardinality mismatches fail loudly. Individual transport,
-status, challenge, type, parse, limit, and timeout failures become the normal
-unsuccessful `WebContent` result without hiding the reason or discarding other
-successful URLs.
+protocol, retained-body, status, challenge, type, parse, limit, and timeout
+failures become the normal unsuccessful `WebContent` result without hiding the
+typed reason or discarding other successful URLs. Every typed shared-client
+failure is warning-level and carries its opaque request ID and sanitized stage
+so production log levels do not hide protocol failures.
 
 For a mixed result, successful documents and citations remain the primary tool
 response and a trailing `Partial open_url failure report` lists each final

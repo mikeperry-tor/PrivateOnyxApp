@@ -15,6 +15,7 @@ from private_onyx_obscura import is_text_like_content_type  # noqa: E402
 from private_onyx_obscura import normalize_public_url  # noqa: E402
 from private_onyx_obscura import validate_wait_until  # noqa: E402
 from private_onyx_obscura.client import _RawCdp  # noqa: E402
+from private_onyx_obscura.client import _can_preserve_html_dom_without_body  # noqa: E402
 from private_onyx_obscura.client import _challenge_details  # noqa: E402
 
 
@@ -100,6 +101,59 @@ class ObscuraClientTests(unittest.TestCase):
             self.assertEqual(raised.exception.category, FetchFailure.PROTOCOL)
 
         asyncio.run(exercise())
+
+    def test_missing_cached_body_is_typed_body_unavailable(self):
+        class WebSocket:
+            async def send(self, _message):
+                return None
+
+            async def recv(self):
+                return (
+                    '{"id":1,"error":{"code":-32000,'
+                    '"message":"Fetch.takeResponseBodyAsStream: no cached body for loader"}}'
+                )
+
+        async def exercise():
+            with self.assertRaises(ObscuraClientError) as raised:
+                await _RawCdp(WebSocket()).send(
+                    "Fetch.takeResponseBodyAsStream",
+                    {"requestId": "loader"},
+                    session_id="session",
+                )
+            self.assertEqual(raised.exception.category, FetchFailure.BODY_UNAVAILABLE)
+            self.assertEqual(raised.exception.stage, "body-stream-open")
+            self.assertNotIn("loader", str(raised.exception))
+
+        asyncio.run(exercise())
+
+    def test_only_both_mode_html_preserves_dom_when_body_was_evicted(self):
+        unavailable = ObscuraClientError(
+            FetchFailure.BODY_UNAVAILABLE,
+            "body-stream-open",
+            "body unavailable",
+        )
+        protocol = ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "cdp-command",
+            "protocol failure",
+        )
+        self.assertTrue(
+            _can_preserve_html_dom_without_body("both", "text/html", unavailable)
+        )
+        self.assertTrue(
+            _can_preserve_html_dom_without_body(
+                "both", "application/xhtml+xml", unavailable
+            )
+        )
+        self.assertFalse(
+            _can_preserve_html_dom_without_body("body", "text/html", unavailable)
+        )
+        self.assertFalse(
+            _can_preserve_html_dom_without_body("both", "application/pdf", unavailable)
+        )
+        self.assertFalse(
+            _can_preserve_html_dom_without_body("both", "text/html", protocol)
+        )
 
     def test_cdp_command_timeout_is_typed_and_stage_specific(self):
         class WebSocket:

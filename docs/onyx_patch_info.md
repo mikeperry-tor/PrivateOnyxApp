@@ -35,6 +35,9 @@ built-in `OnyxWebCrawler` URL-fetch path. It imports the single client in
   URLs retained for successful content and citations after redirects;
 - same-navigation PDF, HTML, and exact raw-text dispatch using pinned Onyx
   extractors;
+- mixed-result failure reporting that preserves successful documents while
+  appending sanitized per-URL reasons for blocked, unavailable, protocol, and
+  timed-out siblings;
 - a positive finite document byte limit, separate 20 MiB HTML/DOM bound,
   existing post-parse character budgets, and normal unsuccessful
   `WebContent` results for per-URL failures;
@@ -47,9 +50,13 @@ provider data-policy guarantees for them.
 
 The shared CDP client validates URL syntax without public DNS, tracks the
 terminal main-frame Document request, reads retained body streams with actual
-byte accounting, obtains rendered DOM, returns typed failures, redacts
-wrapper diagnostics, and cleans up streams, targets, sessions, and connections
-on every path. See [Request handling](request_handling.md).
+byte accounting, obtains rendered DOM, returns typed warning-level failures,
+redacts wrapper diagnostics, and cleans up streams, targets, sessions, and
+connections on every path. Obscura 0.1.10 can evict a subresource-heavy page's
+main body before creating its loader alias. The client maps that exact rejection
+to `body-unavailable`; Onyx may continue only with same-navigation HTML/XHTML
+DOM, while PDF/raw/binary paths remain strict. See
+[Request handling](request_handling.md).
 
 ## SearXNG overlay
 

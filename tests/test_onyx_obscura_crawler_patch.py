@@ -123,6 +123,26 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
             self.module._decode_raw(result)
         self.assertEqual(raised.exception.category, FetchFailure.UNSUPPORTED_CHARSET)
 
+    def test_typed_protocol_and_body_failures_are_agent_visible(self):
+        body = ObscuraClientError(
+            FetchFailure.BODY_UNAVAILABLE,
+            "body-stream-open",
+            "hidden detail",
+        )
+        protocol = ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "dom-outer-html",
+            "hidden detail",
+        )
+        self.assertEqual(
+            self.module._reason(body),
+            "same-navigation response body was unavailable",
+        )
+        self.assertEqual(
+            self.module._reason(protocol),
+            "browser protocol failed during dom-outer-html",
+        )
+
     def test_source_contains_no_removed_fetch_fallback(self):
         source = Path(self.module.__file__).read_text()
         self.assertNotIn("requests.get", source)

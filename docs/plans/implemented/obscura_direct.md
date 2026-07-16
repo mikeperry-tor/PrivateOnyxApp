@@ -77,7 +77,24 @@ incomplete plan update.
   abandons waiting without retrying or cancelling an already-sent navigation.
   A deterministic orphan fixture proves completed work is retained and the
   collector returns before the blocked thread. Live parallel stress validation
-  after service restart remains pending.
+  after restart reproduced one `DOM.getOuterHTML` stall at the exact 105-second
+  stage while preserving sibling successes and returning a partial result; no
+  outer 120-second aggregate timeout or retained API-to-CDP socket remained.
+- **2026-07-16 — pinned main-body eviction and typed protocol visibility.** A
+  repeated nine-URL batch showed five ordinary HTTP 200 HTML pages as generic
+  browser failures. Exact replay proved `DOM.getOuterHTML` succeeded but every
+  `Fetch.takeResponseBodyAsStream` was rejected. Obscura 0.1.10 applies its
+  16-entry per-page retained-response limit before creating the navigation
+  loader alias, so subresource-heavy pages can evict the main body before
+  `Page.navigate` returns and no client-side reordering can claim it first. The
+  shared client now maps the sanitized `no cached body` rejection to typed
+  `body-unavailable`, preserves same-navigation HTML/XHTML DOM results only,
+  and keeps PDF/raw/binary paths fail-closed. All typed client failures are
+  warning-level, and Onyx maps protocol, body, charset, and empty-content
+  categories to explicit agent-facing reasons rather than the generic browser
+  failure. Runtime and upgrade docs record the limitation and removal test;
+  increasing the cache entry count is rejected because its byte limit is per
+  entry and would multiply worst-case retention.
 
 ### Resolved initial-testing finding
 
@@ -1647,7 +1664,10 @@ than authenticated; CONNECT enforcement cannot inspect encrypted paths or
 response content; Obscura fully buffers a response before downstream limits;
 its network body byte limit applies per retained body, the entry count and
 base64/alias copies can multiply memory, and the distinct aggregate IO-stream
-limit does not cap total process memory; a CDP connection accepted while its selected worker is
+limit does not cap total process memory; the pinned entry eviction can remove
+the main Document before its loader alias is created, so same-navigation HTML
+uses its rendered DOM while formats requiring original bytes fail visibly; a
+CDP connection accepted while its selected worker is
 navigating can leave an otherwise unreachable blank page/session retained
 until worker restart because the pinned disconnect path does not clean that
 pre-dispatch state;

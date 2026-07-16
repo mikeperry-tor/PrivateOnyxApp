@@ -55,14 +55,68 @@ JS HTML, HTTP and JavaScript redirects, PDF, accepted raw text, unsupported and
 oversized content, challenge/status failures, one origin navigation, body/DOM
 byte limits, complete cleanup, and no reconnect/refetch.
 
+### Pinned Obscura limitations and wrapper handling
+
+Treat each item below as an explicit removal checkpoint on every Obscura pin
+change. Do not carry a workaround forward merely because its old fixture still
+passes:
+
+- **Main Document retained-body eviction.** In 0.1.10 the per-page response
+  store applies `OBSCURA_NETWORK_BODY_BUFFER_ENTRIES` to the main Document and
+  subresources alike. The internal main entry can be evicted before
+  `emit_navigation_events` creates its loader-id alias; `Page.navigate` has not
+  returned yet, so no client can claim the body first. The wrapper maps the
+  exact `Fetch.takeResponseBodyAsStream: no cached body` rejection to
+  `body-unavailable` and permits only same-navigation HTML/XHTML DOM processing
+  to continue. PDF/raw/binary handling remains strict. On upgrade, inspect
+  `store_response_body`, eviction order, main-resource alias creation, and
+  command/event ordering; test a page with more retained subresources than the
+  configured entry count. Remove the HTML exception when the tagged image
+  proves the main body remains retrievable. Do not substitute a larger entry
+  count, which multiplies the per-entry memory bound.
+- **Flattened duplicate session IDs.** Obscura 0.1.10 reuses the attached
+  target session ID when Playwright 1.58 calls `new_cdp_session(page)`, causing
+  the driver to reject a duplicate target. The shared client uses one minimal
+  raw WebSocket CDP session. Re-test the high-level API on either pin change and
+  remove the raw transport only if one navigation, event ordering, actual-body
+  access, deadlines, redaction, and cleanup remain equivalent.
+- **Deferred, non-atomic cookie clearing.** `Network.clearBrowserCookies` can
+  wait behind work on the selected child, and another client can interleave
+  between the clear and navigation. The wrapper treats clearing as best effort
+  and makes no per-user isolation claim. Re-audit command dispatch, default
+  context sharing, and two-client interleavings; prefer an upstream isolated
+  context if one becomes complete and supported.
+- **Connection-arrival hidden page/session retention.** A connection assigned
+  during an active navigation can create pre-dispatch blank state that its
+  disconnect path does not reclaim. The wrapper bounds client commands and
+  closes its WebSocket but does not pretend that this reclaims inaccessible
+  server state; worker restart remains the eventual cleanup. Re-test connection
+  churn and worker memory.
+- **Renderer stalls and incomplete multi-worker diagnostics.** DOM and cleanup
+  commands can fail to answer, the multi-worker launcher discards child
+  stdout/stderr, and the single-worker path can log full URLs. Caller-owned
+  absolute setup/request/cleanup deadlines, opaque correlation IDs, sanitized
+  stages, and warning-level typed failures provide the wrapper boundary.
+  Re-test a permanently blocked command, target/connection cleanup, child-log
+  forwarding, and URL redaction before removing any deadline or diagnostic.
+- **Body-memory and classification gaps.** The server fully allocates a
+  response before retention checks; the network byte limit is per entry and is
+  amplified by entry count, base64, and aliases; the IO store is separately
+  aggregate-bounded; and the stream API does not expose the internal
+  text/binary decision. Retain strict limits and the mirrored
+  `is_text_like_content_type` predicate until the tagged source and runtime
+  tests provide authoritative aggregate accounting and classification.
+- **Local-file and health gaps.** Disabling `--allow-file-access` does not
+  repair the pinned ES-module local-file-read path, and the round-robin health
+  endpoint does not establish aggregate child health. Keep the container
+  unprivileged/read-only and free of private mounts, and keep request failures
+  visible rather than adding public probes or a fallback browser. Re-audit both
+  source paths on upgrade.
+
 Playwright Python remains pinned to the version supplied by Onyx (1.58.0 at
 the current baseline) for compatibility auditing and derived-image validation.
-At the current pins, its public `new_cdp_session(page)` cannot attach to an
-Obscura-created page without a duplicate flattened session-id crash. The
-shared runtime client therefore uses the pinned WebSocket transport. Re-test
-this limitation on either pin change; prefer a supported high-level API only
-if it preserves one navigation, actual-request body access, event ordering,
-and complete cleanup.
+The current duplicate-session restriction and its removal criteria are tracked
+in the pinned-limitations list above.
 
 ## Onyx API patch audit
 

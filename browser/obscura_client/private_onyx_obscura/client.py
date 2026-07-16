@@ -102,6 +102,7 @@ class FetchResult:
     completed_body_bytes: int
     rendered_html: str | None
     body: bytes | None
+    body_failure: FetchFailure | None
     navigation_seconds: float
     body_read_seconds: float
     challenge: FetchFailure | None
@@ -198,6 +199,18 @@ def is_text_like_content_type(content_type: str | None) -> bool:
         }
         or essence.endswith("+json")
         or essence.endswith("+xml")
+    )
+
+
+def _can_preserve_html_dom_without_body(
+    want: str,
+    content_type: str | None,
+    exc: ObscuraClientError,
+) -> bool:
+    return (
+        want == "both"
+        and content_type in {"text/html", "application/xhtml+xml"}
+        and exc.category is FetchFailure.BODY_UNAVAILABLE
     )
 
 
@@ -500,20 +513,30 @@ class _RawCdp:
                                 )
                             )
                         )
+                        retained_body_unavailable = (
+                            method == "Fetch.takeResponseBodyAsStream"
+                            and "NO CACHED BODY" in error_message
+                        )
                         raise ObscuraClientError(
                             (
                                 FetchFailure.TRANSPORT
                                 if navigation_transport_failure
+                                else FetchFailure.BODY_UNAVAILABLE
+                                if retained_body_unavailable
                                 else FetchFailure.PROTOCOL
                             ),
                             (
                                 "navigation-transport"
                                 if navigation_transport_failure
+                                else "body-stream-open"
+                                if retained_body_unavailable
                                 else "cdp-command"
                             ),
                             (
                                 "browser proxy could not resolve or connect to destination"
                                 if navigation_transport_failure
+                                else "same-navigation response body was not retained"
+                                if retained_body_unavailable
                                 else f"Obscura rejected {method}"
                             ),
                         )
@@ -663,18 +686,7 @@ async def fetch(
         )
 
     def _log_failure(exc: ObscuraClientError) -> None:
-        log = (
-            LOGGER.warning
-            if exc.category
-            in {
-                FetchFailure.PRE_NAVIGATION_TIMEOUT,
-                FetchFailure.POST_NAVIGATION_TIMEOUT,
-                FetchFailure.NAVIGATION_TIMEOUT,
-            }
-            or exc.stage == "event-barrier"
-            else LOGGER.info
-        )
-        log(
+        LOGGER.warning(
             "obscura fetch failed request_id=%s category=%s stage=%s "
             "elapsed_seconds=%.3f target_created=%s",
             diagnostic_id,
@@ -866,18 +878,40 @@ async def fetch(
                     FetchFailure.OVERSIZE, "dom", "rendered DOM exceeds the configured byte limit"
                 )
         body = None
+        body_failure = None
         stream_started = time.monotonic()
         if want in {"body", "both"}:
             stage = "body-stream"
-            body = await _drain_body(
-                session,
-                request_id,
-                completed,
-                body_limit,
-                diagnostic_id=diagnostic_id,
-                cleanup_command_timeout_seconds=cleanup_command_timeout_seconds,
-                command_timeout=_request_remaining,
-            )
+            try:
+                body = await _drain_body(
+                    session,
+                    request_id,
+                    completed,
+                    body_limit,
+                    diagnostic_id=diagnostic_id,
+                    cleanup_command_timeout_seconds=cleanup_command_timeout_seconds,
+                    command_timeout=_request_remaining,
+                )
+            except ObscuraClientError as exc:
+                # Obscura 0.1.10 evicts the oldest retained response after a
+                # fixed entry count and creates the main-document loader alias
+                # only after navigation completes. Resource-heavy HTML pages
+                # can therefore lose their main body before the client can
+                # claim it. The rendered DOM is still the authoritative Onyx
+                # input for HTML, so preserve that same-navigation result. Raw
+                # and binary formats still fail closed because they require the
+                # retained body.
+                if _can_preserve_html_dom_without_body(want, content_type, exc):
+                    body_failure = exc.category
+                    LOGGER.warning(
+                        "obscura retained body unavailable request_id=%s "
+                        "stage=%s content_class=html completed_body_bytes=%s",
+                        diagnostic_id,
+                        exc.stage,
+                        completed,
+                    )
+                else:
+                    raise
         classification = (
             BodyClassification.TEXT
             if is_text_like_content_type(headers.get("content-type"))
@@ -886,16 +920,27 @@ async def fetch(
         challenge, challenge_signal = _challenge_details(
             status, final_url, rendered_html
         )
-        completion_log = LOGGER.warning if challenge is not None else LOGGER.info
+        completion_log = (
+            LOGGER.warning
+            if challenge is not None or body_failure is not None
+            else LOGGER.info
+        )
         completion_log(
             "obscura fetch completed request_id=%s status_class=%sxx navigation_seconds=%.3f "
-            "body_read_seconds=%.3f completed_body_bytes=%s challenge=%s "
+            "body_read_seconds=%.3f completed_body_bytes=%s body_state=%s challenge=%s "
             "challenge_signal=%s",
             diagnostic_id,
             status // 100,
             navigation_seconds,
             time.monotonic() - stream_started,
             completed,
+            (
+                "unavailable"
+                if body_failure is not None
+                else "available"
+                if body is not None
+                else "not-requested"
+            ),
             challenge.value if challenge is not None else "none",
             challenge_signal,
         )
@@ -912,11 +957,14 @@ async def fetch(
             loader_id=loader_id,
             request_id=request_id,
             body_classification=classification,
-            original_byte_identity=classification is BodyClassification.BINARY,
+            original_byte_identity=(
+                classification is BodyClassification.BINARY and body is not None
+            ),
             lossy_conversion_possible=classification is BodyClassification.TEXT,
             completed_body_bytes=completed,
             rendered_html=rendered_html,
             body=body,
+            body_failure=body_failure,
             navigation_seconds=navigation_seconds,
             body_read_seconds=time.monotonic() - stream_started,
             challenge=challenge,
