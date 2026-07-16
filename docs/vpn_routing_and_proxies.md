@@ -9,7 +9,7 @@ configured upstream proxy, or the explicit no-VPN system route.
 
 | Class | Callers | Fixed bridge | Policy |
 | --- | --- | --- | --- |
-| Public Onyx | generic helpers, saved public MCP/Web Connector traffic | `onyx-public-egress-bridge` | public destinations only |
+| Public Onyx | generic helpers, saved public MCP/Web Connector traffic, optional stock `open_url` requests/local Chromium | `onyx-public-egress-bridge` | public destinations only |
 | Browser | Obscura workers | `obscura-egress-bridge` | same public listener and destination policy |
 | Executor | enabled code-interpreter pods | `executor-egress-bridge` | same public listener and destination policy |
 | Host-capable Onyx | explicitly selected saved-level host routes, configured inference, embedding shim | `onyx-host-egress-bridge` | public plus exact documented host/RFC1918 exceptions |
@@ -49,10 +49,23 @@ Both `NO_PROXY` and `no_proxy` in `onyx/helper-egress.env` contain the exact
 internal name `obscura-cdp-gateway`. Removed browser intermediaries have no
 compatibility aliases.
 
+`ONYX_AGENT_USE_OBSCURA_BROWSER=false` changes only built-in-crawler
+`open_url`. Its stock requests fetch and conditional local Chromium fallback
+run in `api_server` and use `onyx-public-egress-bridge`; SearXNG continues to
+use Obscura. The requests adapter sets `trust_env=False` and supplies the
+bridge explicitly, so `NO_PROXY` cannot bypass it. Chromium is launched with
+the same fixed proxy and `<-loopback>` bypass rule, which means loopback is
+forced through the proxy rather than using Chromium's implicit direct
+exception. Initial URLs and requests redirects receive public-only structural
+validation without local target DNS; browser redirects and subresources cross
+the same public final-hop policy. This mode cannot select the host-capable
+listener and a broken bridge/proxy has no direct fallback.
+
 ## DNS ownership
 
-Docker DNS resolves only internal service names. Browser target names are
-passed unresolved to the final hop:
+Docker DNS resolves only internal service names. Browser target names, and
+stock-crawler target names when its optional mode is selected, are passed
+unresolved to the final hop:
 
 | Mode | Target DNS and route |
 | --- | --- |

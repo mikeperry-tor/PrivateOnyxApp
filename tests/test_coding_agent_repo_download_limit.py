@@ -169,7 +169,7 @@ class PlaywrightHelperProxyTests(unittest.TestCase):
             launch_calls,
         )
 
-    def test_playwright_launch_receives_helper_proxy_without_internal_bypass(
+    def test_playwright_launch_receives_helper_proxy_with_loopback_forced_to_proxy(
         self,
     ) -> None:
         wrapper = _load_wrapper_module()
@@ -193,6 +193,7 @@ class PlaywrightHelperProxyTests(unittest.TestCase):
                     "headless": True,
                     "proxy": {
                         "server": "http://onyx-public-egress-bridge:3128",
+                        "bypass": "<-loopback>",
                     },
                 }
             ],

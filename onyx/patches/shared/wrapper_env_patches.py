@@ -2833,7 +2833,12 @@ def apply_playwright_helper_proxy_patch() -> None:
             if selected_proxy is None:
                 selected_proxy = proxy_url
             if selected_proxy:
-                kwargs["proxy"] = {"server": selected_proxy}
+                # Chromium otherwise bypasses proxies implicitly for loopback.
+                # Keep redirects and subresources on the selected final hop.
+                kwargs["proxy"] = {
+                    "server": selected_proxy,
+                    "bypass": "<-loopback>",
+                }
             return self._browser_type.launch(*args, **kwargs)
 
     class _PlaywrightProxy:

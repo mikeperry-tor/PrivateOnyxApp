@@ -120,6 +120,21 @@ in the pinned-limitations list above.
 
 ## Onyx API patch audit
 
+Audit both values of `ONYX_AGENT_USE_OBSCURA_BROWSER`. The default must still
+install only the strict direct-Obscura replacement. The `false` mode must
+retain the pinned stock requests and Playwright fallback while the narrow
+egress adapter still matches the crawler's imported `ssrf_safe_get` and
+`fetch_rendered_html` symbols. Confirm every initial URL and requests redirect
+receives public-only structural validation without API-side DNS, the session
+sets `trust_env=False` and explicitly uses `onyx-public-egress-bridge`, the
+Admin private-network value cannot widen it, and Playwright validation is
+scoped to this crawler. Confirm the shared launcher still uses the exact
+public/host proxy selected for each consumer and `<-loopback>` disables direct
+loopback bypass. Exercise a public success, qualifying 403 browser fallback,
+public redirect, private/loopback initial URL and redirect, NXDOMAIN, broken
+bridge, and remote-DNS upstream mode. SearXNG must remain direct Obscura under
+both preference values.
+
 Re-audit the pinned Onyx symbols for:
 
 - `OnyxWebCrawler.contents`, `_fetch_url`, `_fetch_web_content`, outer

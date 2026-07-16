@@ -1,6 +1,6 @@
 # Code Agent Instructions for Private Onyx
 
-This repository is a Docker Compose wrapper for running Onyx with private verified inference, VPN/proxy-routed direct Obscura browser access, SearXNG search, local document RAG, and optional Tailscale exposure.
+This repository is a Docker Compose wrapper for running Onyx with private verified inference, VPN/proxy-routed Obscura browser access, an optional public-proxied stock Onyx crawler mode, SearXNG search, local document RAG, and optional Tailscale exposure.
 
 It is not the upstream Onyx project, nor is it a fork. Most changes here are deployment, Compose, Python sidecar, shell, SearXNG, or runtime-patch changes around upstream projects.
 
@@ -13,7 +13,7 @@ These instructions are intentionally a thin orientation layer. They tell you whe
 Before changing a subsystem, read the matching document below, then inspect the implementation. If the implementation and docs disagree, treat that as a bug to resolve. Do not paper over drift with vague wording.
 
 - `README.md` - user setup, first-run flow, optional features, and host endpoints.
-- `docs/request_handling.md` - direct-Obscura `web_search` and built-in `open_url`, lifecycle waits, body/DOM limits, cookies, and anti-bot behavior.
+- `docs/request_handling.md` - direct-Obscura `web_search`, selectable built-in `open_url` transport, lifecycle waits, body/DOM limits, cookies, and anti-bot behavior.
 - `docs/vpn_routing_and_proxies.md` - trusted VPN namespace, restricted component networks, final-hop proxy policies, explicit no-VPN mode, and optional routing switches.
 - `docs/internal_network_security.md` - restricted component reachability, destination validation, bridge boundaries, Onyx SSRF interaction, and residual risks.
 - `docs/onyx_patch_info.md` - why local runtime patches exist.
@@ -33,7 +33,7 @@ At a high level:
   Research agents the tools selected for the current chat Agent and executes
   complete model-emitted tool batches with bounded concurrency.
 - Onyx `web_search` calls SearXNG, whose custom offline engines navigate and parse rendered provider pages through Obscura.
-- The built-in Onyx Web Crawler and custom SearXNG engines share one audited direct-CDP client and perform one Obscura navigation per target, without HTTP prefetch or browser fallback.
+- By default the built-in Onyx Web Crawler and custom SearXNG engines share one audited direct-CDP client and perform one Obscura navigation per target. `ONYX_AGENT_USE_OBSCURA_BROWSER=false` changes only the built-in crawler to pinned stock requests plus its local Chromium fallback; both stages remain public-only through the fixed Onyx bridge, while SearXNG remains direct Obscura.
 - SearXNG, Obscura, and optional executor pods
   use narrow internal networks. Internet traffic crosses component bridges to
   final-hop policy proxies in the trusted Mysterium routing namespace.
@@ -145,7 +145,7 @@ This stack protects private research, document contents, browsing behavior, infe
   answers return to the selected public final hop. Onyx
   applications must never rejoin `netns-holder` or gain direct fallback when
   VPN, policy-proxy, or bridge connectivity fails.
-- Request handling: keep supported search engines and the built-in crawler on the shared direct-Obscura path; preserve one navigation, event-based waits, provider admission, byte/DOM limits, anti-bot visibility, and complete cleanup. Do not add plain HTTP fetching, hidden retries, browser fallback, or fixed sleeps.
+- Request handling: keep supported search engines on the shared direct-Obscura path. Keep the built-in crawler there by default, preserving one navigation, event-based waits, provider admission, byte/DOM limits, anti-bot visibility, and complete cleanup. The only stock requests/local-Chromium exception is the explicit `ONYX_AGENT_USE_OBSCURA_BROWSER=false` mode; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path. Do not add other hidden retries, fallbacks, or fixed sleeps.
 - Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
 - Patch upgrades: before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
 - Untracked stack files: Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data. Do not read, stage, or rewrite them unless the user explicitly asks.

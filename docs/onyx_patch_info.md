@@ -17,7 +17,14 @@ but is not executable bootstrap code. Compose imports it explicitly through
 This split prevents a base bootstrap from running service-inappropriate code
 and makes missing API-only behavior startup-visible.
 
-## Direct Obscura built-in crawler
+## Selectable built-in crawler
+
+`ONYX_AGENT_USE_OBSCURA_BROWSER` accepts exactly `true` or `false` and defaults
+to the direct Obscura path. The API bootstrap installs exactly one of the two
+strict integrations below; an invalid setting or source-shape mismatch stops
+startup. This switch does not affect the SearXNG direct-Obscura engines.
+
+### Direct Obscura mode
 
 `sitecustomize_api_server/obscura_crawler_patch.py` strictly replaces the
 built-in `OnyxWebCrawler` URL-fetch path. It imports the single client in
@@ -47,6 +54,25 @@ The patch is scoped to the built-in crawler. Deliberately selected external
 Onyx providers keep their upstream implementation and public egress route;
 the wrapper neither migrates saved provider rows nor claims one-navigation or
 provider data-policy guarantees for them.
+
+### Stock Onyx compatibility mode
+
+When the preference is `false`,
+`sitecustomize_api_server/onyx_crawler_egress_patch.py` retains the pinned
+upstream crawler's requests fetch and Playwright Chromium fallback. It replaces
+only the crawler's imported HTTP helper and scopes a structural validator to
+its browser fallback. Both stages are public-only, perform no API-side target
+DNS, and use the exact `onyx-public-egress-bridge`; the Admin SSRF private
+allowance and requests environment/`NO_PROXY` behavior cannot widen this
+LLM-controlled route. The shared Playwright launcher sets `<-loopback>` as its
+proxy bypass value to disable Chromium's implicit direct loopback exception.
+Redirects and subresources remain final-hop policy decisions.
+
+The compatibility path intentionally retains upstream behavior, including a
+possible second origin request when Chromium follows a qualifying requests
+failure and local Chromium's weaker containment inside `api_server`. Obscura
+document/wait settings do not apply. Wrapper character limits and
+mixed-success failure presentation remain separate retained patches.
 
 The shared CDP client validates URL syntax without public DNS, tracks the
 terminal main-frame Document request, reads retained body streams with actual
@@ -93,8 +119,10 @@ embedding shim retain their public/host route-class selection. The exact
 internal Teep base is a startup-validated direct exception. Full-mode doc-drop
 uses its exact local gateway rather than a process-wide direct crawl.
 
-Onyx Playwright consumers outside the direct Obscura crawler retain explicit
-helper proxy routing. This does not create a crawler fallback.
+Onyx Playwright consumers retain explicit helper proxy routing with Chromium's
+implicit loopback bypass disabled. In the default mode this does not create a
+crawler fallback; in stock compatibility mode it carries the intentionally
+retained crawler fallback through the public bridge.
 
 ## Other retained patches
 

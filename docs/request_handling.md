@@ -1,14 +1,14 @@
 # Request handling
 
 This document describes the wrapper-managed `web_search` and built-in Onyx
-Web Crawler `open_url` paths. Both use the pinned Obscura browser directly.
-There is no CRW, preliminary HTTP fetch, local-browser retry, or second origin
-request in either path.
+Web Crawler `open_url` paths. Search always uses the pinned Obscura browser.
+`open_url` uses it by default and has an explicit stock-crawler compatibility
+mode. There is no CRW in either path.
 
 ## Runtime flows
 
 ```text
-Onyx open_url
+Onyx open_url (ONYX_AGENT_USE_OBSCURA_BROWSER=true, default)
   -> private_onyx_obscura shared client
   -> obscura-cdp-gateway (API-only control networks)
   -> Obscura
@@ -24,8 +24,18 @@ Onyx web_search
   -> the same browser bridge and public final hop
 ```
 
-The API container and SearXNG import the same client implementation from
-`browser/obscura_client`. SearXNG connects on `obscura-control`; the API can
+With `ONYX_AGENT_USE_OBSCURA_BROWSER=false`, the `open_url` half instead is:
+
+```text
+Onyx open_url -> stock Onyx requests fetch -> onyx-public-egress-bridge
+              -> public final-hop policy -> target
+              -> local Playwright Chromium through the same bridge
+                 only when the stock crawler selects its browser fallback
+```
+
+In the default mode, the API container and SearXNG import the same client
+implementation from `browser/obscura_client`. SearXNG connects on
+`obscura-control`; the API can
 connect only through `obscura-cdp-gateway` on `onyx-obscura-control`. CDP is
 not published on the host or attached to an Onyx data/backend network.
 
@@ -37,7 +47,7 @@ audited raw transport avoids that incompatible second attachment while
 preserving the exact one-`Page.navigate` contract. The derived SearXNG image
 still pins the audited Playwright package and contains no browser binary.
 
-## One-navigation contract
+## Default Obscura one-navigation contract
 
 For each accepted target the shared client:
 
@@ -149,7 +159,7 @@ separate aggregate accounting, but neither limit is an aggregate browser
 process-memory bound. In-process PDF parsing also has no complete CPU,
 transient-memory, or parser wall-time bound beyond the outer invocation.
 
-## Onyx `open_url`
+## Onyx `open_url`: default Obscura mode
 
 The API-only startup patch strictly replaces the built-in `OnyxWebCrawler`
 fetch path. Patch source-shape drift is startup-fatal. A crawler invocation
@@ -208,6 +218,46 @@ account.
 
 Full-mode doc-drop ingestion, local embedding, and `internal_search` do not use
 Obscura and are unchanged.
+
+## Onyx `open_url`: stock crawler compatibility mode
+
+`ONYX_AGENT_USE_OBSCURA_BROWSER` accepts exactly `true` or `false` and defaults
+to `true`; any other value is startup-fatal. When it is `false`, the API patch
+does not install the direct Obscura crawler replacement. It retains the pinned
+upstream `OnyxWebCrawler`, including its requests-first behavior and its local
+Playwright Chromium fallback for qualifying 403/challenge responses. One URL
+can consequently produce a requests fetch followed by a second browser
+navigation. Upstream request, browser, parser, timeout, size, and failure
+semantics apply; `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` and
+`OBSCURA_BROWSER_WAIT_UNTIL_WEB` do not configure this mode. Wrapper character
+budgets and mixed-result failure reporting remain installed.
+
+The stock transport is still wrapper-constrained. A narrow startup-validated
+adapter replaces only this crawler's imported `ssrf_safe_get`: it validates
+the initial URL and every redirect structurally as public-only, never performs
+target DNS in the API container, creates a requests session with
+`trust_env=False`, ignores the Onyx Admin private-network setting for this
+LLM-controlled path, and supplies the exact public bridge proxy explicitly.
+The crawler's Playwright fallback receives the same scoped structural check.
+All Onyx Playwright launches use an explicit proxy bypass value of
+`<-loopback>`, which disables Chromium's normal implicit loopback exception;
+the initial navigation, browser redirects, and subresources must therefore
+cross the selected fixed bridge. These measures prevent `NO_PROXY`, Admin
+SSRF settings, or a localhost redirect from changing the route class.
+
+The final-hop public policy remains authoritative for target DNS, complete
+answer-set classification, private/special-address denial, and the selected
+VPN/upstream/no-VPN route. A proxy or route failure stays closed. In configured
+remote-DNS upstream mode, the same documented residual applies: the wrapper
+cannot inspect the upstream proxy's answer and relies on it to reject private
+resolution. Local Chromium runs inside `api_server`, rather than the hardened
+Obscura container, and shares that service's process/filesystem trust domain;
+this mode is an operator-selected compatibility tradeoff, not equivalent
+browser containment.
+
+This preference never changes `web_search`. The custom SearXNG engines remain
+direct-Obscura clients with their one-navigation, scheduling, and failure
+contracts.
 
 ## SearXNG search
 
@@ -289,15 +339,18 @@ docker logs onyx-api_server-1 --since 10m
 
 Expected search failures include provider 429, access-denied, CAPTCHA, parser
 mismatch, timeout, and suspension records. They must not become empty-success
-substitutes. For `open_url`, verify the API startup log contains
-`installed strict direct Obscura crawler`. A missing gateway, browser bridge,
-or final hop must fail the feature closed without moving an application onto a
-public network.
+substitutes. For `open_url`, verify the API startup log contains either
+`installed strict direct Obscura crawler` (default) or
+`installed proxied stock Onyx crawler with public-only requests and Playwright
+fallback` (compatibility mode). A missing gateway, selected bridge, or final
+hop must fail the feature closed without moving an application onto a public
+network.
 
 Relevant controls are documented in `.env.wrapper.example`:
 
 - `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` and
   `OBSCURA_BROWSER_WAIT_UNTIL_WEB`;
+- `ONYX_AGENT_USE_OBSCURA_BROWSER`;
 - `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB`;
 - `EGRESS_ALLOW_HTTP_URLS`;
 - `SEARXNG_ROUND_ROBIN`;

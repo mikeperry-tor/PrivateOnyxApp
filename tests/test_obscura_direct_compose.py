@@ -15,6 +15,10 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         cls.no_proxy = (ROOT / "onyx/helper-egress.env").read_text()
 
     def test_direct_topology_literals(self):
+        self.assertIn(
+            'ONYX_AGENT_USE_OBSCURA_BROWSER: "${ONYX_AGENT_USE_OBSCURA_BROWSER:-true}"',
+            self.compose,
+        )
         self.assertIn('ONYX_OBSCURA_CDP_URL: "ws://obscura-cdp-gateway:9222/devtools/browser"', self.compose)
         self.assertIn('SEARXNG_OBSCURA_CDP_URL: "ws://obscura:9222/devtools/browser"', self.compose)
         self.assertIn('networks: [onyx-obscura-control, obscura-control]', self.compose)

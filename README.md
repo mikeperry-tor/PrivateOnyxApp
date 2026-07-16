@@ -4,7 +4,7 @@ This stack gets you a private deep research agent with code sub-agents and RAG d
 
 The stack is built around [Onyx](https://github.com/onyx-dot-app/onyx) using [teep](https://github.com/13rac1/teep) for private verified LLM inference.
 
-Search and built-in `open_url` traffic is rendered by customized [SearXNG](https://github.com/searxng/searxng) engines and the Onyx Web Crawler through [Obscura Browser](https://github.com/h4ckf0r0day/obscura).
+Search and, by default, built-in `open_url` traffic is rendered by customized [SearXNG](https://github.com/searxng/searxng) engines and the Onyx Web Crawler through [Obscura Browser](https://github.com/h4ckf0r0day/obscura). An explicit compatibility setting can retain Onyx's stock requests/Playwright crawler for `open_url` without changing search.
 
 Agent web traffic uses the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, or explicit no-VPN routing mode. Proxy support is available either in addition to Mysterium or instead of it.
 
@@ -28,7 +28,7 @@ The Docker Compose files in this stack relies on the following components:
 
 3. [Mysterium](https://github.com/mysteriumnetwork/node) is a Wireguard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. The use of residential IP addresses reduces the rate of captchas and rate limiting by search engines and websites. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
-4. [Obscura](https://github.com/h4ckf0r0day/obscura) provides the built-in Onyx Web Crawler and custom search engines with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy in the selected Myst/proxy/no-VPN routing namespace.
+4. [Obscura](https://github.com/h4ckf0r0day/obscura) provides the default built-in Onyx Web Crawler and all custom search engines with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy in the selected Myst/proxy/no-VPN routing namespace. With `ONYX_AGENT_USE_OBSCURA_BROWSER=false`, only the built-in crawler uses Onyx's stock HTTP fetch and local Chromium fallback through the fixed public Onyx bridge.
 
 5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. The wrapper-provided Google, Brave, DuckDuckGo, Startpage, and Bing offline engines navigate and parse rendered result pages through Obscura. SearXNG owns provider scheduling, retries after unresponsive providers, and suspension after visible anti-bot failures.
 
@@ -313,11 +313,26 @@ Existing deployments must replace previously saved SearXNG localhost URLs and
 select the built-in crawler after upgrading. Saved Onyx Admin values are not
 rewritten by Compose.
 
-Each built-in crawler fetch performs one main browser navigation. The default
-document limit is 50 MiB (`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB`); larger values
+In the default mode, each built-in crawler fetch performs one main browser
+navigation. The default document limit is 50 MiB
+(`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB`); larger values
 increase memory exposure across five API fetch permits and five fixed Obscura
 workers. Search and web waits are separately configured by
 `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` and `OBSCURA_BROWSER_WAIT_UNTIL_WEB`.
+
+`ONYX_AGENT_USE_OBSCURA_BROWSER=true` is the default. Set it to `false` and
+restart the stack to use the pinned upstream Onyx crawler for `open_url`:
+its requests fetch runs first and its local Playwright Chromium fallback is
+retained for qualifying blocked responses. The wrapper replaces the stock
+local-DNS fetch guard with public-only structural validation, disables
+requests environment/`NO_PROXY` routing and Chromium's implicit loopback
+bypass, and sends both stages through `onyx-public-egress-bridge`. The final
+hop therefore remains authoritative for target DNS, private-address denial,
+VPN/upstream selection, and redirects/subresources. This compatibility mode
+can make two target requests when Chromium fallback is attempted, runs the
+browser inside the trusted API container, and does not use the Obscura
+document-size or wait settings. SearXNG and its provider scheduling continue
+to use Obscura regardless of this preference.
 
 Selecting Firecrawl, Exa, or another external provider is still supported via
 Onyx's public route, but is outside this one-navigation guarantee. That
