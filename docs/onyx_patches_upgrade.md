@@ -39,6 +39,10 @@ Audit these Obscura 0.1.10 areas (or their new equivalents):
 - the cumulative 45-second pre-navigation deadline across connect, cookie
   clear, target creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
+- caller-specific absolute attempt deadlines covering navigation, event wait,
+  DOM commands, body-stream creation and reads; exact post-navigation expiry
+  stages; and the five-second-before-outer-deadline Onyx partial collector that
+  finalizes queued work, preserves ordered completions, and does not retry;
 - proxy resolution, redirect/subresource enforcement, logging/full-URL
   exposure, file-access guards, and the accepted ES-module local-file path.
 - bounded structural challenge parsing that excludes script/style/template/
@@ -85,6 +89,10 @@ or startup enforcement of the operator's saved crawler choice.
 Verify mixed-success batches retain successful documents and citations while
 appending the final post-fallback per-URL failure reasons to the LLM-facing
 response; all-failure and timeout-only response forms must remain unchanged.
+Inject a permanently blocked per-URL worker and prove completed siblings return
+in order before the outer deadline, the unfinished URL receives a visible
+failure, queued work cannot navigate after collection finalization, and the
+blocked CDP operation expires at its exact logged stage and releases its permit.
 
 ## SearXNG audit
 

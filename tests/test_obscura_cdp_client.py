@@ -125,6 +125,29 @@ class ObscuraClientTests(unittest.TestCase):
 
         asyncio.run(exercise())
 
+    def test_post_navigation_command_timeout_is_typed_and_stage_specific(self):
+        class WebSocket:
+            async def send(self, _message):
+                return None
+
+            async def recv(self):
+                await asyncio.Future()
+
+        async def exercise():
+            with self.assertRaises(ObscuraClientError) as raised:
+                await _RawCdp(WebSocket()).send(
+                    "DOM.getOuterHTML",
+                    timeout_seconds=0.001,
+                    timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+                    timeout_stage="dom-outer-html",
+                )
+            self.assertEqual(
+                raised.exception.category, FetchFailure.POST_NAVIGATION_TIMEOUT
+            )
+            self.assertEqual(raised.exception.stage, "dom-outer-html")
+
+        asyncio.run(exercise())
+
     def test_challenge_detection_ignores_script_only_captcha_markers(self):
         challenge, signal = _challenge_details(
             200,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -82,6 +83,36 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
         )
         self.assertEqual(all_failed.llm_facing_response, "failed")
 
+    def test_result_collection_returns_completed_work_without_waiting_for_orphan(self):
+        release = threading.Event()
+        state = self.module.InvocationState(time.monotonic() + 0.08)
+
+        def fetch_one(url):
+            if url == "slow":
+                release.wait(1)
+            return f"result:{url}"
+
+        def failure(url, reason):
+            return SimpleNamespace(url=url, failure_reason=reason)
+
+        started = time.monotonic()
+        try:
+            results = self.module._collect_url_results(
+                ["fast", "slow"],
+                state,
+                fetch_one,
+                failure,
+                max_workers=2,
+                headroom_seconds=0.02,
+            )
+        finally:
+            release.set()
+        self.assertLess(time.monotonic() - started, 0.3)
+        self.assertEqual(results[0], "result:fast")
+        self.assertEqual(results[1].url, "slow")
+        self.assertIn("collection deadline", results[1].failure_reason)
+        self.assertFalse(state.permits_navigation())
+
     def test_raw_text_decoding_is_strict_and_charset_bounded(self):
         result = SimpleNamespace(
             body=b"hello", body_classification=BodyClassification.TEXT, charset="utf-8"
@@ -106,6 +137,8 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
             source,
         )
         self.assertIn("Partial open_url failure report:", source)
+        self.assertIn("BROWSER_ATTEMPT_TIMEOUT_SECONDS = 105.0", source)
+        self.assertIn("executor.shutdown(wait=False, cancel_futures=True)", source)
 
 
 if __name__ == "__main__":

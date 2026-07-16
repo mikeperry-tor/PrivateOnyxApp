@@ -160,6 +160,20 @@ presentation gap where per-URL reasons were emitted only when every URL failed.
 Timeout-only and all-failure responses keep their normal upstream form, and
 denial/challenge response bodies are never passed to the model.
 
+Each Onyx browser attempt has a 105-second absolute bound from connection start;
+each SearXNG attempt has a 50-second bound beneath its 60-second engine timeout.
+Navigation, the completion event, DOM commands, retained-body stream creation,
+and every stream read use only the remaining attempt budget and report the exact
+sanitized expiry stage. Cleanup remains independently bounded.
+
+Onyx stops collecting per-URL work five seconds before its 120-second outer
+deadline. It preserves completed results in requested-URL order, represents
+unfinished work as explicit per-URL failures, finalizes the shared invocation
+so queued workers cannot begin a late navigation, and returns without waiting
+for an orphaned thread. It neither retries nor cancels a navigation already
+sent; that background attempt is instead bounded by its own absolute deadline
+and must release its browser permit during cleanup.
+
 Operators must select **Onyx Web Crawler** in the Web Search Admin page to use
 this path. The wrapper does not rewrite saved provider rows or enforce a
 provider choice at startup. Deliberately selecting Firecrawl, Exa, or another

@@ -23,6 +23,7 @@ ALLOW_HTTP = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in {
     "1", "true", "yes", "on"
 }
 SEARCH_DOM_LIMIT = 20 * 1024 * 1024
+SEARCH_BROWSER_ATTEMPT_TIMEOUT_SECONDS = 50.0
 MINIMUM_START_INTERVAL = 3.0
 
 TERMINAL_HOSTS = {
@@ -119,6 +120,7 @@ def navigate(engine_name: str, target_url: str) -> str:
                 body_limit=SEARCH_DOM_LIMIT,
                 dom_limit=SEARCH_DOM_LIMIT,
                 want="dom",
+                request_timeout_seconds=SEARCH_BROWSER_ATTEMPT_TIMEOUT_SECONDS,
                 pre_navigation_guard=record_start,
             )
         except ObscuraClientError as exc:

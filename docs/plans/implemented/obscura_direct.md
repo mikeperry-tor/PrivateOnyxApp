@@ -64,6 +64,41 @@ incomplete plan update.
   response whenever rich successful results also exist. All-failure and timeout
   responses retain their upstream forms, successful documents/citations remain
   unchanged, and no failure page body is exposed.
+- **2026-07-16 — bounded post-navigation work and partial-result collection.**
+  Every shared-client attempt now has a caller-owned absolute deadline in
+  addition to the cumulative 45-second setup limit: Onyx supplies at most 105
+  seconds and SearXNG supplies 50 seconds. `Page.navigate`, the completion
+  event, DOM retrieval, retained-body stream creation, and every `IO.read` use
+  only the remaining attempt budget and emit a typed, URL-free stage on expiry;
+  cleanup retains its separate five-second command bound. Onyx collection ends
+  five seconds before its 120-second outer deadline, returns completed URL
+  results in input order, creates explicit failures for unfinished URLs, marks
+  the shared invocation finalized so queued work cannot navigate late, and
+  abandons waiting without retrying or cancelling an already-sent navigation.
+  A deterministic orphan fixture proves completed work is retained and the
+  collector returns before the blocked thread. Live parallel stress validation
+  after service restart remains pending.
+
+### Resolved initial-testing finding
+
+- **2026-07-16 — post-navigation orphan and aggregate head-of-line timeout.**
+  A model emitted 12 URLs; pinned Onyx truncated the batch to its configured
+  maximum of 10. The crawler completed multiple requests, including two typed
+  HTTP denials, but one CDP WebSocket remained established for more than five
+  minutes after the crawl future hit its 120-second outer timeout. No
+  `pre-navigation-timeout` occurred, so the cumulative setup guard was not the
+  failing boundary. The remaining candidate is an unbounded post-navigation
+  CDP command (`Page.navigate`, DOM retrieval, retained-body stream setup/read,
+  or a missing command response); the five-second event barrier and bounded
+  cleanup paths did not report expiry. Because `OnyxWebCrawler.contents()`
+  waits for its complete nested executor result, the one orphan caused the
+  outer crawl future to return no crawler results to the agent, including
+  already-completed successes. A subsequent six-URL batch returned three
+  successes while the orphaned socket remained, demonstrating degraded rather
+  than total renderer/API capacity. The bounded post-navigation and
+  deadline-aware partial-collection correction above resolves the identified
+  client-side failure mode without a second navigation or unsafe retry; live
+  reproduction after restart remains a completion-review checkpoint.
 
 Deterministic validation passed at implementation time. A live explicit
 no-VPN run returned HTTP 200 for a direct built-in-crawler transport fetch of

@@ -25,6 +25,7 @@ from urllib.parse import SplitResult, unquote, urlsplit, urlunsplit
 LOGGER = logging.getLogger("private_onyx_obscura")
 PRE_NAVIGATION_TIMEOUT_SECONDS = 45.0
 CLEANUP_COMMAND_TIMEOUT_SECONDS = 5.0
+REQUEST_TIMEOUT_SECONDS = 105.0
 ALLOWED_WAIT_UNTIL = frozenset(
     {"domcontentloaded", "load", "networkidle0", "networkidle2"}
 )
@@ -52,6 +53,7 @@ class FetchFailure(StrEnum):
     INVALID_URL = "invalid-url"
     POLICY_DENIED = "final-hop-policy-denied"
     PRE_NAVIGATION_TIMEOUT = "pre-navigation-timeout"
+    POST_NAVIGATION_TIMEOUT = "post-navigation-timeout"
     NAVIGATION_TIMEOUT = "navigation-timeout"
     HTTP_STATUS = "http-status"
     ACCESS_DENIED = "access-denied"
@@ -362,12 +364,17 @@ async def _drain_body(
     *,
     diagnostic_id: str,
     cleanup_command_timeout_seconds: float,
+    command_timeout: Callable[[str], float],
 ) -> bytes:
     handle: str | None = None
     data = bytearray()
     try:
         opened = await session.send(
-            "Fetch.takeResponseBodyAsStream", {"requestId": request_id}
+            "Fetch.takeResponseBodyAsStream",
+            {"requestId": request_id},
+            timeout_seconds=command_timeout("body-stream-open"),
+            timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+            timeout_stage="body-stream-open",
         )
         handle = opened.get("stream")
         if not isinstance(handle, str) or not handle:
@@ -375,7 +382,13 @@ async def _drain_body(
                 FetchFailure.PROTOCOL, "body", "Obscura returned an invalid body handle"
             )
         while True:
-            chunk = await session.send("IO.read", {"handle": handle, "size": 1 << 20})
+            chunk = await session.send(
+                "IO.read",
+                {"handle": handle, "size": 1 << 20},
+                timeout_seconds=command_timeout("body-stream-read"),
+                timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+                timeout_stage="body-stream-read",
+            )
             raw = chunk.get("data", "")
             if not isinstance(raw, str):
                 raise ObscuraClientError(
@@ -565,6 +578,7 @@ async def fetch(
     event_timeout_seconds: float = 5.0,
     pre_navigation_timeout_seconds: float = PRE_NAVIGATION_TIMEOUT_SECONDS,
     cleanup_command_timeout_seconds: float = CLEANUP_COMMAND_TIMEOUT_SECONDS,
+    request_timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     pre_navigation_guard: Callable[[], bool] | None = None,
 ) -> FetchResult:
     """Perform exactly one Obscura navigation and consume only its output."""
@@ -574,11 +588,16 @@ async def fetch(
         raise ValueError("pre-navigation timeout must be positive and finite")
     if not math.isfinite(cleanup_command_timeout_seconds) or cleanup_command_timeout_seconds <= 0:
         raise ValueError("cleanup command timeout must be positive and finite")
+    if not math.isfinite(request_timeout_seconds) or request_timeout_seconds <= 0:
+        raise ValueError("request timeout must be positive and finite")
     wait_until = validate_wait_until(wait_until)
     navigation_url, _fragment = normalize_public_url(url, allow_http=allow_http)
     started = time.monotonic()
     diagnostic_id = uuid.uuid4().hex[:12]
-    pre_navigation_deadline = started + pre_navigation_timeout_seconds
+    request_deadline = started + request_timeout_seconds
+    pre_navigation_deadline = min(
+        started + pre_navigation_timeout_seconds, request_deadline
+    )
     websocket = cdp = session = None
     target_id: str | None = None
     stream_started = started
@@ -591,6 +610,18 @@ async def fetch(
         if remaining <= 0:
             raise ObscuraClientError(
                 FetchFailure.PRE_NAVIGATION_TIMEOUT,
+                stage,
+                f"Obscura did not complete {stage} before its deadline",
+            )
+        return remaining
+
+    def _request_remaining(next_stage: str) -> float:
+        nonlocal stage
+        stage = next_stage
+        remaining = request_deadline - time.monotonic()
+        if remaining <= 0:
+            raise ObscuraClientError(
+                FetchFailure.POST_NAVIGATION_TIMEOUT,
                 stage,
                 f"Obscura did not complete {stage} before its deadline",
             )
@@ -613,11 +644,33 @@ async def fetch(
             timeout_stage=setup_stage,
         )
 
+    async def _post_navigation_send(
+        transport: _RawCdp,
+        method: str,
+        params: dict | None = None,
+        *,
+        session_id: str | None = None,
+        command_stage: str,
+        timeout_category: FetchFailure = FetchFailure.POST_NAVIGATION_TIMEOUT,
+    ) -> dict:
+        return await transport.send(
+            method,
+            params,
+            session_id=session_id,
+            timeout_seconds=_request_remaining(command_stage),
+            timeout_category=timeout_category,
+            timeout_stage=command_stage,
+        )
+
     def _log_failure(exc: ObscuraClientError) -> None:
         log = (
             LOGGER.warning
             if exc.category
-            in {FetchFailure.PRE_NAVIGATION_TIMEOUT, FetchFailure.NAVIGATION_TIMEOUT}
+            in {
+                FetchFailure.PRE_NAVIGATION_TIMEOUT,
+                FetchFailure.POST_NAVIGATION_TIMEOUT,
+                FetchFailure.NAVIGATION_TIMEOUT,
+            }
             or exc.stage == "event-barrier"
             else LOGGER.info
         )
@@ -633,11 +686,12 @@ async def fetch(
 
     LOGGER.info(
         "obscura fetch started request_id=%s wait_until=%s want=%s "
-        "pre_navigation_timeout_seconds=%.1f",
+        "pre_navigation_timeout_seconds=%.1f request_timeout_seconds=%.1f",
         diagnostic_id,
         wait_until,
         want,
         pre_navigation_timeout_seconds,
+        request_timeout_seconds,
     )
     try:
         from websockets.asyncio.client import connect
@@ -714,16 +768,33 @@ async def fetch(
             time.monotonic() - started,
         )
         nav_started = time.monotonic()
-        nav = await session.send(
-            "Page.navigate", {"url": navigation_url, "waitUntil": wait_until}
+        nav = await _post_navigation_send(
+            cdp,
+            "Page.navigate",
+            {"url": navigation_url, "waitUntil": wait_until},
+            session_id=session_id,
+            command_stage="navigate",
+            timeout_category=FetchFailure.NAVIGATION_TIMEOUT,
         )
         loader_id = str(nav.get("loaderId", ""))
         stage = "event-barrier"
-        await cdp.wait_for_event(
-            "Page.frameStoppedLoading",
-            lambda event: event.get("frameId") == frame_id,
-            event_timeout_seconds,
+        event_budget = min(
+            event_timeout_seconds, _request_remaining("event-barrier")
         )
+        try:
+            await cdp.wait_for_event(
+                "Page.frameStoppedLoading",
+                lambda event: event.get("frameId") == frame_id,
+                event_budget,
+            )
+        except asyncio.TimeoutError as exc:
+            if time.monotonic() >= request_deadline:
+                raise ObscuraClientError(
+                    FetchFailure.POST_NAVIGATION_TIMEOUT,
+                    "event-barrier",
+                    "Obscura did not complete event-barrier before its deadline",
+                ) from exc
+            raise
         navigation_seconds = time.monotonic() - nav_started
         stage = "terminal-events"
         documents = [
@@ -769,10 +840,22 @@ async def fetch(
         rendered_html = None
         if want in {"dom", "both"}:
             stage = "dom-document"
-            document_node = await session.send("DOM.getDocument", {"depth": 0})
+            document_node = await _post_navigation_send(
+                cdp,
+                "DOM.getDocument",
+                {"depth": 0},
+                session_id=session_id,
+                command_stage="dom-document",
+            )
             node_id = document_node.get("root", {}).get("nodeId")
             stage = "dom-outer-html"
-            outer = await session.send("DOM.getOuterHTML", {"nodeId": node_id})
+            outer = await _post_navigation_send(
+                cdp,
+                "DOM.getOuterHTML",
+                {"nodeId": node_id},
+                session_id=session_id,
+                command_stage="dom-outer-html",
+            )
             rendered_html = outer.get("outerHTML")
             if not isinstance(rendered_html, str):
                 raise ObscuraClientError(
@@ -793,6 +876,7 @@ async def fetch(
                 body_limit,
                 diagnostic_id=diagnostic_id,
                 cleanup_command_timeout_seconds=cleanup_command_timeout_seconds,
+                command_timeout=_request_remaining,
             )
         classification = (
             BodyClassification.TEXT

@@ -7,7 +7,7 @@ import inspect
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
@@ -19,6 +19,8 @@ from private_onyx_obscura import fetch_sync
 from private_onyx_obscura import validate_wait_until
 
 OPEN_URL_TIMEOUT_SECONDS = 120
+BROWSER_ATTEMPT_TIMEOUT_SECONDS = 105.0
+RESULT_COLLECTION_HEADROOM_SECONDS = 5.0
 HTML_LIMIT_BYTES = 20 * 1024 * 1024
 ACTIVE_FETCHES = threading.BoundedSemaphore(5)
 _STATE: contextvars.ContextVar["InvocationState | None"] = contextvars.ContextVar(
@@ -119,6 +121,7 @@ def _reason(exc: ObscuraClientError) -> str:
         FetchFailure.INVALID_URL: "URL is invalid or forbidden by public-only browser policy",
         FetchFailure.POLICY_DENIED: "destination was denied by the final-hop policy",
         FetchFailure.PRE_NAVIGATION_TIMEOUT: "browser setup timed out before navigation",
+        FetchFailure.POST_NAVIGATION_TIMEOUT: "browser response processing timed out",
         FetchFailure.TRANSPORT: "browser proxy could not resolve or connect to destination",
         FetchFailure.NAVIGATION_TIMEOUT: "browser navigation timed out",
         FetchFailure.OVERSIZE: "response exceeded the configured maximum size",
@@ -140,6 +143,47 @@ def _append_partial_failure_report(response, failures, build_failure_message):
         + failure_report
     )
     return response
+
+
+def _collect_url_results(
+    urls,
+    state: InvocationState,
+    fetch_one,
+    failure_factory,
+    *,
+    max_workers: int = 5,
+    headroom_seconds: float = RESULT_COLLECTION_HEADROOM_SECONDS,
+):
+    if not urls:
+        return []
+    executor = ThreadPoolExecutor(max_workers=min(max_workers, len(urls)))
+    future_to_index = {
+        executor.submit(fetch_one, target): index
+        for index, target in enumerate(urls)
+    }
+    results = [None] * len(urls)
+    try:
+        collection_timeout = max(0.0, state.remaining() - headroom_seconds)
+        done, pending = wait(future_to_index, timeout=collection_timeout)
+        for future in done:
+            index = future_to_index[future]
+            try:
+                results[index] = future.result()
+            except Exception:
+                results[index] = failure_factory(
+                    urls[index], "browser worker failed before producing a result"
+                )
+        if pending:
+            state.finish()
+            for future in pending:
+                index = future_to_index[future]
+                future.cancel()
+                results[index] = failure_factory(
+                    urls[index], "open_url result collection deadline expired"
+                )
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return results
 
 
 def _decode_raw(result) -> str:
@@ -171,6 +215,12 @@ def _direct_fetch(url: str, state: InvocationState):
     try:
         if not state.permits_navigation():
             return _failure(url, "open_url invocation timed out before navigation")
+        attempt_timeout = min(
+            BROWSER_ATTEMPT_TIMEOUT_SECONDS,
+            state.remaining() - RESULT_COLLECTION_HEADROOM_SECONDS,
+        )
+        if attempt_timeout <= 0:
+            return _failure(url, "open_url invocation timed out before navigation")
         result = fetch_sync(
             url,
             cdp_url=CDP_URL,
@@ -179,6 +229,7 @@ def _direct_fetch(url: str, state: InvocationState):
             body_limit=DOCUMENT_LIMIT_BYTES,
             dom_limit=HTML_LIMIT_BYTES,
             want="both",
+            request_timeout_seconds=attempt_timeout,
             pre_navigation_guard=state.permits_navigation,
         )
         if result.challenge is not None:
@@ -294,8 +345,12 @@ def install() -> None:
         state = _STATE.get() or InvocationState(
             time.monotonic() + OPEN_URL_TIMEOUT_SECONDS
         )
-        with ThreadPoolExecutor(max_workers=min(5, len(urls))) as executor:
-            return list(executor.map(lambda target: _direct_fetch(target, state), urls))
+        return _collect_url_results(
+            urls,
+            state,
+            lambda target: _direct_fetch(target, state),
+            _failure,
+        )
 
     def _fetch_web_content(self, urls, url_snippet_map):
         if not isinstance(self._provider, crawler.OnyxWebCrawler):
