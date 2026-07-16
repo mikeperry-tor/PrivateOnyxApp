@@ -97,10 +97,16 @@ DOM, while PDF/raw/binary paths remain strict. See
 
 ## SearXNG overlay
 
-The derived `searxng/Dockerfile` installs all build-time pinned Python
+The derived image is based on SearXNG `2026.7.15-7b2199ecd` and strictly
+validates the upstream offline processor, search orchestration, result
+container, timeout, and exception shapes used by its runtime patches. The
+derived `searxng/Dockerfile` installs all build-time pinned Python
 dependencies, including the audited Playwright 1.58 client, from the generated
 hashed `searxng/requirements.txt` lock. It downloads neither a browser nor
-packages at runtime. The
+packages at runtime. Compose explicitly exposes the wrapper patch directory,
+the SearXNG application root, and the shared client directory to the embedded
+Python interpreter so patch or client import failure remains startup-visible.
+The
 runtime direct client uses pinned WebSockets because Playwright's public page
 session attachment is incompatible with Obscura 0.1.10's reused flattened
 session identifier.

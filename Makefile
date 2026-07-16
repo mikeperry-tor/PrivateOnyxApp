@@ -213,7 +213,7 @@ help:
 	@echo "Version manifest: $(VERSION_FILE) (override with VERSION_FILE=...)"
 	@echo "Override env file: make up-lite ENV_FILE=.env.wrapper"
 	@echo "Override Onyx tag: make onyx-build ONYX_IMAGE_TAG=v3.2.12"
-	@echo "Override SearXNG tag: make searxng-image-ready SEARXNG_IMAGE_TAG=2026.6.26-f8ffbf36f"
+	@echo "Override SearXNG tag: make searxng-image-ready SEARXNG_IMAGE_TAG=2026.7.15-7b2199ecd"
 	@echo "Override code-interpreter tag: make up-lite CODE_INTERPRETER_IMAGE_TAG=0.4.4"
 	@echo "Override config ref: make upgrade-onyx ONYX_CONFIG_REF=main"
 	@echo "Override install-time low-port remap: make up-full ONYX_INSTALL_HOST_PORT_80=3001"

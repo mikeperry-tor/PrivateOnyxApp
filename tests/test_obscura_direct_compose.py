@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         cls.manifest = (ROOT / "stack.versions.env").read_text()
         cls.no_proxy = (ROOT / "onyx/helper-egress.env").read_text()
         cls.searxng_dockerfile = (ROOT / "searxng/Dockerfile").read_text()
+        cls.searxng_compose = (ROOT / "searxng/docker-compose.yml").read_text()
         cls.makefile = (ROOT / "Makefile").read_text()
 
     def test_direct_topology_literals(self):
@@ -47,6 +49,14 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertNotIn("./onyx/patches/sitecustomize:/app/wrapper-patches", self.lite)
 
     def test_searxng_build_consumes_generated_dependency_lock(self):
+        image_tag = re.search(
+            r"^SEARXNG_IMAGE_TAG=(.+)$", self.manifest, re.MULTILINE
+        )
+        self.assertIsNotNone(image_tag)
+        self.assertIn(
+            f"ARG SEARXNG_UPSTREAM_IMAGE=docker.io/searxng/searxng:{image_tag.group(1)}",
+            self.searxng_dockerfile,
+        )
         self.assertIn(
             "COPY searxng/requirements.txt /tmp/requirements.txt",
             self.searxng_dockerfile,
@@ -57,6 +67,14 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             '--build-arg ONYX_BACKEND_IMAGE="$(ONYX_BACKEND_IMAGE)"',
             self.makefile,
         )
+
+    def test_searxng_pythonpath_exposes_patch_app_and_shared_client(self):
+        self.assertIn(
+            'PYTHONPATH: "/usr/local/searxng/wrapper-patches:'
+            '/usr/local/searxng:/usr/local/lib"',
+            self.searxng_compose,
+        )
+        self.assertNotIn("${PYTHONPATH:-}", self.searxng_compose)
 
 
 if __name__ == "__main__":

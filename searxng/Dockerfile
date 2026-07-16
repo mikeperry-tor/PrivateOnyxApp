@@ -1,4 +1,4 @@
-ARG SEARXNG_UPSTREAM_IMAGE=docker.io/searxng/searxng:2026.6.26-f8ffbf36f
+ARG SEARXNG_UPSTREAM_IMAGE=docker.io/searxng/searxng:2026.7.15-7b2199ecd
 
 FROM python:3.14-slim-bookworm AS python-runtime-deps
 COPY searxng/requirements.txt /tmp/requirements.txt

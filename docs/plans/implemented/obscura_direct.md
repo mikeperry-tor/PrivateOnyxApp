@@ -292,7 +292,7 @@ re-audit these symbols in the matching `reference_repos/` checkouts:
 | Component | Plan baseline | Primary audit locations |
 | --- | --- | --- |
 | Onyx | image `v4.2.5`; ref `b7482a59fb74503d5ec3dcde0ae5beac7b4905ff` | `backend/onyx/tools/tool_implementations/open_url/onyx_web_crawler.py`, `backend/onyx/tools/tool_implementations/web_search/providers.py`, `backend/onyx/utils/web_content.py`, `backend/onyx/file_processing/extract_file_text.py`, `backend/onyx/utils/playwright_fetch.py`, and the Web UI provider-card source in `reference_repos/onyx` |
-| SearXNG | image `2026.6.26-f8ffbf36f`; ref `f8ffbf36f9039ecb232dcfab5263b02b36fed9f5` | online/offline processors, `demo_offline.py`, exception/suspension logic, and search orchestration in `reference_repos/searxng` |
+| SearXNG | image `2026.7.15-7b2199ecd`; ref `7b2199ecdf75a00981583fa2f392a785dfc4fcee` | online/offline processors, `demo_offline.py`, exception/suspension logic, and search orchestration in `reference_repos/searxng` |
 | Obscura | image `h4ckf0r0day/obscura:0.1.10`; ref `50e66320b0842d2844ce298957a335a6bed95c4d` | main-resource/body storage in `crates/obscura-browser/src/page.rs`; Network, Fetch, IO, Page, Target, and dispatch domains in `reference_repos/obscura` |
 | CRW removal baseline | image `ghcr.io/us/crw:0.23.0`; ref `dc497fdf35a6d1a941391cbade663601eedac1b6` | `reference_repos/crw`, used only to enumerate preserved or intentionally removed behavior |
 | Playwright Python | `1.58.0` from the pinned Onyx source | Onyx dependency metadata and both direct-client call sites; no browser binary belongs in the SearXNG image |

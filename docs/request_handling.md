@@ -271,6 +271,10 @@ default if Obscura improves.
 
 ## SearXNG search
 
+The derived search service uses SearXNG `2026.7.15-7b2199ecd`. Its offline
+processor, search orchestration, result container, timeout handling, and
+exception contracts are startup-validated by the wrapper patch.
+
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are custom
 offline engines. Each builds one provider URL, performs one direct Obscura
 navigation, verifies an exact terminal-host allowlist, classifies status and

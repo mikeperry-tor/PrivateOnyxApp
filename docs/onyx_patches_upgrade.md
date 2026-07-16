@@ -174,9 +174,11 @@ blocked CDP operation expires at its exact logged stage and releases its permit.
 
 ## SearXNG audit
 
-Re-audit the pinned offline and online processors, engine loader, exception
-suspension mapping, result containers, timeout/late-result handling, engine
-selection, round-robin retry patch points, and last-resort scoring.
+The current audited SearXNG pin is `2026.7.15-7b2199ecd`, sourced from commit
+`7b2199ecdf75a00981583fa2f392a785dfc4fcee`. Re-audit the pinned offline and
+online processors, engine loader, exception suspension mapping, result
+containers, timeout/late-result handling, engine selection, round-robin retry
+patch points, and last-resort scoring.
 
 For every custom engine verify:
 
@@ -198,7 +200,10 @@ For every custom engine verify:
 The derived SearXNG image must install its complete Python dependency set from
 the generated hashed `searxng/requirements.txt` lock, use one Granian process,
 one replica, perform no Chromium/browser download or runtime installation, and
-pass the shared-client import validation.
+pass the shared-client import validation. Its explicit `PYTHONPATH` must expose
+the wrapper patches, SearXNG application root, and shared client before the
+embedded interpreter imports `sitecustomize`; verify the real Granian
+entrypoint logs every strict patch success and loads every custom engine.
 
 ## Routing and Compose audit
 
