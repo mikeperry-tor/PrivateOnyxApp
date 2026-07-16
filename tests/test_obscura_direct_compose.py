@@ -16,7 +16,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
 
     def test_direct_topology_literals(self):
         self.assertIn(
-            'ONYX_AGENT_USE_OBSCURA_BROWSER: "${ONYX_AGENT_USE_OBSCURA_BROWSER:-true}"',
+            'ONYX_AGENT_USE_OBSCURA_BROWSER: "${ONYX_AGENT_USE_OBSCURA_BROWSER:-false}"',
             self.compose,
         )
         self.assertIn('ONYX_OBSCURA_CDP_URL: "ws://obscura-cdp-gateway:9222/devtools/browser"', self.compose)

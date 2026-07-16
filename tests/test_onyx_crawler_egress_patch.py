@@ -67,9 +67,9 @@ class CrawlerEgressPatchTests(unittest.TestCase):
             "EGRESS_ALLOW_HTTP_URLS": "false",
         }
 
-    def test_mode_defaults_true_and_is_strict(self):
+    def test_mode_defaults_false_and_is_strict(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertTrue(self.module.use_obscura_browser())
+            self.assertFalse(self.module.use_obscura_browser())
         for raw, expected in (("true", True), ("false", False)):
             with patch.dict(
                 os.environ, {"ONYX_AGENT_USE_OBSCURA_BROWSER": raw}, clear=True

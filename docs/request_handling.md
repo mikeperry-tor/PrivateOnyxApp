@@ -2,13 +2,13 @@
 
 This document describes the wrapper-managed `web_search` and built-in Onyx
 Web Crawler `open_url` paths. Search always uses the pinned Obscura browser.
-`open_url` uses it by default and has an explicit stock-crawler compatibility
-mode. There is no CRW in either path.
+`open_url` uses the stock Onyx crawler by default and has an explicit direct
+Obscura mode. There is no CRW in either path.
 
 ## Runtime flows
 
 ```text
-Onyx open_url (ONYX_AGENT_USE_OBSCURA_BROWSER=true, default)
+Onyx open_url (ONYX_AGENT_USE_OBSCURA_BROWSER=true)
   -> private_onyx_obscura shared client
   -> obscura-cdp-gateway (API-only control networks)
   -> Obscura
@@ -24,7 +24,7 @@ Onyx web_search
   -> the same browser bridge and public final hop
 ```
 
-With `ONYX_AGENT_USE_OBSCURA_BROWSER=false`, the `open_url` half instead is:
+By default, with `ONYX_AGENT_USE_OBSCURA_BROWSER=false`, the `open_url` half is:
 
 ```text
 Onyx open_url -> stock Onyx requests fetch -> onyx-public-egress-bridge
@@ -33,7 +33,7 @@ Onyx open_url -> stock Onyx requests fetch -> onyx-public-egress-bridge
                  only when the stock crawler selects its browser fallback
 ```
 
-In the default mode, the API container and SearXNG import the same client
+In direct Obscura mode, the API container and SearXNG import the same client
 implementation from `browser/obscura_client`. SearXNG connects on
 `obscura-control`; the API can
 connect only through `obscura-cdp-gateway` on `onyx-obscura-control`. CDP is
@@ -47,7 +47,7 @@ audited raw transport avoids that incompatible second attachment while
 preserving the exact one-`Page.navigate` contract. The derived SearXNG image
 still pins the audited Playwright package and contains no browser binary.
 
-## Default Obscura one-navigation contract
+## Obscura one-navigation contract
 
 For each accepted target the shared client:
 
@@ -159,7 +159,7 @@ separate aggregate accounting, but neither limit is an aggregate browser
 process-memory bound. In-process PDF parsing also has no complete CPU,
 transient-memory, or parser wall-time bound beyond the outer invocation.
 
-## Onyx `open_url`: default Obscura mode
+## Onyx `open_url`: Obscura mode
 
 The API-only startup patch strictly replaces the built-in `OnyxWebCrawler`
 fetch path. Patch source-shape drift is startup-fatal. A crawler invocation
@@ -219,10 +219,10 @@ account.
 Full-mode doc-drop ingestion, local embedding, and `internal_search` do not use
 Obscura and are unchanged.
 
-## Onyx `open_url`: stock crawler compatibility mode
+## Onyx `open_url`: default stock crawler mode
 
 `ONYX_AGENT_USE_OBSCURA_BROWSER` accepts exactly `true` or `false` and defaults
-to `true`; any other value is startup-fatal. When it is `false`, the API patch
+to `false`; any other value is startup-fatal. When it is `false`, the API patch
 does not install the direct Obscura crawler replacement. It retains the pinned
 upstream `OnyxWebCrawler`, including its requests-first behavior and its local
 Playwright Chromium fallback for qualifying 403/challenge responses. One URL
@@ -252,12 +252,21 @@ remote-DNS upstream mode, the same documented residual applies: the wrapper
 cannot inspect the upstream proxy's answer and relies on it to reject private
 resolution. Local Chromium runs inside `api_server`, rather than the hardened
 Obscura container, and shares that service's process/filesystem trust domain;
-this mode is an operator-selected compatibility tradeoff, not equivalent
-browser containment.
+this default is a reliability-over-containment tradeoff, not equivalent browser
+containment. Operators can select the more isolated Obscura mode explicitly.
 
 This preference never changes `web_search`. The custom SearXNG engines remain
 direct-Obscura clients with their one-navigation, scheduling, and failure
 contracts.
+
+Parallel `open_url` stress testing against the pinned Obscura 0.1.10 release
+found that the stock crawler was blocked less often and returned substantially
+more reliable results than the direct Obscura path. This is an empirical result
+for the current pin and tested sites, not a claim that requests/Chromium is
+universally less detectable. Keep the stock crawler as the default while that
+result persists. On each Obscura upgrade, repeat parallel blocked,
+empty-content, and timeout tests across the same URL set and reconsider the
+default if Obscura improves.
 
 ## SearXNG search
 
@@ -340,9 +349,9 @@ docker logs onyx-api_server-1 --since 10m
 Expected search failures include provider 429, access-denied, CAPTCHA, parser
 mismatch, timeout, and suspension records. They must not become empty-success
 substitutes. For `open_url`, verify the API startup log contains either
-`installed strict direct Obscura crawler` (default) or
+`installed strict direct Obscura crawler` (explicit Obscura mode) or
 `installed proxied stock Onyx crawler with public-only requests and Playwright
-fallback` (compatibility mode). A missing gateway, selected bridge, or final
+fallback` (default stock mode). A missing gateway, selected bridge, or final
 hop must fail the feature closed without moving an application onto a public
 network.
 

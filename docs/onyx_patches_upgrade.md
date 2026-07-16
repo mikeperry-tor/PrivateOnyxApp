@@ -120,8 +120,7 @@ in the pinned-limitations list above.
 
 ## Onyx API patch audit
 
-Audit both values of `ONYX_AGENT_USE_OBSCURA_BROWSER`. The default must still
-install only the strict direct-Obscura replacement. The `false` mode must
+Audit both values of `ONYX_AGENT_USE_OBSCURA_BROWSER`. The default `false` mode must
 retain the pinned stock requests and Playwright fallback while the narrow
 egress adapter still matches the crawler's imported `ssrf_safe_get` and
 `fetch_rendered_html` symbols. Confirm every initial URL and requests redirect
@@ -134,6 +133,14 @@ loopback bypass. Exercise a public success, qualifying 403 browser fallback,
 public redirect, private/loopback initial URL and redirect, NXDOMAIN, broken
 bridge, and remote-DNS upstream mode. SearXNG must remain direct Obscura under
 both preference values.
+
+The current default reflects parallel testing in which the stock crawler was
+blocked less often and was substantially more reliable than Obscura 0.1.10.
+Every Obscura pin upgrade must repeat comparable parallel URL batches and
+retries, recording blocked, empty-content, timeout, and successful results.
+Monitor upstream Obscura improvements and switch the default to `true` if the
+new pin reverses the reliability result while preserving the audited privacy,
+cleanup, body-retention, and concurrency properties.
 
 Re-audit the pinned Onyx symbols for:
 

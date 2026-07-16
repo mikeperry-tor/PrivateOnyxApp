@@ -59,13 +59,13 @@ Connector, and configured provider choices. It does not replace final-hop
 policy. Saved Admin settings select the public or host-capable route; they do
 not grant browser or executor access to the host listener.
 
-When `ONYX_AGENT_USE_OBSCURA_BROWSER=false`, the LLM-controlled stock crawler
+By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` makes the LLM-controlled stock crawler
 does not inherit that Admin private-network allowance. Its requests adapter
 and scoped Playwright validation accept public URL shapes only, avoid local
 target DNS, and force the fixed public bridge. Requests environment proxy and
 `NO_PROXY` selection are disabled; Chromium's implicit loopback bypass is
 explicitly disabled. Redirects and subresources therefore remain under the
-public final-hop policy, and the compatibility mode cannot reach the
+public final-hop policy, and the stock mode cannot reach the
 host-capable listener.
 
 ## Browser containment and residuals
@@ -81,9 +81,15 @@ The optional stock crawler's Chromium process is materially less isolated: it
 runs inside the trusted `api_server` container with that service's filesystem
 and process privileges. The fixed public proxy limits network destinations but
 is not a browser sandbox and does not limit damage from a Chromium compromise
-inside the container. Operators choose this mode only when upstream
-requests/Playwright compatibility is worth that containment tradeoff; search
-continues in hardened Obscura.
+inside the container. This is the default because current reliability testing
+favored upstream requests/Playwright despite that containment tradeoff;
+operators can select the more isolated direct Obscura crawler, and search
+continues in hardened Obscura either way.
+
+This containment tradeoff is currently accepted as the default because the
+stock crawler was blocked less often in parallel tests against Obscura 0.1.10.
+Treat that result as version-specific and re-evaluate both reliability and
+containment when Obscura is upgraded.
 
 The browser's main-response retention limit applies per entry, not per
 process. Multiple retained entries, base64 representation, and request/loader

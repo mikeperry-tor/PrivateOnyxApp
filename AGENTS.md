@@ -33,7 +33,7 @@ At a high level:
   Research agents the tools selected for the current chat Agent and executes
   complete model-emitted tool batches with bounded concurrency.
 - Onyx `web_search` calls SearXNG, whose custom offline engines navigate and parse rendered provider pages through Obscura.
-- By default the built-in Onyx Web Crawler and custom SearXNG engines share one audited direct-CDP client and perform one Obscura navigation per target. `ONYX_AGENT_USE_OBSCURA_BROWSER=false` changes only the built-in crawler to pinned stock requests plus its local Chromium fallback; both stages remain public-only through the fixed Onyx bridge, while SearXNG remains direct Obscura.
+- Custom SearXNG engines always use the audited direct-CDP client. By default (`ONYX_AGENT_USE_OBSCURA_BROWSER=false`), the built-in crawler uses pinned stock requests plus its local Chromium fallback; both stages remain public-only through the fixed Onyx bridge. Setting it to `true` moves only the built-in crawler to the single-navigation Obscura path. At Obscura 0.1.10, testing found the stock crawler was blocked less often; re-evaluate this default on Obscura upgrades.
 - SearXNG, Obscura, and optional executor pods
   use narrow internal networks. Internet traffic crosses component bridges to
   final-hop policy proxies in the trusted Mysterium routing namespace.
@@ -145,7 +145,7 @@ This stack protects private research, document contents, browsing behavior, infe
   answers return to the selected public final hop. Onyx
   applications must never rejoin `netns-holder` or gain direct fallback when
   VPN, policy-proxy, or bridge connectivity fails.
-- Request handling: keep supported search engines on the shared direct-Obscura path. Keep the built-in crawler there by default, preserving one navigation, event-based waits, provider admission, byte/DOM limits, anti-bot visibility, and complete cleanup. The only stock requests/local-Chromium exception is the explicit `ONYX_AGENT_USE_OBSCURA_BROWSER=false` mode; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path. Do not add other hidden retries, fallbacks, or fixed sleeps.
+- Request handling: keep supported search engines on the shared direct-Obscura path. The built-in crawler defaults to the stock requests/local-Chromium mode because it was blocked less often in Obscura 0.1.10 testing; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path. When explicitly switched to Obscura, preserve one navigation, event-based waits, provider admission, byte/DOM limits, anti-bot visibility, and complete cleanup. Re-test the default on Obscura upgrades. Do not add other hidden retries, fallbacks, or fixed sleeps.
 - Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
 - Patch upgrades: before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
 - Untracked stack files: Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data. Do not read, stage, or rewrite them unless the user explicitly asks.

@@ -49,8 +49,8 @@ Both `NO_PROXY` and `no_proxy` in `onyx/helper-egress.env` contain the exact
 internal name `obscura-cdp-gateway`. Removed browser intermediaries have no
 compatibility aliases.
 
-`ONYX_AGENT_USE_OBSCURA_BROWSER=false` changes only built-in-crawler
-`open_url`. Its stock requests fetch and conditional local Chromium fallback
+By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` makes built-in-crawler
+`open_url` use its stock requests fetch and conditional local Chromium fallback
 run in `api_server` and use `onyx-public-egress-bridge`; SearXNG continues to
 use Obscura. The requests adapter sets `trust_env=False` and supplies the
 bridge explicitly, so `NO_PROXY` cannot bypass it. Chromium is launched with
@@ -60,6 +60,11 @@ exception. Initial URLs and requests redirects receive public-only structural
 validation without local target DNS; browser redirects and subresources cross
 the same public final-hop policy. This mode cannot select the host-capable
 listener and a broken bridge/proxy has no direct fallback.
+
+The stock route is the default because parallel testing found it was blocked
+less often than the direct crawler on Obscura 0.1.10. That observation does
+not change either route's egress policy. Re-run the comparison on Obscura
+upgrades and monitor whether the browser route becomes more reliable.
 
 ## DNS ownership
 

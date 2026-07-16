@@ -18,7 +18,7 @@ _CRAWLER_PLAYWRIGHT_VALIDATION: contextvars.ContextVar[bool] = (
 
 
 def use_obscura_browser() -> bool:
-    raw = os.environ.get("ONYX_AGENT_USE_OBSCURA_BROWSER", "true").strip().lower()
+    raw = os.environ.get("ONYX_AGENT_USE_OBSCURA_BROWSER", "false").strip().lower()
     if raw == "true":
         return True
     if raw == "false":

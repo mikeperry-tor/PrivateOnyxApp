@@ -20,9 +20,15 @@ and makes missing API-only behavior startup-visible.
 ## Selectable built-in crawler
 
 `ONYX_AGENT_USE_OBSCURA_BROWSER` accepts exactly `true` or `false` and defaults
-to the direct Obscura path. The API bootstrap installs exactly one of the two
+to the stock Onyx path. The API bootstrap installs exactly one of the two
 strict integrations below; an invalid setting or source-shape mismatch stops
 startup. This switch does not affect the SearXNG direct-Obscura engines.
+
+The stock path is the default because parallel testing against Obscura 0.1.10
+found it was blocked less often and was substantially more reliable. This is a
+pin-specific operational observation. Re-run the comparison when Obscura is
+upgraded and change the default if the direct browser path improves enough to
+justify its stronger containment and one-navigation behavior.
 
 ### Direct Obscura mode
 
@@ -55,7 +61,7 @@ Onyx providers keep their upstream implementation and public egress route;
 the wrapper neither migrates saved provider rows nor claims one-navigation or
 provider data-policy guarantees for them.
 
-### Stock Onyx compatibility mode
+### Default stock Onyx mode
 
 When the preference is `false`,
 `sitecustomize_api_server/onyx_crawler_egress_patch.py` retains the pinned
@@ -68,7 +74,7 @@ LLM-controlled route. The shared Playwright launcher sets `<-loopback>` as its
 proxy bypass value to disable Chromium's implicit direct loopback exception.
 Redirects and subresources remain final-hop policy decisions.
 
-The compatibility path intentionally retains upstream behavior, including a
+The stock path intentionally retains upstream behavior, including a
 possible second origin request when Chromium follows a qualifying requests
 failure and local Chromium's weaker containment inside `api_server`. Obscura
 document/wait settings do not apply. Wrapper character limits and
@@ -120,8 +126,8 @@ internal Teep base is a startup-validated direct exception. Full-mode doc-drop
 uses its exact local gateway rather than a process-wide direct crawl.
 
 Onyx Playwright consumers retain explicit helper proxy routing with Chromium's
-implicit loopback bypass disabled. In the default mode this does not create a
-crawler fallback; in stock compatibility mode it carries the intentionally
+implicit loopback bypass disabled. In direct Obscura mode this does not create
+a crawler fallback; in the default stock mode it carries the intentionally
 retained crawler fallback through the public bridge.
 
 ## Other retained patches

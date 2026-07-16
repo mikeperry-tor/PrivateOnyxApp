@@ -97,7 +97,7 @@ incomplete plan update.
   entry and would multiply worst-case retention.
 - **2026-07-16 — explicit stock-crawler compatibility mode.**
   `ONYX_AGENT_USE_OBSCURA_BROWSER` now accepts exactly `true` or `false` and
-  defaults to the implemented direct-Obscura crawler. `false` changes only
+  initially defaulted to the implemented direct-Obscura crawler. `false` changes only
   built-in-crawler `open_url` to the pinned upstream requests fetch plus its
   Playwright Chromium fallback; SearXNG remains direct Obscura. A
   startup-validated adapter keeps both stock stages public-only: requests uses
@@ -111,6 +111,15 @@ incomplete plan update.
   origin request and Chromium runs inside `api_server`. Obscura document/wait
   settings do not apply. README, runtime, routing, security, patch, and upgrade
   docs record the tradeoff and removal/audit conditions.
+- **2026-07-16 — stock crawler becomes the operational default.** Parallel
+  batches and retries found the public-proxied stock Onyx requests/Playwright
+  crawler was blocked less often and considerably more reliable than the
+  direct crawler on pinned Obscura 0.1.10. The preference therefore now
+  defaults to `false`. SearXNG remains direct Obscura, and neither route's
+  privacy or egress policy changes. This is a version-specific operational
+  decision: every Obscura upgrade must repeat comparable blocked,
+  empty-content, timeout, and success testing and reconsider the default as
+  Obscura improves.
 
 ### Resolved initial-testing finding
 
@@ -1948,17 +1957,17 @@ blind zero-match assertion is not sufficient.
 
 The migration is complete only when:
 
-1. With `ONYX_AGENT_USE_OBSCURA_BROWSER=true` (the default), every
+1. With `ONYX_AGENT_USE_OBSCURA_BROWSER=true`, every
    built-in-crawler Onyx document and custom SearXNG search attempt uses one
-   Obscura navigation. With the explicit `false` compatibility setting, only
+   Obscura navigation. With the default `false` stock setting, only
    the built-in crawler uses stock requests/Playwright through the constrained
    public route; SearXNG remains direct Obscura. Deliberately selected external Onyx providers are
    supported through public Onyx egress, explicitly outside that guarantee,
    and carry a documented retention/training/ZDR warning for the provider's
    subsequent data handling.
 2. No retained path can silently refetch or fall back to CRW/local Chromium.
-   The only local-Chromium crawler fallback is selected explicitly by
-   `ONYX_AGENT_USE_OBSCURA_BROWSER=false`, remains public-proxied, and is
+   The only local-Chromium crawler fallback is the default stock mode selected
+   by `ONYX_AGENT_USE_OBSCURA_BROWSER=false`, remains public-proxied, and is
    documented as potentially making a second origin request.
 3. Obscura and SearXNG have no direct route, target DNS remains final-hop, and
    both direct-client callers receive the same validated
@@ -1986,17 +1995,16 @@ The migration is complete only when:
    actual-request body retrieval, body classification/streaming, typed results,
    wrapper-owned redaction, and complete per-thread/loop cleanup for both
    callers.
-9. In the default mode, the strict lite/full Onyx patch uses the built-in crawler,
+9. In direct Obscura mode, the strict lite/full Onyx patch uses the built-in crawler,
    owns one invocation deadline/finalization object plus deadline-bounded
    blocking admission, leaves deliberately selected external providers
    upstream-owned, preserves output ordering and content semantics, correlates
    redirects by requested URL while citing the terminal URL, performs no
    database or provider-configuration migration/enforcement, and cannot reach
    requests, local Chromium, Firecrawl, CRW, CLI,
-   generic-parser, or
-    second-fetch fallbacks. The explicit stock compatibility mode instead
-    retains the pinned requests/Playwright behavior behind its strict
-    public-egress adapter. No default-mode crawler starts a target/navigation after its
+   generic-parser, or second-fetch fallbacks. The default stock mode instead
+   retains the pinned requests/Playwright behavior behind its strict
+   public-egress adapter. No direct-Obscura crawler starts a target/navigation after its
    outer result is finalized, including when finalization occurs after target,
    session, domain, and listener setup but before `Page.navigate`.
 10. Every custom search engine uses the pinned SearXNG offline/direct contract,
