@@ -347,6 +347,13 @@ make embedserv-verify-model
 make embedserv-serve
 ```
 
+Once the selected model is installed, `make up-full` automatically launches
+`make embedserv-serve` in the background when the shim uses the bundled default
+URL. It skips this startup when the selected model is not installed or when
+`ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` selects Teep or another custom service.
+The background server writes to `embedserv/serve.log`; direct
+`make embedserv-serve` remains the foreground form.
+
 `make embedserv-install` installs from the hashed lock file with
 `--require-hashes`. To upgrade package versions during a stack upgrade, edit
 `embedserv/requirements.in` if needed and run `make upgrade-python-deps`.
@@ -377,6 +384,19 @@ flow.
 requires the path to end in `/v1/embeddings`, and binds to `0.0.0.0` when the
 configured host is `host.docker.internal`. The Docker-side shim reaches that
 host service through `host.docker.internal`.
+
+To use Teep instead of the bundled MLX server, configure:
+
+```env
+ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:8337/v1/embeddings"
+ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B"
+```
+
+Use the configured `HOST_PORT_TEEP` in the URL if it is not `8337`.
+`ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` does not select a Teep model; it only
+controls the bundled MLX download/server and serves as the shim's fallback
+model when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL` is unset. The shim reaches
+Teep through its fixed host publisher, not the internal `teep` service name.
 
 Exact `host.docker.internal` uses the narrow host exception without another
 setting. If the embedding service instead uses an RFC1918 literal or a

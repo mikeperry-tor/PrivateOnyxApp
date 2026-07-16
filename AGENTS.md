@@ -100,7 +100,10 @@ Use the Makefile instead of hand-assembling compose commands unless you are
 debugging the Makefile itself.
 
 - `make help` - list supported targets and key overrides.
-- `make up-lite` / `make up-full` - start the lite or full stack.
+- `make up-lite` / `make up-full` - start the lite or full stack. Full mode
+  also starts the bundled host MLX embedding server when its selected model is
+  already installed and the shim still uses the bundled default endpoint;
+  custom upstreams such as Teep are not started or replaced.
 - `make down-lite` / `make down-full` - stop the matching stack.
 - `make ps-lite` / `make ps-full` - inspect containers.
 - `make logs-lite` / `make logs-full` - follow logs.

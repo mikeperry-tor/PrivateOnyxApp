@@ -193,6 +193,9 @@ EMBEDSERV_REQUIREMENTS_IN := $(EMBEDSERV_DIR)/requirements.in
 EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
+EMBEDSERV_DEFAULT_UPSTREAM_URL := http://host.docker.internal:3210/v1/embeddings
+EMBEDSERV_LOG := $(EMBEDSERV_DIR)/serve.log
+EMBEDSERV_PID_FILE := $(EMBEDSERV_DIR)/serve.pid
 SEARXNG_REQUIREMENTS_IN := searxng/requirements.in
 SEARXNG_REQUIREMENTS := searxng/requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
@@ -200,12 +203,12 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
 	@echo "  make up-lite      # Start wrapper + Onyx lite"
-	@echo "  make up-full      # Start wrapper + Onyx full"
+	@echo "  make up-full      # Start wrapper + Onyx full and an installed default MLX server"
 	@echo "  make down-lite    # Stop wrapper + Onyx lite"
 	@echo "  make down-full    # Stop wrapper + Onyx full"
 	@echo "  make ps-lite      # Show lite mode containers"
@@ -297,7 +300,7 @@ up-lite: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready my
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
-up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
+up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 ensure-onyx-config:
@@ -506,7 +509,10 @@ embedserv-install:
 	MODEL_REPO="$$model_repo" MODEL_DIR="$$model_dir" "$$venv_python" -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["MODEL_REPO"], local_dir=os.environ["MODEL_DIR"])'; \
 	echo "Model ready at $$model_dir"
 
+ifeq ($(filter true,$(EMBEDSERV_SKIP_INSTALL)),)
 embedserv-verify-model: embedserv-install
+endif
+embedserv-verify-model:
 	@set -eu; \
 	if [ ! -f "$(ENV_FILE)" ]; then \
 		echo "ERROR: missing $(ENV_FILE)"; \
@@ -567,6 +573,37 @@ embedserv-serve: embedserv-verify-model
 		--served-model-name "$$served_model" \
 		--host "$$host" \
 		--port "$$port"
+
+# Start the bundled host MLX server for full mode only after its selected model
+# has been installed and only while the shim still targets the bundled default
+# endpoint. Custom endpoints (including teep) remain entirely operator-owned.
+embedserv-start-if-installed:
+	@set -eu; \
+	if [ ! -f "$(ENV_FILE)" ]; then \
+		echo "ERROR: missing $(ENV_FILE)"; \
+		exit 1; \
+	fi; \
+	set -a; . "$(ENV_FILE)"; set +a; \
+	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	embeddings_url="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-$(EMBEDSERV_DEFAULT_UPSTREAM_URL)}"; \
+	venv_server="$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server"; \
+	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
+	if [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; then \
+		echo "Embedding shim uses a custom upstream; not starting bundled MLX server: $$embeddings_url"; \
+		exit 0; \
+	fi; \
+	if [ ! -x "$$venv_server" ] || [ ! -d "$$model_dir" ]; then \
+		echo "Bundled MLX embedding server is not installed for $$model_repo; not starting it"; \
+		echo "Run 'make embedserv-install' to enable automatic startup with make up-full"; \
+		exit 0; \
+	fi; \
+	if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 3210), timeout=1); s.close()' >/dev/null 2>&1; then \
+		echo "Bundled MLX embedding server is already listening on 127.0.0.1:3210"; \
+		exit 0; \
+	fi; \
+	echo "Starting bundled MLX embedding server for $$model_repo (log: $(EMBEDSERV_LOG))"; \
+	nohup "$${MAKE:-make}" embedserv-serve EMBEDSERV_SKIP_INSTALL=true >"$(EMBEDSERV_LOG)" 2>&1 & \
+	printf '%s\n' "$$!" >"$(EMBEDSERV_PID_FILE)"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # VPN signup, order status, and balance

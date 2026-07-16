@@ -524,11 +524,13 @@ For implementation details, troubleshooting notes, and Onyx upgrade assumptions,
 Setup steps:
 
 1. Put PDFs into `ONYX_RAG_DOC_SOURCE_DIR` (default `./doc-drop`).
-2. Start or restart full stack: `make up-full`.
-3. In Onyx Admin → Connectors → Web, create a connector.
-4. Set Web connector type to **Recursive**.
-5. Set URL to the internal crawl origin `http://doc-drop-web:8091/`.
-6. Sync the connector.
+2. Configure one of the embedding backends below (install the bundled MLX
+   backend first if that is your choice).
+3. Start or restart full stack: `make up-full`.
+4. In Onyx Admin → Connectors → Web, create a connector.
+5. Set Web connector type to **Recursive**.
+6. Set URL to the internal crawl origin `http://doc-drop-web:8091/`.
+7. Sync the connector.
 
 Notes:
 
@@ -551,9 +553,15 @@ If you are on a Mac, the makefile has rules that can install [Harrier-oss-v1-0.6
 make embedserv-install
 # Verify the model was downloaded correctly
 make embedserv-verify-model
-# Launch the embedding server
-make embedserv-serve
+# Start the full stack; this also launches the installed embedding server
+make up-full
 ```
+
+After `make embedserv-install` has installed the selected model, `make up-full`
+automatically launches `make embedserv-serve` when the shim uses the bundled
+default endpoint, `http://host.docker.internal:3210/v1/embeddings`. It leaves
+Teep and other custom upstream URLs alone. You can still run
+`make embedserv-serve` directly when you want the server in the foreground.
 
 Installation and model download run on the host before the embedding shim is
 ready; they are not routed through the stack VPN. Standard `HTTP_PROXY`,
@@ -571,9 +579,24 @@ it only after the complete DNS answer set validates as RFC1918.
 
 ### Optional: Using Teep for Embeddings
 
-If you are not on a Mac, your best bet is to use `Qwen/Qwen3-Embedding-0.6B` with the `neardirect` provider.
+If you are not on a Mac, your best bet is to use
+`Qwen/Qwen3-Embedding-0.6B` with Teep's `neardirect` provider. Point the shim at
+Teep's host-published OpenAI endpoint and select Teep's provider-qualified
+model in `.env.wrapper`:
 
-TODO: Document this in more detail
+```env
+ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:8337/v1/embeddings"
+ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B"
+```
+
+The default `HOST_PORT_TEEP` is `8337`; substitute its configured value if you
+changed it. Teep uses `TEEP_NEARAI_API_KEY` from the same file for the upstream
+request. Do not set `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` to the Qwen model:
+that variable only selects the model downloaded and served by the bundled Mac
+MLX flow. `make up-full` sees the custom Teep URL and does not start MLX.
+
+The shim container reaches Teep through the fixed host publisher, so use
+`host.docker.internal` here rather than the internal `teep` service name.
 
 ### Optional: Local/Custom Embedding Model Configuration
 
