@@ -293,6 +293,14 @@ by internal model-server assumptions:
   family, so the recommended UI setup uses `nomic-ai/nomic-embed-text-v23` as
   the model type while the shim maps requests to the actual upstream model.
 
+The `v23` name is intentionally synthetic. It must remain saved in Onyx so
+the `nomic-ai` feature gates stay enabled. The API and background startup
+patches map only tokenizer construction for that exact name to the tokenizer
+already bundled as `nomic-ai/nomic-embed-text-v1`; they do not rewrite the
+saved model name or the model name sent to the embedding shim. This avoids an
+attempt to download the nonexistent `v23` tokenizer and preserves the same
+tokenization Onyx previously reached through its fallback.
+
 The shim preserves Onyx's internal contract and moves the OpenAI-compatible
 translation to a small local service that can be updated independently during
 Onyx upgrades.
@@ -406,6 +414,9 @@ When `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL` is set, the shim uses that value
 for upstream requests regardless of the `model_name` sent by Onyx. When it is
 unset, the shim uses `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL`. This lets Onyx use
 the UI/model-type behavior it needs while the shim targets the real local model.
+Do not replace the synthetic `nomic-ai/nomic-embed-text-v23` Admin value with
+the real upstream model unless the corresponding Onyx feature gates have been
+re-audited.
 
 Changing embedding model, dimensionality, or prefix policy after documents are
 indexed can require rebuilding the index. Mixed embeddings from different
@@ -483,6 +494,9 @@ assumptions:
   [Internal network security](internal_network_security.md).
 - The recommended Admin model type and embedding dimension still match the
   current Onyx UI behavior and the selected local model.
+- The exact synthetic `nomic-ai/nomic-embed-text-v23` name still activates the
+  intended Onyx RAG behavior, and `HuggingFaceTokenizer.__init__` still has the
+  source shape validated by the exact v23-to-v1 tokenizer-only alias.
 
 If Onyx gains a first-class OpenAI-compatible embedding provider that handles
 query/document prefixes correctly in both indexing and query-time search, prefer

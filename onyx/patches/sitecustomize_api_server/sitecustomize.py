@@ -19,6 +19,7 @@ def _install() -> None:
     from wrapper_env_patches import apply_coding_agent_repo_download_limit_patch
     from wrapper_env_patches import apply_configured_inference_proxy_patch
     from wrapper_env_patches import apply_deep_research_chat_agent_tools_patch
+    from wrapper_env_patches import apply_embedding_tokenizer_alias_patch
     from wrapper_env_patches import apply_internal_search_context_patches
     from wrapper_env_patches import apply_llm_max_tokens_override_patch
     from wrapper_env_patches import apply_mcp_egress_proxy_patch
@@ -35,6 +36,7 @@ def _install() -> None:
     from onyx_crawler_egress_patch import install as install_onyx_crawler
     from onyx_crawler_egress_patch import use_obscura_browser
 
+    apply_embedding_tokenizer_alias_patch()
     apply_llm_max_tokens_override_patch()
     apply_open_url_char_limit_patches()
     apply_coding_agent_repo_download_limit_patch()

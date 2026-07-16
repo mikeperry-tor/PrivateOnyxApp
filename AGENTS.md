@@ -59,6 +59,12 @@ At a high level:
   interfaces, routes, and policy listeners. Their fixed gateways constrain
   application ingress; they are not a sandbox between co-resident processes.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
+- The recommended local-RAG Admin model name
+  `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves
+  Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only
+  tokenizer construction to the bundled v1 tokenizer. The wrapper uses the
+  legacy code-interpreter service and explicitly disables unsupported Craft
+  sandbox scheduling.
 
 Those bullets are only a map. Read the docs above before changing any runtime path.
 
@@ -150,6 +156,10 @@ This stack protects private research, document contents, browsing behavior, infe
 - Request handling: keep supported search engines on the shared direct-Obscura path and preserve their atomic pre-thread provider reservation. The built-in crawler defaults to the stock requests/local-Chromium mode because it was blocked less often in Obscura 0.1.10 testing; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path. When explicitly switched to Obscura, preserve one navigation, event-based waits, the configured main-response byte limit (including HTML), the separate fixed DOM limit, anti-bot visibility, and complete cleanup. Re-test the default on Obscura upgrades. Do not add other hidden retries, fallbacks, or fixed sleeps.
 - Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
 - Patch upgrades: before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
+- Local RAG compatibility: preserve the exact fake-nomic saved model name and
+  tokenizer-only alias unless Onyx's feature gates are deliberately reworked.
+  Do not enable Craft or its cleanup schedule without adding and documenting a
+  supported sandbox backend.
 - Onyx bootstrap diagnostics must stay on stderr because isolated child stdout
   carries a pickled result. Bootstrap or process-isolation changes require a
   real PDF extraction test.

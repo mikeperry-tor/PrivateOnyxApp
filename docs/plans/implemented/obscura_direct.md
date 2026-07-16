@@ -154,6 +154,12 @@ incomplete plan update.
   hashes the pinned upstream tag plus the Dockerfile, generated dependency
   lock, shared Obscura client, and custom engines into the local image tag, so
   source-only changes cannot silently reuse an older derived image.
+- **2026-07-16 — Bing verification interstitial is a typed CAPTCHA.** Bing can
+  render a `One last step` / `solve the challenge below to continue` page
+  without its older challenge selectors. The Bing engine now classifies that
+  visible-text pair as CAPTCHA so SearXNG suspends the provider instead of
+  reporting a parser crash. The same phrases in inactive script, style,
+  template, or noscript content remain ignored.
 
 ### Resolved initial-testing finding
 

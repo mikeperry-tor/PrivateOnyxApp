@@ -83,6 +83,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         url_module.validate_outbound_http_url = validate_outbound_http_url
 
         wrapper_module = ModuleType("wrapper_env_patches")
+        wrapper_module.apply_embedding_tokenizer_alias_patch = lambda: None
         wrapper_module.apply_playwright_helper_proxy_patch = lambda: None
         wrapper_module.apply_configured_inference_proxy_patch = lambda: None
         wrapper_module._validated_fixed_proxy_url = (
@@ -97,6 +98,19 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         wrapper_module.select_playwright_proxy = select_playwright_proxy
 
         onyx_module = ModuleType("onyx")
+        background_module = ModuleType("onyx.background")
+        celery_module = ModuleType("onyx.background.celery")
+        tasks_module = ModuleType("onyx.background.celery.tasks")
+        beat_schedule_module = ModuleType(
+            "onyx.background.celery.tasks.beat_schedule"
+        )
+        beat_schedule_module.beat_task_templates = [
+            {"name": "cleanup-idle-sandboxes"},
+            {"name": "unrelated-task"},
+        ]
+        tasks_module.beat_schedule = beat_schedule_module
+        celery_module.tasks = tasks_module
+        background_module.celery = celery_module
         connectors_module = ModuleType("onyx.connectors")
         web_module = ModuleType("onyx.connectors.web")
         server_module = ModuleType("onyx.server")
@@ -109,6 +123,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         server_module.security = security_module
         utils_module.url = url_module
         onyx_module.connectors = connectors_module
+        onyx_module.background = background_module
         onyx_module.server = server_module
         onyx_module.utils = utils_module
 
@@ -117,6 +132,10 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             "requests.sessions": sessions_module,
             "wrapper_env_patches": wrapper_module,
             "onyx": onyx_module,
+            "onyx.background": background_module,
+            "onyx.background.celery": celery_module,
+            "onyx.background.celery.tasks": tasks_module,
+            "onyx.background.celery.tasks.beat_schedule": beat_schedule_module,
             "onyx.connectors": connectors_module,
             "onyx.connectors.web": web_module,
             "onyx.connectors.web.connector": connector_module,

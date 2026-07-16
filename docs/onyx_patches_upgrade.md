@@ -158,6 +158,14 @@ Re-audit the pinned Onyx symbols for:
 - built-in versus external provider dispatch and Admin/provider test APIs;
 - any new requests, local-browser, Firecrawl, parser, or generic fallback.
 
+Re-audit the exact fake embedding model contract. The saved
+`nomic-ai/nomic-embed-text-v23` value must continue to activate the intended
+Onyx `nomic-ai` RAG feature gates, while only tokenizer construction is mapped
+to the bundled `nomic-ai/nomic-embed-text-v1` tokenizer. Confirm the strict
+`HuggingFaceTokenizer.__init__` source-shape check, both API and background
+installation points, no Hugging Face lookup for v23, and unchanged behavior
+for every other tokenizer model.
+
 Verify `sitecustomize_api_server` is the only API bootstrap in both modes,
 neutral shared helpers are imported rather than executed, and patch drift is
 startup-fatal. Test one shared 120-second monotonic invocation state through
@@ -197,6 +205,8 @@ For every custom engine verify:
   different-provider concurrency;
 - CAPTCHA, rate-limit, and access-denied exceptions use the ordinary offline
   suspension path; non-blocking failures become unresponsive records;
+- Bing's visible `One last step` challenge is a typed CAPTCHA while the same
+  phrases in excluded script/style/template/noscript content are ignored;
 - engines and the CDP client never retry or select another provider;
 - enabled round-robin normal/last-resort order and same-request retry, plus
   disabled-round-robin selected-engine fan-out and disclosure warning.
@@ -244,6 +254,13 @@ reasoning preservation, selected Deep Research tools/batches, character and
 upload limits, helper routes, lite `open_url`, background PDF freshness,
 executor networking/capability text, and the embedding shim. Moving the shared
 helper must not change their source-shape or import behavior.
+
+Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
+background services unless the wrapper deliberately adds and documents a
+Craft backend. With Craft disabled, the background bootstrap must find and
+remove exactly one `cleanup-idle-sandboxes` beat template; beat logs must not
+show Kubernetes sandbox-manager initialization attempts. Re-audit the template
+name and collection shape on every Onyx upgrade.
 
 ## Minimum deterministic validation
 

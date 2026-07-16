@@ -20,13 +20,38 @@ def _install_searx_stubs(obscura_module):
     engines = types.ModuleType("searx.engines")
     engines.__path__ = []
     engines._obscura = obscura_module
+    exceptions = types.ModuleType("searx.exceptions")
+
+    class SearxEngineCaptchaException(RuntimeError):
+        def __init__(self, message: str):
+            super().__init__(message)
+
+    exceptions.SearxEngineCaptchaException = SearxEngineCaptchaException
     utils = types.ModuleType("searx.utils")
     utils.eval_xpath = lambda node, expression: node.xpath(expression)
+    utils.eval_xpath_getindex = (
+        lambda node, expression, index, default=None: (
+            node.xpath(expression)[index]
+            if len(node.xpath(expression)) > index
+            else default
+        )
+    )
     utils.eval_xpath_list = lambda node, expression: list(node.xpath(expression))
-    utils.extract_text = lambda node: " ".join("".join(node.itertext()).split())
+    utils.extract_text = lambda node: " ".join(
+        "".join(
+            item
+            for current in (node if isinstance(node, list) else [node])
+            for item in current.itertext()
+        ).split()
+    )
     sys.modules.update(
-        {"searx": searx, "searx.engines": engines, "searx.engines._obscura": obscura_module,
-         "searx.utils": utils}
+        {
+            "searx": searx,
+            "searx.engines": engines,
+            "searx.engines._obscura": obscura_module,
+            "searx.exceptions": exceptions,
+            "searx.utils": utils,
+        }
     )
 
 
@@ -56,6 +81,7 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         cls.obscura = obscura
         cls.google = _load_engine("google2")
         cls.brave = _load_engine("brave2")
+        cls.bing = _load_engine("bing2")
 
     def test_google_sanitized_result_and_no_results(self):
         html = """<html><body><div class='g'><a href='/url?q=https%3A%2F%2Fexample.com%2Fa'><h3>Example</h3></a><div class='VwiC3b'>Snippet</div></div></body></html>"""
@@ -85,6 +111,28 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         self.assertEqual(engine, "brave2")
         self.assertIn("q=private+query", target)
         self.assertIsNone(reservation)
+
+    def test_bing_visible_one_last_step_is_typed_captcha(self):
+        challenge = """
+        <html><head><title>Search</title></head><body>
+          <main><h1>One last step</h1>
+          <p>Please solve the challenge below to continue</p></main>
+        </body></html>
+        """
+        with self.assertRaisesRegex(RuntimeError, "verification page"):
+            self.bing._parse_html(challenge)
+
+        script_only = """
+        <html><body><ol id='b_results'>
+          <li class='b_algo'><h2><a href='https://example.com/'>Result</a></h2>
+          <p>Snippet</p></li></ol>
+          <script>One last step. Please solve the challenge below to continue</script>
+        </body></html>
+        """
+        self.assertEqual(
+            self.bing._parse_html(script_only)[0]["url"],
+            "https://example.com/",
+        )
 
     def test_every_custom_engine_declares_offline_contract(self):
         for path in sorted((ROOT / "searxng/engines").glob("*2.py")):

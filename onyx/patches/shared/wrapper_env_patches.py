@@ -2453,6 +2453,58 @@ def apply_llm_max_tokens_override_patch() -> None:
     )
 
 
+def apply_embedding_tokenizer_alias_patch() -> None:
+    """Keep Onyx's intentional fake nomic model name without a network lookup.
+
+    The saved v23 name activates Onyx's nomic-family RAG behavior, while the
+    local embedding shim selects the real upstream model. Onyx otherwise asks
+    Hugging Face for a nonexistent tokenizer and then falls back to the bundled
+    v1 tokenizer. Map only tokenizer construction to that same fallback model;
+    the saved model name and every feature gate remain unchanged.
+    """
+
+    fake_model = "nomic-ai/nomic-embed-text-v23"
+    tokenizer_model = "nomic-ai/nomic-embed-text-v1"
+
+    try:
+        from onyx.natural_language_processing import utils as nlp_utils
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing embedding tokenizer module: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    original_init = nlp_utils.HuggingFaceTokenizer.__init__
+    try:
+        source = inspect.getsource(original_init)
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(f"could not inspect HuggingFaceTokenizer.__init__: {e}")
+        return
+
+    if "Tokenizer.from_pretrained(model_name)" not in source:
+        _warn_or_raise(
+            "HuggingFaceTokenizer.__init__ no longer contains the expected "
+            "from_pretrained(model_name) call"
+        )
+        return
+
+    @functools.wraps(original_init)
+    def _aliased_init(self, model_name: str):
+        return original_init(
+            self,
+            tokenizer_model if model_name == fake_model else model_name,
+        )
+
+    nlp_utils.HuggingFaceTokenizer.__init__ = _aliased_init
+    print(
+        "sitecustomize: mapped fake nomic v23 tokenizer to bundled nomic v1 "
+        "without changing the saved embedding model name",
+        flush=True,
+    )
+
+
 def apply_internal_search_context_patches() -> None:
     """Apply optional character caps to Onyx internal search payloads.
 

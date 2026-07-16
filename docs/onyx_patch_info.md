@@ -167,8 +167,16 @@ The migration does not change the following independently tested behavior:
 - background Web Connector PDF freshness and local doc-drop behavior;
 - optional code-interpreter executor networking, proxy injection, and
   capability descriptions;
-- local embedding shim model-name/query-prefix behavior;
+- local embedding shim model-name/query-prefix behavior, including the exact
+  fake-nomic v23-to-v1 tokenizer-only alias that preserves Onyx feature gates;
 - host publisher, Tailscale, MinIO, authentication, and Teep integration.
+
+The wrapper explicitly disables Onyx Craft because it provides the legacy
+code-interpreter service, not a Craft Kubernetes or Docker sandbox backend.
+The background bootstrap removes the otherwise unconditional
+`cleanup-idle-sandboxes` beat template when Craft is disabled. The removal is
+strictly shape-checked so an Onyx scheduling change fails visibly instead of
+causing periodic attempts to initialize an unconfigured Kubernetes backend.
 
 ## Compose wrapper changes
 

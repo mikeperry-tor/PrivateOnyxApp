@@ -11,6 +11,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.compose = (ROOT / "docker-compose.yaml").read_text()
+        cls.full = (ROOT / "docker-compose.full.yml").read_text()
         cls.lite = (ROOT / "docker-compose.lite.yml").read_text()
         cls.manifest = (ROOT / "stack.versions.env").read_text()
         cls.no_proxy = (ROOT / "onyx/helper-egress.env").read_text()
@@ -48,6 +49,18 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertIn("sitecustomize_api_server", self.compose)
         self.assertIn("sitecustomize_api_server", self.lite)
         self.assertNotIn("./onyx/patches/sitecustomize:/app/wrapper-patches", self.lite)
+
+    def test_unsupported_craft_backend_is_explicitly_disabled(self):
+        self.assertIn('ENABLE_CRAFT: "false"', self.compose)
+        self.assertIn('ENABLE_CRAFT: "false"', self.full)
+        background_patch = (
+            ROOT / "onyx/patches/sitecustomize_background/sitecustomize.py"
+        ).read_text()
+        self.assertIn("_apply_disabled_craft_schedule_patch()", background_patch)
+        self.assertIn(
+            'task.get("name") != "cleanup-idle-sandboxes"',
+            background_patch,
+        )
 
     def test_searxng_build_consumes_generated_dependency_lock(self):
         image_tag = re.search(

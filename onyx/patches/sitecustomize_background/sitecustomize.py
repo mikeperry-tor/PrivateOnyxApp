@@ -64,6 +64,63 @@ def _apply_configured_inference_proxy_patch() -> None:
             raise
 
 
+def _apply_embedding_tokenizer_alias_patch() -> None:
+    try:
+        from wrapper_env_patches import apply_embedding_tokenizer_alias_patch
+
+        apply_embedding_tokenizer_alias_patch()
+    except Exception as e:  # pragma: no cover
+        print(
+            "sitecustomize_background: failed to patch embedding tokenizer alias: "
+            f"{e}",
+            flush=True,
+        )
+        if _strict_mode():
+            raise
+
+
+def _apply_disabled_craft_schedule_patch() -> None:
+    """Do not schedule Kubernetes sandbox cleanup when Craft is disabled."""
+    if os.environ.get("ENABLE_CRAFT", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+
+    try:
+        from onyx.background.celery.tasks import beat_schedule
+
+        matches = [
+            task
+            for task in beat_schedule.beat_task_templates
+            if task.get("name") == "cleanup-idle-sandboxes"
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                "expected exactly one cleanup-idle-sandboxes beat template, "
+                f"found {len(matches)}"
+            )
+        beat_schedule.beat_task_templates[:] = [
+            task
+            for task in beat_schedule.beat_task_templates
+            if task.get("name") != "cleanup-idle-sandboxes"
+        ]
+        print(
+            "sitecustomize_background: disabled Craft sandbox cleanup schedule",
+            flush=True,
+        )
+    except Exception as e:  # pragma: no cover
+        print(
+            "sitecustomize_background: failed to patch disabled-Craft schedule: "
+            f"{e}",
+            flush=True,
+        )
+        if _strict_mode():
+            raise
+
+
 def _apply_web_connector_egress_patch() -> None:
     """Select public/host policy for every Web Connector request path."""
     try:
@@ -929,6 +986,8 @@ def _apply_web_connector_http_freshness_patch() -> None:
 
 
 def _install() -> None:
+    _apply_embedding_tokenizer_alias_patch()
+    _apply_disabled_craft_schedule_patch()
     _apply_playwright_helper_proxy_patch()
     _apply_configured_inference_proxy_patch()
     _apply_web_connector_egress_patch()

@@ -84,6 +84,10 @@ captcha_xpath = (
     ' | //input[contains(translate(@name, '
     '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "captcha")]'
 )
+visible_text_xpath = (
+    "//body//text()[not(ancestor::script) and not(ancestor::style) "
+    "and not(ancestor::template) and not(ancestor::noscript)]"
+)
 _xpath_upper = '"ABCDEFGHIJKLMNOPQRSTUVWXYZ"'
 _xpath_lower = '"abcdefghijklmnopqrstuvwxyz"'
 _non_web_marker_condition = " or ".join(
@@ -164,7 +168,13 @@ def _valid_result_url(url: str) -> bool:
 
 def _raise_if_captcha(dom) -> None:
     """Bing can return a human-verification page with HTTP 200."""
-    if eval_xpath(dom, captcha_xpath):
+    visible_text = " ".join(
+        " ".join(eval_xpath_list(dom, visible_text_xpath)).split()
+    ).lower()
+    if eval_xpath(dom, captcha_xpath) or (
+        "one last step" in visible_text
+        and "solve the challenge below to continue" in visible_text
+    ):
         raise SearxEngineCaptchaException(
             message="bing2: Bing returned a captcha / verification page",
         )

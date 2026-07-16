@@ -409,6 +409,9 @@ services:
       NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
       CAPTCHA_ENABLED: "false"
       RECAPTCHA_SECRET_KEY: ""
+      # This wrapper provides the legacy code-interpreter service, not Onyx
+      # Craft's Kubernetes/Docker sandbox backend.
+      ENABLE_CRAFT: "false"
       # Controls Web connector SSRF-style URL checks.
       OPEN_URL_VALIDATE_SSRF: "true"
       MCP_SERVER_ALLOW_PRIVATE_NETWORK: "true"

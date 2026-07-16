@@ -283,6 +283,13 @@ selectors return no results; missing expected structure is an unresponsive
 parser mismatch. The engines cannot call SearXNG's normal HTTP transport,
 retry internally, or choose another provider.
 
+Bing's rendered `One last step` / `solve the challenge below to continue`
+interstitial is a CAPTCHA failure, even when it contains none of Bing's older
+challenge selectors. Detection uses visible body text only; matching text in
+script, style, template, or noscript content does not block a valid results
+page. This typed failure enters SearXNG's ordinary provider-suspension path
+instead of being reported as a parser crash.
+
 One Granian process owns scheduling. Each provider has one atomic pre-thread
 reservation, one active lease, and an exact 3.0-second minimum interval between
 navigation starts, with zero jitter. The engine thread must consume its exact
