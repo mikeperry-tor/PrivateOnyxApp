@@ -4,7 +4,9 @@ This stack gets you a private deep research agent with code sub-agents and RAG d
 
 The stack is built around [Onyx](https://github.com/onyx-dot-app/onyx) using [teep](https://github.com/13rac1/teep) for private verified LLM inference.
 
-Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0day/obscura) via customized [SearXNG](https://github.com/searxng/searxng) engines which round-robin to minimize search load and associated captchas. Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are randomized per site, and cookies are cleared every hour.
+Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0day/obscura) via customized [SearXNG](https://github.com/searxng/searxng) engines which round-robin to minimize search load and associated captchas.
+
+Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Obscura uses a stable browser vendor/version profile with some per-navigation fingerprint variation, while the stock Onyx Web Crawler uses a fixed generic MacOS Chromium browser fingerprint. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
 
 To further minimize captchas and reduce tracking, all agent internet traffic can use the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, and/or explicit no-VPN routing mode. The stack employs docker/podman network namespace isolation to ensure that all agent traffic exits through the configured VPN and/or upstream proxy.
 
@@ -566,7 +568,7 @@ This stack uses the host OS VPN as the "first hop" before connecting to the
 Mysterium endpoint. Additionally, all inference, search, and web traffic exiting
 the Mysterium VPN uses TLS or https.
 
-Browser fingerprints are standardized and obsfuscated in both the Obscura and Onyx Web Crawler cases, and cookies are cleared every hour by default.
+Obscura uses a stable browser vendor/version profile with some per-navigation fingerprint variation, while the stock Onyx Web Crawler uses a fixed browser configuration. Obscura-backed requests clear cookies before each navigation, while the default stock crawler does not retain cookies between requests. No other browser state or browser-based tracking information is preserved.
 
 ### Why not just use Tor by default?
 
