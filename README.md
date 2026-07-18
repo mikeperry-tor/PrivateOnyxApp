@@ -14,7 +14,7 @@ To further minimize captchas and reduce tracking, all agent internet traffic can
 
 The main reason I created this stack is because none of the private chat providers offer "Deep Research" (aka orchestrated multi-agent multi-round research report generation), and I didn't like going back to non-private chat providers when I needed this functionality.
 
-Additionally, the full mode of Onyx provides RAG search results to the agent from local collection of PDFs and other documents, and has a Code Agent tool that allows the chat agent to spawn multiple sub-agents to clone and investigate git repositories. Onyx has many other connectors as well.
+Additionally, the full mode of Onyx provides RAG search results to the agent from local collection of PDFs and other documents, and has a Code Agent tool that allows the chat agent to spawn multiple sub-agents to clone and investigate git repositories. Onyx has many other connectors as well. The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
 
 If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 
@@ -397,7 +397,11 @@ Notes:
 
 ### Optional: Running a Local Embedding Model Server (Mac)
 
-If you are on a Mac, the makefile has rules that can install [Harrier-oss-v1-0.6b](https://huggingface.co/microsoft/harrier-oss-v1-0.6b) (which is the current leading SOTA open weight embedding model), served via [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings).
+If you are on a Mac, the makefile has rules that can install
+[Harrier-oss-v1-0.6b](https://huggingface.co/microsoft/harrier-oss-v1-0.6b)
+(which is a [leading SOTA open weight embedding model](https://huggingface.co/spaces/mteb/leaderboard)), served via
+[mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings).
+
 
 ```sh
 # Install mlx-openai-server and mlx-embeddings in ./embedserv using `uv`
@@ -407,6 +411,9 @@ make embedserv-verify-model
 # Start the full stack; this also launches the installed embedding server
 make up-full
 ```
+
+You can select a different model via `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` in
+`.env.wrapper`, using the huggingface ID of any MLX-packaged embedding model.
 
 After `make embedserv-install` has installed the selected model, `make up-full`
 automatically launches `make embedserv-serve` when the shim uses the bundled
@@ -422,9 +429,9 @@ The stack uses use `mlx-embeddings` because llama.cpp embeddings support is very
 
 ### Optional: Using Teep for Embeddings
 
-If you are not on a Mac, your best bet is to use
-`Qwen/Qwen3-Embedding-0.6B` with Teep's `neardirect` provider. Point the shim at
-Teep's host-published OpenAI endpoint and select Teep's provider-qualified
+If you are not on a Mac, your best bet is to use `Qwen/Qwen3-Embedding-0.6B` with Teep's `neardirect` provider. Qwen3-Embedding is also highly ranked in the [emebdding leaderboards](https://huggingface.co/spaces/mteb/leaderboard).
+
+Point the shim at Teep's host-published OpenAI endpoint and select Teep's provider-qualified
 model in `.env.wrapper`:
 
 ```env
