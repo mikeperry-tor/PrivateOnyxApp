@@ -109,10 +109,27 @@ Most likely variables you want to change:
   - Set `MYST_VPN_ENABLED=false` to use the explicit no-VPN final-hop route. `myst-client` remains the route owner but idles its daemon without arming the kill switch. Onyx application containers stay on internal-only networks in both modes and cannot use Docker as a direct fallback. This skips the Myst wallet/funding requirement entirely.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
-  - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 (local network) access for MCP, configured Web Connector, local network embedding servers, and local network inference destinations through the host-capable final-hop proxy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
-  - Use an RFC1918 IP address literal, or a name ending in `.local`, `.internal`, or `.home.arpa`. Only those operator-local suffixes are queried through system/Docker DNS for complete-answer-set RFC1918 classification. Arbitrary names are never sent to system DNS merely because this option is enabled.
-  - With an upstream proxy, all other target names are given directly to that proxy. Without one, Myst provider DNS resolves them; explicit no-VPN mode uses system DNS.
-  - Exact `host.docker.internal` is a narrower default host-route exception and does not require the RFC1918 option.
+  - Set `EGRESS_ALLOW_RFC1918=true` to let explicitly configured MCP servers,
+    Web Connectors, embedding servers, and inference providers reach services on
+    your private LAN. Default: `false`. MCP and Web Connector access also
+    requires a compatible setting under **Admin → Security Hardening**.
+  - This setting does **not** give agent web search, `open_url()`, browser
+    activity, or generated code access to your host, LAN, private addresses,
+    metadata endpoints, or stack-managed services. Those agent-controlled paths
+    remain public-only (or have no network at all).
+  - `host.docker.internal` is available by default to the explicitly configured
+    integrations and model endpoints above, so services running on the Docker
+    host do not require `EGRESS_ALLOW_RFC1918=true`. Other private destinations
+    require an RFC1918 IP literal or a name ending in `.local`, `.internal`, or
+    `.home.arpa`; failed, empty, or mixed public/private lookups are rejected.
+  - Stack-managed local services used for inference, embedding, search, and RAG
+    are available only to the Onyx features that need them. Their names do not
+    become general destinations for agent browsing or generated code.
+  - These controls constrain normal and malicious agent-selected URLs and code.
+    They are not a sandbox for Onyx itself: if the Onyx application is fully
+    compromised, an attacker may abuse the local access granted to configured
+    integrations. See [`docs/internal_network_security.md`](docs/internal_network_security.md)
+    for the implementation boundaries and residual risks.
 
 ### Initial VPN Connection (Myst Payment)
 
@@ -250,8 +267,11 @@ Use `http://teep:8337/v1` as the OpenAI baseurl.
 
 The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown. Use teep's exact model ID as listed in the model selection drowndrop.
 
-The wrapper recognizes exactly `http://teep:8337/v1` as an internal configured
-chat endpoint. Other supported configured chat endpoints use the host-capable policy (allowing `host.docker.internal` by default, and allowing local network inference servers if `EGRESS_ALLOW_RFC1918=true`).
+The wrapper recognizes exactly `http://teep:8337/v1` as its bundled private
+inference endpoint. Other supported configured chat endpoints may be public,
+may use `host.docker.internal` by default, or may use a private LAN address when
+`EGRESS_ALLOW_RFC1918=true`. These inference permissions are not inherited by
+agent browsing or generated code.
 
 ### Inference Provider Recommendations
 
@@ -360,15 +380,21 @@ EGRESS_UPSTREAM_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
 An exact host Tor proxy
-(`EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150`) uses the
-default host exception and does not require `EGRESS_ALLOW_RFC1918=true`.
+(`EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150`) does not
+require `EGRESS_ALLOW_RFC1918=true`. Choosing a host- or LAN-based upstream
+proxy only makes that proxy available as routing infrastructure; it does not
+give agent browsing or generated code permission to access other host or LAN
+destinations.
 
 Invalid upstream proxy URLs fail policy-proxy startup.
 
-During usage, prior to hitting this proxy, the stack's [internal policies](./docs/internal_network_security.md) block private/internal literals,
-all `*.docker.internal` names, known legacy Docker Desktop host/gateway names,
-and single-label Docker service/container names.  These built-in blocks cannot
-be removed by configuration.
+The same destination permissions apply whether or not an upstream proxy is
+configured. Agent browsing and generated code remain unable to target host,
+LAN, metadata, or stack-managed service addresses. Explicitly configured MCP,
+Web Connector, inference, and embedding endpoints retain only the local access
+described under **Optional LAN access**. See the
+[internal network policy](./docs/internal_network_security.md) for DNS and
+remote-proxy limitations.
 
 ### Optional: Local Document RAG via Web Connector
 
@@ -444,8 +470,9 @@ request. Do not set `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` to the Qwen model:
 that variable only selects the model downloaded and served by the bundled Mac
 MLX flow. `make up-full` sees the custom Teep URL and does not start MLX.
 
-The shim container reaches Teep through the fixed host publisher, so use
-`host.docker.internal` here rather than the internal `teep` service name.
+Use `host.docker.internal` here because this setting identifies an embedding
+endpoint running on the Docker host; stack-managed service names are not a
+user-configurable addressing surface for this option.
 
 ### Optional: Embedding Model Configuration in Onyx
 
@@ -469,11 +496,11 @@ This Onyx configuration choices cause the stack's patches to route embedding req
 
 You can add any MCP servers you operate or trust through Onyx Admin. Their streamable
 HTTP, SSE, redirects, discovery, registration, OAuth, token, refresh, and tool
-traffic use an explicit public or host-capable proxy transport. The restricted [final-hop egress proxy](./docs/internal_network_security.md) enforces every
-initial and SDK-derived destination. Public MCP servers may use nonstandard TCP
-ports; RFC1918 destinations require `EGRESS_ALLOW_RFC1918=true` and the host
-route, while exact `host.docker.internal` uses the default narrower host
-exception.
+traffic is subject to the saved **Admin → Security Hardening** setting. Public
+MCP servers may use nonstandard TCP ports. An MCP server on
+`host.docker.internal` can be allowed without enabling general LAN access;
+other RFC1918 destinations require `EGRESS_ALLOW_RFC1918=true`. These MCP
+permissions do not extend to agent browsing or generated code.
 
 ## Upgrading the Stack
 
@@ -519,6 +546,14 @@ be as strong as [Tinfoil's distributed trust architecture](https://tinfoil.sh/se
 However, the [network security](./docs/internal_network_security.md) of this
 stack is robust, and [restricted VPN+proxy egress is enforced](docs/vpn_routing_and_proxies.md) with docker compose network
 namespaces, service isolation and least-priviledge capability configuration.
+
+The network restrictions are designed to contain agent-controlled activity:
+web search, `open_url()`, browser requests, and optionally network-enabled
+generated code cannot reach host, LAN, metadata, or stack-managed service
+addresses. Configured MCP/Web integrations and inference/embedding endpoints
+can be granted narrower local access. This separation is not a sandbox for a
+fully compromised Onyx application; such a compromise may abuse the local
+destinations that Onyx is legitimately configured to use.
 
 This stack uses the host OS VPN as the "first hop" before connecting to the
 Mysterium endpoint. Additionally, all inference, search, and web traffic exiting

@@ -12,7 +12,7 @@ These instructions are intentionally a thin orientation layer. They tell you whe
 
 Before changing a subsystem, read the matching document below, then inspect the implementation. If the implementation and docs disagree, treat that as a bug to resolve. Do not paper over drift with vague wording.
 
-- `README.md` - user-facing setup instructions and privacy properties. Keep deep implementation details out of this document. 
+- `README.md` - user-facing setup instructions, privacy properties, and option consequences. Keep deep implementation details out of this document.
 - `docs/request_handling.md` - direct-Obscura `web_search`, selectable built-in `open_url` transport, lifecycle waits, body/DOM limits, cookies, and anti-bot behavior.
 - `docs/vpn_routing_and_proxies.md` - trusted VPN namespace, restricted component networks, final-hop proxy policies, explicit no-VPN mode, and optional routing switches.
 - `docs/internal_network_security.md` - restricted component reachability, destination validation, bridge boundaries, Onyx SSRF interaction, and residual risks.
@@ -71,7 +71,7 @@ Those bullets are only a map. Read the docs above before changing any runtime ne
 
 - `Makefile` - source of truth for stack targets, compose layering, generated local secrets, image builds, upgrades, Myst flows, and embedserv flows.
 - `stack.versions.env` - committed source of truth for stack image tags, source refs, and the derived SearXNG image repository. The Makefile adds a digest of every embedded SearXNG wrapper input to that derived image's tag.
-- `.env.wrapper.example` - user-facing configuration surface for local runtime options; do not expose developer or debugging configuration here. Keep option descriptions user-facing, without describing full implementation details. Only describe properties that are directly relevant to the user's decision.
+- `.env.wrapper.example` - user-facing configuration surface for local runtime options; do not expose developer or debugging configuration here. Keep option descriptions user-facing, without describing full implementation details. Only describe properties and consequences that are directly relevant to the user's decision.
 - `docker-compose.yaml` - base wrapper stack, including the restricted SearXNG/Obscura control topology, policy proxies, fixed bridges, and service gateways.
 - `docker-compose.full.yml` - full Onyx/RAG mode.
 - `docker-compose.lite.yml` - lite mode.
