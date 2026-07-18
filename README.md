@@ -8,9 +8,9 @@ Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0
 
 Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are stable in the default web crawler, but are varied per-navigation in Obscura. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
 
-To further minimize captchas and reduce tracking, all agent internet traffic can use the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, and/or explicit no-VPN routing mode. The stack employs docker/podman network namespace isolation to ensure that all agent traffic exits through the configured VPN and/or upstream proxy.
+To further minimize captchas and reduce tracking, all agent internet traffic can use the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, and/or explicit no-VPN routing mode. The stack employs docker/podman network namespace isolation to ensure that all agent traffic exits through the configured VPN and/or upstream proxy, and prohibits DNS leaks and other forms of proxy bypass.
 
-[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN.
+[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for that device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN.
 
 ## Private Deep Research, RAG, and Code Agent Support
 
@@ -374,7 +374,7 @@ EGRESS_UPSTREAM_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
 An exact host Tor proxy
-(`EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150`) does not
+(via `EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150`) does not
 require `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Choosing a host- or
 LAN-based upstream proxy only makes that proxy available as routing
 infrastructure; it does not give agent browsing or generated code permission to
@@ -560,7 +560,7 @@ Obscura uses a stable browser vendor/version profile with some per-navigation fi
 
 ### Why not just use Tor by default?
 
-Tor usage is supported by configuring [EGRESS_UPSTREAM_PROXY_URL="socks5h://host.docker.internal:9150"] in your .env.wrapper, and this [proxy usage](./docs/vpn_routing_and_proxies.md) is [strictly enforced](./docs/internal_network_security.md), but it is not the default.
+Tor usage is supported by configuring `EGRESS_UPSTREAM_PROXY_URL="socks5h://host.docker.internal:9150"` in your .env.wrapper, and this [proxy usage](./docs/vpn_routing_and_proxies.md) is [strictly enforced](./docs/internal_network_security.md), but it is not the default.
 
 It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that does not support Tor usage by default. This was a pragmatic choice to produce something that functioned.
 
