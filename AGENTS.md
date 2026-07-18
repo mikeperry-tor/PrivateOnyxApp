@@ -12,7 +12,7 @@ These instructions are intentionally a thin orientation layer. They tell you whe
 
 Before changing a subsystem, read the matching document below, then inspect the implementation. If the implementation and docs disagree, treat that as a bug to resolve. Do not paper over drift with vague wording.
 
-- `README.md` - user setup, first-run flow, optional features, and host endpoints.
+- `README.md` - user-facing setup instructions and privacy properties. Keep deep implementation details out of this document. 
 - `docs/request_handling.md` - direct-Obscura `web_search`, selectable built-in `open_url` transport, lifecycle waits, body/DOM limits, cookies, and anti-bot behavior.
 - `docs/vpn_routing_and_proxies.md` - trusted VPN namespace, restricted component networks, final-hop proxy policies, explicit no-VPN mode, and optional routing switches.
 - `docs/internal_network_security.md` - restricted component reachability, destination validation, bridge boundaries, Onyx SSRF interaction, and residual risks.
@@ -22,23 +22,29 @@ Before changing a subsystem, read the matching document below, then inspect the 
 
 When a request touches more than one path, read each relevant doc first. Prefer small, doc-aligned changes over broad rewrites.
 
+Keep relevant documentation up to date when you perform changes, including this AGENTS.md file.
+
 ## Runtime Shape
 
 At a high level:
 
-- Users reach nginx through a hardened fixed host publisher or the optional
-  fixed Tailscale frontend gateway; nginx stays internal-only.
+- Users reach nginx through a hardened fixed host publisher or the optional fixed Tailscale frontend gateway; nginx stays internal-only.
+- There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
+- The recommended local-RAG Admin model name `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only tokenizer construction to the bundled v1 tokenizer.
+- The wrapper uses the legacy code-interpreter service and explicitly disables unsupported Craft sandbox scheduling.
 - Onyx sends LLM requests through the included Teep local inference service.
-- When explicitly enabled, the base `sitecustomize` patch gives nested Deep
-  Research agents the tools selected for the current chat Agent and executes
-  complete model-emitted tool batches with bounded concurrency.
+- The base `sitecustomize` patch gives nested Deep Research agents the tools selected for the current chat Agent and executes complete model-emitted tool batches with bounded concurrency.
 - Onyx `web_search` calls SearXNG, whose custom offline engines navigate and parse rendered provider pages through Obscura.
-- Custom SearXNG engines always use the audited direct-CDP client. By default (`ONYX_AGENT_USE_OBSCURA_BROWSER=false`), the built-in crawler uses pinned stock requests plus its local Chromium fallback; both stages remain public-only through the fixed Onyx bridge. Setting it to `true` moves only the built-in crawler to the single-navigation Obscura path. At Obscura 0.1.10, testing found the stock crawler was blocked less often; re-evaluate this default on Obscura upgrades.
-- SearXNG, Obscura, and optional executor pods
-  use narrow internal networks. Internet traffic crosses component bridges to
-  final-hop policy proxies in the trusted Mysterium routing namespace.
-- Direct callers validate URL syntax without resolving target names;
-  authoritative destination DNS and address validation remain at the final-hop policy.
+- Onyx `open_url()` tool calls use the Onyx Web Crawler with python requests and its local Chromium fallback; both stages are restricted to public-only
+egress through the fixed Onyx bridge.
+- Setting `ONYX_AGENT_USE_OBSCURA_BROWSER=true` moves only the built-in crawler to the single-navigation Obscura path. At Obscura 0.1.10, testing found the stock crawler was blocked less often; re-evaluate this default on Obscura upgrades.
+
+## Network Security
+
+This stack has hardened the Onyx networking usage to ensure that both egress and internal network access is controlled via network namespace topology and explicit routing, rather than code.
+
+- SearXNG, Obscura, and optional executor pods use narrow internal networks. Internet traffic crosses component bridges to final-hop policy proxies in the trusted Mysterium routing namespace.
+- Direct callers validate URL syntax without resolving target names; authoritative destination DNS and address validation remain at the final-hop policy.
 - Isolated Obscura allows private-address resolution only so its HTTP client
   can resolve the mandatory Docker egress-bridge proxy.
   Their narrow networks prevent direct Internet egress, and final-hop policy
@@ -58,23 +64,14 @@ At a high level:
   trusted component into the same namespace, including its loopback,
   interfaces, routes, and policy listeners. Their fixed gateways constrain
   application ingress; they are not a sandbox between co-resident processes.
-- There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
-- The recommended local-RAG Admin model name
-  `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves
-  Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only
-  tokenizer construction to the bundled v1 tokenizer. The wrapper uses the
-  legacy code-interpreter service and explicitly disables unsupported Craft
-  sandbox scheduling.
 
-Those bullets are only a map. Read the docs above before changing any runtime path.
+Those bullets are only a map. Read the docs above before changing any runtime networking path. Keep the documentation up-to-date.
 
 ## Key Locations
 
 - `Makefile` - source of truth for stack targets, compose layering, generated local secrets, image builds, upgrades, Myst flows, and embedserv flows.
-- `stack.versions.env` - committed source of truth for stack image tags, source
-  refs, and the derived SearXNG image repository. The Makefile adds a digest of
-  every embedded SearXNG wrapper input to that derived image's tag.
-- `.env.wrapper.example` - user-facing configuration surface for local runtime options, not routine image pins.
+- `stack.versions.env` - committed source of truth for stack image tags, source refs, and the derived SearXNG image repository. The Makefile adds a digest of every embedded SearXNG wrapper input to that derived image's tag.
+- `.env.wrapper.example` - user-facing configuration surface for local runtime options; do not expose developer or debugging configuration here. Keep option descriptions user-facing, without describing full implementation details. Only describe properties that are directly relevant to the user's decision.
 - `docker-compose.yaml` - base wrapper stack, including the restricted SearXNG/Obscura control topology, policy proxies, fixed bridges, and service gateways.
 - `docker-compose.full.yml` - full Onyx/RAG mode.
 - `docker-compose.lite.yml` - lite mode.
@@ -93,11 +90,11 @@ Those bullets are only a map. Read the docs above before changing any runtime pa
 - `onyx/local_embedding_shim.py` - model-server-compatible bridge to an OpenAI-compatible embeddings endpoint. Exists to provide embedding query prefix strings and model name conversion.
 - `onyx/doc_drop_webserver.py` - read-only local document HTTP server for the Web connector, to serve files for RAG indexing and embedding.
 - `reference_repos/` - upstream checkouts for audits and upgrades, if present. Treat them as references only; do not patch them.
+- `tests/` - Python unittests and image-based validation tests. Run these upon changes and keep them up to date.
 
 ## Commands
 
-Use the Makefile instead of hand-assembling compose commands unless you are
-debugging the Makefile itself.
+Use the Makefile instead of hand-assembling compose commands unless you are debugging the Makefile itself.
 
 - `make help` - list supported targets and key overrides.
 - `make up-lite` / `make up-full` - start the lite or full stack. Full mode
@@ -111,15 +108,13 @@ debugging the Makefile itself.
 - `make upgrade` and `make upgrade-onyx ONYX_CONFIG_REF=<tag>` - upgrade flows.
 - `make upgrade-python-deps` - upgrade hashed Python lock files from the committed `requirements.in` inputs.
 - `make onyx-build`, `make myst-build`, and `make teep-build` - image builds.
-- `make vpn-signup-orderform`, `make vpn-signup-blockchain`,
-  `make vpn-orderstatus`, and `make vpn-balance` - Myst account/payment flows.
 - `make embedserv-install`, `make embedserv-verify-model`, and `make embedserv-serve` - optional local MLX embedding server flow for the full RAG stack.
 
 `make up-lite` and `make up-full` generate ephemeral local secrets on every start, including SearXNG, Onyx auth, and MinIO credentials. Do not move those secrets (or any other new ephemeral secrets) into `.env.wrapper.example`.
 
-Do not run live network, payment, VPN, or full-stack destructive operations casually. If a check needs credentials, funding, external services, or long runtime, explain what was not run and why.
+Do not read or modify the custom `.env.wrapper` unless specifically asked to do so. You may source this file into your environment without reading the contents, to apply the environment to service restart and patch diagnosis.
 
-Do not read or modify the custom `.env.wrapper` unless specifically asked to do so.
+If a check needs additional credentials, funding, external services, or long runtime, explain what was not run and why.
 
 ## Repository Rules
 
@@ -128,46 +123,49 @@ This stack protects private research, document contents, browsing behavior, infe
 ### Implementation Style
 
 - Prefer small, explicit changes over broad rewrites.
+- When necessary, runtime patches should be narrow, startup-validated, covered by tests, and documented in `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`.
 - Prefer structured parsers or compose-aware inspection over ad hoc text hacks when changing configuration formats.
-- Prefer component-configurable behavior over shims. Remove shims when component configurations are discovered.
-- When necessary, runtime patches should be narrow, startup-validated, and documented in `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`.
+- Prefer component-configurable behavior over shims and patches.
+- Remove shims and patches when component configuration options or other updates are discovered that could provide the desired functionality.
 - Don't preserve compatibility for old behavior. Prefer current, explicit behavior over indefinite backwards compatibility.
 - Keep optional features opt-in and visibly configured.
 
 ### General Failure Handling
 
-- Fail loudly and fail closed. Do not add silent fallbacks, broad error suppression, `|| true`, direct-network bypasses, empty-result substitutes, or weaker parser paths unless the user explicitly asks for that behavior.
+- Fail loudly and fail closed, especially for patch application and patch error handling.
+- Do not add silent fallbacks, broad error suppression, `|| true`, direct-network bypasses, empty-result substitutes, or weaker parser paths unless the user explicitly asks for that behavior.
 - Shell scripts should use strict error handling where practical and should not hide failing commands that affect privacy, routing, or validation.
 - Python sidecars should return clear HTTP errors and log non-secret reasons.
 - Patches and overlay modifications should self-validate their application and halt service health or stack launch otherwise.
-- Keep required env values, image/tag resolution, patch application, routing setup, proxy setup, and validation checks as visible non-secret failures.
+- Keep image/tag resolution, patch application, routing setup, proxy setup, and validation checks as visible non-secret failures.
 
 ### Component-Specific Rules
 
-- Compose layering: the Makefile assembles `COMPOSE_FILE`. Keep optional behavior in override files, keep Docker and Podman behavior separated, and preserve generated local secret flow plus Compose `${VAR:?message}` checks.
-- VPN/proxy routing: preserve explicit VPN/no-VPN behavior, the separate
-  public/host Onyx route classes, exact host and opt-in RFC1918 policy,
-  operator-local `.local`/`.internal`/`.home.arpa` DNS restriction, optional
-  routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY` handling.
-  Public upstream-proxy names and addresses must use provider DNS and the VPN
-  route in VPN mode; exact host and RFC1918-literal proxy endpoints use only
-  their documented narrow route exceptions, while named operator-local
-  proxies require the RFC1918 opt-in. Empty or failed operator-local target
-  lookups fail closed without external fallback; only non-empty all-global
-  answers return to the selected public final hop. Onyx
-  applications must never rejoin `netns-holder` or gain direct fallback when
-  VPN, policy-proxy, or bridge connectivity fails.
-- Request handling: keep supported search engines on the shared direct-Obscura path and preserve their atomic pre-thread provider reservation. The built-in crawler defaults to the stock requests/local-Chromium mode because it was blocked less often in Obscura 0.1.10 testing; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path. When explicitly switched to Obscura, preserve one navigation, event-based waits, the configured main-response byte limit (including HTML), the separate fixed DOM limit, anti-bot visibility, and complete cleanup. Re-test the default on Obscura upgrades. Do not add other hidden retries, fallbacks, or fixed sleeps.
-- Documentation: update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change. Remove obsolete text instead of keeping long historical sections.
-- Patch upgrades: before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`. Runtime patches should remain narrow, startup-validated, strict by default, and documented.
-- Local RAG compatibility: preserve the exact fake-nomic saved model name and
-  tokenizer-only alias unless Onyx's feature gates are deliberately reworked.
-  Do not enable Craft or its cleanup schedule without adding and documenting a
-  supported sandbox backend.
-- Onyx bootstrap diagnostics must stay on stderr because isolated child stdout
-  carries a pickled result. Bootstrap or process-isolation changes require a
-  real PDF extraction test.
-- Untracked stack files: Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data. Do not read, stage, or rewrite them unless the user explicitly asks.
+- Compose layering:
+  - The Makefile assembles `COMPOSE_FILE`. Keep optional behavior in override files, keep Docker and Podman behavior separated, and preserve generated local secret flow plus Compose `${VAR:?message}` checks.
+- VPN/proxy routing:
+  - Preserve explicit VPN/no-VPN behavior, the separate public/host Onyx route classes, exact host and opt-in RFC1918 policy, operator-local `.local`/`.internal`/`.home.arpa` DNS restriction, optional routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY` handling.
+  - Public upstream-proxy names and addresses must use provider DNS and the VPN route in VPN mode; exact host and RFC1918-literal proxy endpoints use only their documented narrow route exceptions, while named operator-local proxies require the RFC1918 opt-in.
+  - Empty or failed operator-local target lookups fail closed without external fallback; only non-empty all-global answers return to the selected public final hop.
+  - Onyx applications must never join `netns-holder` or gain direct fallback when VPN, policy-proxy, or bridge connectivity fails.
+- Request handling:
+  - Keep supported search engines on the shared direct-Obscura path and preserve their atomic pre-thread provider reservation.
+  - The built-in Onyx Web Crawler defaults to the stock requests/local-Chromium mode because it was blocked less often in Obscura 0.1.10 testing; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path.
+  - When explicitly switched to Obscura, preserve one navigation, event-based waits, the configured main-response byte limit (including HTML), the separate fixed DOM limit, anti-bot visibility, and complete cleanup. Re-test the default on Obscura upgrades.
+  - Do not add other hidden retries, fallbacks, or fixed sleeps.
+- Documentation:
+  - Update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change.
+  - Remove obsolete text instead of keeping long historical sections.
+- Patch upgrades:
+  - Before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`.
+  - Runtime patches should remain narrow, startup-validated, strict by default, and documented.
+- Local RAG compatibility:
+  - Preserve the exact fake-nomic saved model name and tokenizer-only alias unless Onyx's feature gates are deliberately reworked.
+  - Do not enable Craft or its cleanup schedule without adding and documenting a supported sandbox backend.
+  - The Onyx PDF parser operates by producing parsing results on stdout. Onyx bootstrap diagnostics must stay on stderr because isolated child stdout carries a pickled result.
+  - Bootstrap or process-isolation changes require a real PDF extraction test.
+- Untracked stack files:
+  - Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data. Do not read, stage, or rewrite them unless the user explicitly asks.
 
 ### Testing and Validation
 
