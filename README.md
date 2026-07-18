@@ -4,35 +4,35 @@ This stack gets you a private deep research agent with code sub-agents and RAG d
 
 The stack is built around [Onyx](https://github.com/onyx-dot-app/onyx) using [teep](https://github.com/13rac1/teep) for private verified LLM inference.
 
-Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0day/obscura) by customized [SearXNG](https://github.com/searxng/searxng) engines. Built-in `open_url` uses Onyx's stock requests/Playwright crawler by default and can be switched to the direct Obscura crawler independently.
+Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0day/obscura) via customized [SearXNG](https://github.com/searxng/searxng) engines which round-robin to minimize search load and associated captchas. Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are randomized per site, and cookies are cleared every hour.
 
-Agent web traffic uses the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, or explicit no-VPN routing mode. Proxy support is available either in addition to Mysterium or instead of it.
+To further minimize captchas and reduce tracking, all agent internet traffic can use the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, and/or explicit no-VPN routing mode. The stack employs docker/podman network namespace isolation to ensure that all agent traffic exits through the configured VPN and/or upstream proxy.
 
-[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere.
+[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN.
 
 ## Private Deep Research, RAG, and Code Agent Support
 
-The main reason I created this stack is because none of the private chat providers offer a "Deep Research Mode" (aka multi-agent multi-round research report generation), and I didn't like going back to non-private chat providers when I needed this functionality.
+The main reason I created this stack is because none of the private chat providers offer "Deep Research" (aka orchestrated multi-agent multi-round research report generation), and I didn't like going back to non-private chat providers when I needed this functionality.
 
 Additionally, the full mode of Onyx provides RAG search results to the agent from local collection of PDFs and other documents, and has a Code Agent tool that allows the chat agent to spawn multiple sub-agents to clone and investigate git repositories. Onyx has many other connectors as well.
 
-If you do not need intense multi-agent deep research and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
+If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 
 ## Components
 
 The Docker Compose files in this stack relies on the following components:
 
-1. [Onyx](https://github.com/onyx-dot-app/onyx) provides a [top-ranking Deep Research Agent](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard), with a decent web interface and comprehensive connector and RAG-based local document search support. While other open source deep research agents rank slightly higher than Onyx, it is the only provider-neutral option with a complete user interface.
+1. [Onyx](https://github.com/onyx-dot-app/onyx) provides a [top-ranking Deep Research Agent](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard), with a decent web interface and comprehensive connector and RAG-based local document search support. While other open source deep research agents rank slightly higher than Onyx, it is the only provider-neutral option with a complete user interface that works well with both mobile and desktop web browsers.
 
 2. [Teep](https://github.com/13rac1/teep) provides private verified LLM inference via a local OpenAI-compatible proxy on port 8337. Teep supports [multiple private inference providers](https://github.com/13rac1/teep#supported-providers), and verifies attestation, encryption, and remote runtime properties before requests are allowed to proceed.
 
 3. [Mysterium](https://github.com/mysteriumnetwork/node) is a Wireguard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. The use of residential IP addresses reduces the rate of captchas and rate limiting by search engines and websites. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
-4. [Obscura](https://github.com/h4ckf0r0day/obscura) provides all custom search engines, and optionally the built-in Onyx Web Crawler, with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy in the selected Myst/proxy/no-VPN routing namespace. By default, only the built-in crawler instead uses Onyx's stock HTTP fetch and local Chromium fallback through the fixed public Onyx bridge.
+4. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides all custom search engines, and optionally the built-in Onyx Web Crawler, with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy in the selected Myst/proxy/no-VPN routing namespace. By default, only the built-in crawler instead uses Onyx's stock HTTP fetch and local Chromium fallback through the fixed public Onyx bridge.
 
-5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. The wrapper-provided Google, Brave, DuckDuckGo, Startpage, and Bing offline engines navigate and parse rendered result pages through Obscura. SearXNG owns provider scheduling, retries after unresponsive providers, and suspension after visible anti-bot failures.
+5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. The wrapper-provided Google, Brave, DuckDuckGo, Startpage, and Bing offline engines navigate and parse rendered result pages through Obscura. SearXNG owns round-robin search provider scheduling, retries after unresponsive providers, and suspends providers after visible anti-bot failures or rate limits.
 
-6. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to the Onyx web interface. The TLS key is generated locally and signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
+6. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to access the Onyx web interface via HTTPS from any web browser, using your assigned ts.net service subdomain name. The TLS key is generated locally in this stack and is signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
 
 ## Prerequisites
 
@@ -107,26 +107,12 @@ Most likely variables you want to change:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **Master VPN switch**:
   - Set `MYST_VPN_ENABLED=false` to use the explicit no-VPN final-hop route. `myst-client` remains the route owner but idles its daemon without arming the kill switch. Onyx application containers stay on internal-only networks in both modes and cannot use Docker as a direct fallback. This skips the Myst wallet/funding requirement entirely.
-  - No-VPN readiness requires no stale `myst0` interface and a usable IPv4
-    default route on whichever Docker interface owns it; full-mode network
-    attachment order means that interface is not necessarily `eth0`.
-  - With the VPN enabled, Myst readiness requires a connected daemon, a usable
-    `myst0` subnet, and a source-bound query to the provider resolver. Docker
-    autoheal restarts only `myst-client` when that data-plane check fails; the
-    stable `netns-holder` namespace contains final-hop route owners and proxies,
-    plus only Teep or Tailscale processes explicitly promoted by their Myst
-    routing switches; application containers do not share it.
-    Explicit no-VPN models omit `autoheal` and its Docker socket entirely.
-  - Core Onyx startup is independent of optional browsing and unrelated egress
-    health. If SearXNG, Obscura, or their route is unavailable, that
-    feature fails closed when invoked. Full mode still requires its embedding
-    shim and the shim's configured upstream route.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
-  - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 MCP, configured Web Connector, dedicated embedding-shim upstream, and supported configured chat inference destinations through the host-capable final-hop proxy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
-  - Use an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`. Only those operator-local suffixes are queried through system/Docker DNS for complete-answer-set RFC1918 classification. An empty answer or resolution failure stops locally; a non-empty all-global answer returns to the selected public final hop, and a mixed answer fails. Arbitrary names are never sent to system DNS merely because this option is enabled.
+  - Set `EGRESS_ALLOW_RFC1918=true` to permit RFC1918 (local network) access for MCP, configured Web Connector, local network embedding servers, and local network inference destinations through the host-capable final-hop proxy. Default: `false`. This never grants access to loopback, link-local metadata, Docker service names, or the public-only/browser/executor paths.
+  - Use an RFC1918 IP address literal, or a name ending in `.local`, `.internal`, or `.home.arpa`. Only those operator-local suffixes are queried through system/Docker DNS for complete-answer-set RFC1918 classification. Arbitrary names are never sent to system DNS merely because this option is enabled.
   - With an upstream proxy, all other target names are given directly to that proxy. Without one, Myst provider DNS resolves them; explicit no-VPN mode uses system DNS.
-  - Exact `host.docker.internal` is a narrower host-route exception and does not require the RFC1918 option. New installs seed Onyx SSRF protection to **Allow Private Network**, with loopback disabled; saved Admin Security Hardening settings remain authoritative and select the public or host-capable route for new MCP clients and Web crawls.
+  - Exact `host.docker.internal` is a narrower default host-route exception and does not require the RFC1918 option.
 
 ### Initial VPN Connection (Myst Payment)
 
@@ -256,17 +242,16 @@ The node polls the on-chain channel balance and will reflect the transfer once t
 
 ## Onyx UI Configuration
 
-Once Mysterium VPN successfully connects, Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models). Select the **OpenAI-Compatible** provider type for teep. This is important for GLM-5.2 and Kimi-K2.6 reasoning models: the wrapper's Onyx patches preserve active-turn assistant reasoning as OpenAI-compatible `reasoning_content`/`reasoning` fields by default, and the OpenAI-Compatible provider keeps teep's raw model IDs on that request path. Set `ONYX_AGENT_PRESERVE_ALL_REASONING=true` only if you want to carry reasoning from older turns too. The BiFrost provider is also compatible, but OpenAI-Compatible is the recommended teep selection. The URL depends on your `TEEP_ROUTE_THROUGH_MYST_VPN` setting:
+Once Mysterium VPN successfully connects (or the service starts with `MYST_VPN_ENABLED=false`), Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models).
 
-- **Default (`TEEP_ROUTE_THROUGH_MYST_VPN=false`):** Use `http://teep:8337/v1`.
-- **VPN-routed (`TEEP_ROUTE_THROUGH_MYST_VPN=true`):** Also use `http://teep:8337/v1`; the routing override replaces that fixed internal gateway without exposing the VPN namespace to Onyx.
+For LLM inference, select the **OpenAI-Compatible** provider type for teep. This is important for GLM-5.2 and Kimi-K2.6 reasoning models: the wrapper's Onyx patches preserve active-turn assistant reasoning as OpenAI-compatible `reasoning_content`/`reasoning` fields by default, and the OpenAI-Compatible provider keeps teep's raw model IDs on that request path. The BiFrost provider is also compatible, but OpenAI-Compatible is the recommended teep selection. Other provider catalogs may spell GLM and Kimi model names with different dots, dashes, or compressed forms, and the OpenAI-Compatible path avoids LiteLLM native-provider remapping and ensures reasoning preservation.
 
-The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown. Use teep's exact model ID as listed; provider catalogs may spell GLM and Kimi model names with different dots, dashes, or compressed forms, and the OpenAI-Compatible path avoids LiteLLM native-provider remapping.
+Use `http://teep:8337/v1` as the OpenAI baseurl.
+
+The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown. Use teep's exact model ID as listed in the model selection drowndrop.
 
 The wrapper recognizes exactly `http://teep:8337/v1` as an internal configured
-chat endpoint and constructs a direct `trust_env=false` client for it. Other
-supported configured chat endpoints use the host-capable policy. This exception
-does not permit another Docker service name or Teep URL shape.
+chat endpoint. Other supported configured chat endpoints use the host-capable policy (allowing `host.docker.internal` by default, and allowing local network inference servers if `EGRESS_ALLOW_RFC1918=true`).
 
 ### Inference Provider Recommendations
 
@@ -274,16 +259,9 @@ The best privacy preserving providers supported by teep are currently `neardirec
 
 This stack can also use a local OpenAI-compatible, LM Studio, or Ollama chat
 endpoint through `host.docker.internal` or an explicitly enabled RFC1918
-IP address. RFC1918 names must end in `.local`, `.internal`, or `.home.arpa`.
-The fixed host route covers chat inference after a provider and model have
-been saved. Onyx's separate model-discovery endpoints are not patched for
-private routing in this wrapper version; if the Admin UI cannot enumerate a
-private endpoint, configure the model identifier explicitly where the UI
-permits it. Configured private image-generation, speech, and arbitrary
-embedding/reranking provider endpoints are likewise not supported; the
-wrapper's dedicated local embedding shim remains supported.
+IP address.
 
-If the local provider is running on a private/LAN address, you will usually also want `EGRESS_ALLOW_RFC1918=true` so traffic can bypass the Myst VPN firewall to reach your host or LAN service.
+If your local provider is running on a private/LAN address, you will usually also want `EGRESS_ALLOW_RFC1918=true` so traffic can bypass the Myst VPN firewall to reach your host or LAN service. RFC1918 names must end in `.local`, `.internal`, or `.home.arpa`; otherwise use literal IP addresses.
 
 ### LLM recommendations
 
@@ -291,69 +269,36 @@ Verifiable private inference is only currently possible with Open Weight models.
 
 For a research agent like Onyx, the primary desirable property is a low hallucination rate. The [Artificial Analysis Omniscience Index](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) provides a [Hallucination Rate benchmark](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) that is worth tracking for this purpose.
 
-Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.2 is the best option for text, and Kimi-K2.6 is the best multimodal option. Configure these through teep with Onyx's OpenAI-Compatible provider type so active-turn reasoning fields continue across tool-using turns.
+Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.2 is the best option for text, and Kimi-K2.6 is the best multimodal option. Configure these with Onyx's OpenAI-Compatible provider type so the stack's Onyx patches can preserve active-turn reasoning fields continue across tool-using turns.
 
-### Web Search Provider Configuration
+### Search and Web Crawler Provider Configuration
 
-Select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Panel](http://localhost:3000/admin/configuration/web-search). SearXNG always uses Obscura; `ONYX_AGENT_USE_OBSCURA_BROWSER` independently selects the built-in crawler transport:
-
-For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
+Select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Panel](http://localhost:3000/admin/configuration/web-search):
 
 1. Go to **Admin Panel -> Web Search -> Web Crawler**.
 2. Open **SearXNG** and click **Connect**
 3. Set the **SearXNG Base URL** to `http://searxng-service-gateway:8888`.
 4. Open **Onyx Web Crawler**, click **Connect**, then **Set as Default**.
 
-The crawler test performs a live fetch of `https://example.com`; it is not only
-a syntax check. In the default stock mode, inspect the API, public Onyx bridge,
-and final-hop proxy if it fails. In Obscura mode, also inspect Obscura, the CDP
-gateway, and browser bridge. See the
-[request-path diagnostics](docs/request_handling.md#diagnostics).
+The stock Onyx Web Crawler appears to be blocked less often than Obscura v0.1.10
+by websites, but you can set `ONYX_AGENT_USE_OBSCURA_BROWSER=true` to cause the
+Onyx Web Crawler to use the Obscura Browser instead of Onyx's internal fetch +
+Chromium Playwrite fallback.
 
-Existing deployments must replace previously saved SearXNG localhost URLs and
-select the built-in crawler after upgrading. Saved Onyx Admin values are not
-rewritten by Compose.
+SearXNG always uses Obscura; `ONYX_AGENT_USE_OBSCURA_BROWSER` independently selects the built-in crawler transport.
 
-With `ONYX_AGENT_USE_OBSCURA_BROWSER=true`, each built-in crawler fetch
-performs one main browser navigation. The Obscura document limit is 50 MiB
-(`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB`); larger values
-increase memory exposure across five API fetch permits and five fixed Obscura
-workers. Search and web waits are separately configured by
-`OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` and `OBSCURA_BROWSER_WAIT_UNTIL_WEB`.
+In either case, egress is restricted to ensure usage of VPN and/or upstream
+proxy, through docker compose network namespace routing. This is the case for
+all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
 
-`ONYX_AGENT_USE_OBSCURA_BROWSER=false` is the default and uses the pinned
-upstream Onyx crawler for `open_url`:
-its requests fetch runs first and its local Playwright Chromium fallback is
-retained for qualifying blocked responses. The wrapper replaces the stock
-local-DNS fetch guard with public-only structural validation, disables
-requests environment/`NO_PROXY` routing and Chromium's implicit loopback
-bypass, and sends both stages through `onyx-public-egress-bridge`. The final
-hop therefore remains authoritative for target DNS, private-address denial,
-VPN/upstream selection, and redirects/subresources. This stock mode
-can make two target requests when Chromium fallback is attempted, runs the
-browser inside the trusted API container, and does not use the Obscura
-document-size or wait settings. SearXNG and its provider scheduling continue
-to use Obscura regardless of this preference.
-
-During parallel `open_url` stress testing, this stock crawler appeared to be
-blocked less often and was considerably more reliable than the direct path on
-the pinned Obscura 0.1.10 release. This is an observed version-specific result,
-not a general browser guarantee. Monitor newer Obscura releases and repeat the
-parallel blocked/empty-body/timeout comparison; set
-`ONYX_AGENT_USE_OBSCURA_BROWSER=true` after a restart when Obscura becomes the
-better fit for the workload.
-
-Selecting Firecrawl, Exa, or another external provider is still supported via
-Onyx's public route, but is outside this one-navigation guarantee. That
-provider performs the target fetch under its current retention, training, and
-zero-data-retention policy, and its API key associates activity with your
-account.
-
-`SEARXNG_ROUND_ROBIN=true` selects one available normal custom provider and
-may try another only after SearXNG records an unresponsive failure. Disabling
-it restores selected-engine fan-out and can disclose the same query to several
-providers. `open_url`, generic helpers, and enabled executors are not governed
-by the provider scheduler.
+Selecting Firecrawl or Exa for Web (or Brave, Serpa, Exa, or Google PSE for Search),
+is supported and connections to these services will traverse via the VPN and/or
+upstream proxy, but these external providers perform their accesses from their
+own IP address space, using their own data-retention and user data training
+policies. None of these providers offer ZDR policies to consumer end
+users, so your API key and account on these services will be associated with
+your usage activity, and this data will be stored, trained on, and/or sold
+by these providewrs.
 
 ## Optional Configurations
 
@@ -369,7 +314,6 @@ To set this up, in `.env.wrapper`, set `TAILSCALE_FUNNEL_ENABLED=true` and set `
 - By default, the tailscale service does not route through Mysterium VPN, to avoid linking your tailscale account to your search actvity at the Myst VPN exit server.
 - Tailscale uses the userspace networking mode, so no VPN activity is involved.
 - To route Tailscale through the VPN namespace instead, set `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` in `.env.wrapper`. **Warning:** this links your Tailscale identity to the VPN exit IP.
-- Selecting that override promotes the trusted Tailscale process into the shared routing namespace. Its configured application path still reaches nginx through the fixed frontend gateway, but the process shares the namespace's loopback, interfaces, routes, and policy listeners. Do not use this option for a component you do not trust with that network capability.
 
 Tailscale Funnel prerequisites:
 
@@ -380,33 +324,6 @@ Tailscale Funnel prerequisites:
 Bring the stack up as usual (`make up-lite` or `make up-full`).
 
 Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The Tailscale process and its fixed frontend gateway are then omitted from the effective Compose model.
-
-### Optional: VPN Routing for Teep, Tailscale, and Code-Interpreter
-
-By default, **teep** uses its dedicated service and direct-uplink networks, while enabled **tailscale** uses its dedicated ingress and direct-uplink networks. Neither uses the Mysterium namespace unless its routing switch is enabled. This means:
-
-- Teep LLM API traffic egresses directly (not through Mysterium).
-- Tailscale Funnel traffic egresses directly, keeping your Tailscale identity separate from the VPN exit IP.
-
-You can optionally route either or both services through the Mysterium VPN namespace by setting these variables in `.env.wrapper`:
-
-```bash
-# Route teep LLM proxy traffic through the VPN
-TEEP_ROUTE_THROUGH_MYST_VPN=true
-
-# Route Tailscale Funnel through the VPN
-# WARNING: This links your Tailscale identity to the VPN exit IP
-TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true
-```
-
-The Makefile conditionally applies `docker-compose.teep-vpn.yml` and/or `docker-compose.tailscale-vpn.yml` override files when these are set to `true`. These override files properly adjust host and port mappings of teep and tailscale for the VPN interface. Restart the stack after changing these settings.
-
-These switches deliberately promote trusted Teep or Tailscale processes into
-the shared routing namespace. A promoted process shares its loopback,
-interfaces, routes, and final-hop proxy listeners; the fixed Teep and frontend
-gateways constrain how Onyx reaches those services, not what a compromised
-promoted process could reach. Onyx applications, Obscura, SearXNG, and
-executor pods remain outside that namespace.
 
 #### Optional: Network Access for the Code-Interpreter
 
@@ -420,47 +337,11 @@ You can optionally give executor pods restricted proxy-only access by setting:
 ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true
 ```
 
-Executor pods join only the internal `onyx-code-interpreter-executor` network.
-Their sole peer is an HTTP proxy bridge; raw direct connections have no route
-to the internet, Onyx services, SearXNG, Obscura, Docker host gateway,
-LAN/private ranges, or metadata addresses. The final-hop proxy preserves the
-selected VPN/upstream-proxy/no-VPN mode. Public search engines are deliberately
-allowed through that public policy and return their real response or challenge.
-Tool descriptions advertise this restricted capability and do not expose
-stack-local service endpoints.
-
-`ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB` (default `1000`) is the shared
-byte-oriented ceiling for code-interpreter file uploads and coding-agent
-GitHub repository tarball downloads. Oversized repositories now fail in the
-API server before it attempts an upload that code-interpreter would reject.
-The `ONYX_OPEN_URL_MAX_CHARS_PER_URL` and
-`ONYX_OPEN_URL_MAX_TOTAL_CHARS` settings are separate post-fetch text budgets;
-they do not limit network bytes or uploaded files.
-
-Restart the stack after changing this setting (`make down-lite && make up-lite`, or the full-mode equivalents).
-
 ### Optional: Outbound Proxy (`EGRESS_UPSTREAM_PROXY_URL`)
 
-Set `EGRESS_UPSTREAM_PROXY_URL` in `.env.wrapper` to give the final-hop
-policy proxies an upstream proxy. This includes the fixed public-only proxy
-used by environment-aware HTTP clients in the Onyx API and background workers, so
-coding-agent repository downloads, Web connector downloads, and similar
-helpers follow the same routing matrix. Restricted components continue to use
-local bridge URLs. This is orthogonal to Mysterium: if both are set, the
-upstream-proxy connection crosses the VPN.
-
-The Onyx route has no intermediate stream broker, admission counter, or fixed
-total CONNECT lifetime. Established tunnels remain open until a peer closes or
-I/O fails. The optional Tailscale frontend does not traverse these outbound
-proxies; it reaches nginx through its own fixed internal gateway.
-
-The proxy endpoint itself follows the same routing boundary. In VPN mode,
-public proxy names use the Myst provider resolver and public proxy addresses
-use the Myst route. Exact `host.docker.internal` uses the narrow host-route
-exception. A configured RFC1918 IPv4 literal receives an exact `/32` route and
-does not require or enable general RFC1918 target access. System-DNS resolution
-of `.local`, `.internal`, or `.home.arpa` proxy names requires
-`EGRESS_ALLOW_RFC1918=true` so the complete answer set can be classified.
+Set `EGRESS_UPSTREAM_PROXY_URL` in `.env.wrapper` to use an upstream proxy. This
+is orthogonal to Mysterium: if both are set, the upstream-proxy connection
+crosses the VPN.
 
 Supported schemes:
 
@@ -478,48 +359,23 @@ EGRESS_UPSTREAM_PROXY_URL="socks5://proxy.example.com:1080"
 EGRESS_UPSTREAM_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
-The local policy proxies block private/internal literals, all
-`*.docker.internal` names, known legacy Docker Desktop host/gateway names, and
-single-label Docker service/container names. These built-in blocks cannot be
-removed by configuration. HTTP, HTTPS, `socks5`, and `socks5h` all leave target
-DNS at the upstream proxy, so a public-looking hostname that it resolves to a
-private address is a residual risk. Exact host Tor
-(`socks5h://host.docker.internal:9150`) uses the narrow host exception and
-does not require `EGRESS_ALLOW_RFC1918=true`.
+An exact host Tor proxy
+(`EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150`) uses the
+default host exception and does not require `EGRESS_ALLOW_RFC1918=true`.
 
-In both lite and full mode, the Onyx API uses the helper policy for public
-downloads; the full-only background worker uses it as well. Their direct
-stack-local and host-local dependencies are maintained in the tracked
-`onyx/helper-egress.env` file, not user configuration. Public destinations
-must not be added there because they would bypass the helper policy and
-upstream proxy. Executor pods do not inherit this trusted bypass list. HTTP
-libraries that explicitly disable
-environment proxy discovery or install their own transport are outside this
-generic helper route and require component-specific routing; the bundled
-GitHub downloader and normal `requests`, `httpx`, and `urllib` helpers honor it.
-Playwright does not inherit the backend bypass set; every external browser
-navigation uses an explicit selected proxy. The full-mode Web connector has
-one exact host final-hop route for the internal `http://doc-drop-web:8091/` crawl
-origin through a fixed gateway; no host or public name is added to generic
-`NO_PROXY`, and doc-drop browser subresources remain policy mediated.
+Invalid upstream proxy URLs fail policy-proxy startup.
 
-The final-hop policy remains authoritative. Without an upstream proxy, Myst
-mode queries the provider resolver directly through the tunnel and pins the
-connection to the validated answer; explicit no-VPN mode uses system/Docker
-DNS. With an upstream proxy, the final-hop policy sends target hostnames only
-through HTTP CONNECT, SOCKS, or absolute-form proxy requests. Only the
-upstream proxy endpoint itself may need bootstrap resolution.
-
-Invalid upstream proxy URLs fail policy-proxy startup. Startup logs redact
-userinfo and show only the configured scheme, host, and port.
-
-The default SearXNG engines (`google2`, `brave2`, `duckduckgo2`, `startpage2`, `bing2`) are offline engines that connect only to Obscura over the internal control network. SearXNG has no general Internet route. Their public target DNS and connections occur in Obscura through the selected final hop.
+During usage, prior to hitting this proxy, the stack's [internal policies](./docs/internal_network_security.md) block private/internal literals,
+all `*.docker.internal` names, known legacy Docker Desktop host/gateway names,
+and single-label Docker service/container names.  These built-in blocks cannot
+be removed by configuration.
 
 ### Optional: Local Document RAG via Web Connector
 
 The full version of Onyx supports search and retrieval (RAG) over PDF, DOC, EPUB, and other document types.
 
-For implementation details, troubleshooting notes, and Onyx upgrade assumptions, see [`docs/local_docs_rag_search.md`](docs/local_docs_rag_search.md).
+For implementation details, troubleshooting notes, and Onyx upgrade assumptions,
+see [`docs/local_docs_rag_search.md`](docs/local_docs_rag_search.md).
 
 Setup steps:
 
@@ -537,16 +393,11 @@ Notes:
 - Directory listing pages are crawlable; you can also target specific files
   directly, e.g. `http://doc-drop-web:8091/my-paper.pdf`.
 - Browser-visible result links are rewritten to the host display origin,
-  `http://localhost:8091/` by default. That host URL is for display, not the
-  saved connector crawl origin.
-- Saved Security Hardening settings continue to govern external Web connector
-  targets. The exact stack-owned `http://doc-drop-web:8091/` crawl origin remains
-  available under strict `Validate All` through its dedicated host final-hop
-  gateway; the exception does not grant general private-network access.
+  `http://localhost:8091/` by default. This enables you to click on source links in a host browser and view them locally.
 
 ### Optional: Running a Local Embedding Model Server (Mac)
 
-If you are on a Mac, the makefile has rules that can install [Harrier-oss-v1-0.6b](https://huggingface.co/microsoft/harrier-oss-v1-0.6b), which is a SOTA open weight embedding model:
+If you are on a Mac, the makefile has rules that can install [Harrier-oss-v1-0.6b](https://huggingface.co/microsoft/harrier-oss-v1-0.6b) (which is the current leading SOTA open weight embedding model), served via [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings).
 
 ```sh
 # Install mlx-openai-server and mlx-embeddings in ./embedserv using `uv`
@@ -559,31 +410,15 @@ make up-full
 
 After `make embedserv-install` has installed the selected model, `make up-full`
 automatically launches `make embedserv-serve` when the shim uses the bundled
-default endpoint, `http://host.docker.internal:3210/v1/embeddings`. It leaves
-Teep and other custom upstream URLs alone. You can still run
+default endpoint, `http://host.docker.internal:3210/v1/embeddings`. You can also run
 `make embedserv-serve` directly when you want the server in the foreground.
 `make down-full` stops only the bundled server that `make up-full` started; it
 does not stop a server that was launched manually.
 
-When the default endpoint is selected but neither an installed bundled server
-nor an already-running server is available, `make up-full` fails immediately
-with setup guidance. It also waits for an automatically launched server to
-listen and prints recent `embedserv/serve.log` output if startup fails, instead
-of surfacing only a later Compose health-check error.
-
-Installation and model download run on the host before the embedding shim is
-ready; they are not routed through the stack VPN. Standard `HTTP_PROXY`,
-`HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
+MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
 the download libraries when the host requires a build/download proxy.
 
-These rules use `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs), and LM Studio's is non-existent.
-
-The default plain-HTTP `host.docker.internal` endpoint uses the exact host
-route, remains usable when public HTTP URLs are disabled, and does not require
-`EGRESS_ALLOW_RFC1918`. Enable that option only when the embedding endpoint is
-an RFC1918 literal or uses a `.local`, `.internal`, or `.home.arpa` name. Such
-opt-in RFC1918 endpoints may also use plain HTTP; the host final-hop proxy permits
-it only after the complete DNS answer set validates as RFC1918.
+The stack uses use `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs, especially under concurrency load and batched embeddings). LM Studio's embedding support is non-existent.
 
 ### Optional: Using Teep for Embeddings
 
@@ -597,8 +432,7 @@ ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:8337/v1/embedd
 ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B"
 ```
 
-The default `HOST_PORT_TEEP` is `8337`; substitute its configured value if you
-changed it. Teep uses `TEEP_NEARAI_API_KEY` from the same file for the upstream
+Teep uses `TEEP_NEARAI_API_KEY` from the `.env.wrapper` file for the upstream
 request. Do not set `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` to the Qwen model:
 that variable only selects the model downloaded and served by the bundled Mac
 MLX flow. `make up-full` sees the custom Teep URL and does not start MLX.
@@ -606,13 +440,13 @@ MLX flow. `make up-full` sees the custom Teep URL and does not start MLX.
 The shim container reaches Teep through the fixed host publisher, so use
 `host.docker.internal` here rather than the internal `teep` service name.
 
-### Optional: Local/Custom Embedding Model Configuration
+### Optional: Embedding Model Configuration in Onyx
 
 Properly configuring an open-weight frontier embedding model for RAG is a minefield. Almost no one gets it right, including Onyx and LiteLLM. Do **not** configure embeddings through LiteLLM.
 
 Frontier embedding models require an instruction prefix when generating queries, but unfortunately, Onyx has an issue with handling this prefix for generic LLM providers. To address this, the stack contains a local shim which allows you to set the query prefix via an environment instead. The prefixes in `.env.wrapper.example` should be good for either Harrier or Qwen3.
 
-To use this shim:
+To configure embedding support in Onyx:
 
 1. Go to [Onyx Admin Index Settings](http://localhost:3000/admin/configuration/index-settings)
 2. Select your embedding model as **Self-Hosted / Custom Model** (local)
@@ -622,28 +456,17 @@ To use this shim:
    shim still sends requests to the configured real upstream model.
 4. For both `Harrier-OSS-V1-0.6B` and `Qwen3-Embedding-0.6B`, the embedding dimension is 1024.
 
-### MCP servers
+This Onyx configuration choices cause the stack's patches to route embedding requests to either the MLX embeddings or teep model that you configured above, using correctly formatted query and indexing prefixes.
 
-The former bundled Obscura MCP browser has been removed intentionally. Add
-only MCP servers you operate or trust through Onyx Admin. Their streamable
+### Optional: External MCP servers
+
+You can add any MCP servers you operate or trust through Onyx Admin. Their streamable
 HTTP, SSE, redirects, discovery, registration, OAuth, token, refresh, and tool
-traffic use an explicit public or host-capable proxy transport. The selected
-egress final-hop proxy, rather than a second HTTPX validator, enforces every
-initial and SDK-derived destination. Public servers may use nonstandard TCP
+traffic use an explicit public or host-capable proxy transport. The restricted [final-hop egress proxy](./docs/internal_network_security.md) enforces every
+initial and SDK-derived destination. Public MCP servers may use nonstandard TCP
 ports; RFC1918 destinations require `EGRESS_ALLOW_RFC1918=true` and the host
-route, while exact `host.docker.internal` uses the existing narrower host
+route, while exact `host.docker.internal` uses the default narrower host
 exception.
-
-## Docker Host Endpoints
-
-The following endpoints are exposed to your docker host:
-
-- Onyx WebUI: [`http://localhost:3000`](http://localhost:3000)
-- SearxNG WebUI: [`http://localhost:8080`](http://localhost:8080)
-- teep human-readable stats page: [`http://localhost:8337`](http://localhost:8337)
-- teep OpenAI API base: `http://localhost:8337/v1`
-- teep health check: `http://localhost:8337/health`
-- teep prometheus metrics: `http://localhost:8337/metrics`
 
 ## Upgrading the Stack
 
@@ -663,28 +486,47 @@ builds forward standard
 `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` build arguments when those
 variables are present. Image builds and host-side `embedserv` installation
 happen before stack readiness and therefore use the host/build network, not
-the Mysterium namespace or `EGRESS_UPSTREAM_PROXY_URL`. When changing pins
-or rebasing onto a new Onyx release, use
-[`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md).
+the Mysterium namespace or `EGRESS_UPSTREAM_PROXY_URL`.
+
+When changing these image pins or rebasing onto a new Onyx release, point a code agent at [`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md).
+
+## Docker Host Endpoints
+
+The following endpoints are exposed to your docker host:
+
+- Onyx WebUI: [`http://localhost:3000`](http://localhost:3000)
+- SearxNG WebUI: [`http://localhost:8080`](http://localhost:8080)
+- teep human-readable stats page: [`http://localhost:8337`](http://localhost:8337)
+- teep OpenAI API base: `http://localhost:8337/v1`
+- teep health check: `http://localhost:8337/health`
+- teep prometheus metrics: `http://localhost:8337/metrics`
 
 ## Privacy of this stack
 
-This stack should be regarded as a proof-of-concept. It will keep your LLM queries and the resultant search
-activity out of the hands of AI companies, data aggregators, and marketers,
-but single-hop VPN activity is not as strong as Tor, and may not even be as
-strong as [Tinfoil's distributed trust
-architecture](https://tinfoil.sh/security-and-privacy-faq#web-search).
+This stack should be regarded as a proof-of-concept. It will keep your LLM
+queries and the resultant search activity out of the hands of AI companies, data
+aggregators, and marketers, but single-hop VPN activity is not as strong as Tor
+(which is supported, but not the default). Single-hop VPN activity may not even
+be as strong as [Tinfoil's distributed trust architecture](https://tinfoil.sh/security-and-privacy-faq#web-search).
 
-This stack uses the host OS VPN as the "first hop"
-before connecting to the Mysterium endpoint. Additionally, all inference,
-search, and web traffic exiting the Mysterium VPN uses TLS or https.
+However, the [network security](./docs/internal_network_security.md) of this
+stack is robust, and [restricted VPN+proxy egress is enforced](docs/vpn_routing_and_proxies.md) with docker compose network
+namespaces, service isolation and least-priviledge capability configuration.
 
-### Why not just use Tor?
+This stack uses the host OS VPN as the "first hop" before connecting to the
+Mysterium endpoint. Additionally, all inference, search, and web traffic exiting
+the Mysterium VPN uses TLS or https.
 
-It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that does not support Tor usage. This was a pragmatic choice to produce something that functioned.
+Browser fingerprints are standardized and obsfuscated in both the Obscura and Onyx Web Crawler cases, and cookies are cleared every hour by default.
+
+### Why not just use Tor by default?
+
+Tor usage is supported by configuring [EGRESS_UPSTREAM_PROXY_URL="socks5h://host.docker.internal:9150"] in your .env.wrapper, and this [proxy usage](./docs/vpn_routing_and_proxies.md) is [strictly enforced](./docs/internal_network_security.md), but it is not the default.
+
+It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that does not support Tor usage by default. This was a pragmatic choice to produce something that functioned.
 
 The reality is that many websites subject Tor and datacenter VPNs to increased captchas and bans compared to [residential IP addresses](https://acid.vegas/blog/the-shady-world-of-ip-leasing/). The most egregious example is Google's move to update [ReCaptcha to require an official Google device, while exempting "official" AI scrapers](https://www.financialexpress.com/life/technology-google-qr-captcha-controversy-explained-why-internet-is-scared-of-this-4237640/).
 
 Until this landscape changes, residential IP address leasing is the only reliable option for a self-hosted private research agent, and Mysterium was the best choice among those, since the server side is open source, and payment is made in cryptocurrency.
 
-To compare routing, set `EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150` in `.env.wrapper` to use the host Tor Browser proxy. SearXNG provides search-engine success statistics on the "Engines" tab of the [Preferences Pane](http://localhost:8080/preferences). The exact Docker-host route is narrower than the separate RFC1918 opt-in; upstream-resolved target DNS retains the residual risk documented above.
+You can monitor SearXNG search-engine success statistics on the "Engines" tab of the [Preferences Pane](http://localhost:8080/preferences), if you want to test your success with Tor usage, other proxy providers, or your host VPN.
