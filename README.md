@@ -6,7 +6,7 @@ The stack is built around [Onyx](https://github.com/onyx-dot-app/onyx) using [te
 
 Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0day/obscura) via customized [SearXNG](https://github.com/searxng/searxng) engines which round-robin to minimize search load and associated captchas.
 
-Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Obscura uses a stable browser vendor/version profile with some per-navigation fingerprint variation, while the stock Onyx Web Crawler uses a fixed generic MacOS Chromium browser fingerprint. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
+Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are stable in the default web crawler, but are varied per-navigation in Obscura. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
 
 To further minimize captchas and reduce tracking, all agent internet traffic can use the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, and/or explicit no-VPN routing mode. The stack employs docker/podman network namespace isolation to ensure that all agent traffic exits through the configured VPN and/or upstream proxy.
 
@@ -18,14 +18,14 @@ The main reason I created this stack is because none of the private chat provide
 
 Additionally, the full mode of Onyx provides RAG search results to the agent from local collection of PDFs and other documents, and has a Code Agent tool that allows the chat agent to spawn multiple sub-agents to clone and investigate git repositories. Onyx has many other connectors as well.
 
-I also [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
+In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
 
 - Stock Onyx strips reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality.
 - Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results; this has been patched.
-- The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
 - The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
 - The "Deep Research" mode now also supports longer, bounded research runs and executes all accepted tool calls when a research agent requests several different tools at once, rather than silently dropping some of them.
-- Onyx is patched to let models choose whether to call another tool or finish, avoiding a forced-tool compatibility problem that otherwise affects Code Agent and Deep Research workflows.
+- The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
+- Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit. It is also not clear that Onyx prioritizes compatibility with the Open Weight frontier. (It is not unique in this regard; it still remains the most capable research agent framework I have found).
@@ -53,6 +53,7 @@ The Docker Compose files in this stack relies on the following components:
 - Docker or Podman
 - Internet access for image builds and provider APIs
 - `make`
+- `uv` for unit tests and MLX embedding server installation.
 
 ## Running the Stack
 
@@ -119,33 +120,16 @@ Most likely variables you want to change:
   - In Podman mode, the wrapper disables `code-interpreter` and the VPN-only `autoheal` service by default because they require a functional Docker-compatible daemon socket inside containers.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
-- **Master VPN switch**:
-  - Set `MYST_VPN_ENABLED=false` to use the explicit no-VPN final-hop route. `myst-client` remains the route owner but idles its daemon without arming the kill switch. Onyx application containers stay on internal-only networks in both modes and cannot use Docker as a direct fallback. This skips the Myst wallet/funding requirement entirely.
+- **VPN and Proxy Use**:
+  - Set `MYST_VPN_ENABLED=false` to use the explicit no-VPN final-hop route.
+  - You may use an upstream proxy with or without the Mysterium VPN enabled (`EGRESS_UPSTREAM_PROXY_URL`).
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
-  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let explicitly
-    configured MCP servers,
-    Web Connectors, embedding servers, and inference providers reach services on
-    your private LAN. Default: `false`. MCP and Web Connector access also
-    requires a compatible setting under **Admin → Security Hardening**.
-  - This setting does **not** give agent web search, `open_url()`, browser
-    activity, or generated code access to your host, LAN, private addresses,
-    metadata endpoints, or stack-managed services. Those agent-controlled paths
-    remain public-only (or have no network at all).
-  - `host.docker.internal` is available by default to the explicitly configured
-    integrations and model endpoints above, so services running on the Docker
-    host do not require `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Other
-    private destinations require an RFC1918 IP literal or a name ending in
-    `.local`, `.internal`, or `.home.arpa`; failed, empty, or mixed
-    public/private lookups are rejected.
-  - Stack-managed local services used for inference, embedding, search, and RAG
-    are available only to the Onyx features that need them. Their names do not
-    become general destinations for agent browsing or generated code.
-  - These controls constrain normal and malicious agent-selected URLs and code.
-    They are not a sandbox for Onyx itself: if the Onyx application is fully
-    compromised, an attacker may abuse the local access granted to configured
-    integrations. See [`docs/internal_network_security.md`](docs/internal_network_security.md)
-    for the implementation boundaries and residual risks.
+  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let explicitly configured MCP servers, Web Connectors, embedding servers, and inference providers reach services on your private LAN. MCP and Web Connector access also requires a compatible SSRF setting under **Admin → Security Hardening** that will be set correctly by default, but should not be changed.
+  - LAN service destinations require an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`; failed, empty, or mixed public/private lookups are rejected.
+  - This setting does **not** give agent web search, `open_url()`, browser activity, or generated code access to your host, LAN, private addresses, metadata endpoints, or stack-managed services. Those agent-controlled paths remain public-only (or have no network at all).
+  - `host.docker.internal` is available by default to the explicitly configured integrations and model endpoints above, so services running on the Docker host do not require `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. The Onyx agent itself never has access to `host.docker.internal` through any of its default tools.
+  - If the Onyx application becomes fully compromised, an attacker may abuse local LAN access with this pref. See [`docs/internal_network_security.md`](docs/internal_network_security.md) for the implementation boundaries and residual risks of enabling this setting.
 
 ### Initial VPN Connection (Myst Payment)
 
@@ -322,25 +306,13 @@ Select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Pa
 3. Set the **SearXNG Base URL** to `http://searxng-service-gateway:8888`.
 4. Open **Onyx Web Crawler**, click **Connect**, then **Set as Default**.
 
-The stock Onyx Web Crawler appears to be blocked less often than Obscura v0.1.10
-by websites, but you can set `ONYX_AGENT_USE_OBSCURA_BROWSER=true` to cause the
-Onyx Web Crawler to use the Obscura Browser instead of Onyx's internal fetch +
-Chromium Playwrite fallback.
+The stock Onyx Web Crawler appears to be blocked less often than Obscura v0.1.10 by websites, but you can set `ONYX_AGENT_USE_OBSCURA_BROWSER=true` to cause the Onyx Web Crawler to use the Obscura Browser instead of Onyx's internal fetch + Chromium Playwrite fallback.
 
 SearXNG always uses Obscura; `ONYX_AGENT_USE_OBSCURA_BROWSER` independently selects the built-in crawler transport.
 
-In either case, egress is restricted to ensure usage of VPN and/or upstream
-proxy, through docker compose network namespace routing. This is the case for
-all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
+In either case, egress is restricted to ensure usage of VPN and/or upstream proxy, through docker compose network namespace routing. This is the case for all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
 
-Selecting Firecrawl or Exa for Web (or Brave, Serpa, Exa, or Google PSE for Search),
-is supported and connections to these services will traverse via the VPN and/or
-upstream proxy, but these external providers perform their accesses from their
-own IP address space, using their own data-retention and user data training
-policies. None of these providers offer ZDR policies to consumer end
-users, so your API key and account on these services will be associated with
-your usage activity, and this data will be stored, trained on, and/or sold
-by these providewrs.
+Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Search, is supported. Connections to these services will traverse via the VPN and/or upstream proxy, but these external providers perform their accesses from their own IP address space. None of these providers offer ZDR policies to consumer end users, so your API key and account on these services will be associated with your usage activity, and this data will be stored, trained on, and/or sold by these providewrs.
 
 ## Optional Configurations
 
