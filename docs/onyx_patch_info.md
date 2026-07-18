@@ -14,6 +14,14 @@ neutral `onyx/patches/shared/wrapper_env_patches.py` contains reusable helpers
 but is not executable bootstrap code. Compose imports it explicitly through
 `PYTHONPATH`.
 
+The pinned background image's supervisor configuration resets worker
+`PYTHONPATH` to `/app`, overriding the container-level Compose value. Full mode
+therefore also mounts the background bootstrap as `/app/sitecustomize.py` and
+the shared helper as `/app/wrapper_env_patches.py`. This makes the same strict
+bootstrap visible to the real Celery workers and their spawn-based indexing
+children; relying only on the wrapper directories in the container environment
+would patch the supervisor process but leave document fetching unpatched.
+
 This split prevents a base bootstrap from running service-inappropriate code
 and makes missing API-only behavior startup-visible.
 

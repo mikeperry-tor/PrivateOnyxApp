@@ -512,6 +512,30 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             background_env["ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL"],
             "http://doc-drop-web:8091/",
         )
+        background_volumes = services["background"]["volumes"]
+        self.assertIn(
+            {
+                "type": "bind",
+                "source": str(
+                    ROOT
+                    / "onyx/patches/sitecustomize_background/sitecustomize.py"
+                ),
+                "target": "/app/sitecustomize.py",
+                "read_only": True,
+                "bind": {},
+            },
+            background_volumes,
+        )
+        self.assertIn(
+            {
+                "type": "bind",
+                "source": str(ROOT / "onyx/patches/shared/wrapper_env_patches.py"),
+                "target": "/app/wrapper_env_patches.py",
+                "read_only": True,
+                "bind": {},
+            },
+            background_volumes,
+        )
 
     def test_obscura_mcp_and_shared_namespace_artifacts_are_absent(self) -> None:
         model = _compose_model("full")

@@ -90,6 +90,11 @@ services:
       - ./docker-data/file-system:/app/file-system
       - ./docker-data/model-cache:/app/.cache/huggingface
       - ./docker-data/model-cache:/root/.cache/huggingface
+      # Upstream supervisord resets worker PYTHONPATH to /app. Mount the same
+      # strict bootstrap and shared helper there so Celery workers and their
+      # spawned indexing children cannot start without the wrapper patches.
+      - ./onyx/patches/sitecustomize_background/sitecustomize.py:/app/sitecustomize.py:ro
+      - ./onyx/patches/shared/wrapper_env_patches.py:/app/wrapper_env_patches.py:ro
       - ./onyx/patches/sitecustomize_background:/app/wrapper-patches-background:ro
       - ./onyx/patches/shared:/app/wrapper-patches-shared:ro
       - background_logs:/var/log/onyx

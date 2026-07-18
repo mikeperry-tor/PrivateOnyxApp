@@ -262,6 +262,14 @@ remove exactly one `cleanup-idle-sandboxes` beat template; beat logs must not
 show Kubernetes sandbox-manager initialization attempts. Re-audit the template
 name and collection shape on every Onyx upgrade.
 
+Confirm the background image's supervisor `environment=PYTHONPATH=...` setting.
+While it resets worker `PYTHONPATH` to `/app`, full-mode Compose must mount the
+strict background bootstrap at `/app/sitecustomize.py` and its shared helper at
+`/app/wrapper_env_patches.py`, in addition to the wrapper-directory mounts used
+by the container entry process. Verify patch-success diagnostics in the actual
+Celery worker and in a spawn-based document-fetching child, then run a real
+doc-drop Web connector crawl and PDF extraction.
+
 ## Minimum deterministic validation
 
 ```sh
