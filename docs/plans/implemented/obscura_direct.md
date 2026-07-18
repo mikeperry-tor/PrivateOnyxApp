@@ -475,8 +475,8 @@ literals; do not add runtime parsing or validation code for them. Pass the
 resolved `EGRESS_ALLOW_HTTP_URLS` boolean to both `api_server` and
 `searxng-core`, so the
 shared client's local scheme gate and the public final-hop proxy enforce the
-same operator policy. Do not give either caller `EGRESS_ALLOW_RFC1918` or a
-host-capable browser route.
+same operator policy. Do not give either caller
+`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` or a host-capable browser route.
 
 Obscura retains its mandatory proxy setting and can resolve only the internal
 browser bridge. Preserve `OBSCURA_ALLOW_PRIVATE_NETWORK=true`: it is required
@@ -588,10 +588,10 @@ API-process-local blocking semaphore below; that semaphore grants no network
 authority and coordinates only in-process crawler work.
 
 The host proxy alone retains exact `host.docker.internal`, exact stack-owned
-destinations, and `EGRESS_ALLOW_RFC1918` behavior. Public Onyx, browser, and
-executor listeners reject those destinations. Mixed public/private answers,
-loopback, link-local, metadata, container-internal names, and alternate-route
-attempts fail closed.
+destinations, and `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` behavior. Public
+Onyx, browser, and executor listeners reject those destinations. Mixed
+public/private answers, loopback, link-local, metadata, container-internal
+names, and alternate-route attempts fail closed.
 
 Those destination-denial guarantees are authoritative when the wrapper's
 final-hop proxy performs DNS and pins the validated address. If an operator

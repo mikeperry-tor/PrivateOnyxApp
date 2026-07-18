@@ -59,6 +59,11 @@ This stack has hardened the Onyx networking usage to ensure that both egress and
   Onyx exceptions. The exact internal Teep chat base is a startup-validated
   direct-service exception, and doc-drop Web Connector traffic uses an exact
   host final-hop gateway rather than a process-wide direct crawl.
+- `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` is the user-facing opt-in for
+  validated RFC1918 endpoints used by configured MCP/Web integrations,
+  inference providers, and the embedding shim. It must never grant LAN access
+  to generic helpers, `open_url`, browser activity, or executors. Exact
+  `host.docker.internal` remains a separate default host-route exception.
 - Myst and the final-hop proxies are trusted routing-namespace processes.
   Enabling Myst routing for Teep or Tailscale deliberately promotes that
   trusted component into the same namespace, including its loopback,
@@ -144,8 +149,8 @@ This stack protects private research, document contents, browsing behavior, infe
 - Compose layering:
   - The Makefile assembles `COMPOSE_FILE`. Keep optional behavior in override files, keep Docker and Podman behavior separated, and preserve generated local secret flow plus Compose `${VAR:?message}` checks.
 - VPN/proxy routing:
-  - Preserve explicit VPN/no-VPN behavior, the separate public/host Onyx route classes, exact host and opt-in RFC1918 policy, operator-local `.local`/`.internal`/`.home.arpa` DNS restriction, optional routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY` handling.
-  - Public upstream-proxy names and addresses must use provider DNS and the VPN route in VPN mode; exact host and RFC1918-literal proxy endpoints use only their documented narrow route exceptions, while named operator-local proxies require the RFC1918 opt-in.
+  - Preserve explicit VPN/no-VPN behavior, the separate public/host Onyx route classes, exact host and opt-in `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` policy, operator-local `.local`/`.internal`/`.home.arpa` DNS restriction, optional routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY` handling.
+  - Public upstream-proxy names and addresses must use provider DNS and the VPN route in VPN mode; exact host and RFC1918-literal proxy endpoints use only their documented narrow route exceptions, while named operator-local proxies require `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`.
   - Empty or failed operator-local target lookups fail closed without external fallback; only non-empty all-global answers return to the selected public final hop.
   - Onyx applications must never join `netns-holder` or gain direct fallback when VPN, policy-proxy, or bridge connectivity fails.
 - Request handling:

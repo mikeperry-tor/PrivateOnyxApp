@@ -23,7 +23,10 @@ SECRET_ENV = {
 
 
 def _compose_model(
-    mode: str, *extra_files: str, profiles: tuple[str, ...] = ()
+    mode: str,
+    *extra_files: str,
+    profiles: tuple[str, ...] = (),
+    env_overrides: dict[str, str] | None = None,
 ) -> dict:
     command = [
         "docker",
@@ -50,7 +53,7 @@ def _compose_model(
     completed = subprocess.run(
         command,
         cwd=ROOT,
-        env={**os.environ, **SECRET_ENV},
+        env={**os.environ, **SECRET_ENV, **(env_overrides or {})},
         check=True,
         capture_output=True,
         text=True,
@@ -234,12 +237,34 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
 
         public = services["onyx-public-egress-proxy"]["environment"]
         host = services["onyx-host-egress-proxy"]["environment"]
-        self.assertEqual(public["EGRESS_ALLOW_RFC1918"], "false")
+        self.assertEqual(public["ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS"], "false")
         self.assertNotIn("EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS", public)
         self.assertEqual(
             host["EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS"],
             "doc-drop-web:8091",
         )
+
+    def test_integration_lan_option_reaches_only_host_policy_and_route_owner(
+        self,
+    ) -> None:
+        model = _compose_model(
+            "full",
+            "docker-compose.code-interpreter-network.yml",
+            env_overrides={"ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true"},
+        )
+        services = model["services"]
+        option = "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS"
+
+        self.assertEqual(
+            services["onyx-host-egress-proxy"]["environment"][option], "true"
+        )
+        self.assertEqual(
+            services["myst-client"]["environment"][option], "true"
+        )
+        self.assertEqual(
+            services["onyx-public-egress-proxy"]["environment"][option], "false"
+        )
+        self.assertNotIn(option, services["code-interpreter"]["environment"])
 
     def test_every_restricted_listener_has_an_explicit_route_class(self) -> None:
         model = _compose_model(
@@ -271,7 +296,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         for service_name in expected:
             if service_name != "onyx-host-egress-proxy":
                 environment = services[service_name]["environment"]
-                self.assertEqual(environment["EGRESS_ALLOW_RFC1918"], "false")
+                self.assertEqual(environment["ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS"], "false")
                 self.assertNotIn(
                     "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS", environment
                 )

@@ -85,7 +85,8 @@ The host route adds only:
 - exact `host.docker.internal`, resolved and pinned by the final-hop proxy;
 - exact stack-owned `doc-drop-web:8091` through its fixed gateway; and
 - RFC1918 literals or `.local`, `.internal`, and `.home.arpa` names whose
-  complete answer set is RFC1918, only when `EGRESS_ALLOW_RFC1918=true`.
+  complete answer set is RFC1918, only when
+  `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`.
 
 Mixed private/global answers fail closed. Loopback, link-local, metadata, and
 other container-internal names remain blocked. Plain HTTP remains disabled by

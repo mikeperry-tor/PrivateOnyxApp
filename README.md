@@ -109,7 +109,8 @@ Most likely variables you want to change:
   - Set `MYST_VPN_ENABLED=false` to use the explicit no-VPN final-hop route. `myst-client` remains the route owner but idles its daemon without arming the kill switch. Onyx application containers stay on internal-only networks in both modes and cannot use Docker as a direct fallback. This skips the Myst wallet/funding requirement entirely.
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
-  - Set `EGRESS_ALLOW_RFC1918=true` to let explicitly configured MCP servers,
+  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let explicitly
+    configured MCP servers,
     Web Connectors, embedding servers, and inference providers reach services on
     your private LAN. Default: `false`. MCP and Web Connector access also
     requires a compatible setting under **Admin → Security Hardening**.
@@ -119,9 +120,10 @@ Most likely variables you want to change:
     remain public-only (or have no network at all).
   - `host.docker.internal` is available by default to the explicitly configured
     integrations and model endpoints above, so services running on the Docker
-    host do not require `EGRESS_ALLOW_RFC1918=true`. Other private destinations
-    require an RFC1918 IP literal or a name ending in `.local`, `.internal`, or
-    `.home.arpa`; failed, empty, or mixed public/private lookups are rejected.
+    host do not require `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Other
+    private destinations require an RFC1918 IP literal or a name ending in
+    `.local`, `.internal`, or `.home.arpa`; failed, empty, or mixed
+    public/private lookups are rejected.
   - Stack-managed local services used for inference, embedding, search, and RAG
     are available only to the Onyx features that need them. Their names do not
     become general destinations for agent browsing or generated code.
@@ -270,8 +272,8 @@ The models supported by your API key from `.env.wrapper` should then be listed i
 The wrapper recognizes exactly `http://teep:8337/v1` as its bundled private
 inference endpoint. Other supported configured chat endpoints may be public,
 may use `host.docker.internal` by default, or may use a private LAN address when
-`EGRESS_ALLOW_RFC1918=true`. These inference permissions are not inherited by
-agent browsing or generated code.
+`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. These inference permissions are
+not inherited by agent browsing or generated code.
 
 ### Inference Provider Recommendations
 
@@ -281,7 +283,11 @@ This stack can also use a local OpenAI-compatible, LM Studio, or Ollama chat
 endpoint through `host.docker.internal` or an explicitly enabled RFC1918
 IP address.
 
-If your local provider is running on a private/LAN address, you will usually also want `EGRESS_ALLOW_RFC1918=true` so traffic can bypass the Myst VPN firewall to reach your host or LAN service. RFC1918 names must end in `.local`, `.internal`, or `.home.arpa`; otherwise use literal IP addresses.
+If your local provider is running on a private LAN address, set
+`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to permit that configured
+endpoint. RFC1918 names must end in `.local`, `.internal`, or `.home.arpa`;
+otherwise use literal IP addresses. An endpoint on `host.docker.internal` does
+not require this setting.
 
 ### LLM recommendations
 
@@ -381,10 +387,10 @@ EGRESS_UPSTREAM_PROXY_URL="socks5h://proxy.example.com:1080"
 
 An exact host Tor proxy
 (`EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150`) does not
-require `EGRESS_ALLOW_RFC1918=true`. Choosing a host- or LAN-based upstream
-proxy only makes that proxy available as routing infrastructure; it does not
-give agent browsing or generated code permission to access other host or LAN
-destinations.
+require `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Choosing a host- or
+LAN-based upstream proxy only makes that proxy available as routing
+infrastructure; it does not give agent browsing or generated code permission to
+access other host or LAN destinations.
 
 Invalid upstream proxy URLs fail policy-proxy startup.
 
@@ -499,8 +505,9 @@ HTTP, SSE, redirects, discovery, registration, OAuth, token, refresh, and tool
 traffic is subject to the saved **Admin → Security Hardening** setting. Public
 MCP servers may use nonstandard TCP ports. An MCP server on
 `host.docker.internal` can be allowed without enabling general LAN access;
-other RFC1918 destinations require `EGRESS_ALLOW_RFC1918=true`. These MCP
-permissions do not extend to agent browsing or generated code.
+other RFC1918 destinations require
+`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. These MCP permissions do not
+extend to agent browsing or generated code.
 
 ## Upgrading the Stack
 

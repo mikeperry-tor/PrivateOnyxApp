@@ -59,6 +59,14 @@ Connector, and configured provider choices. It does not replace final-hop
 policy. Saved Admin settings select the public or host-capable route; they do
 not grant browser or executor access to the host listener.
 
+`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` adds validated RFC1918 LAN
+destinations only to the host-capable route used by configured MCP/Web
+integrations, inference providers, and the embedding shim. Exact
+`host.docker.internal` remains a separate default exception on that route.
+Neither permission is inherited by agent browsing or executor code. This is an
+agent-activity boundary, not containment against arbitrary code execution in a
+trusted Onyx application process that can legitimately use the host route.
+
 By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` means the LLM-controlled
 stock crawler does not inherit that Admin private-network allowance. Its
 requests adapter and scoped Playwright validation accept public URL shapes

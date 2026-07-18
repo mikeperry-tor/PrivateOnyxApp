@@ -41,7 +41,7 @@ reach policy instances only through their local bridges. In VPN mode, public
 proxy names use provider DNS and public proxy addresses follow the Myst route.
 Exact ``host.docker.internal`` uses its narrow route; an RFC1918 IPv4 literal
 receives only an exact proxy-endpoint route; and operator-local proxy names use
-system DNS only with ``EGRESS_ALLOW_RFC1918=true``.
+system DNS only with ``ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true``.
 
 Architecture::
 
@@ -94,7 +94,10 @@ LISTEN_PORT = int(os.environ.get("EGRESS_PROXY_PORT", "3128"))
 ROUTE_CLASS = os.environ.get("EGRESS_ROUTE_CLASS", "public").strip().lower()
 if ROUTE_CLASS not in {"public", "host"}:
     raise RuntimeError("EGRESS_ROUTE_CLASS must be exactly 'public' or 'host'")
-ALLOW_RFC1918 = os.environ.get("EGRESS_ALLOW_RFC1918", "false").strip() == "true"
+ALLOW_LAN_ENDPOINTS = (
+    os.environ.get("ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS", "false").strip()
+    == "true"
+)
 RFC1918_SYSTEM_DNS_SUFFIXES = (".local", ".internal", ".home.arpa")
 
 # Upstream proxy (EGRESS_UPSTREAM_PROXY_URL from .env.wrapper). When set,
@@ -382,7 +385,7 @@ def _plain_http_allowed(
         or _is_exact_host_exception(host)
         or (
             ROUTE_CLASS == "host"
-            and ALLOW_RFC1918
+            and ALLOW_LAN_ENDPOINTS
             and validated_rfc1918
         )
     )
@@ -773,7 +776,7 @@ async def _validate_destination(
 
     if (
         ROUTE_CLASS == "host"
-        and ALLOW_RFC1918
+        and ALLOW_LAN_ENDPOINTS
         and _is_rfc1918(host)
     ):
         return None, (host,)
@@ -802,7 +805,7 @@ async def _validate_destination(
     # route below. Arbitrary names never reach system DNS in VPN mode.
     if (
         ROUTE_CLASS == "host"
-        and ALLOW_RFC1918
+        and ALLOW_LAN_ENDPOINTS
         and _is_rfc1918_system_dns_name(host)
     ):
         try:
@@ -1024,7 +1027,7 @@ async def _connect_via_upstream(
     if _is_exact_host_exception(target_host):
         return await _open_validated_direct_connection(validated_ips, target_port)
 
-    if ROUTE_CLASS == "host" and ALLOW_RFC1918 and validated_ips and all(
+    if ROUTE_CLASS == "host" and ALLOW_LAN_ENDPOINTS and validated_ips and all(
         _is_rfc1918(ip) for ip in validated_ips
     ):
         return await _open_validated_direct_connection(validated_ips, target_port)
@@ -1264,7 +1267,7 @@ async def _open_http_proxy_connection(
             raise ConnectionError(
                 "system DNS returned no Docker-host proxy addresses"
             )
-    elif ALLOW_RFC1918 and _is_rfc1918_system_dns_name(normalized_host):
+    elif ALLOW_LAN_ENDPOINTS and _is_rfc1918_system_dns_name(normalized_host):
         candidate_ips = await _resolve_system_host(proxy_host, proxy_port)
         if not candidate_ips:
             raise ConnectionError(
@@ -1292,7 +1295,7 @@ async def _open_http_proxy_connection(
         raise ConnectionError(
             "upstream proxy hostname requires exact host.docker.internal, an "
             "RFC1918 literal, or an operator-local suffix with "
-            "EGRESS_ALLOW_RFC1918=true"
+            "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true"
         )
 
     failures: list[str] = []
@@ -1341,7 +1344,7 @@ async def _open_plain_http_forward_connection(
         or _is_exact_host_exception(target_host)
         or (
             ROUTE_CLASS == "host"
-            and ALLOW_RFC1918
+            and ALLOW_LAN_ENDPOINTS
             and validated_ips
             and all(_is_rfc1918(ip) for ip in validated_ips)
         )

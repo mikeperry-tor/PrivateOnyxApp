@@ -71,10 +71,10 @@ if [ -n "${EGRESS_UPSTREAM_PROXY_URL:-}" ]; then
   fi
 fi
 
-# Optional LAN access: append common private network CIDRs to route exemptions.
-# When EGRESS_ALLOW_RFC1918=true, LMStudio and other local inference APIs can be
-# reached without VPN routing, while remaining connections stay fail-closed.
-if [ "${EGRESS_ALLOW_RFC1918:-false}" = "true" ]; then
+# Optional LAN access: make approved configured integration endpoints routable
+# outside the VPN. Destination policy still limits this capability to the host
+# route; these exemptions do not grant public/browser/executor callers access.
+if [ "${ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS:-false}" = "true" ]; then
   # Common private network ranges per RFC 1918
   LAN_CIDRS="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
   if [ -n "${MYST_ROUTE_EXEMPT_CIDRS:-}" ]; then
@@ -82,7 +82,7 @@ if [ "${EGRESS_ALLOW_RFC1918:-false}" = "true" ]; then
   else
     MYST_ROUTE_EXEMPT_CIDRS="${LAN_CIDRS}"
   fi
-  echo "EGRESS_ALLOW_RFC1918=true: added LAN CIDRs to route exemptions"
+  echo "Configured integration LAN endpoints enabled: added LAN route exemptions"
 fi
 
 # ── Optional VPN bypass ────────────────────────────────────────────────────

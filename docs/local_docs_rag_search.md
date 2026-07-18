@@ -271,10 +271,12 @@ unusable. The response and logs expose no API key or upstream response body.
 The default plain-HTTP `host.docker.internal` endpoint uses the host route's
 fixed exact-host exception even when public cleartext URLs are disabled;
 arbitrary public HTTP destinations remain blocked. RFC1918 HTTP destinations
-are allowed only on the host route when `EGRESS_ALLOW_RFC1918=true`. Use an
-RFC1918 literal or a `.local`, `.internal`, or `.home.arpa` name whose complete
-DNS answer set validates as RFC1918. Empty or failed lookups for those
-operator-local suffixes fail closed without external DNS/proxy fallback.
+are available to the configured embedding integration only when
+`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Use an RFC1918 literal or a
+`.local`, `.internal`, or `.home.arpa` name whose complete DNS answer set
+validates as RFC1918. Empty or failed lookups for those operator-local suffixes
+fail closed without external DNS/proxy fallback. This setting does not give
+agent browsing or generated code access to the embedding endpoint or LAN.
 
 ## Why The Shim Exists
 
@@ -409,7 +411,7 @@ setting. If the embedding service instead uses an RFC1918 literal or a
 `.local`, `.internal`, or `.home.arpa` LAN name, set:
 
 ```env
-EGRESS_ALLOW_RFC1918=true
+ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true
 ```
 
 The shim itself has no direct route. It uses HTTP absolute-form or HTTPS
@@ -481,8 +483,9 @@ Common failure modes:
 - Indexing starts but embedding fails with connection errors: confirm the host
   embedding server is running at `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`,
   `onyx-host-egress-bridge` and its final-hop proxy are healthy,
-  `EGRESS_ALLOW_RFC1918=true` is set only when an RFC1918 endpoint needs it,
-  and the URL uses a container-reachable host name.
+  `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` is set only when the configured
+  endpoint is on an RFC1918 LAN, and the URL uses a container-reachable host
+  name.
 - Search returns weak results after successful indexing: verify query prefix
   logs, embedding dimension, model identity, and whether old documents were
   indexed with a different model or prefix.

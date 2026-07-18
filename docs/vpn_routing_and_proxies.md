@@ -22,9 +22,11 @@ real public search-engine response or challenge. No named search-host blocking
 mode remains.
 
 The host-capable listener alone owns exact `host.docker.internal` and opt-in
-RFC1918 behavior. `EGRESS_ALLOW_RFC1918=true` accepts RFC1918 literals and
-operator-local names ending in `.local`, `.internal`, or `.home.arpa` only
-after complete-answer-set classification. Empty, failed, or mixed local
+LAN behavior. `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` lets configured
+Onyx integrations use RFC1918 literals and operator-local names ending in
+`.local`, `.internal`, or `.home.arpa`, only after complete-answer-set
+classification. It does not extend this capability to public helpers,
+`open_url`, browser activity, or executors. Empty, failed, or mixed local
 answers fail closed. Loopback, link-local metadata, Docker service names, and
 other special-use ranges remain denied.
 

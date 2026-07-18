@@ -166,7 +166,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_ALLOW_RFC1918": "true",
+                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
             },
         )
         self.assertTrue(
@@ -206,7 +206,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_ALLOW_RFC1918": "true",
+                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
                 "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080",
             },
         )
@@ -235,7 +235,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                     "host",
                     {
                         "EGRESS_ROUTE_CLASS": route_class,
-                        "EGRESS_ALLOW_RFC1918": enabled,
+                        "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": enabled,
                     },
                 )
                 reason, addresses = await module._validate_destination(
@@ -249,7 +249,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_ALLOW_RFC1918": "true",
+                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
             },
         )
         with patch.object(
@@ -290,7 +290,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_ALLOW_RFC1918": "true",
+                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
             },
         )
         system_resolver = AsyncMock(
@@ -314,7 +314,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_ALLOW_RFC1918": "true",
+                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
             },
         )
         system_resolver = AsyncMock(return_value={"93.184.216.34"})
@@ -340,7 +340,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                     "host",
                     {
                         "EGRESS_ROUTE_CLASS": "host",
-                        "EGRESS_ALLOW_RFC1918": "true",
+                        "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
                         "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080",
                     },
                 )
@@ -369,7 +369,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_ALLOW_RFC1918": "true",
+                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
             },
         )
         system_resolver = AsyncMock(return_value={"192.168.1.20"})
@@ -393,7 +393,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
-                "EGRESS_ALLOW_RFC1918": "false",
+                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "false",
             },
         )
         system_resolver = AsyncMock()
@@ -790,7 +790,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                             f"{scheme}://proxy.example:1080"
                         ),
                         "EGRESS_ROUTE_CLASS": "host",
-                        "EGRESS_ALLOW_RFC1918": "true",
+                        "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
                     }
                 )
                 target_resolver = AsyncMock()
@@ -895,7 +895,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         module = _load_module(
             env_overrides={
                 "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080",
-                "EGRESS_ALLOW_RFC1918": "true",
+                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
             }
         )
         vpn_resolver = AsyncMock(return_value={"93.184.216.34"})
@@ -986,7 +986,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         module = _load_module(
-            env_overrides={"EGRESS_ALLOW_RFC1918": "true"}
+            env_overrides={"ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true"}
         )
         system_resolver = AsyncMock(return_value={"192.168.1.20"})
         vpn_resolver = AsyncMock()
