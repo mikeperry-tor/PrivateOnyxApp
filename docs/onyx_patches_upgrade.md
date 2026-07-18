@@ -248,8 +248,8 @@ Tailscale, Podman, and optional executor modes that changed. Verify:
 
 ## Other patch regression audit
 
-Retest the unaffected patches listed in
-[Patch information](onyx_patch_info.md#other-retained-patches), especially
+Retest the wrapper patches summarized in
+[Patch information](onyx_patch_info.md), especially
 reasoning preservation, selected Deep Research tools/batches, character and
 upload limits, helper routes, lite `open_url`, background PDF freshness,
 executor networking/capability text, and the embedding shim. Moving the shared

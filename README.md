@@ -16,7 +16,19 @@ To further minimize captchas and reduce tracking, all agent internet traffic can
 
 The main reason I created this stack is because none of the private chat providers offer "Deep Research" (aka orchestrated multi-agent multi-round research report generation), and I didn't like going back to non-private chat providers when I needed this functionality.
 
-Additionally, the full mode of Onyx provides RAG search results to the agent from local collection of PDFs and other documents, and has a Code Agent tool that allows the chat agent to spawn multiple sub-agents to clone and investigate git repositories. Onyx has many other connectors as well. The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
+Additionally, the full mode of Onyx provides RAG search results to the agent from local collection of PDFs and other documents, and has a Code Agent tool that allows the chat agent to spawn multiple sub-agents to clone and investigate git repositories. Onyx has many other connectors as well.
+
+I also patched Onyx to improve several limitations and poorly performing edge cases:
+
+- Stock Onyx strips reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality.
+- Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results; this has been patched.
+- The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
+- The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
+- The "Deep Research" mode now also supports longer, bounded research runs and executes all accepted tool calls when a research agent requests several different tools at once, rather than silently dropping some of them.
+- Onyx is patched to let models choose whether to call another tool or finish, avoiding a forced-tool compatibility problem that otherwise affects Code Agent and Deep Research workflows.
+- RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
+
+I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit. It is also not clear that Onyx prioritizes compatibility with the Open Weight frontier. (It is not unique in this regard; it still remains the most capable research agent framework I have found).
 
 If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 
@@ -271,6 +283,8 @@ Use `http://teep:8337/v1` as the OpenAI baseurl.
 
 The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown. Use teep's exact model ID as listed in the model selection drowndrop.
 
+Set `ONYX_AGENT_LLM_MAX_TOKENS` in `.env.wrapper` to the limit you want the stack to use (the default 900000 is good for GLM-5.2).
+
 The wrapper recognizes exactly `http://teep:8337/v1` as its bundled private
 inference endpoint. Other supported configured chat endpoints may be public,
 may use `host.docker.internal` by default, or may use a private LAN address when
@@ -426,6 +440,8 @@ Notes:
 
 - Directory listing pages are crawlable; you can also target specific files
   directly, e.g. `http://doc-drop-web:8091/my-paper.pdf`.
+- Later syncs skip downloading and parsing unchanged local PDFs, making routine
+  document updates substantially faster than stock Onyx.
 - Browser-visible result links are rewritten to the host display origin,
   `http://localhost:8091/` by default. This enables you to click on source links in a host browser and view them locally.
 

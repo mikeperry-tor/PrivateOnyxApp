@@ -160,6 +160,20 @@ implicit loopback bypass disabled. In direct Obscura mode this does not create
 a crawler fallback; in the default stock mode it carries the intentionally
 retained crawler fallback through the public bridge.
 
+## Background Web connector PDF freshness
+
+Full mode narrows Onyx's Web connector PDF freshness behavior for trusted
+local document origins. For allowlisted local hosts, the background patch uses
+stable HTTP metadata such as `Last-Modified` and `Content-Length` to skip a full
+download and PDF parse when a document has not changed. It stores the wrapper
+freshness metadata on the Onyx document record for later syncs.
+
+The behavior is deliberately limited to configured local origins; ordinary
+external Web connector PDFs retain upstream Onyx behavior. Patch installation
+validates the pinned connector, document, and database shapes and fails visibly
+if an Onyx upgrade changes them. See
+[Local document RAG search](local_docs_rag_search.md#pdf-freshness-patch).
+
 ## Other retained patches
 
 The migration does not change the following independently tested behavior:
@@ -172,7 +186,7 @@ The migration does not change the following independently tested behavior:
 - coding-agent repository/upload byte-limit alignment;
 - internal-search content caps;
 - lite-mode `open_url` availability;
-- background Web Connector PDF freshness and local doc-drop behavior;
+- local doc-drop behavior;
 - optional code-interpreter executor networking, proxy injection, and
   capability descriptions;
 - local embedding shim model-name/query-prefix behavior, including the exact

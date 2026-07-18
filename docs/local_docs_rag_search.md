@@ -84,9 +84,9 @@ Implementation:
 - User-facing env: `ONYX_RAG_DOC_SOURCE_DIR` and `HOST_PORT_ONYX_RAG_DOC_WEB`
 
 Upgrade-sensitive compose details for these services live in
-[Full mode](onyx_patches_upgrade.md#full-mode-compose). The
+[Routing and Compose audit](onyx_patches_upgrade.md#routing-and-compose-audit). The
 broader reason the wrapper carries these sidecars is described in
-[Docker Compose wrapper modifications](onyx_patch_info.md#docker-compose-wrapper-modifications).
+[Compose wrapper changes](onyx_patch_info.md#compose-wrapper-changes).
 
 `doc-drop-web` is a thin Python `http.server` wrapper. It deliberately does not
 try to parse documents. Onyx's Web connector is responsible for downloading,
@@ -153,7 +153,7 @@ rationale is in
 [Background Web connector PDF freshness](onyx_patch_info.md#background-web-connector-pdf-freshness);
 the upstream symbols and line references to re-check during an Onyx upgrade are
 in
-[Background Web connector PDF freshness patch](onyx_patches_upgrade.md#background-web-connector-pdf-freshness-patch).
+[Other patch regression audit](onyx_patches_upgrade.md#other-patch-regression-audit).
 
 Onyx v4.2.5 intentionally avoids trusting `Last-Modified` for Web PDFs because
 public websites often emit unreliable validators. That is sensible for the
@@ -217,10 +217,10 @@ Implementation:
 - Onyx services routed to it: `api_server` and `background`
 
 This section focuses on how to run and diagnose the shim. The rationale and
-upstreamable design are in
-[Local embedding shim](onyx_patch_info.md#local-embedding-shim); the model-server
-contract and upstream references to verify during upgrades are in
-[Local embedding shim](onyx_patches_upgrade.md#local-embedding-shim).
+upstreamable design are described below, with a summary in
+[Other retained patches](onyx_patch_info.md#other-retained-patches). The
+model-server contract and upstream references to verify during upgrades are in
+[Other patch regression audit](onyx_patches_upgrade.md#other-patch-regression-audit).
 
 The shim listens on `0.0.0.0:9101` on its own container and joins the internal
 `onyx-backend` network. Full mode sets these env vars for `api_server` and
@@ -500,12 +500,12 @@ Common failure modes:
 
 This is the short RAG-specific checklist. The authoritative line-oriented
 inventory is
-[`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md), especially the
-[background freshness](onyx_patches_upgrade.md#background-web-connector-pdf-freshness-patch),
-[embedding shim](onyx_patches_upgrade.md#local-embedding-shim), and
-[full-mode compose](onyx_patches_upgrade.md#full-mode-compose)
-sections. Before upgrading Onyx across a major version, re-check these
-assumptions:
+[`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md), especially
+[Other patch regression audit](onyx_patches_upgrade.md#other-patch-regression-audit)
+for background freshness and the embedding shim, and
+[Routing and Compose audit](onyx_patches_upgrade.md#routing-and-compose-audit)
+for full-mode Compose. Before upgrading Onyx across a major version, re-check
+these assumptions:
 
 - `background` and `api_server` still route both indexing and query-time
   embeddings through the model-server env vars pointed at the shim.
