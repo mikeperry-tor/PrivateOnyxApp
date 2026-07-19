@@ -114,6 +114,18 @@ Those bullets are only a map. Read the docs above before changing any runtime ne
 Use the Makefile instead of hand-assembling compose commands unless you are debugging the Makefile itself.
 
 - `make help` - list supported targets and key overrides.
+- `make test` - run the deterministic Python suite without requiring images,
+  credentials, a running stack, or the private `.env.wrapper` contents.
+- `make check` - run `make test`, compile tracked runtime/test Python paths,
+  validate `make help`, and run `git diff --check`. Use this as the normal
+  development pre-handoff check.
+- `make test-images` - install strict runtime patches against the already-built
+  pinned Onyx, code-interpreter, and derived SearXNG images, then run the
+  SearXNG parser tests that need image dependencies. It does not pull or build
+  missing images or permit validation-container networking; use the reported
+  build target first.
+- `make check-upgrade` - run `make check` followed by `make test-images`. Run
+  this after `make upgrade` and before the practical live validation matrix.
 - `make up-lite` / `make up-full` - start the lite or full stack. Full mode
   also starts the bundled host MLX embedding server when its selected model is
   already installed and the shim still uses the bundled default endpoint;
@@ -186,10 +198,18 @@ This stack protects private research, document contents, browsing behavior, infe
 
 ### Testing and Validation
 
-There is no single test framework for this wrapper. Choose checks based on what changed:
+Use `make check` as the default deterministic development validation. After an
+image/source pin or runtime patch upgrade, first build/refresh the images with
+`make upgrade`, then run `make check-upgrade`. Image checks are deliberately
+separate from `make upgrade`: they validate the newly produced images and must
+not silently pull or rebuild a different artifact. Live stack, browser, VPN,
+and RAG checks remain explicit because they can require credentials, funding,
+private configuration, external services, or a running stack.
+
+Choose additional checks based on what changed:
 
 - Restricted-egress unit tests: run
-  `python3 -m unittest discover -s tests -p 'test_*.py' -v`. Add focused cases
+  `make test` (or the underlying unittest command for focused debugging). Add focused cases
   under `tests/` when changing proxy destination/DNS policy, HTTP request
   framing, bridge-peer authentication and route-class enforcement, executor
   network selection, or injected executor environment. Runtime-limit patches should get focused signature,

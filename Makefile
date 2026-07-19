@@ -203,10 +203,14 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images check-upgrade up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
+	@echo "  make test         # Run the deterministic Python test suite"
+	@echo "  make check        # Run deterministic tests and local static checks"
+	@echo "  make test-images  # Validate patches against already-built pinned images"
+	@echo "  make check-upgrade # Run check plus pinned-image validation after an upgrade"
 	@echo "  make up-lite      # Start wrapper + Onyx lite"
 	@echo "  make up-full      # Start wrapper + Onyx full and an installed default MLX server"
 	@echo "  make down-lite    # Stop wrapper + Onyx lite"
@@ -232,7 +236,35 @@ help:
 	@echo "Proxy: set EGRESS_UPSTREAM_PROXY_URL in $(ENV_FILE) (http/https/socks5)"
 	@echo "       to route Onyx helpers, Obscura, and network-enabled executor egress"
 
+test:
+	python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+check: test
+	@$(MAKE) --no-print-directory help >/dev/null
+	python3 -m compileall -q \
+		browser/obscura_client/private_onyx_obscura \
+		egress \
+		onyx/patches \
+		onyx/doc_drop_webserver.py \
+		onyx/local_embedding_shim.py \
+		searxng/engines \
+		searxng/patches \
+		tests
+	git diff --check
+
+test-images:
+	@CONTAINER_BIN="$(CONTAINER_BIN)" \
+		ONYX_BACKEND_IMAGE="$(ONYX_BACKEND_IMAGE)" \
+		CODE_INTERPRETER_IMAGE="$(CODE_INTERPRETER_IMAGE)" \
+		SEARXNG_WRAPPER_IMAGE="$(SEARXNG_WRAPPER_IMAGE)" \
+		./tests/validate_pinned_patch_images.sh
+
+check-upgrade:
+	@$(MAKE) --no-print-directory check
+	@$(MAKE) --no-print-directory test-images
+
 upgrade: upgrade-python-deps myst-build teep-build searxng-build tailscale-image-ready obscura-image-ready upgrade-onyx
+	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."
 
 upgrade-python-deps:
 	@set -eu; \

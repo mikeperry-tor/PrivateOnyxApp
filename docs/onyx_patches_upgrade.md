@@ -11,11 +11,18 @@ contains read-only audit checkouts when present.
    support-image versions.
 2. Read the upstream implementations named below. Do not infer compatibility
    from a tag or passing import alone.
-3. Update pins and hashed locks through the Makefile upgrade targets.
-4. Rebuild derived images. Runtime startup must not invoke a package manager,
-   `pip`, or a Playwright browser download.
-5. Run strict source-shape tests, deterministic unit tests, effective Compose
-   checks, and the practical live matrix.
+3. Run `make upgrade` to update pins/hashed locks and rebuild or refresh the
+   required images. Runtime startup must not invoke a package manager, `pip`,
+   or a Playwright browser download.
+4. Run `make check-upgrade`. It first runs the complete deterministic suite and
+   local static checks, then validates strict patch installation against the
+   exact newly pinned local Onyx, code-interpreter, and derived SearXNG images.
+   Missing images are fatal and reported with the build target; validation does
+   not silently pull or build a substitute, and every validation container runs
+   with networking disabled.
+5. Inspect effective Compose models and complete every practical live-matrix
+   row available in the environment. Record rows blocked by credentials,
+   funding, provider stability, private documents, or long runtimes.
 6. Update `docs/onyx_patch_info.md`, request/routing/security docs, README, and
    AGENTS when behavior or topology changes.
 7. Remove a wrapper patch only when the pinned upstream behavior provides the
@@ -362,11 +369,12 @@ its user-visible behavior:
 - **Lite `open_url`, helper routes, embedding tokenizer/shim, privacy settings,
   and CSP:** retain their dedicated audits elsewhere in this checklist.
 
-Run the focused deterministic suite before image checks. Then install the API
-patch families and PDF freshness patch inside the pinned Onyx backend image,
-and the executor patch inside the pinned code-interpreter image, with
-`WRAPPER_PATCH_STRICT=true`. Any source, signature, model, prompt, or command
-shape mismatch is an upgrade blocker, not a reason to weaken validation.
+`make check-upgrade` preserves the required order: deterministic checks first,
+then strict installation of the API and PDF freshness patch families inside
+the pinned Onyx backend image, the executor patch inside the pinned code-
+interpreter image, and the SearXNG runtime/parser checks inside the derived
+image. Any source, signature, model, prompt, or command shape mismatch is an
+upgrade blocker, not a reason to weaken validation.
 
 Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
 background services unless the wrapper deliberately adds and documents a
@@ -386,10 +394,19 @@ doc-drop Web connector crawl and PDF extraction.
 ## Minimum deterministic validation
 
 ```sh
-make help
-python3 -m unittest discover -s tests -p 'test_*.py' -v
-git diff --check
+make check
 ```
+
+For an image or patch upgrade, the expected local flow is:
+
+```sh
+make upgrade
+make check-upgrade
+```
+
+`make test` runs only the deterministic Python suite. `make test-images` runs
+only strict pinned-image contracts plus the image-dependent SearXNG parser
+tests. Neither target starts the application stack or performs the live matrix.
 
 Also inspect effective lite/full Compose models through the Makefile. Search
 current runtime files for removed service/env/path names and manually classify
