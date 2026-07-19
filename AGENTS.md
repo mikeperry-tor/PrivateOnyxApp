@@ -198,35 +198,49 @@ This stack protects private research, document contents, browsing behavior, infe
 
 ### Testing and Validation
 
-Use `make check` as the default deterministic development validation. After an
-image/source pin or runtime patch upgrade, first build/refresh the images with
-`make upgrade`, then run `make check-upgrade`. Image checks are deliberately
-separate from `make upgrade`: they validate the newly produced images and must
-not silently pull or rebuild a different artifact. Live stack, browser, VPN,
-and RAG checks remain explicit because they can require credentials, funding,
-private configuration, external services, or a running stack.
-
-Choose additional checks based on what changed:
-
-- Restricted-egress unit tests: run
-  `make test` (or the underlying unittest command for focused debugging). Add focused cases
-  under `tests/` when changing proxy destination/DNS policy, HTTP request
-  framing, bridge-peer authentication and route-class enforcement, executor
-  network selection, or injected executor environment. Runtime-limit patches should get focused signature,
-  configured-value, and invalid-value cases. Tests must be deterministic and
-  must not require live internet, VPN credentials, or the private
-  `.env.wrapper`.
-
-- Compose or Makefile changes: run `make help` and inspect the effective compose model for the affected mode using the Makefile's layering.
-- Stack startup changes: run the relevant `make up-lite` or `make up-full`, then `make ps-*` and targeted logs when practical.
-- Request path changes: test a real `web_search` query and a real `open_url` request; inspect SearXNG, Obscura, CDP gateway, API, bridge, and final-hop logs as needed.
-- VPN/proxy changes: verify namespace membership, egress path, `NO_PROXY` behavior, and absence of direct host-port or direct-network bypasses.
-- Onyx patch changes: confirm startup logs show patch success in strict mode and exercise the patched behavior.
-- Full-mode RAG changes: test doc-drop crawling, PDF freshness/reindexing, embedding shim health, and `internal_search`.
-- SearXNG engine changes: test each affected custom engine with a real query.
-- Code-interpreter routing/proxy changes: test disabled and enabled modes, and confirm LLM-facing capability text matches executor networking.
-
-If you cannot safely run a relevant check, say why.
+- Baseline workflow:
+  - Use `make check` as the normal deterministic development and pre-handoff
+    validation.
+  - After changing an image/source pin or runtime patch, run `make upgrade`,
+    then `make check-upgrade` against the newly produced images.
+  - `make test-images` must validate the selected local images without silently
+    pulling, rebuilding, or substituting another artifact.
+  - Keep live stack, browser, VPN, and RAG checks explicit. They can require
+    credentials, funding, private configuration, external services, or an
+    already-running stack.
+- Deterministic test coverage:
+  - Use `make test` for the complete Python suite. Use the underlying unittest
+    command only when focused debugging is useful.
+  - Add focused cases under `tests/` for proxy destination/DNS policy, HTTP
+    framing, bridge-peer authentication, route-class enforcement, executor
+    network selection, and injected executor environment changes.
+  - Runtime-limit patches need cases covering signature drift, configured
+    values, and invalid values.
+  - Deterministic tests must not require live Internet access, VPN credentials,
+    or the private `.env.wrapper`.
+- Compose and lifecycle changes:
+  - For Compose or Makefile changes, run `make help` and inspect the effective
+    Compose model for every affected mode using the Makefile's layering.
+  - For startup changes, run the relevant `make up-lite` or `make up-full`, then
+    inspect `make ps-*` and targeted service logs when practical.
+- Request and routing changes:
+  - For request-path changes, exercise a real `web_search` query and a real
+    `open_url` request. Inspect SearXNG, Obscura, CDP gateway, API, bridge, and
+    final-hop logs as needed.
+  - For VPN/proxy changes, verify namespace membership, egress path,
+    `NO_PROXY` behavior, and the absence of direct host-port or direct-network
+    bypasses.
+- Runtime patch and component changes:
+  - For Onyx patches, confirm strict-mode startup success diagnostics and
+    exercise the patched behavior.
+  - For full-mode RAG, test doc-drop crawling, PDF freshness/reindexing,
+    embedding-shim health, and `internal_search`.
+  - For SearXNG engines, test every affected custom engine with a real query.
+  - For code-interpreter routing/proxy changes, test disabled and enabled modes
+    and confirm that LLM-facing capability text matches executor networking.
+- Incomplete validation:
+  - If a relevant check cannot be run safely, state exactly what was omitted
+    and why.
 
 ### Git Workflow
 
