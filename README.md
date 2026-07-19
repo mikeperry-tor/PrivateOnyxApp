@@ -30,6 +30,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
+- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, and keeping optional Slack/Discord bot processes off unless enabled. This considerably lowers idle CPU, memory, and disk activity, and conserves power/battery for laptop deployments.
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
 
