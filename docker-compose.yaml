@@ -391,8 +391,16 @@ services:
       S3_AWS_SECRET_ACCESS_KEY: "${S3_AWS_SECRET_ACCESS_KEY:?S3_AWS_SECRET_ACCESS_KEY must be set}"
       # Disable optional telemetry/analytics integrations from wrapper layer.
       DISABLE_TELEMETRY: "true"
+      # Disable automatic third-party configuration/data-list fetches. Release
+      # note polling remains enabled separately.
+      AUTO_LLM_CONFIG_URL: ""
+      DISPOSABLE_EMAIL_DOMAINS_URL: ""
       SENTRY_DSN: ""
       SENTRY_TRACES_SAMPLE_RATE: "0"
+      BRAINTRUST_API_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_HOST: ""
       HUBSPOT_TRACKING_URL: ""
       POSTHOG_API_KEY: ""
       MARKETING_POSTHOG_API_KEY: ""
@@ -408,7 +416,10 @@ services:
       NEXT_PUBLIC_SENTRY_DSN: ""
       NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
       CAPTCHA_ENABLED: "false"
-      RECAPTCHA_SECRET_KEY: ""
+      RECAPTCHA_ENTERPRISE_PROJECT_ID: ""
+      RECAPTCHA_ENTERPRISE_API_KEY: ""
+      RECAPTCHA_SITE_KEY: ""
+      RECAPTCHA_HOSTNAME_ALLOWLIST: ""
       # This wrapper provides the legacy code-interpreter service, not Onyx
       # Craft's Kubernetes/Docker sandbox backend.
       ENABLE_CRAFT: "false"
@@ -528,6 +539,11 @@ services:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: nginx
     networks: [onyx-frontend]
+    volumes:
+      # Onyx already emits its own CSP. Browsers enforce this additional
+      # image-source policy at the same time, so remote Markdown/tracking
+      # images cannot bypass the container VPN/proxy path through the client.
+      - ./onyx/nginx/webui-csp.conf:/etc/nginx/conf.d/webui-csp.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/ || exit 1"]
       interval: 30s

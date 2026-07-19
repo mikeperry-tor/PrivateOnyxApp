@@ -94,6 +94,29 @@ documented narrow route exceptions. Named operator-local proxies require the
 RFC1918 opt-in and never fall back to external DNS when local lookup is empty
 or fails.
 
+## WebUI browser image egress
+
+The route classes above govern container traffic. They cannot transparently
+route requests made by the WebUI after JavaScript and rendered content reach a
+user's browser: without another control, a remote Markdown image would be
+loaded through the user's ordinary DNS and network, outside Myst and the
+final-hop proxies.
+
+Nginx therefore adds a second CSP with `img-src 'self' blob: data:`. The
+browser intersects it with Onyx's own CSP and refuses HTTP(S) images from any
+other origin before opening a connection. This blocks arbitrary Markdown
+tracking images and the upstream Google favicon service. Same-origin packaged
+assets and `/api/chat/file/{id}` remain available, while local `blob:` and
+`data:` sources preserve previews. Code-interpreter image links are recognized
+by their `/api/chat/file/` path and rewritten by the WebUI to a relative
+same-origin image source, so no `http://localhost:3000` exception is present.
+
+This closes the browser-image bypass; it does not send browser traffic through
+the VPN and is not a general browser egress firewall. User-opened external
+links remain possible. Server-side connectors, inference, search, release-note
+refresh, and other configured operations continue to use their documented
+container route class.
+
 ## VPN and no-VPN lifecycle
 
 `netns-holder` gives route-owning processes a stable namespace. Myst and the
@@ -139,4 +162,6 @@ Check that application, browser, executor, and host-capable networks remain
 distinct; the fixed bridges point at the intended listener; target DNS does
 not appear at Docker's embedded resolver; private/internal/metadata targets
 are rejected; and an interrupted VPN or proxy produces a visible failure with
-no direct route.
+no direct route. Also inspect the WebUI response for the wrapper image-source
+CSP and confirm a remote Markdown image produces no client-side request while
+same-origin chat images still render.

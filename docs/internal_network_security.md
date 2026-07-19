@@ -113,6 +113,14 @@ checks remain separate. Host-capable policy is a different listener and
 bridge. A compromised caller cannot select another bridge merely by choosing
 a proxy address.
 
+The end-user browser is outside these container networks. As defense in depth,
+nginx supplies a separate `img-src 'self' blob: data:` CSP that prevents
+rendered Markdown and WebUI components from opening remote image connections
+through the user's network. It preserves same-origin chat-file images and
+local preview schemes. This is a browser image-load boundary only; it neither
+places the browser in the trusted routing namespace nor changes server-side
+destination policy.
+
 Wrapper logs redact query strings, bodies, cookies, credentials, and response
 content. Upstream Obscura does not provide the same guarantee and may expose
 full URLs in some logging modes; its logs are private data. Multi-worker child
@@ -129,4 +137,6 @@ logging can also be incomplete.
   destinations fail according to the selected DNS mode.
 - Proxy, VPN, gateway, or bridge failure cannot produce direct application
   egress.
+- WebUI responses include the wrapper image-source CSP; remote Markdown images
+  are blocked while same-origin chat-file and local preview images work.
 - Full-mode doc-drop remains a local path and does not gain browser/CDP access.

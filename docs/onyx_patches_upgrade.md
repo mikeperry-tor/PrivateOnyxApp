@@ -246,14 +246,66 @@ Tailscale, Podman, and optional executor modes that changed. Verify:
 - full local RAG, embedding, configured inference, Teep, hardened publishers,
   and optional Tailscale behavior remain intact.
 
+## Privacy and WebUI CSP audit
+
+Re-audit every privacy setting against the new Onyx source rather than carrying
+environment names forward by resemblance. Confirm:
+
+- `DISABLE_TELEMETRY` still gates every anonymous telemetry call;
+- empty backend Sentry, PostHog/marketing PostHog, HubSpot, Braintrust, and
+  Langfuse credentials still prevent initialization, including in Celery
+  workers;
+- `AUTO_LLM_CONFIG_URL=""` still removes the recommended-model beat/poller
+  work and performs no fetch, and `DISPOSABLE_EMAIL_DOMAINS_URL=""` still
+  skips the public domain-list fetch;
+- the current reCAPTCHA client and Enterprise backend variable names remain
+  empty and `CAPTCHA_ENABLED=false` remains authoritative;
+- cloud, paid-EE, Stripe, GTM, Sentry, PostHog, and reCAPTCHA build/runtime
+  controls still match their call sites. `NEXT_PUBLIC_*` values can be inlined
+  during a WebUI build, so inspect the pinned image/source build in addition to
+  the runtime Compose environment;
+- release-note refresh remains the only intentional wrapper-independent Onyx
+  update poll, and local administrative analytics remain local and usable;
+- newly added tracing, analytics, crash-reporting, marketing, update-check,
+  remote-config, favicon, font, image, video, CAPTCHA, billing, or CDN clients
+  are either required operator-selected functionality or explicitly disabled.
+
+Inspect the pinned WebUI CSP implementation. At the current baseline Onyx emits
+a policy unconditionally from `web/src/proxy.ts`; the documented
+`WEB_STRICT_CSP_ENABLED` environment name has no implementation and must not be
+counted as a defense. Keep the tracked nginx policy as a second CSP header so
+the browser intersects it with upstream policy. If upstream implements an
+equivalent strict `img-src`, remove the wrapper header only after testing the
+effective combined response.
+
+Test through both the localhost publisher and every enabled Tailscale frontend:
+
+- a remote Markdown image and the Google Web-result favicon must make no
+  outbound browser request and must fail/fall back visibly;
+- a code-interpreter image emitted as `[filename](file_link)` must render from
+  the relative `/api/chat/file/{id}` endpoint even when `file_link` contains a
+  different configured `WEB_DOMAIN` origin;
+- uploaded/local/background images, a `blob:` image preview, and an embedded
+  `data:` DOCX image must still render;
+- the response must contain both Onyx's CSP and the wrapper `img-src 'self'
+  blob: data:` policy, with no remote HTTP(S) image source;
+- external user navigation and configured backend integrations must retain
+  their documented behavior; do not describe the image policy as a general
+  browser VPN or proxy.
+
+Validate the nginx fragment with the pinned nginx image and inspect the
+effective Compose mount. A generated `onyx/onyx_data` refresh must not remove
+the tracked `/etc/nginx/conf.d/webui-csp.conf` bind mount.
+
 ## Other patch regression audit
 
 Retest the wrapper patches summarized in
 [Patch information](onyx_patch_info.md), especially
 reasoning preservation, selected Deep Research tools/batches, character and
 upload limits, helper routes, lite `open_url`, background PDF freshness,
-executor networking/capability text, and the embedding shim. Moving the shared
-helper must not change their source-shape or import behavior.
+executor networking/capability text, the embedding shim, explicit privacy
+environment, and the WebUI image CSP. Moving the shared helper must not change
+their source-shape or import behavior.
 
 Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
 background services unless the wrapper deliberately adds and documents a

@@ -160,6 +160,68 @@ implicit loopback bypass disabled. In direct Obscura mode this does not create
 a crawler fallback; in the default stock mode it carries the intentionally
 retained crawler fallback through the public bridge.
 
+## Telemetry, automatic fetches, and WebUI egress
+
+The wrapper explicitly overrides the pinned images' optional reporting and
+tracing configuration rather than relying on unset values inherited from the
+generated upstream `.env` file. `DISABLE_TELEMETRY=true` disables Onyx's
+anonymous telemetry endpoint. Empty Sentry, PostHog, marketing PostHog,
+HubSpot, Braintrust, and Langfuse credentials disable those clients; the
+PostHog key, rather than its default host value, is the authoritative enable
+condition. Cloud, paid-EE, Stripe, GTM, and reCAPTCHA configuration remains
+disabled in both the backend and WebUI. The current reCAPTCHA Enterprise
+project, API-key, site-key, and hostname settings are explicitly empty; the
+obsolete `RECAPTCHA_SECRET_KEY` name is not treated as a current control.
+
+Two pinned backend defaults make third-party requests independently of
+`DISABLE_TELEMETRY`. The wrapper sets both to an explicit empty value:
+
+- `AUTO_LLM_CONFIG_URL` disables the periodic recommended-model configuration
+  download from the Onyx GitHub repository. Model configuration is therefore
+  local/operator-managed.
+- `DISPOSABLE_EMAIL_DOMAINS_URL` disables the public disposable-email domain
+  list download. Disposable-address filtering is consequently unavailable;
+  ordinary authentication and the configured valid-domain controls are
+  unchanged.
+
+Release-note refreshes remain enabled by design. They fetch the Onyx
+documentation changelog through the fixed public Onyx egress route and cache
+the result. Local administrative usage/query analytics also remain available:
+they are stored and rendered by this deployment and are not the optional
+PostHog, Sentry, or custom-script integrations described above. Operator-added
+connectors, MCP servers, inference providers, web-search providers, OAuth
+flows, and similar configured integrations retain their intended outbound
+behavior through the documented route class.
+
+The WebUI executes in the user's browser, so a Markdown image or embedded
+component would otherwise use the user's ordinary network and bypass every
+container VPN/proxy control. The tracked `onyx/nginx/webui-csp.conf` adds a
+second response policy:
+
+```text
+img-src 'self' blob: data:;
+```
+
+Browsers enforce that policy together with Onyx's existing CSP. It blocks
+arbitrary remote Markdown images and the Web-result Google favicon request
+before a network request is made. `'self'` preserves packaged images,
+backgrounds, logos, uploaded images, and `/api/chat/file/{id}`. `blob:` keeps
+local preview object URLs working, and `data:` keeps embedded DOCX preview
+images working; neither permits an HTTP(S) image destination.
+
+Code-interpreter output does not need a `localhost` CSP exception. The pinned
+prompt tells the model to emit `[filename](file_link)`. For an image filename,
+the WebUI extracts the ID from the `/api/chat/file/` path and renders a new
+relative `/api/chat/file/{id}` URL, even if the original backend link used the
+default absolute `http://localhost:3000` origin. Custom prompts should retain
+that ordinary-link form and should not emit a hard-coded Markdown image URL.
+
+This is an image-egress control, not a claim that CSP routes browser traffic
+through Myst. External links can still be opened by the user, and the backend
+route policy remains authoritative for server-side traffic. The generated
+upstream environment template mentions `WEB_STRICT_CSP_ENABLED`, but the
+pinned WebUI does not read it; the wrapper does not rely on that dead switch.
+
 ## Background Web connector PDF freshness
 
 Full mode narrows Onyx's Web connector PDF freshness behavior for trusted
@@ -213,6 +275,11 @@ Lite and full overlays mount the same named API bootstrap. Full mode adds local
 RAG services; lite mode does not install an anonymous substitute bootstrap.
 The optional code-interpreter network overlay adds only the executor network
 and bridge selected by the strict runtime patch.
+
+The nginx service additionally mounts the tracked image-source CSP fragment
+directly into `/etc/nginx/conf.d`. The fragment is independent of the generated
+upstream nginx template and survives regeneration of `onyx/onyx_data`; nginx
+startup remains fatal if the fragment is syntactically invalid.
 
 ## Maintenance rule
 
