@@ -40,6 +40,9 @@ class ValidationMakefileTests(unittest.TestCase):
         for document in (agents, upgrade_notes):
             self.assertIn("make check-upgrade", document)
             self.assertIn("make test-images", document)
+        self.assertIn("runtime-patch-only change", agents)
+        self.assertIn("Runtime startup must not install packages", agents)
+        self.assertIn("onyx/onyx_data/deployment/.env", agents)
 
 
 if __name__ == "__main__":
