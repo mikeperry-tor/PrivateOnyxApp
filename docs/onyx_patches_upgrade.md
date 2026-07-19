@@ -148,6 +148,13 @@ cleanup, body-retention, and concurrency properties.
 
 Re-audit the pinned Onyx symbols for:
 
+- lite-mode `OpenURLTool.is_available`, including its
+  `DISABLE_VECTOR_DB` gate; the crawler/index parallel call; and the indexed
+  retrieval exception-to-empty-result path. Confirm the strict availability
+  patch installs only in lite mode, `open_url` remains visible in the user
+  skill list and constructed Agent tools, and a real crawler request succeeds
+  without restoring indexed retrieval. Remove the patch if upstream makes
+  crawler-backed `open_url` natively available without a vector database;
 - `OnyxWebCrawler.contents`, `_fetch_url`, `_fetch_web_content`, outer
   `open_url` timeout callback, copied context, nested executor, and result
   ordering;

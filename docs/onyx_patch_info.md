@@ -108,6 +108,36 @@ to `body-unavailable`; Onyx may continue only with same-navigation HTML/XHTML
 DOM, while PDF/raw/binary paths remain strict. See
 [Request handling](request_handling.md).
 
+## Lite-mode `open_url` availability
+
+Stock Onyx makes `OpenURLTool.is_available()` return false whenever
+`DISABLE_VECTOR_DB=true`. That condition is too broad for this deployment's
+lite mode: indexed URL retrieval is unavailable without a vector database, but
+the independent built-in crawler can still open and read public web pages. If
+left unchanged, Onyx hides `open_url` from user-visible built-in skills and
+skips it while constructing an Agent's tools, leaving lite mode with search
+results but no tool for opening their pages.
+
+The lite overlay therefore sets the stack-owned
+`ONYX_FORCE_OPEN_URL_AVAILABLE=true`. The API bootstrap installs
+`sitecustomize_api_server/lite_open_url_availability_patch.py`, which overrides
+only `OpenURLTool.is_available()` and only when `DISABLE_VECTOR_DB=true`. Full
+mode does not set the switch and retains upstream availability behavior.
+
+The installer strictly validates both sides of the contract before exposing
+the tool: upstream must still disable it specifically because of
+`DISABLE_VECTOR_DB`, and `OpenURLTool.run()` must still execute indexed
+retrieval and crawling as failure-tolerant siblings while converting an index
+failure into an empty indexed result. Lite mode consequently returns crawler
+content while its `DisabledDocumentIndex` continues to fail loudly if called;
+the patch does not restore RAG or indexed retrieval.
+
+Remove this patch and its Compose switch when upstream makes crawler-backed
+`open_url` available with the vector database disabled. Until then, every
+Onyx upgrade must verify the availability gate, crawler/index failure
+separation, user-visible skill listing, Agent tool construction, and a real
+lite-mode `open_url` request.
+
 ## SearXNG overlay
 
 The derived image is based on SearXNG `2026.7.15-7b2199ecd` and strictly
