@@ -21,7 +21,7 @@ Additionally, the full mode of Onyx provides RAG search results to the agent fro
 In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
 
 - Onyx telemetry, third-party analytics and error reporting, cloud billing, CAPTCHA, and automatic remote configuration/data-list downloads are explicitly disabled.
-- A restrictive browser Content Security Policy blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's VPN/proxy routing through the user's browser.
+- A restrictive browser Content Security Policy blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's VPN/proxy routing through the user's browser. Additionally, this blocks queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
 - Stock Onyx strips reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality.
 - Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results; this has been patched.
 - Stock Onyx disables `open_url()` whenever its vector database is disabled, which leaves lite mode unable to open and read web pages. This stack keeps crawler-backed web browsing available in lite mode. Full mode may reuse a connector document already indexed under the requested URL during an `open_url()` call; this is exact-ID chat-time retrieval, not URL ingestion or `internal_search`, and remains unavailable in lite mode.
