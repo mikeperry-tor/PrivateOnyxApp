@@ -12,7 +12,7 @@ Podman-native startup-health layer. Tests and the user-facing and upgrade
 documentation cover these changes.
 
 **Validation state: deterministic and pinned-image validation passes.**
-`make check` passed 212 tests (with five image-only skips), and
+`make check` passed 221 tests (with five image-only skips), and
 `make check-upgrade` passed the pinned-image contracts and five image-backed
 parser tests. Live Docker checks covered startup/readiness, worker and Beat
 behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
@@ -30,6 +30,17 @@ health timestamps confirmed five-second startup checks, a 600-second ordinary
 steady interval, and Myst's one-minute interval. The bundled MLX child also
 unloaded after its completed readiness request while the lightweight host
 proxy remained listening.
+Podman was then cleanly restarted against the initialized Docker bind data:
+PostgreSQL exposed the existing application state (including 194 chat sessions,
+1,326 chat messages, 15 connectors, three LLM providers, and six personas),
+OpenSearch recovered 71 active primary shards, all 29 expected services became
+healthy, and the WebUI returned HTTP 200. A subsequent full down/up cycle
+exercised the unchanged-document-cache fast path and restored the same shared
+database and index mounts. PostgreSQL retained the native five-second startup
+check and 600-second steady-state check after the shared-data workaround. The
+working mappings are now unconditional parts of the two core Podman overlays;
+there are no database-specific Compose layers, native-volume branch, or
+storage opt-out flags.
 The long controlled before/after measurement windows and the remaining
 destructive or workload-specific fault/performance gates have not yet been
 run. A complete `make upgrade` dependency refresh was also not completed

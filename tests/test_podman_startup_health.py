@@ -5,6 +5,7 @@ import io
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from podman import startup_health
@@ -36,6 +37,55 @@ def _container(
 
 
 class PodmanStartupHealthTests(unittest.TestCase):
+    @patch.object(startup_health, "_run")
+    def test_prepare_shared_postgres_removes_only_mount_root_override(
+        self, run
+    ) -> None:
+        run.side_effect = [
+            subprocess.CompletedProcess(
+                [], 0, stdout="com.docker.grpcfuse.ownership\nuser.containers.override_stat\n"
+            ),
+            subprocess.CompletedProcess([], 0, stdout=""),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "PG_VERSION").write_text("15\n", encoding="ascii")
+            self.assertEqual(
+                startup_health.prepare_shared_data(postgres=directory),
+                ["PostgreSQL"],
+            )
+        self.assertEqual(run.call_args_list[0].args[0], ["xattr", directory])
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["xattr", "-d", startup_health.PODMAN_OVERRIDE_XATTR, directory],
+        )
+
+    @patch.object(startup_health, "_run")
+    def test_prepare_shared_postgres_accepts_absent_override(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, stdout="com.docker.grpcfuse.ownership\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "PG_VERSION").write_text("15\n", encoding="ascii")
+            startup_health.prepare_shared_data(postgres=directory)
+        self.assertEqual(run.call_count, 1)
+
+    def test_prepare_shared_opensearch_requires_initialized_nodes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                startup_health.ContractError, "OpenSearch data is not initialized"
+            ):
+                startup_health.prepare_shared_data(opensearch=directory)
+            (Path(directory) / "nodes").mkdir()
+            self.assertEqual(
+                startup_health.prepare_shared_data(opensearch=directory),
+                ["OpenSearch"],
+            )
+
+    def test_prepare_shared_data_requires_exactly_one_path(self) -> None:
+        with self.assertRaisesRegex(startup_health.ContractError, "exactly one"):
+            startup_health.prepare_shared_data()
+
     def test_capability_gate_refuses_non_podman_binary(self) -> None:
         with self.assertRaisesRegex(startup_health.ContractError, "non-Podman"):
             startup_health.check_capability("docker")
@@ -139,6 +189,14 @@ class PodmanStartupHealthTests(unittest.TestCase):
             if isinstance(argument, str)
         ]
         self.assertFalse(any("mv /volume/.incoming" in item for item in scripts))
+
+    def test_archive_error_class_never_returns_path_text(self) -> None:
+        private_error = io.BytesIO(
+            b"tar: ./private/customer.pdf: Cannot open: Permission denied\n"
+        )
+        self.assertEqual(
+            startup_health._archive_error_class(private_error), "permission-denied"
+        )
 
     def test_document_staging_rejects_invalid_volume_name(self) -> None:
         with tempfile.TemporaryDirectory() as source:

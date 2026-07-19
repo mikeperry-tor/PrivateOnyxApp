@@ -28,6 +28,7 @@ REQUIRED_UPDATE_FLAGS = {
     "--health-startup-success",
     "--health-startup-timeout",
 }
+PODMAN_OVERRIDE_XATTR = "user.containers.override_stat"
 
 
 class ContractError(RuntimeError):
@@ -41,6 +42,36 @@ class ContainerHealth:
     state: str
     regular: dict[str, Any]
     startup: dict[str, Any] | None
+
+
+def prepare_shared_data(
+    *, postgres: str | None = None, opensearch: str | None = None
+) -> list[str]:
+    """Validate initialized Docker binds and remove one unsafe mount override."""
+    if (postgres is None) == (opensearch is None):
+        raise ContractError("select exactly one shared-data path")
+
+    prepared: list[str] = []
+    if postgres is not None:
+        postgres_path = os.path.abspath(postgres)
+        if not os.path.isfile(os.path.join(postgres_path, "PG_VERSION")):
+            raise ContractError("shared PostgreSQL data is not initialized")
+        try:
+            attributes = _run(["xattr", postgres_path]).stdout.splitlines()
+            if PODMAN_OVERRIDE_XATTR in attributes:
+                _run(["xattr", "-d", PODMAN_OVERRIDE_XATTR, postgres_path])
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise ContractError(
+                "could not prepare the PostgreSQL mount ownership override"
+            ) from exc
+        prepared.append("PostgreSQL")
+
+    if opensearch is not None:
+        opensearch_path = os.path.abspath(opensearch)
+        if not os.path.isdir(os.path.join(opensearch_path, "nodes")):
+            raise ContractError("shared OpenSearch data is not initialized")
+        prepared.append("OpenSearch")
+    return prepared
 
 
 def _run(
@@ -221,11 +252,15 @@ def stage_document_source(
         tar_process.stdout.close()
         receive_status = receive_process.wait()
         tar_status = tar_process.wait()
+        tar_error_class = _archive_error_class(tar_errors)
+        receiver_error_class = _archive_error_class(podman_errors)
     if tar_status != 0 or receive_status != 0:
         raise ContractError(
             "Podman could not stage the configured RAG document source into "
             "its native volume; the previous staged copy was preserved "
-            f"(archive status {tar_status}, receiver status {receive_status})"
+            f"(archive status {tar_status}, archive error {tar_error_class}; "
+            f"receiver status {receive_status}, receiver error "
+            f"{receiver_error_class})"
         )
 
     rotate_script = (
@@ -267,6 +302,23 @@ def stage_document_source(
             "new native-volume copy"
         ) from exc
     return volume
+
+
+def _archive_error_class(stream: Any) -> str:
+    """Classify archive stderr without returning private path-bearing text."""
+    stream.seek(0)
+    message = stream.read().decode("utf-8", errors="replace")
+    classes = (
+        ("No space left on device", "no-space"),
+        ("Operation not permitted", "operation-not-permitted"),
+        ("Permission denied", "permission-denied"),
+        ("File changed as we read it", "source-changed"),
+        ("Broken pipe", "broken-pipe"),
+        ("Unexpected EOF", "unexpected-eof"),
+        ("Cannot write", "write-failed"),
+    )
+    matched = [label for needle, label in classes if needle in message]
+    return ",".join(matched) if matched else "unclassified"
 
 
 def _document_source_manifest(source_path: str) -> str:
@@ -439,13 +491,15 @@ def configure_project(container_bin: str, project: str) -> int:
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "action", choices=("check", "configure", "stage-docs")
+        "action", choices=("check", "configure", "stage-docs", "prepare-shared-data")
     )
     parser.add_argument("--container-bin", default="podman")
     parser.add_argument("--project", default="onyx")
     parser.add_argument("--path")
     parser.add_argument("--image")
     parser.add_argument("--volume")
+    parser.add_argument("--postgres")
+    parser.add_argument("--opensearch")
     return parser.parse_args(argv)
 
 
@@ -462,6 +516,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.container_bin, args.path, args.image, args.volume
             )
             print("Podman RAG document source staged into a native volume.")
+        elif args.action == "prepare-shared-data":
+            prepared = prepare_shared_data(
+                postgres=args.postgres, opensearch=args.opensearch
+            )
+            print("Prepared shared Docker data for Podman: " + ", ".join(prepared))
         else:
             configure_project(args.container_bin, args.project)
     except (ContractError, subprocess.CalledProcessError) as exc:

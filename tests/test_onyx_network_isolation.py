@@ -180,16 +180,20 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertNotIn("uid=", " ".join(tmpfs))
         self.assertNotIn("gid=", " ".join(tmpfs))
 
-    def test_podman_override_uses_native_storage_and_gates_database_consumers(self) -> None:
+    def test_podman_override_reuses_docker_storage_and_gates_database_consumers(self) -> None:
         for mode in ("lite", "full"):
             extra = ["docker-compose.podman.yml"]
             if mode == "full":
                 extra.append("docker-compose.podman-full.yml")
             model = _compose_model(mode, *extra)
             services = model["services"]
+            postgres = services["relational_db"]
+            self.assertEqual(postgres["userns_mode"], "keep-id:uid=70,gid=70")
+            self.assertEqual(postgres["user"], "70:70")
+            self.assertEqual(postgres["entrypoint"], ["postgres"])
             self.assertEqual(
-                services["relational_db"]["volumes"][0]["source"],
-                "podman-postgres-data",
+                postgres["volumes"][0]["source"],
+                str(ROOT / "docker-data/postgres"),
             )
             self.assertEqual(
                 services["api_server"]["depends_on"]["relational_db"]["condition"],
@@ -200,9 +204,13 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                     services["background"]["depends_on"]["relational_db"]["condition"],
                     "service_healthy",
                 )
+                opensearch = services["opensearch"]
                 self.assertEqual(
-                    services["opensearch"]["volumes"][0]["source"],
-                    "podman-opensearch-data",
+                    opensearch["userns_mode"], "keep-id:uid=1000,gid=1000"
+                )
+                self.assertEqual(
+                    opensearch["volumes"][0]["source"],
+                    str(ROOT / "docker-data/opensearch"),
                 )
                 doc_mounts = services["doc-drop-web"]["volumes"]
                 self.assertEqual(
@@ -225,6 +233,16 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                     model["volumes"]["podman-rag-docs"],
                     {"name": "onyx-podman-rag-docs", "external": True},
                 )
+
+    def test_makefile_uses_only_the_two_core_podman_storage_overlays(self) -> None:
+        files = _make_compose_files(vpn_enabled=False, container_bin="podman")
+        self.assertIn("docker-compose.podman.yml", files)
+        self.assertIn("docker-compose.podman-full.yml", files)
+        self.assertNotIn("podman-docker-postgres", files)
+        self.assertNotIn("podman-docker-opensearch", files)
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertNotIn("PODMAN_SHARE_DOCKER_POSTGRES", makefile)
+        self.assertNotIn("PODMAN_SHARE_DOCKER_OPENSEARCH", makefile)
 
     def test_autoheal_is_present_only_in_vpn_models(self) -> None:
         for mode in ("lite", "full"):

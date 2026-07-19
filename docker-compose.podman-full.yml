@@ -9,10 +9,9 @@
 ##   OpenSearchException[failed to bind service]
 ##
 ## `:Z` changes the SELinux label but not uid/gid, and `:U` recursive chown is
-## rejected by the macOS virtiofs share. Use an engine-native named volume
-## rather than widening the host directory. Docker's bind data remains
-## untouched. This override is full-mode only because the lite stack has no
-## opensearch service.
+## rejected by the macOS virtiofs share. Map the machine user to OpenSearch's
+## uid/gid 1000 and retain the same initialized bind used by Docker Desktop.
+## This override is full-mode only because lite has no opensearch service.
 
 services:
   background:
@@ -21,8 +20,9 @@ services:
         condition: service_healthy
 
   opensearch:
+    userns_mode: "keep-id:uid=1000,gid=1000"
     volumes: !override
-      - podman-opensearch-data:/usr/share/opensearch/data
+      - ./docker-data/opensearch:/usr/share/opensearch/data
 
   # macOS cannot reliably re-export user-mounted filesystems such as WebDAV
   # through the Podman machine's virtiofs shares. The Makefile atomically
@@ -35,7 +35,6 @@ services:
       - ./onyx/doc_drop_webserver.py:/app/doc_drop_webserver.py:ro
 
 volumes:
-  podman-opensearch-data:
   podman-rag-docs:
     name: ${PODMAN_RAG_DOC_VOLUME:?PODMAN_RAG_DOC_VOLUME must be set}
     external: true

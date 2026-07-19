@@ -31,6 +31,14 @@ the Podman API. This does not mean the Docker engine is being used. Do not run
 `docker` commands as a fallback, and use `podman version` or `podman info` when
 the selected engine must be proved.
 
+Docker Compose 5.3.1 may otherwise honor the host's selected Docker Desktop
+context or Podman's SSH system connection. The Makefile therefore exports an
+exact `DOCKER_HOST=unix://...` value from the current machine's inspected
+forwarded socket whenever Podman is selected. Preserve this pin: the SSH path
+can inherit host proxy/SOCKS behavior and fail with `nc: connection failed`,
+while the Unix socket also proves that the provider targets Podman's API rather
+than Docker Desktop.
+
 The macOS client and Linux VM server can have different versions. The wrapper
 requires:
 
@@ -38,8 +46,22 @@ requires:
 - a Compose provider version 2.20.2 or later; and
 - the native startup-health flags checked by `podman update --help`.
 
-The currently verified guest baseline is the official Podman machine-os 5.8.1
-image. On this machine, official 5.8.2 and 5.8.5 machine images developed an
+The currently verified guest baseline is the immutable official Podman
+machine-os v5.8.1 release image. On Apple silicon with libkrun, initialize it
+from:
+
+```text
+https://github.com/podman-container-tools/podman-machine-os/releases/download/v5.8.1/podman-machine.aarch64.applehv.raw.zst
+```
+
+Despite `applehv` in the artifact name, this is the published ARM64 raw disk
+format accepted by libkrun. Do not replace it with the mutable
+`quay.io/podman/machine-os:5.8` tag without first validating a new machine. In
+July 2026 that tag produced a Fedora CoreOS 44 image whose first-boot Ignition
+failed while creating the macOS uid 501 user (`useradd: cannot lock
+/etc/group`) and entered emergency mode under both libkrun and AppleHV.
+
+On this machine, official 5.8.2 and 5.8.5 machine images also developed an
 unusable overlay image store after restart, reporting
 `readlink ... overlay: invalid argument`. This is a local observed regression,
 not a claim about every Podman installation. The capability gate deliberately
@@ -82,8 +104,8 @@ replaced. Re-add every required mount explicitly; for example,
   options with Podman's `U` option. This use is limited to newly created tmpfs
   mounts, not host data. The service remains non-root and retains its other
   hardening.
-- PostgreSQL replaces its macOS host bind with the
-  `podman-postgres-data` native volume.
+- PostgreSQL always uses the same initialized `docker-data/postgres` bind as
+  Docker Desktop, with the required `keep-id` mapping and direct entrypoint.
 - API startup waits for PostgreSQL to become healthy. Podman creates more of
   the graph concurrently and otherwise can expose database initialization
   races earlier than the Docker path.
@@ -93,14 +115,45 @@ replaced. Re-add every required mount explicitly; for example,
 `docker-compose.podman-full.yml` additionally:
 
 - makes `background` wait for PostgreSQL health;
-- replaces the OpenSearch data bind with the
-  `podman-opensearch-data` native volume; and
+- always uses the same initialized `docker-data/opensearch` bind as Docker
+  Desktop with the required `keep-id` mapping; and
 - mounts the externally managed `onyx-podman-rag-docs` volume read-only at
   `/import`, while preserving the document-server script bind.
 
 The RAG volume is marked `external: true` because the Makefile staging step
 creates and owns it before Compose starts. Compose must not silently create a
 project-scoped substitute or remove it as ordinary project state.
+
+### Shared Docker data
+
+The two core Podman overlays let Docker Desktop and Podman use the same stopped
+PostgreSQL cluster and OpenSearch index in place. This is unconditional: there
+are no additional database overlays, marker-selected storage branches, or
+opt-out flags. The startup preflight requires the expected initialization
+markers and does not inspect chats, tables, index names, or document contents.
+Both engines must be down before switching because shared storage does not make
+concurrent database or index writers safe.
+
+PostgreSQL requires three linked settings:
+
+- `userns_mode: keep-id:uid=70,gid=70` maps the Podman machine user to the
+  Alpine image's PostgreSQL account;
+- `user: "70:70"` starts the database with that account; and
+- `entrypoint: ["postgres"]` bypasses the stock image entrypoint only for the
+  already-initialized shared cluster.
+
+The entrypoint bypass is essential. Its unconditional `chmod 0700` on
+`PGDATA` makes macOS virtiofs create a root-owned
+`user.containers.override_stat` on the mount root. Subsequent lookup then
+fails even though Docker's `com.docker.grpcfuse.ownership` metadata correctly
+records uid/gid 70. `prepare-podman-postgres-data` validates `PG_VERSION` and
+removes only that mount-root Podman override before Compose create. It leaves
+Docker's attribute and valid per-file Podman runtime attributes intact.
+
+OpenSearch uses `keep-id:uid=1000,gid=1000` and its ordinary image entrypoint.
+The tested image can create and reuse its normal per-file Podman attributes;
+do not recursively delete them. `prepare-podman-opensearch-data` requires its
+initialized `nodes` directory before a full-mode create.
 
 ### VPN override and socket limitations
 
@@ -121,7 +174,7 @@ The Compose provider accepts and renders `healthcheck.start_interval`, but the
 tested Podman compatibility API drops it when creating containers. A rendered
 Compose model is therefore necessary but not sufficient evidence.
 
-`podman/startup_health.py` provides three strict actions:
+`podman/startup_health.py` provides four strict actions:
 
 - `check` validates that the selected binary is Podman, inspects the Linux
   server version, probes the image store, checks the Compose provider, and
@@ -130,6 +183,8 @@ Compose model is therefore necessary but not sufficient evidence.
   retained regular check, installs an exact native startup check on stopped
   containers, and reinspects the complete project.
 - `stage-docs` implements the full-mode native RAG cache described below.
+- `prepare-shared-data` validates an initialized Docker database/index path
+  and performs the narrow PostgreSQL mount-root xattr cleanup described above.
 
 For each retained health check, `configure` copies the exact regular command
 and timeout into Podman's `StartupHealthCheck`, sets its interval to five
@@ -148,9 +203,12 @@ The authoritative inspect fields are separate:
 The Podman Makefile lifecycle is consequently create/configure/start:
 
 1. `check-container-health-capability` runs the capability gate.
-2. `podman compose create` creates stopped containers.
-3. `startup_health.py configure` installs and verifies native startup checks.
-4. `podman compose up -d --wait` starts the verified graph.
+2. The mode-appropriate database preflights validate the shared binds and
+   remove only the unsafe PostgreSQL mount-root override when present. Full
+   mode also stages the RAG document source.
+3. `podman compose create` creates stopped containers.
+4. `startup_health.py configure` installs and verifies native startup checks.
+5. `podman compose up -d --wait` starts the verified graph.
 
 Full mode performs that sequence first for `local-embedding-shim`, makes the
 single `/ready` request, then repeats create/configure/start for the complete
@@ -170,15 +228,21 @@ Local component images still use their documented Makefile image targets.
 Never substitute an unpinned image because the Podman store is empty, and do
 not let validation containers pull or use network access implicitly.
 
+Root-context Podman builds use `.containerignore`. It excludes private bind
+data, the document source, generated Onyx deployment state, local model/cache
+trees, logs, and reference checkouts. Preserve those exclusions: without them,
+Podman archives large private host trees into the remote build context before
+the Dockerfile runs, causing long silent starts and unnecessary data exposure.
+
 ## macOS mounts, ownership, and attributes
 
 Podman machine host shares use virtiofs. Linux container ownership expectations
-do not reliably map to macOS bind mounts:
+do not map directly to macOS bind mounts:
 
-- mode-0700 PostgreSQL data appeared with unusable ownership and could not be
-  safely changed by the image;
-- OpenSearch uid/gid 1000 could not create its `nodes` tree and failed with
-  `AccessDeniedException`/`failed to bind service`; and
+- mode-0700 PostgreSQL data becomes inaccessible when the stock image
+  entrypoint creates a root-owned Podman override on the mount root;
+- PostgreSQL is shareable with the guarded direct-entrypoint overlay above,
+  while OpenSearch is shareable with uid/gid 1000 `keep-id`; and
 - a user-mounted WebDAV source under `/Volumes` appeared empty or inaccessible
   inside the VM even when the exact directory was configured, macOS approved
   it, and Podman Desktop was restarted.
@@ -195,12 +259,10 @@ The common suffixes solve different Linux problems:
   private data and was rejected by the tested virtiofs paths. Its only current
   use is on new disposable tmpfs mounts.
 
-Do not apply `chmod`, `chown`, `chattr`, `xattr`, `:U`, or broader VM sharing to
-private database or RAG sources. Native volumes are the supported workaround
-for PostgreSQL and OpenSearch. Those volumes live inside the Podman VM and are
-not synchronized with Docker's `docker-data/postgres` or
-`docker-data/opensearch` binds. Switching engines therefore switches database
-and index state; it does not migrate it.
+Do not apply manual recursive `chmod`, `chown`, `chattr`, `xattr`, `:U`, or
+broader VM sharing to private database or RAG sources. The tracked preflight's
+single mount-root xattr removal is the supported exception. Database state is
+not duplicated into Podman-native volumes.
 
 ## RAG document staging workaround
 
@@ -265,15 +327,15 @@ The primary Podman-specific tests are:
 - `tests/test_podman_startup_health.py`: binary refusal, capability and image
   store gates, regular/startup cadence contracts, stopped-container update,
   running-container fail-closed behavior, metadata-free offline document
-  streaming, cache reuse, atomic failure preservation, and volume-name
-  validation.
+  streaming, shared-data preflight, cache reuse, atomic failure preservation,
+  and volume-name validation.
 - `tests/test_myst_lifecycle_makefile.py`: capability prerequisites,
   create/configure/start ordering, staged full-mode documents, direct Onyx
   image pulls, and exclusion of the upstream installer/socket-only executor.
 - `tests/test_onyx_network_isolation.py`: effective Podman overlay selection,
-  optional VPN behavior, tmpfs options, native PostgreSQL/OpenSearch storage,
-  database health dependencies, external RAG volume, script bind, and
-  read-only mount semantics.
+  optional VPN behavior, tmpfs options, unconditional shared Docker
+  PostgreSQL/OpenSearch storage, database health dependencies, external RAG
+  volume, script bind, and read-only mount semantics.
 - `tests/test_myst_readiness.py`: interface/route parsing that must remain
   valid with Podman's network layout.
 
@@ -303,9 +365,9 @@ direct inspection; do not mix Docker engine results into the evidence.
    manifest fast path when safe. Confirm the external native volume, retained
    script bind, `/import/docs` availability, and denied writes without printing
    private document names.
-6. Validate native database volumes on both a fresh machine/volume and existing
-   data where the change touches initialization, ownership, or dependencies.
-   Confirm Docker bind data was not modified.
+6. Validate the shared Docker binds. Confirm the core Podman overlays,
+   PostgreSQL direct entrypoint, `keep-id` mappings, initialization checks,
+   mount-root xattr preflight, clean shutdown, and engine exclusivity.
 7. Verify socket-only code interpreter and autoheal remain absent. If a future
    feature needs control-plane access, review its authority rather than
    exposing the rootless socket broadly.

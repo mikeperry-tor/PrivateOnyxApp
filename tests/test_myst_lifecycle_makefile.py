@@ -8,6 +8,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MystLifecycleMakefileTests(unittest.TestCase):
+    def test_podman_build_context_excludes_private_and_large_local_state(self) -> None:
+        ignored = {
+            line.strip()
+            for line in (ROOT / ".containerignore").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+        self.assertTrue(
+            {".env.wrapper", "docker-data", "doc-drop", "embedserv/models"}
+            <= ignored
+        )
+        self.assertTrue({"onyx/onyx_data", "reference_repos", ".git"} <= ignored)
+
+    def test_podman_compose_is_pinned_to_the_forwarded_unix_socket(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("export DOCKER_HOST := unix://$(DOCKER_SOCK_PATH)", makefile)
+        self.assertIn("export CONTAINER_BIN", makefile)
+
     def test_stack_start_preserves_integrated_myst_container(self) -> None:
         makefile = (ROOT / "Makefile").read_text()
         self.assertIn('com.docker.compose.project', makefile)
@@ -84,6 +101,24 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn('"$(CONTAINER_BIN)"', stage_target)
         self.assertIn('"$(ONYX_RAG_DOC_SOURCE_DIR)"', stage_target)
         self.assertIn('"$(PODMAN_RAG_DOC_VOLUME)"', stage_target)
+
+    def test_podman_shared_database_preflights_are_unconditional(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        lite_prerequisites = next(
+            line
+            for line in makefile.splitlines()
+            if line.startswith("up-lite: ensure-onyx-config")
+        )
+        full_prerequisites = next(
+            line
+            for line in makefile.splitlines()
+            if line.startswith("up-full: ensure-onyx-config")
+        )
+        self.assertIn("prepare-podman-postgres-data", lite_prerequisites)
+        self.assertIn("prepare-podman-postgres-data", full_prerequisites)
+        self.assertIn("prepare-podman-opensearch-data", full_prerequisites)
+        self.assertNotIn("prepare-podman-opensearch-data", lite_prerequisites)
+        self.assertNotIn("PODMAN_SHARE_DOCKER_", makefile)
 
     def test_podman_excludes_socket_only_code_interpreter_and_pulls_directly(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

@@ -18,14 +18,17 @@ services:
       - /var/run:U,mode=0755
       - /tmp
 
-  # macOS Podman presents mode-0700 host binds through virtiofs as nobody,
-  # preventing postgres from safely changing ownership. Use an engine-native
-  # named volume; Docker's bind data remains untouched and recoverable. `:Z`
-  # changes SELinux labels, not ownership, while `:U` recursive chown is
-  # rejected by this virtiofs path.
+  # Reuse the same initialized bind as Docker Desktop. Map the machine user to
+  # Alpine PostgreSQL's uid/gid 70 and bypass the image entrypoint because its
+  # unconditional PGDATA chmod creates a root-owned virtiofs override and
+  # immediately locks postgres out. `:Z` changes labels, not ownership, while
+  # `:U` recursive chown is rejected by this macOS virtiofs path.
   relational_db:
+    userns_mode: "keep-id:uid=70,gid=70"
+    user: "70:70"
+    entrypoint: ["postgres"]
     volumes: !override
-      - podman-postgres-data:/var/lib/postgresql/data
+      - ./docker-data/postgres:/var/lib/postgresql/data
 
   # Podman starts more concurrently than the Docker path and reports an exited
   # dependent immediately. Gate database consumers on the native startup check
@@ -34,6 +37,3 @@ services:
     depends_on:
       relational_db:
         condition: service_healthy
-
-volumes:
-  podman-postgres-data:
