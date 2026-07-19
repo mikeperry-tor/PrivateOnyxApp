@@ -162,13 +162,23 @@ Re-audit the pinned Onyx symbols for:
   skill list and constructed Agent tools, and a real crawler request succeeds
   without restoring indexed retrieval. Remove the patch if upstream makes
   crawler-backed `open_url` natively available without a vector database;
+- chat-time indexed reuse: URL normalization must resolve only to an existing
+  connector document ID, `id_based_retrieval` must remain ACL-filtered, and
+  fresh crawling must not ingest content or become `internal_search`. Confirm
+  both siblings still run, indexed content is preferred after completion, and
+  crawler content remains the fallback;
 - `OnyxWebCrawler.contents`, `_fetch_url`, `_fetch_web_content`, outer
   `open_url` timeout callback, copied context, nested executor, and result
   ordering;
 - `WebContent` failure shape, requested/terminal URL metadata, snippet and
   indexed-document preference/merge behavior;
 - `is_pdf_resource`, `extract_pdf_text`, HTML extraction, raw-text decoding,
-  and character-budget call sites;
+  and character-budget call sites. Confirm the per-URL character cap touches
+  crawler sections only, while the aggregate LLM-output cap follows the merge;
+- direct-Obscura size scope: `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` must remain
+  an API crawler body cap and must not be passed to `background`, aliased to
+  Onyx `MAX_FILE_SIZE_BYTES`, or applied to exact-ID indexed retrieval. Test an
+  oversized crawler sibling alongside a usable indexed sibling;
 - built-in versus external provider dispatch and Admin/provider test APIs;
 - any new requests, local-browser, Firecrawl, parser, or generic fallback.
 
@@ -355,7 +365,9 @@ its user-visible behavior:
   markers, the complete internal-search formatter signature/JSON construction,
   all three `open_url`/search positional defaults, and the repository downloader
   signature/defaults. Test invalid, zero/unlimited, normal, and smaller-than-
-  notice budgets; no result may exceed its per-result or aggregate cap.
+  notice budgets; no result may exceed its per-result or aggregate cap. Keep
+  the crawler-only per-URL cap distinct from the post-merge aggregate cap and
+  from the direct-Obscura response-body cap.
 - **PDF freshness:** validate exact `_do_scrape()` and
   `get_docs_to_update()` signatures/source markers plus connector, database,
   and result shapes. Exercise unchanged, changed, missing-validator, 401/403/404,

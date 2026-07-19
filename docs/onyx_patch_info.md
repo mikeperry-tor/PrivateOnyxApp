@@ -115,11 +115,14 @@ DOM, while PDF/raw/binary paths remain strict. See
 
 Stock Onyx makes `OpenURLTool.is_available()` return false whenever
 `DISABLE_VECTOR_DB=true`. That condition is too broad for this deployment's
-lite mode: indexed URL retrieval is unavailable without a vector database, but
-the independent built-in crawler can still open and read public web pages. If
-left unchanged, Onyx hides `open_url` from user-visible built-in skills and
-skips it while constructing an Agent's tools, leaving lite mode with search
-results but no tool for opening their pages.
+lite mode: exact-ID reuse of a connector document already indexed under the
+requested URL is unavailable without a vector database, but the independent
+built-in crawler can still open and read public web pages. This reuse occurs
+only while executing the chat-time `open_url` tool; it does not ingest the URL
+or run semantic `internal_search`. If left unchanged, Onyx hides `open_url`
+from user-visible built-in skills and skips it while constructing an Agent's
+tools, leaving lite mode with search results but no tool for opening their
+pages.
 
 The lite overlay therefore sets the stack-owned
 `ONYX_FORCE_OPEN_URL_AVAILABLE=true`. The API bootstrap installs
@@ -134,6 +137,15 @@ retrieval and crawling as failure-tolerant siblings while converting an index
 failure into an empty indexed result. Lite mode consequently returns crawler
 content while its `DisabledDocumentIndex` continues to fail loudly if called;
 the patch does not restore RAG or indexed retrieval.
+
+In direct Obscura mode, `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` caps only the
+fresh crawler sibling's retained main-resource body. It is an API-only wrapper
+setting, is not mapped to Onyx's `MAX_FILE_SIZE_BYTES`, and is not present in
+the background indexing service. Exact-ID indexed retrieval bypasses this byte
+cap, although both indexed and crawled content remain subject to the final
+`ONYX_OPEN_URL_MAX_TOTAL_CHARS` LLM-output budget after merge. The Makefile's
+derived Obscura retention floors are shared browser memory settings, not Onyx
+document-indexing limits.
 
 Remove this patch and its Compose switch when upstream makes crawler-backed
 `open_url` available with the vector database disabled. Until then, every
@@ -391,6 +403,11 @@ construction before applying per-result and aggregate character caps. The
 `open_url`/web-search patch validates the positional defaults it changes, and
 the repository-download patch validates the downloader signature and defaults
 before aligning it with the code-interpreter upload receiver.
+
+The per-URL `open_url` character cap applies while crawler output is converted
+to an inference section. Exact-ID indexed sections bypass it. The aggregate cap
+is applied after indexed/crawled merge and therefore limits both representations
+in the LLM-facing string without limiting retrieval or ingestion itself.
 
 Focused tests cover each configured value and drift boundary. They also cover
 small internal-search budgets: if the human-readable truncation notice cannot

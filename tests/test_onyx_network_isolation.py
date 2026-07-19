@@ -562,6 +562,20 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             background_volumes,
         )
 
+    def test_open_url_document_body_limit_is_not_an_indexing_setting(self) -> None:
+        model = _compose_model("full")
+        services = model["services"]
+        api_environment = services["api_server"]["environment"]
+        background_environment = services["background"]["environment"]
+
+        self.assertEqual(
+            api_environment["ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB"], "50"
+        )
+        self.assertNotIn(
+            "ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB", background_environment
+        )
+        self.assertNotIn("onyx-obscura-control", services["background"]["networks"])
+
     def test_obscura_mcp_and_shared_namespace_artifacts_are_absent(self) -> None:
         model = _compose_model("full")
         service_names = set(model["services"])

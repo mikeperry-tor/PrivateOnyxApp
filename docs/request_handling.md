@@ -33,6 +33,46 @@ Onyx open_url -> stock Onyx requests fetch -> onyx-public-egress-bridge
                  only when the stock crawler selects its browser fallback
 ```
 
+## `open_url` and previously indexed documents
+
+`open_url` is a chat-time read tool. It does not ingest a requested URL, add
+freshly crawled content to the vector index, participate in connector sync, or
+replace the semantic `internal_search` path.
+
+For each tool call in full mode, Onyx first normalizes every requested URL using
+connector-owned rules and checks for an existing document with that exact
+canonical ID. It then runs exact-ID chunk retrieval and a fresh crawler request
+as failure-tolerant parallel siblings. After both finish, it prefers the
+already-indexed representation for a matched URL and otherwise uses the fresh
+crawl. The crawl therefore still occurs even when an indexed copy is ultimately
+returned. A link-column lookup is a last resort only when ordinary ID resolution
+and the crawl both fail. Access filters apply to indexed retrieval.
+
+Lite mode has no usable document index. Its availability patch leaves the
+crawler sibling operational while the indexed sibling fails into an empty
+result; it does not restore ingestion, RAG, or indexed retrieval.
+
+The limits apply at distinct boundaries:
+
+| Setting | Fresh crawler result | Previously indexed result |
+| --- | --- | --- |
+| `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` | Main-resource response-body cap in direct Obscura mode only | No |
+| `ONYX_OPEN_URL_MAX_CHARS_PER_URL` | Post-parse per-page character cap | No |
+| `ONYX_OPEN_URL_MAX_TOTAL_CHARS` | Final LLM-facing output after merge | Yes |
+
+The total character budget does not limit the index read itself. Onyx constructs
+and emits the rich document response before applying that final LLM-facing
+budget, so the model may receive less content than the UI document payload.
+
+`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` is already isolated from indexing. Compose
+passes it only to `api_server`; it is not mapped to Onyx's ingestion
+`MAX_FILE_SIZE_BYTES` setting and is absent from the full-mode `background`
+service. An oversized direct-Obscura crawl can therefore fail while a matching
+previously indexed copy still succeeds. The Makefile also uses the value to
+size retention floors in the shared Obscura server. That affects browser memory
+provisioning shared with SearXNG, but SearXNG keeps its independent fixed DOM
+limit and no Onyx indexing path uses Obscura.
+
 In direct Obscura mode, the API container and SearXNG import the same client
 implementation from `browser/obscura_client`. SearXNG connects on
 `obscura-control`; the API can
@@ -145,12 +185,13 @@ identical. Declared non-UTF-8 text must satisfy the strict permitted decoding
 contract.
 
 `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` defaults to 50 MiB and is a positive
-integer. In direct Obscura mode it is the sole main-resource response-body cap,
-including HTML responses, and it drives Obscura retention floors. Serialized
-rendered DOM has a separate fixed 20 MiB cap; search DOM also has a fixed
-20 MiB cap. Existing Onyx character budgets apply after parsing. Increasing
-the document limit increases potential memory use across five simultaneous API
-fetches and five browser workers.
+integer. In direct Obscura mode it is the sole main-resource response-body cap
+for the fresh crawler sibling, including HTML responses, and it drives Obscura
+retention floors. It does not cap exact-ID reads of previously indexed
+documents or configure ingestion. Serialized rendered DOM has a separate fixed
+20 MiB cap; search DOM also has a fixed 20 MiB cap. Existing Onyx character
+budgets apply after parsing. Increasing the document limit increases potential
+memory use across five simultaneous API fetches and five browser workers.
 
 These limits do not bound Obscura's initial response allocation. The pinned
 server can read a complete response before applying retained-body limits. Its

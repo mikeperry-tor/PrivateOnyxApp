@@ -33,10 +33,12 @@ At a high level:
 - Onyx sends LLM requests through the included Teep local inference service.
 - The shared API runtime patches give nested Deep Research agents the tools selected for the current chat Agent and execute complete model-emitted tool batches with bounded concurrency.
 - Onyx `web_search` calls SearXNG, whose custom offline engines navigate and parse rendered provider pages through Obscura.
-- Onyx `open_url()` runs the Onyx Web Crawler and, when the vector database is
-  available, indexed URL retrieval. The default crawler uses Python `requests`
-  with a local Chromium fallback; both stages are restricted to public-only
-  egress through the fixed Onyx bridge.
+- Onyx `open_url()` is a chat-time read tool, not an ingestion path. For every
+  requested URL it concurrently performs a fresh crawl and, in full mode,
+  exact-ID retrieval of any document that a connector indexed previously; it
+  prefers that indexed copy when present. The default crawler uses Python
+  `requests` with a local Chromium fallback; both stages are restricted to
+  public-only egress through the fixed Onyx bridge.
 - Lite mode keeps crawler-backed `open_url()` available through a strict runtime
   patch while indexed URL retrieval remains disabled.
 - Setting `ONYX_AGENT_USE_OBSCURA_BROWSER=true` moves only the built-in crawler to the single-navigation Obscura path. At Obscura 0.1.10, testing found the stock crawler was blocked less often; re-evaluate this default on Obscura upgrades.
@@ -206,8 +208,17 @@ This stack protects private research, document contents, browsing behavior, infe
   - Onyx applications must never join `netns-holder` or gain direct fallback when VPN, policy-proxy, or bridge connectivity fails.
 - Request handling:
   - Keep supported search engines on the shared direct-Obscura path and preserve their atomic pre-thread provider reservation.
+  - Preserve `open_url`'s chat-time exact-ID reuse semantics: it must not ingest
+    crawled pages, replace `internal_search`, or turn URL opening into semantic
+    retrieval. Indexed and crawler work remain failure-tolerant siblings, with
+    indexed content preferred only after both paths complete.
   - The built-in Onyx Web Crawler defaults to the stock requests/local-Chromium mode because it was blocked less often in Obscura 0.1.10 testing; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path.
-  - When explicitly switched to Obscura, preserve one navigation, event-based waits, the configured main-response byte limit (including HTML), the separate fixed DOM limit, anti-bot visibility, and complete cleanup. Re-test the default on Obscura upgrades.
+  - When explicitly switched to Obscura, preserve one navigation, event-based
+    waits, the `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` fresh-crawl main-response
+    byte limit (including HTML), the separate fixed DOM limit, anti-bot
+    visibility, and complete cleanup. That setting must remain API-crawler-only:
+    do not map it to Onyx `MAX_FILE_SIZE_BYTES`, background ingestion, or indexed
+    document retrieval. Re-test the default on Obscura upgrades.
   - Do not add other hidden retries, fallbacks, or fixed sleeps.
 - Documentation:
   - Update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change.
