@@ -20,8 +20,22 @@ After startup, in an idle default stack:
 - Onyx background discovery work runs every 5 minutes, and functional
   housekeeping runs every 10 minutes or longer.
 - Pull-only background analytics, Celery event heartbeats/gossip, and unused
-  file-based liveness writes are absent.
+  per-worker file-based liveness writes are absent. Beat retains one consumed
+  file heartbeat, but only once every 5 minutes.
 - Disabled features have neither scheduled jobs nor dedicated idle workers.
+- OpenSearch is no longer provisioned with an unconditional 2 GiB heap and
+  does not run schedulers, agents, audit writes, or plugins that the pinned
+  Onyx workload does not use.
+- MinIO keeps its supported scanner/healing behavior, but uses the supported
+  `slowest` scanner profile instead of beginning a new background scan cycle
+  every minute.
+- The bundled host MLX embedding model unloads after a bounded idle period and
+  reloads on the next real embedding request; a full-mode stack no longer
+  holds roughly a gigabyte of model-handler memory indefinitely while idle.
+- The API and retained Celery workers do not build or expose unused Prometheus
+  instrumentation/endpoints, and imported-but-idle processes, connection
+  pools, and worker counts are kept to the smallest values that pass
+  representative full-mode workloads.
 
 Correctness work that is conditional on an active request/task or owns a live
 distributed lease is not governed by those idle-observability targets. The
@@ -56,16 +70,17 @@ direct-network fallback. Application requests continue to rely on the actual
 route and final-hop policy and must fail closed immediately even if Docker
 still reports a stale `healthy` state.
 
-Docker's `start_interval` requires Docker Engine 25.0 or later. The Compose
-specification can carry the field, but that alone does not prove that the
-selected engine schedules it. Make Engine 25.0 the documented Docker minimum,
-verify the rendered `StartInterval` in `docker inspect`, and verify the
-effective Docker and Podman models selected by the Makefile. Podman exposes a
-separate startup-health model (`HealthStartup*`); do not assume that accepting
-the Compose key gives Docker-equivalent behavior. A supported Podman path must
-either demonstrate the fast-start/slow-steady transition in a live contract
-test or use a narrow Podman-specific startup layer. Otherwise fail before
-starting the stack with an actionable version/capability error.
+Docker's `start_interval` requires Docker Engine 25.0 or later, and Docker
+Compose first supported the field in 2.20.2. The Compose specification can
+carry the field, but that alone does not prove that the selected engine
+schedules it. Make Engine 25.0 and Compose 2.20.2 the documented Docker
+minimums, verify the rendered `StartInterval` in `docker inspect`, and verify
+the effective Docker and Podman models selected by the Makefile. Podman
+exposes a separate startup-health model (`HealthStartup*`); do not assume that
+accepting the Compose key gives Docker-equivalent behavior. A supported Podman
+path must either demonstrate the fast-start/slow-steady transition in a live
+contract test or use a narrow Podman-specific startup layer. Otherwise fail
+before starting the stack with an actionable version/capability error.
 
 Use the official [Dockerfile `HEALTHCHECK`
 reference](https://docs.docker.com/reference/dockerfile/), [Compose
@@ -94,16 +109,31 @@ credentials. Do not modify generated files under
 the documented Makefile upgrade flow; wrapper behavior belongs in tracked
 Compose layers, scripts, or strict runtime patches.
 
-The source audit is pinned-artifact-sensitive. The local Onyx reference
-worktree is at the wrapper's audited commit
-`b7482a59fb74503d5ec3dcde0ae5beac7b4905ff`, but the local Teep reference
-worktree is not at `TEEP_REF=6413fe0547b449e67f7296986fe8b8ffbc9bbcd2`
-and does not currently contain that object. Before implementing or changing a
-Teep health assumption, synchronize the read-only reference repository to the
-committed pin (or inspect the exact built image/source archive) and record the
-pin in the audit. Never infer pinned Teep behavior from the current reference
-worktree. Apply the same exact-pin check to Myst, Obscura, SearXNG, autoheal,
-and the generated Onyx deployment inputs.
+The source audit is pinned-artifact-sensitive. Verified matches are Onyx
+`b7482a59fb74503d5ec3dcde0ae5beac7b4905ff`, Obscura `v0.1.10`, and SearXNG
+`7b2199ecd`. The local Teep reference worktree does not contain the committed
+`TEEP_REF=6413fe0547b449e67f7296986fe8b8ffbc9bbcd2`, although the built image's
+revision label does. The local MinIO reference also does not contain the
+revision recorded on the running image. Synchronize those read-only reference
+repositories, or extract and archive the exact image source, before relying on
+implementation details from them.
+
+Myst and two third-party support images are not currently reproducible enough
+for an exact-source audit: the Myst Dockerfile clones the mutable
+`docker_host_fixes_with_logs` branch at depth one and records no revision;
+`willfarrell/autoheal:latest` and `tailscale/tailscale:stable` are mutable image
+tags. Before implementation, pin Myst to a reviewed commit in
+`stack.versions.env`, add the commit as an image label, and pin Autoheal plus
+Tailscale to immutable tags or digests. Record the currently tested image
+digests as audit evidence, but do not mistake a local image digest for a
+source pin. Reconcile the Makefile's stale Teep fallback ref with the committed
+source of truth or add an assertion that makes fallback drift impossible.
+
+Those pin corrections are part of this plan, not incidental cleanup. They
+trigger the pin-upgrade workflow in `docs/onyx_patches_upgrade.md`: refresh the
+relevant sources/images through the Makefile, run `make check-upgrade`, and
+perform the component-specific live matrix. Do not defer exact-source review
+until after health and scheduler behavior has been changed.
 
 ## Container health-check plan
 
@@ -120,12 +150,13 @@ health checks, but neither may generate Internet traffic:
   recovery value.
 
 Prefer a direct local TequilAPI request over launching the Myst CLI. The
-pinned daemon exposes `GET http://127.0.0.1:4050/connection`; this reads the
-local connection manager and returns the current connection state. The
-existing `myst connection info` command is a heavier CLI wrapper around the
-same API call. The health check should consume the response without logging
-it and require exactly `status=Connected`, because the full response contains
-provider, location, session, and identity metadata.
+currently built daemon exposes `GET http://127.0.0.1:4050/connection`; this
+reads the local connection manager and returns the current connection state.
+The existing `myst connection info` command is a heavier CLI wrapper around
+the same API call. Confirm that contract after Myst is pinned in phase 1. The
+health check should consume the response without logging it and require
+exactly `status=Connected`, because the full response contains provider,
+location, session, and identity metadata.
 
 The complete recurring VPN probe should use only:
 
@@ -164,6 +195,47 @@ the one-minute autoheal poll give a roughly two-to-three-minute detection and
 restart bound. Keep `AUTOHEAL_START_PERIOD=300`; it is independent of the
 Docker health start period and prevents recycling Myst during initial setup.
 
+### Replace Myst's 20-second route/MTU rewrite loop
+
+`myst-client-entrypoint.sh` currently runs `apply_wireguard_mtu` and
+`apply_route_exemptions` every 20 seconds. In the default VPN configuration
+that repeatedly resolves `host.docker.internal` and
+`broker.mysterium.network`, executes several `ip`/text-processing commands,
+rewrites already-correct routes, and logs every exemption even while nothing
+has changed. Literal upstream-proxy/LAN exemptions are also rewritten. This is
+correctness maintenance, not health monitoring, but the implementation is
+wasteful and its public-name lookup is far too frequent.
+
+Replace the fixed loop with two mechanisms:
+
+- A blocking local netlink watcher reacts to relevant `myst0` link/address,
+  default-route, and route-table changes, then reapplies the configured MTU and
+  cached exemption routes. Filter out the helper's own /32 route events and
+  debounce event bursts so it cannot trigger itself indefinitely. It must not
+  resolve DNS on each kernel event.
+- A 10-minute reconciliation resolves configured exemption hostnames, diffs
+  the resulting addresses and routes against the last wrapper-owned set,
+  adds only missing/changed entries, and removes stale wrapper-owned /32 routes.
+  Literal CIDRs and an unchanged MTU require no periodic command. Continue to
+  apply everything synchronously at startup and after wrapper-owned connection
+  attempts.
+
+Treat the netlink helper as part of fail-closed route ownership: if it exits or
+cannot monitor the namespace, make the container fail visibly rather than
+silently reverting to a ten-minute-only repair path. Store only non-secret
+route state in a fixed private runtime path; do not log resolved lists on every
+successful reconciliation. Validate the exact Myst reconnection behavior
+before finalizing event filters, including changes made by the daemon without
+a wrapper `connect` call.
+
+Tests must prove zero DNS/route/log churn across a stable interval longer than
+20 seconds; immediate repair after simulated link/address/default-route
+replacement; no self-trigger loop; stale-address removal after a mocked DNS
+change; literal-only configurations with no recurring DNS; helper-death
+failure behavior; and continued exact host/LAN/upstream-proxy exemptions in
+VPN and explicit no-VPN modes. A live reconnect must preserve the trusted
+namespace and fail-closed application paths throughout.
+
 ### Keep, but make sleepy
 
 For every retained ordinary health check, set the steady-state contract to:
@@ -186,7 +258,6 @@ must switch to the 10-minute interval. A permanently failing fast service must
 become unhealthy within its short documented startup grace, not after a
 blanket 10-minute wait.
 
-- Myst-dependent policy proxies
 - Egress bridges
 - Obscura readiness through its CDP gateway
 - SearXNG readiness through its API gateway
@@ -196,7 +267,7 @@ blanket 10-minute wait.
 - Teep
 - PostgreSQL
 - MinIO
-- Doc-drop origin and route gateway
+- Doc-drop route gateway
 - Tailscale frontend gateway
 - Executor egress bridge
 
@@ -261,7 +332,8 @@ For full-stack startup:
    `docker compose up -d --wait`.
 4. Fail visibly if the one end-to-end embedding request fails, leave the
    already-started shim/routing dependency subset running for diagnosis, and
-   do not start API/background against an unvalidated embedding backend.
+   do not newly create or restart API/background against an unvalidated
+   embedding backend.
 5. Do not retry it periodically or cache a retry loop inside the container.
 
 The ordering is essential. Calling `/ready` after the full `compose up` would
@@ -279,18 +351,82 @@ success could be reused on a later stack start. `up-lite` must never invoke the
 helper. Do not add a restarting init container or shell retry loop, because
 either can turn a failed paid endpoint into unbounded repeated spend.
 
-This gives startup validation without keeping the model warm, waking the GPU, or spending API tokens indefinitely. Subsequent real embedding failures will surface through the actual indexing or search operation.
+Define repeated-start behavior explicitly. On a fresh stack, API and
+background must not exist before `/ready` succeeds. On a repeated `make
+up-full`, those services may already be running from the previous successful
+start; a later failed `/ready` must return nonzero without recreating,
+restarting, or stopping them. The helper cannot truthfully promise that they
+were never running, and it must not turn a validation failure into an implicit
+outage of an otherwise healthy existing stack.
+
+This removes periodic inference and API spend, but it does not by itself stop
+the bundled host server from keeping its model resident. The following
+lifecycle work is required for the default local MLX path. Subsequent real
+embedding failures still surface through the actual indexing or search
+operation.
+
+### Bundled MLX server: unload the model when idle
+
+The pinned `mlx-openai-server` 1.8.1 configuration has no idle-unload option
+and eagerly spawns its model handler. In the running stack the lightweight
+server parent is roughly 100 MiB RSS and the idle embedding handler roughly
+1.36 GiB RSS. Unified-memory accounting varies on macOS, but this is plainly a
+larger savings opportunity than the health request itself.
+
+For the wrapper-managed default MLX upstream only, replace the always-warm
+host process with a tracked lightweight lifecycle proxy:
+
+1. Keep the shim-facing address and request contract unchanged at port 3210.
+   Bind a small tracked proxy there and launch the heavy MLX server only on
+   loopback at a separate fixed port. Preserve the existing host-exposure and
+   routing policy; do not make the model backend itself reachable from Docker.
+2. On the first bounded `/v1/embeddings` request, serialize startup, launch the
+   exact verified command/process group, wait for model readiness within the
+   existing startup budget, and forward the original request once. Concurrent
+   callers wait on the same startup rather than spawning duplicate models.
+3. After 10 minutes with no in-flight or newly arrived embedding request,
+   gracefully stop the identity-validated child process group, verify exit,
+   and release MLX model memory. Reset the timer after request completion, not
+   request start, so long batches cannot be killed. Do not expose a generic
+   user cadence knob or unload between requests in an active indexing burst.
+4. If startup or the child fails, return one clear local upstream error. Never
+   replay a POST whose delivery/completion is ambiguous, hide failure with an
+   empty vector, or fall through to a network embedding provider.
+5. `make down-full` stops the wrapper-owned proxy and any child using the same
+   PID/executable/ancestry validation as the current lifecycle. Custom
+   upstreams and manually launched listeners remain untouched.
+
+Prefer a small stdlib implementation with strict URL/path/body limits and no
+general forwarding capability. Pin and inspect the installed MLX server CLI
+and readiness contract; fail startup on drift. The one-shot full startup
+`/ready` will intentionally load the model once and the idle timer will unload
+it about ten minutes later. A later search/index operation may incur the
+measured cold-start delay, which must fit Onyx/shim timeouts and be documented.
+
+Test first request, concurrent cold requests, an indexing burst, the exact
+idle boundary, a request arriving during shutdown, child crash, proxy crash,
+stale/reused PID files, repeated `make up-full`, `make down-full`, custom and
+manual upstreams, and query/index correctness after multiple unload/reload
+cycles. Measure host RSS/unified GPU memory and idle package power before load,
+while warm, and after unload; verify that no timer sends inference or network
+traffic merely to keep/readiness-check the model.
 
 ### Final-hop proxy probes
 
 The current proxy health command starts Python and resolves `example.com`.
-Remove that behavior completely rather than merely making it less frequent.
-Both recurring proxy health and startup readiness must avoid synthetic online
-traffic:
+Remove the proxy health check entirely rather than replacing it with another
+observer. Each proxy is already exercised by one or more egress-bridge health
+checks: a local `CONNECT` that receives the expected policy rejection proves
+that the bridge can reach the final-hop listener and that the process is
+serving its validated configuration. Preserve a separate aggregate bridge
+check for every distinct public, host, Obscura, and executor path; do not
+collapse checks across network boundaries merely because several bridges
+share a proxy process.
 
-- Add a cheap listener-only health command for Docker’s recurring check.
-- Validate static configuration, listener availability, and local namespace
-  preconditions without resolving a public hostname.
+- Change bridge dependencies on the final-hop proxy to `service_started`.
+- Keep strict main-process startup validation of static configuration,
+  listener binding, route-class policy, and upstream-proxy syntax. Invalid
+  configuration must make the process exit and prevent aggregate readiness.
 - Do not periodically connect to a configured upstream HTTP/SOCKS proxy merely
   to prove that it accepts a connection or credentials.
 - Do not use a public canary target during startup. The first real request is
@@ -298,13 +434,13 @@ traffic:
   behavior, and it already fails closed if that path is unavailable.
 - Keep Myst responsible only for the local, offline VPN state checks described
   above.
+- Remove `--check-ready` and readiness-only probe helpers if no production path
+  uses them after the dependency rewrite; retain real request-time DNS and
+  destination-validation helpers.
 
-The recurring proxy check should prove only that the final-hop process is
-alive, its listener accepts a local connection, and its startup-validated
-configuration remains loaded. Bridge checks may continue proving that a
-policy-rejected local `CONNECT` receives the expected 403 because that request
-does not leave the Docker/VPN namespace. No health or readiness check should
-produce DNS or upstream-network traffic.
+The aggregate bridge check must fail when the proxy is absent, not listening,
+misconfigured, or unreachable from that bridge. No health or readiness check
+should produce DNS or upstream-network traffic.
 
 ### Exact Compose disposition
 
@@ -316,7 +452,7 @@ and Tailscale profiles. The intended steady-state disposition is:
 |---|---:|---|
 | `myst-client` | 1m | Replace with offline TequilAPI/interface/route probe; use two failures before unhealthy. |
 | `autoheal` loop | 1m | Set `AUTOHEAL_INTERVAL=60`; disable the image's inherited 5s `pgrep` health check with `healthcheck: {disable: true}`. |
-| Public/host final-hop proxies | 10m | Replace `--check-ready` with a local-only listener/configuration check. |
+| Public/host final-hop proxies | none | Remove the redundant probe; strict process startup plus each bridge's aggregate local 403 check owns readiness. |
 | Obscura/public/host/executor egress bridges | 10m | Keep the local policy-rejection check; it must never leave the namespace. |
 | Obscura | none | Remove the expensive in-container `fetch` probe; aggregate readiness moves to the CDP gateway. |
 | Obscura CDP gateway | 10m | Replace socket-open-only health with a local `/json/version` request through the gateway. |
@@ -325,6 +461,8 @@ and Tailscale profiles. The intended steady-state disposition is:
 | API, Web, and nginx | 10m | Keep local HTTP checks needed by startup dependencies. |
 | Teep | 10m | Keep its local `/health` check; audit the Teep-VPN gateway overlay too. |
 | PostgreSQL | 10m | Override the inherited upstream 10s check in `docker-compose.yaml`. |
+| Redis cache | none | Preserve `service_started`; broker/cache clients already perform functional startup checks and connection health. |
+| OpenSearch | none | Preserve `service_started`; Onyx performs functional initialization, and a periodic JVM health probe would add observation without recovery. |
 | MinIO | 10m | Keep its local readiness check in the full overlay. |
 | Doc-drop origin | none | Remove duplicate origin health; aggregate readiness moves to its route gateway. |
 | Doc-drop route gateway | 10m | Keep one end-to-end local HTTP check through the gateway. |
@@ -346,7 +484,8 @@ The main implementation locations are:
 - the optional Compose overlays named above;
 - `myst/docker-compose.yaml`, `myst/myst-readiness.sh`, and
   `docker-compose.vpn-autoheal.yml` for VPN recovery; and
-- `egress/final_hop_proxy.py` for the proxy's local-only health command.
+- `egress/final_hop_proxy.py` for removal of readiness-only probe code after
+  bridge dependencies are rewired.
 
 For Myst, feed the loopback TequilAPI response directly into a status matcher.
 Do not print, persist, or interpolate the full JSON into an error message. Unit
@@ -354,8 +493,8 @@ tests must provide fake `wget` and `ip` executables and prove that no `dig`,
 resolver, or other online command is invoked. Keep the existing no-VPN
 stale-`myst0` and default-route behavior.
 
-The pinned Myst image has BusyBox `wget` with explicit proxy control. Use the
-equivalent of:
+The currently tested Myst image has BusyBox `wget` with explicit proxy
+control. Reconfirm this in the newly pinned image, then use the equivalent of:
 
 ```sh
 wget -Y off -q -T 5 -O - http://127.0.0.1:4050/connection
@@ -364,8 +503,9 @@ wget -Y off -q -T 5 -O - http://127.0.0.1:4050/connection
 Pipe it directly to a matcher anchored at the beginning of the top-level JSON
 object, equivalent to
 `^[[:space:]]*\{[[:space:]]*"status"[[:space:]]*:[[:space:]]*"Connected"[[:space:]]*[,}]`.
-The pinned Go DTO serializes `status` first; assert that exact pinned contract
-against the Myst source/image. A loose search for any nested `status` field is
+The currently tested Go DTO serializes `status` first; assert that exact
+contract against the newly pinned Myst source/image. A loose search for any
+nested `status` field is
 not sufficient. `-Y off` is required
 even for loopback so an inherited proxy environment can never turn health into
 an upstream request. Do not hold the response in a shell variable. Treat an
@@ -381,18 +521,98 @@ lookup. After reading the first global `myst0` address, require `ip -4 route
 get 198.51.100.1` to select `dev myst0` and the same `src` address. This TEST-NET
 lookup sends no packet and performs no DNS, while proving that an ordinary
 public route selects the tunnel rather than merely proving that some route is
-attached to the interface. Characterize the pinned Myst route output first and
-add a different local-only invariant only if the supported provider route
-shape demonstrably cannot satisfy this one.
+attached to the interface. Characterize the newly pinned Myst route output
+first and add a different local-only invariant only if the supported provider
+route shape demonstrably cannot satisfy this one.
 
-For the final-hop proxy, split the existing readiness logic rather than
-weakening destination validation used by real requests. The Docker health
-entry point should import and validate configuration, connect only to its own
-loopback listener, and exit. Remove readiness-only calls to
-`_resolve_target_host`, `_probe_http_proxy_endpoint`, and
-`_probe_socks5_proxy_endpoint`; those helpers may remain if real request paths
-need them. Tests must patch DNS and upstream socket-open functions to raise if
-a local health invocation reaches them.
+For the final-hop proxy, remove readiness logic without weakening destination
+validation used by real requests. Tests must prove that no effective health
+command invokes `_resolve_target_host`, `_probe_http_proxy_endpoint`, or
+`_probe_socks5_proxy_endpoint`, and that the retained bridge check reaches the
+right listener while making no DNS or upstream connection.
+
+## Full-mode storage and search plan
+
+The original proposal concentrated on check frequency, but the live full
+stack shows that always-resident storage/search services are a larger power
+and memory opportunity. A one-shot diagnostic sample found the background
+container at roughly 2.9 GiB/212 PIDs and OpenSearch at roughly 2.8 GiB/125
+PIDs; MinIO was roughly 230 MiB. These figures are not acceptance thresholds:
+repeat cgroup memory, CPU, wakeup, disk-I/O, thread, and process measurements
+over a controlled idle window before and after each phase.
+
+### OpenSearch heap, plugins, agents, and scheduled jobs
+
+The generated deployment fixes `OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g`. The
+running JVM confirms that 2 GiB heap, and its logs show scheduler activity from
+features this wrapper may not use: a five-minute job sweep, a 15-minute Flint
+housekeeping pass, hourly anomaly/cron work, and Performance Analyzer startup
+that fails back to disabled after doing agent/plugin work. Treat this as a
+major resource-sizing and image-composition task, not as a health-check tweak.
+
+1. Override the generated heap in tracked wrapper Compose. Start with
+   `-Xms1g -Xmx1g`; separately test 512 MiB because the official
+   [OpenSearch Docker example](https://docs.opensearch.org/latest/install-and-configure/install-opensearch/docker/)
+   demonstrates that size, but select the lowest value that
+   passes this repository's ingestion, hybrid-search, reindex, restart, and
+   concurrency tests. Record old-generation pressure, pauses, native/direct
+   memory, peak cgroup memory, and OOM behavior. Add a container memory limit
+   only after the peak non-heap allowance is measured; do not equate JVM heap
+   with the safe cgroup limit.
+2. Set `DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI=true` immediately so the bundled
+   agent does not start merely to disable itself. Then build a pinned derived
+   OpenSearch image and remove the Performance Analyzer plugin if the exact
+   dependency graph permits it. The authoritative behavior is documented in
+   the [OpenSearch Performance Analyzer
+   documentation](https://docs.opensearch.org/latest/monitoring-your-cluster/pa/index/).
+3. Inventory `bin/opensearch-plugin list`, every plugin descriptor dependency,
+   Onyx's actual index mappings and API calls, and the exact startup logs.
+   `opensearch-knn` and `opensearch-neural-search` are known requirements:
+   Onyx uses `knn_vector` mappings and hybrid normalization pipelines. Their
+   dependencies, plus the currently required Security/TLS path, must remain.
+   Candidates for removal include alerting, anomaly detection, async search,
+   cross-cluster replication, Flow Framework, geospatial, index management,
+   LTR, notifications, observability, reports scheduler, search relevance,
+   security analytics, skills, SQL, query insights, and other top-level
+   plugins for which no Onyx call or retained dependency exists. This list is
+   an audit queue, not permission to remove them blindly.
+4. Do not remove the Security plugin as a power shortcut. The current stack
+   depends on its TLS/authentication behavior. Separately determine whether
+   security audit logging is producing unused audit indexes; if no supported
+   consumer exists, disable only audit event generation through supported
+   Security configuration while preserving authentication, authorization,
+   TLS, and startup validation.
+5. Make the derived image reproducible: pin its base digest and plugin set,
+   include every Dockerfile/config input in the derived tag or build hash, add
+   a Makefile build target, record the version in `stack.versions.env`, and add
+   it to the upgrade checklist and image-contract tests. Plugin removal must
+   happen at build time, never during container startup.
+
+Validate create/index/search/delete against both the fresh and existing data
+volumes, KNN vector search, hybrid normalization pipelines, multi-document PDF
+ingestion, connector reindex, restart recovery, and the security/TLS client
+path. Observe an idle window longer than 16 minutes plus an hourly sample and
+prove that removed five-/15-minute/hourly plugin jobs no longer appear. Do not
+globally lengthen OpenSearch's refresh interval until Onyx's read-after-index
+expectations are tested; measure it as a separate candidate and use a modest
+value such as 5 seconds only if user-visible freshness and task completion
+semantics still pass.
+
+### MinIO scanner cadence
+
+MinIO documents a one-minute default scanner cycle. Confirm that behavior in
+the exact image source synchronized in phase 1, then set
+`MINIO_SCANNER_SPEED=slowest` in the full-mode MinIO service. The supported
+profile keeps scanner, healing, lifecycle, and usage behavior but changes its
+cycle to 30 minutes and uses the service's built-in throttling. Use the
+[documented MinIO scanner setting](https://min.io/docs/minio/linux/reference/minio-server/settings/core.html);
+do not use the undocumented `_MINIO_SCANNER=off` escape hatch.
+
+Validate bucket creation, chat/file upload and download, multipart/object
+cleanup, document ingestion, restart, and any configured lifecycle/usage
+behavior. Compare disk I/O and scanner logs across an idle window longer than
+30 minutes. Also verify that license call-home is absent in this unlicensed
+deployment; classify it rather than adding an unnecessary blocking shim.
 
 ## Onyx background plan
 
@@ -427,7 +647,12 @@ Change these from 15–20 seconds to 5 minutes:
 - Vespa/OpenSearch metadata synchronization
 - Connector pruning
 
-The trade-off is that unattended work may take up to five minutes to begin. Interactive chat is unaffected. For a local laptop stack, that is a much better default than waking PostgreSQL, Redis, Celery Beat, and several workers every few seconds.
+The trade-off is that unattended work may take up to five minutes to begin.
+Chat over existing indexed data is unaffected, but a newly uploaded
+project/assistant file, connector change, or deletion can be visibly delayed;
+those are interactive workflows and must be documented as such. For a local
+laptop stack, that is a reasonable default only if the live acceptance test
+confirms the stated five-minute bound.
 
 A future improvement would enqueue work directly when an API action creates it, leaving these schedules only as slow reconciliation jobs. Until then, five minutes is the simple reliable choice.
 
@@ -499,11 +724,11 @@ available as operator-invoked diagnostics. It must run only on demand: do not
 add a replacement timer, dashboard refresh, background thread, health check,
 or user-facing preference that resumes the monitoring pipeline.
 
-### Functional housekeeping at 10 minutes or longer; Beat recovery at 5 minutes
+### Functional housekeeping at 10 minutes or longer; local Beat recovery
 
 | Exact schedule name | Pinned upstream cadence | New cadence |
 |---|---:|---:|
-| `celery-beat-heartbeat` | 1m | 5m |
+| `celery-beat-heartbeat` | 1m | remove |
 | `check-for-checkpoint-cleanup` | 1h | unchanged |
 | `check-for-index-attempt-cleanup` | 30m | unchanged |
 | `check-for-hierarchy-fetching` | 1h | unchanged |
@@ -528,41 +753,37 @@ global multiplier.
 `DynamicTenantScheduler.RELOAD_INTERVAL` is a separate one-minute schedule
 poll that the original plan missed. On each reload it queries tenant state,
 reads the Beat multiplier, rebuilds and compares the entire schedule, writes
-an informational log even when unchanged, and touches a liveness file. Set the
-strictly validated self-hosted reload interval to 5 minutes. The discovery
-delay contract is therefore the greater of schedule activation and reload
-timing; tests must prove a newly materialized eligible task is dispatched
-within the documented bound. Remove the Beat liveness-file touch because the
-Compose deployment has no consumer for that file.
+an informational log even when unchanged, and touches Beat's liveness file.
+Set the strictly validated self-hosted reload interval to 5 minutes and keep
+that file touch: unlike the eight worker files below, it will become the sole
+input to the replacement watchdog. The discovery delay contract is the greater
+of schedule activation and reload timing; tests must prove a newly
+materialized eligible task is dispatched within the documented bound.
 
-The beat heartbeat and watchdog must be changed as one contract:
+Remove the queued `celery-beat-heartbeat` task, its Redis key/TTL writes, and
+the current Redis-aware watchdog. A heartbeat routed through the primary
+Celery queue cannot distinguish a hung Beat process from a busy/delayed worker,
+and the current watchdog imports enough of Onyx's Redis stack to consume about
+222 MiB RSS in the observed container. Replace it with a tiny tracked,
+stdlib-only supervisor program that watches only Beat's local liveness-file
+mtime:
 
-- Heartbeat: every 5 minutes
-- Redis value: the heartbeat's Unix timestamp rather than the current constant
-  `1`
-- Redis key TTL: 30 minutes, longer than the stale threshold so a newly
-  restarted watchdog can still measure the last actual heartbeat
-- Watchdog check: every 5 minutes
-- Watchdog stale threshold: 20 minutes
-- Missing or malformed key: require two consecutive observations and apply the
-  same 20-minute startup/last-valid-heartbeat grace; Redis connection errors do
-  not count as proof that Beat is stale
+- Beat touches the file after each successful five-minute scheduler reload.
+- The watcher checks once every 5 minutes with monotonic elapsed time.
+- Use a 20-minute stale threshold and an equivalent startup grace; require two
+  observations for a missing file so startup ordering cannot cause a restart.
+- Treat a missing, non-regular, wrong-owner, or future-dated file as invalid
+  without reading/logging file contents. Pin the exact safe path and reject
+  symlinks.
+- On confirmed staleness, restart only Beat through the existing supervised
+  control path and log one non-secret reason. A watcher failure must be visible
+  to supervisor rather than silently disabling recovery.
 
-The current existence-only key cannot implement a 20-minute age contract: it
-expires after 10 minutes, while the watchdog measures from the last time it
-observed the key rather than from the last heartbeat. Store and strictly parse
-the actual timestamp so the expected stuck-Beat restart bound is roughly
-20–25 minutes after the last successful heartbeat, plus task-queue delay if
-the primary queue is already busy. Reject nonnumeric and implausibly future
-values without logging the raw value. State the measured bound rather than
-claiming it until the live fault-injection test establishes it.
-
-The upstream watchdog constants are currently hard-coded in
-`onyx/utils/supervisord_watchdog.py`, and the heartbeat value/TTL is hard-coded
-in the Celery task. Do not claim these are environment-configurable. Use a
-narrow, startup-validated wrapper replacement or patch, cover it with
-pinned-image installation tests, and document the chosen ownership in
-`docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`.
+The expected stuck-Beat recovery bound is roughly 20–25 minutes after the
+last successful reload, with no Redis or task-queue dependency. State the
+measured bound only after killing/hanging Beat in a live fault-injection test.
+Keep the replacement narrow and startup-validated, and document its ownership
+in `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`.
 
 ### Remove unused Celery event and file-liveness traffic
 
@@ -629,6 +850,11 @@ derived configuration, and `exec` supervisord with that file. It must:
   monitoring queue has no producers;
 - add `--without-heartbeat --without-gossip` exactly once to every retained
   Celery worker command; and
+- route retained program output directly to the container's stdout with
+  rotation disabled at the supervisor layer, then remove the
+  `log-redirect-handler` tail process and its per-program intermediary files;
+  first prove that the listed `mcp_server.log`/`.err.log` inputs have no
+  separate active producer whose diagnostics would be lost; and
 - apply the explicit bot policy below.
 
 Fail startup on missing, duplicate, or structurally changed sections or
@@ -637,6 +863,16 @@ an unchecked full copy of the upstream supervisor file. Preserve the upstream
 background command's custom-CA installation step and process/signal semantics
 when replacing its entrypoint; add an image-contract assertion for those
 commands so an upstream bootstrap change fails visibly.
+
+The current supervisor writes each worker/bot/watchdog stream to a rotating
+file and runs `tail -F` to copy all of those files back to container stdout.
+That duplicates log I/O and keeps another observer/process alive. The derived
+configuration should send each retained program directly to stdout (with the
+required zero supervisor rotation limit) and preserve `redirect_stderr` and
+Docker log-driver behavior. Validate startup and failure diagnostics, log
+ordering/interleaving expectations, rotation at the Docker layer, and absence
+of growing task logs under `/var/log`; do not remove the relay until every
+listed input is either redirected or proven unused.
 
 ### Remove dormant bot polling and right-size worker pools
 
@@ -685,6 +921,112 @@ measure throughput/memory, and verify that no task's correctness assumes the
 upstream pool size. The two removed monitoring/scheduled-task workers must not
 have concurrency settings left behind.
 
+Discord also creates a SQLAlchemy pool sized for a server process
+(`pool_size=20`, `max_overflow=5`). When the bot is explicitly enabled, give
+its single-process polling workload a small measured pool (proposed 2 plus 1
+overflow) and exercise reconnect/failover. Slack starts a Prometheus server
+unconditionally when its program runs even though this wrapper has no scraper;
+disable that listener in the enabled-bot path as well.
+
+### Remove unused Prometheus instrumentation and right-size connection pools
+
+The retained primary, light, heavy, document-processing, and document-fetching
+worker apps each call `start_metrics_server`. Set
+`PROMETHEUS_METRICS_ENABLED=false` explicitly on the background container and
+assert that no worker metrics listener/thread is created. This complements
+removal of the monitoring worker; it does not remove operator-invoked logs or
+diagnostic commands. If a future bundled scraper is added, it must be an
+explicit feature with a documented cost rather than silently re-enabling all
+listeners.
+
+The API is a separate case: it unconditionally installs Prometheus HTTP
+middleware, a `/metrics` route, per-tenant/slow-request histograms, endpoint
+context middleware, three SQLAlchemy pool collectors, and pool event listeners.
+`PROMETHEUS_METRICS_ENABLED=false` currently disables only standalone worker
+servers and does not gate this API path. Because the wrapper has no scraper or
+metrics publisher, add a strict wrapper gate that:
+
+- preserves the functional SQLAlchemy pool-timeout exception handler;
+- omits Prometheus request middleware and the `/metrics` route;
+- omits endpoint context propagation only after proving it has no non-metrics
+  consumer; and
+- omits pool collector registration/event listeners while leaving connection
+  pooling and pre-ping/recycle behavior unchanged.
+
+Prefer an upstream/component flag if exact-source review finds one; otherwise
+use a narrow startup-validated API patch and add the call sites/imported
+symbols to the upgrade contract. Test ordinary/error/streaming requests,
+tenant context, pool exhaustion/timeouts, and absence of the route, middleware,
+collectors, and SQLAlchemy metrics listeners. Measure request CPU/allocation
+and API RSS; do not claim a large saving based only on removing a route.
+
+Reduce imported-process connection capacity only from measured peak demand:
+
+- Test a background `CELERY_BROKER_POOL_LIMIT` of 4 rather than the library's
+  per-process default of 10. Confirm concurrency, Beat publishing, reconnect,
+  cancellation, and broker failure recovery; do not force a pool of one or
+  share unsafe connections across worker children.
+- Inventory the API's synchronous main, asynchronous main, and read-only
+  SQLAlchemy pools. The pinned defaults are 40 plus 10 overflow for each main
+  engine and 10 plus 5 for read-only, which is far more than one laptop user
+  normally needs. Test 10 plus 5 for each main engine and 5 plus 2 for
+  read-only. Exercise chat streaming, document indexing, Admin pages, and
+  concurrent connector work before adopting them.
+- Recalculate PostgreSQL's effective maximum connection budget from every
+  API, worker, bot, and migration pool, then lower `max_connections=250` only
+  with headroom for startup/recovery. A range such as 100–150 is a candidate,
+  not a value to commit without the connection-budget test.
+
+These changes chiefly reduce file descriptors, broker/database bookkeeping,
+and failure fan-out; do not claim that pool limits alone materially reduce RSS
+until measurements show it.
+
+### Reduce empty Celery Redis blocking-pop reissues
+
+Redis command statistics show `BRPOP` as one of the dominant idle commands.
+The exact installed Kombu Redis transport calls `_brpop_start(timeout=1)` and
+sets its generic `polling_interval` to `None`; the public transport option does
+not lengthen this Redis blocking-pop timeout. Every idle consumer therefore
+reissues an empty blocking pop about once per second even though Redis can wake
+a long blocking pop immediately when a producer pushes a task.
+
+Use a narrow, signature-validated background runtime patch to change only the
+Kombu Redis `BRPOP` timeout from 1 second to 10 seconds. Consider 30 seconds
+only as a measured follow-up. This should reduce empty Redis/client wakeups by
+about 90% without adding normal task-dispatch latency: a queued item completes
+the blocking call immediately. It can, however, change shutdown and silent
+broker/network-failure detection bounds, so test those rather than assuming
+equivalence.
+
+Before/after tests must count `BRPOP` deltas per worker over a controlled idle
+window; enqueue one task on every retained queue and measure publish-to-start
+latency; exercise remote revocation/control, graceful shutdown, Redis restart,
+and a dropped/stalled broker connection. Strictly assert the installed Kombu
+version, `_brpop_start` signature/default, and Redis transport behavior so an
+upgrade cannot silently retain or double-apply the patch. Do not add sleeps
+after an unsuccessful pop—the server-side blocking timeout is the power-saving
+mechanism and still permits immediate task delivery.
+
+### Decision gate: consolidate compatible maintenance workers
+
+Concurrency reductions do not remove imported Python runtimes. The live
+background process inventory shows roughly 250–315 MiB RSS for each idle
+functional worker. Investigate consolidating the light, heavy, and user-file
+queues into one wrapper-owned maintenance worker, which could eliminate two
+interpreters. Do not combine primary (leadership), document-fetching, or
+document-processing ownership without a separate design.
+
+This is a decision gate, not an assumed implementation. Before consolidating,
+derive the exact union of registered task modules and compare queue routing,
+`acks_late`, prefetch, time limits, pool type, signal/init hooks, memory
+limits, cancellation, and failure isolation. Add task-registry and routing
+contract tests, then run simultaneous chat, deletion, user-file, connector,
+and heavy-maintenance workloads plus worker-kill/redelivery. Adopt the merged
+worker only if every task remains registered/routed correctly and head-of-line
+blocking remains acceptable; otherwise retain six functional workers and
+record why. If accepted, update the strict supervisor transform and expected
+worker count to four.
+
 ### Recurring work audited and deliberately retained
 
 Do not treat every interval-looking constant as an idle timer. The source
@@ -694,6 +1036,11 @@ unless their stated scope changes:
 - Redis's `health_check_interval=60` is checked opportunistically before a
   connection command after an idle period; it does not create a background
   once-per-minute task by itself. Keep it as broker/cache connection safety.
+- `REDIS_POOL_MAX_CONNECTIONS=128` is a lazy cap rather than 128 preopened
+  sockets. Include actual Redis client/socket peaks in the connection-budget
+  trace, but do not lower the cap merely to make a configuration number look
+  smaller; the scheduled/monitoring removals are what should eliminate idle
+  Redis commands.
 - The primary-worker lock renews every 15 seconds while the primary worker is
   alive. It is leadership correctness, not observability; slowing it changes
   failover and split-brain bounds.
@@ -715,6 +1062,11 @@ unless their stated scope changes:
 - Release-note/health reads are request- or page-driven in the pinned WebUI,
   not a server-side Beat job. Retain the repository's documented local
   administrative analytics and release-note behavior.
+- The globally mounted WebUI health banner performs request/focus-driven SWR
+  reads, not an interval refresh; the ten-minute auth token refresh is
+  visibility-gated and correctness-sensitive. The one-minute `useNightTime`
+  hook has no call sites in the pinned WebUI. Do not patch any of these unless
+  an image/browser trace contradicts that classification.
 
 Add an idle assertion for each conditional item above: no index heartbeat or
 memory observer without an active attempt, no chat/task polling without an
@@ -730,21 +1082,31 @@ Approximate steady-state changes:
 |---|---:|---:|
 | Container health/recovery checks | ~73/min | ~4/min |
 | Non-VPN container checks | ~65/min | ~2/min |
+| Myst route/MTU maintenance | DNS, route writes, and logs every 20s | blocking local events plus one DNS diff/10m; no unchanged writes |
 | Onyx Celery scheduled jobs | ~32/min | ~2/min |
 | Embedding health inferences | 120/hour | 0/hour |
+| Bundled MLX model residency | handler ~1.36 GiB RSS indefinitely after start | unload after 10m idle; reload on demand |
 | Craft jobs while disabled | 3/min | 0 |
 | Self-hosted monitoring jobs | ~6.4/min plus scrape-triggered work | 0 |
 | Queue-observability Redis operations | at least ~136/min, plus uncached Prometheus scrapes | 0 |
+| Empty Celery Redis `BRPOP` reissues | about one/second per idle consumer | about one/10s per idle consumer; immediate wake on task push |
 | Celery worker event heartbeats | about 240/min across eight pinned workers | 0 |
-| Unconsumed Celery liveness-file writes | about 32/min across eight pinned workers, plus Beat | 0 |
+| Per-worker liveness-file writes | about 32/min across eight pinned workers | 0 |
+| Beat liveness/queued heartbeat | file touch on 1m reload plus queued Redis heartbeat every 1m | one consumed local file touch every 5m; no Redis heartbeat task |
 | Dormant bot database/configuration polls | Discord 12/min plus Slack 1/min | 0 by default |
-| Supervisor Celery workers | 8 | 6 |
+| Worker Prometheus listeners | one per retained app that calls `start_metrics_server` | 0 by default |
+| API Prometheus path | middleware, `/metrics`, histograms, DB collectors/listeners on every run | absent; retain functional pool-timeout handling |
+| Supervisor log relay | one `tail -F` plus duplicate rotating per-program writes | direct container stdout; no relay/intermediary task logs |
+| Supervisor Celery workers | 8 | 6, or 4 only if the consolidation gate passes |
+| OpenSearch JVM heap | fixed 2 GiB | initially 1 GiB; 512 MiB only if the full workload passes |
+| OpenSearch idle plugin schedulers | five-/15-minute and hourly activity observed | remove every scheduler whose plugin has no retained dependency |
+| MinIO scanner cycle | 1m default | 30m supported `slowest` profile |
 
 About two of the remaining container checks per minute would be the local Myst
 health and autoheal loops. Everything else would wake approximately once per
 ten minutes. None of these checks should emit public DNS or upstream traffic.
 
-The two container-health rows are provisional estimates and must not be used
+The container-health and Celery rate rows are provisional estimates and must not be used
 as acceptance criteria until generated from every effective Compose model.
 Add a deterministic inventory that lists each effective health command,
 steady/start interval, profile, and checks per minute, and have the plan's
@@ -752,6 +1114,15 @@ final measured table come from that artifact. Count disabled profiles and
 duplicate aggregate/core probes correctly. Likewise, confirm Celery event
 counts from Redis command/event deltas on the exact pinned image rather than
 assuming the nominal two-second default survived Onyx configuration.
+
+The pre-change one-shot live sample (background ~2.9 GiB and 212 PIDs;
+OpenSearch ~2.8 GiB and 125 PIDs; API ~688 MiB; MinIO ~230 MiB; SearXNG ~220
+MiB) is diagnostic context, not a trustworthy baseline by itself. Capture at
+least three comparable idle windows after warm-up, using cgroup memory/CPU,
+process proportional set size where available, disk I/O, network/DNS traffic,
+and wakeup/thread counts. Report median and range, workload, stack mode, image
+digests, host power state, and observation duration. Avoid adding child RSS
+figures as though shared pages were unique memory.
 
 ## Deterministic tests and documentation updates
 
@@ -764,10 +1135,15 @@ Add or extend deterministic coverage before live validation:
   `PATH` and assert they are never invoked. Assert stdout/stderr never contains
   provider, identity, session, or location fields returned by the fake
   TequilAPI.
+- Add focused Myst entrypoint/helper tests for the event-filter/debounce,
+  cached route set, ten-minute DNS diff, stale removal, literal-only path,
+  helper death, and no stable-state command/log churn. Live-test daemon-owned
+  reconnect and every documented route-exemption class.
 - `tests/test_restricted_egress_proxy.py`: replace the tests that currently
-  expect `example.com` DNS or upstream-proxy authentication probes. Assert the
-  local readiness path opens only `127.0.0.1:LISTEN_PORT`, and make patched DNS
-  plus upstream-connect helpers fail the test if called.
+  expect `example.com` DNS or upstream-proxy authentication probes. Assert no
+  final-hop proxy health command exists, each distinct bridge still performs
+  its local aggregate 403 check, and patched DNS plus upstream-connect helpers
+  fail the test if any health path calls them.
 - `tests/test_onyx_network_isolation.py`: use its existing effective Compose
   model helper to assert intervals, `start_interval`, retry counts, removed
   and aggregate health checks, rewired acyclic dependencies, the inherited
@@ -780,9 +1156,16 @@ Add or extend deterministic coverage before live validation:
 - Add a Makefile contract test, or extend
   `tests/test_myst_lifecycle_makefile.py`, to prove only `up-full` invokes the
   one-shot embedding helper, starts only the shim/dependencies first, invokes
-  one `/ready` request with no retry loop, and starts API/background only after
-  success. Exercise failure and repeated `make up-full` calls so an old
-  successful result cannot be reused.
+  one `/ready` request with no retry loop, and on a fresh stack creates
+  API/background only after success. Exercise failure and repeated `make
+  up-full` calls so an old successful result cannot be reused and existing
+  API/background services are neither recreated nor stopped on failure.
+- Add host embedding lifecycle tests for strict proxy paths/body bounds,
+  serialized cold start, single forwarding, no ambiguous POST retry, ten-minute
+  post-completion idle unload, request/shutdown race, process identity, crash,
+  repeated up/down, manual/custom upstream ownership, and reload correctness.
+  Record host/model memory release and cold-start latency against shim/Onyx
+  timeouts.
 - Replace the Craft source-text assertion in
   `tests/test_obscura_direct_compose.py` with focused background-patch tests.
   Also extend `tests/validate_pinned_patch_images.sh` so the actual pinned
@@ -798,9 +1181,14 @@ Add or extend deterministic coverage before live validation:
 - Extend pinned-image validation to instantiate the actual versioned Beat
   application and parse the actual supervisor config under the derived
   wrapper. Assert exact schedule cadences, five-minute scheduler reload,
-  absence of Beat/worker liveness-file writes, absence of disabled Craft and
-  monitoring entries, six retained Celery workers, optional bot sections, and
-  the chosen concurrency values. Source-text matching alone is insufficient.
+  one consumed Beat liveness-file write and no per-worker file writes, absence
+  of the queued Beat heartbeat, disabled Craft and monitoring entries, six
+  retained Celery workers (or four only after the consolidation gate), optional
+  bot sections, and the chosen concurrency values. Source-text matching alone
+  is insufficient.
+- Assert every retained supervisor program has direct nonrotating container
+  output, the relay process is absent, no producer's diagnostics were dropped,
+  and task log files do not grow during the idle/workload observation.
 - Add deterministic bot tests for both feature flags, enabled/disabled
   supervisor output, missing-token/acquisition/cache cadence, no-tenant Slack
   wake behavior, DB-managed configuration, and active heartbeat preservation.
@@ -808,92 +1196,139 @@ Add or extend deterministic coverage before live validation:
   `INFO commandstats` and relevant queue/pubsub state before and after at least
   11 minutes without running `MONITOR` continuously. There must be no
   monitoring-task dispatch, queue/process/Redis metrics collection, Celery
-  worker event heartbeat/gossip traffic, liveness-file timestamp changes, or
-  dormant-bot polling. Record functional queue reads separately; active
-  indexing, deletion, Beat watchdog, primary leadership, and recovery flows
-  are expected traffic and are not failures.
+  worker event heartbeat/gossip traffic, per-worker liveness-file timestamp
+  changes, or dormant-bot polling. The single Beat file should advance only at
+  its five-minute reload; the replacement watcher must cause no Redis traffic.
+  Record functional queue reads separately; active indexing, deletion, primary
+  leadership, and recovery flows are expected traffic and are not failures.
 - Add live task cancellation/revocation, worker-kill/redelivery, and active
   index-attempt heartbeat recovery tests to prove removal of the Celery event
   plane did not remove a correctness mechanism.
-- Add a focused watchdog contract covering heartbeat cadence, key TTL,
-  timestamp encoding/parsing, watchdog check interval, stale threshold,
-  missing/malformed/future values, Redis lookup errors, and the calculated
-  restart bound.
+- Add a focused watchdog contract covering Beat file cadence, safe path/type,
+  ownership, symlink rejection, check interval, stale threshold, startup
+  grace, missing/future-mtime states, supervisor restart failure, and the
+  calculated restart bound. Assert it imports no Onyx, Redis, Celery, or
+  SQLAlchemy modules.
 - Add Docker Engine/Compose and Podman capability tests that inspect the
   runtime health configuration and observe fast startup checks followed by a
   slow steady interval. Merely accepting/rendering `start_interval` is not a
   pass.
+- Add derived OpenSearch image-contract tests for the base digest, exact plugin
+  list/dependencies, disabled Performance Analyzer agent, retained KNN/hybrid
+  APIs, Security/TLS behavior, heap options, and absence of runtime plugin
+  installation. Run live fresh/existing-volume ingestion and search plus the
+  >16-minute and hourly idle log/I/O observation.
+- Add MinIO effective-Compose and live object-flow tests for
+  `MINIO_SCANNER_SPEED=slowest`, retained readiness, lifecycle/healing
+  behavior, and the observed 30-minute scan cadence.
+- Assert background Prometheus listeners and API metrics
+  middleware/route/collectors/listeners are disabled while pool timeout/error
+  handling remains. Measure broker/database peak connections against the
+  proposed pool budgets and, if worker consolidation proceeds, add exact
+  task-registry/routing and head-of-line workload tests.
+- Add a pinned-Kombu contract and live Redis command-delta test for the
+  ten-second `BRPOP` timeout, immediate task wakeup on every queue, control and
+  revocation responsiveness, clean worker shutdown, Redis restart, and stalled
+  broker recovery.
 
 Update behavior documentation in the same change:
 
 - `docs/vpn_routing_and_proxies.md`: replace its claim that health validates
   the provider-resolver data path; document offline TequilAPI/local-route
   health, one-minute autoheal timing, stale health limitations, and the fact
-  that real requests remain fail-closed.
+  that real requests remain fail-closed. Document event-driven route/MTU
+  repair, ten-minute hostname reconciliation, stale-route ownership, and
+  helper failure behavior.
 - `docs/local_docs_rag_search.md`: change Compose readiness from repeated
   `/ready` to local `/health`, and document the staged shim-only startup,
   single pre-API/background `make up-full` `/ready` request, and failure
-  behavior.
+  behavior. Also document the selected OpenSearch heap/plugin image and MinIO
+  scanner profile, including user-visible performance/freshness trade-offs.
+  Document the wrapper-managed MLX idle unload, ten-minute residency window,
+  cold-start delay, failure behavior, and custom/manual-upstream exclusions.
 - `docs/onyx_patch_info.md`: document exact schedule rewrites, removal of all
   self-hosted monitoring jobs/worker/collectors, unused file probes, Celery
   event heartbeat/gossip, the corrected Craft removal, bot policy, concurrency
-  defaults, and watchdog ownership. Clearly distinguish removed observability
-  from retained functional queue inspection, broker health, primary
+  defaults, API/worker Prometheus removal, and watchdog ownership. Clearly
+  distinguish removed observability from retained functional queue inspection,
+  broker health, primary
   leadership, task revocation, and index-attempt heartbeats.
-- `docs/onyx_patches_upgrade.md`: add every schedule name/upstream cadence and
-  the pinned Beat scheduler, app bootstep, monitoring modules, Celery worker
-  commands, supervisor sections/log tails, bot loops, and watchdog constants
-  to the patch audit. Require effective versioned-Beat and derived-supervisor
-  validation.
+- `docs/onyx_patches_upgrade.md` and `stack.versions.env`: add every schedule
+  name/upstream cadence; the pinned Beat scheduler, app bootstep, monitoring
+  modules, Celery worker commands, supervisor sections/log tails, bot loops,
+  watchdog constants, direct-output transform, and Kombu Redis blocking-pop
+  transform; the derived OpenSearch build/plugin contract; immutable
+  Myst/Autoheal/Tailscale pins; and the exact Teep/MinIO source audit. Require
+  effective versioned-Beat/derived-supervisor validation and add or update
+  Makefile targets rather than hand-building component images.
 - `README.md`: mention the five-minute maximum background discovery delay and
   staged one-shot full-mode embedding validation, default-off Slack/Discord
-  processes, and Docker Engine 25 minimum as user-visible consequences; keep
-  implementation details in the subsystem docs.
+  processes, Docker Engine 25 plus Compose 2.20.2 minimums, and the delayed
+  processing of newly uploaded project/assistant files as user-visible
+  consequences; keep implementation details in the subsystem docs.
 - `.env.wrapper.example`: add only documented default-off Slack and Discord
   feature switches; do not add credentials, cadence knobs, or a generic power
   mode.
 - `AGENTS.md`: update the runtime map and validation invariants if the final
   health or background behavior changes its current claims.
 
-`make check` is the deterministic pre-handoff gate. Because this changes a
-runtime patch, also run `make check-upgrade` against the pinned images. Do not
-run `make upgrade` merely for this work because no pin or dependency input is
-changing.
+`make check` is the deterministic pre-handoff gate. This plan deliberately
+changes pins and adds a derived image, so follow the documented `make upgrade`
+flow for those phases and run `make check-upgrade` against the newly produced
+images. Runtime-patch-only iterations may use `make check-upgrade` against the
+current pins, but the final validation cannot claim that no pin changed.
 
 ## Implementation order
 
 Implement and validate in dependency-safe phases:
 
-1. Replace Myst's online DNS readiness with direct local TequilAPI plus
+1. Establish reproducible authority: pin Myst, Autoheal, and Tailscale;
+   synchronize exact Teep and MinIO sources; reconcile the Teep fallback; and
+   capture repeatable idle/workload baselines before changing behavior.
+2. Replace Myst's online DNS readiness with direct local TequilAPI plus
    interface/route validation. Move Myst health and autoheal polling to one
-   minute, disable autoheal's inherited health, update deterministic tests,
-   and live-test autoheal before changing other probes.
-2. Replace final-hop online readiness with local listener/configuration health
-   and prove that neither direct nor configured-upstream modes produce
-   synthetic traffic.
-3. Apply the exact Compose disposition table: remove leaf checks and move all
+   minute, disable autoheal's inherited health, replace the 20-second
+   route/MTU loop, update deterministic tests, and live-test reconnect plus
+   autoheal before changing other probes.
+3. Remove final-hop proxy health and rewire every distinct bridge as the
+   aggregate local readiness owner. Prove that neither direct nor
+   configured-upstream modes produce synthetic health traffic.
+4. Apply the exact Compose disposition table: remove leaf checks and move all
    retained ordinary checks to 10 minutes with service-specific fast-start
    grace. Collapse the Obscura, SearXNG, and doc-drop duplicate probes and
    verify every effective mode and optional overlay.
-4. Replace embedding health with `/health`, add the staged shim-only startup
-   and single pre-API/background `up-full` `/ready` helper, and prove zero
-   later inference requests during idle observation.
-5. Apply the strict Beat rewrite: five-minute discovery/reload, remove all
-   self-hosted monitoring tasks, remove disabled-Craft tasks, and update the
-   coupled heartbeat/watchdog contract. Validate the effective versioned Beat
-   schedule against the actual pinned image.
-6. Install the single derived-supervisor entrypoint: remove monitoring and
+5. Replace embedding health with `/health`, add the staged shim-only startup
+   and single pre-API/background `up-full` `/ready` helper, then install the
+   wrapper-managed MLX lifecycle proxy and prove idle unload/reload with zero
+   keep-warm inference traffic.
+6. Build and validate the minimal derived OpenSearch image, lower its heap in
+   measured steps, disable unused audit/scheduler work, and apply MinIO's
+   supported `slowest` scanner profile. Keep each change separately measurable
+   and reversible during testing.
+7. Apply the strict Beat rewrite: five-minute discovery/reload, remove all
+   self-hosted monitoring and queued Beat-heartbeat tasks, remove
+   disabled-Craft tasks, and install the local-file watchdog. Validate the
+   effective versioned Beat schedule against the actual pinned image.
+8. Install the single derived-supervisor entrypoint: remove monitoring and
    disabled-Craft workers/log tails, disable Celery heartbeat/gossip, remove
    unused worker file probes, and apply explicit default-off bot policy. Test
    task cancellation/redelivery and bot opt-in before right-sizing worker
-   concurrency.
-7. Complete all cross-referenced behavior and upgrade documentation, then run
-   deterministic and live validation.
+   concurrency, API/worker metrics, connection pools, and the Redis
+   blocking-pop timeout. Evaluate maintenance worker consolidation only after
+   the six-worker configuration passes.
+9. Complete all cross-referenced behavior and upgrade documentation, then run
+   deterministic, pinned-image, upgrade, and live validation.
 
 Validation should prove:
 
 - Lite and full startup remain fast.
-- The embedding backend receives exactly one startup validation and no later idle requests.
+- A fresh `make up-full` validates the embedding backend exactly once before
+  creating API/background and makes no later idle requests. On a repeated
+  invocation, failure neither restarts nor stops already-running services.
+- The wrapper-managed MLX handler exits and releases measured model memory
+  about ten minutes after the last completed request, reloads once for
+  concurrent cold callers, and never takes ownership of a manual/custom
+  upstream.
 - A daemon-reported VPN disconnect or missing local tunnel/interface becomes
   unhealthy and autoheals within the documented multi-minute bound.
 - Packet capture and resolver/proxy logs show no DNS query, public connection,
@@ -902,13 +1337,20 @@ Validation should prove:
 - Myst health consumes only loopback TequilAPI state and local interface/route
   information, and does not log the sensitive remainder of the TequilAPI
   connection response.
+- A stable Myst namespace performs no 20-second route rewrite/log/DNS loop;
+  relevant kernel events repair cached routes promptly and hostname changes
+  reconcile within ten minutes without weakening route exemptions.
 - Broken egress continues to fail closed before its next health check.
 - No Craft tasks are scheduled when Craft is disabled.
 - No self-hosted monitoring task, worker, metrics endpoint, queue scan,
   process-memory scan, Redis-health scrape, or worker-event receiver remains.
+- The API has no Prometheus request/tenant/slow-request instrumentation or DB
+  metric listeners, yet pool timeout responses and non-metrics tenant context
+  remain correct.
 - Retained workers emit no Celery monitoring heartbeat/gossip events and write
-  no unconsumed liveness files, while broker health, revocation, redelivery,
-  primary leadership, and active indexing heartbeats still work.
+  no per-worker liveness files; the sole Beat liveness file advances once per
+  reload and is consumed by the stdlib watcher. Broker health, revocation,
+  redelivery, primary leadership, and active indexing heartbeats still work.
 - Slack and Discord processes are absent by default; when explicitly enabled,
   their configuration delays and active heartbeat behavior match the plan.
 - Idle scheduled-discovery and housekeeping logs show only the classified
@@ -922,7 +1364,20 @@ Validation should prove:
   steady checks; supported Podman models either do the same or fail clearly.
 - Removed leaf checks are absent from the effective model, not merely shadowed
   in one Compose source file.
-- The beat watchdog restarts a deliberately hung Beat process within the
-  documented bound and does not poll Redis more frequently than planned.
-- Exact pinned-reference checks pass; no Teep conclusion is based on the
-  currently mismatched reference worktree.
+- The Beat watchdog restarts a deliberately hung Beat process within the
+  documented bound and performs no Redis, SQL, Onyx, or Celery polling.
+- OpenSearch passes KNN/hybrid/TLS and ingestion tests at the selected heap;
+  its effective plugin list has an explicit consumer/dependency justification,
+  and removed plugin scheduler activity is absent from the idle trace.
+- MinIO object/document flows pass with the supported slowest scanner profile,
+  and idle disk activity reflects the documented 30-minute cadence.
+- Peak broker/database connections fit the chosen pools with documented
+  headroom, retained workers expose no unused Prometheus listener, and any
+  worker consolidation passes the registry/routing/failure matrix.
+- Idle `BRPOP` reissues fall by the expected order of magnitude without
+  measurable normal dispatch latency or broken broker-failure/shutdown bounds.
+- Background logs remain visible through the container log driver with no
+  `tail -F` relay or duplicate rotating per-program files.
+- Exact pinned-reference checks pass for every component; no Teep or MinIO
+  conclusion is based on a mismatched reference worktree, and no Myst,
+  Autoheal, or Tailscale behavior is attributed to a mutable tag/branch.
