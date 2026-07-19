@@ -5,6 +5,8 @@ import os
 import sys
 import unittest
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
@@ -20,13 +22,37 @@ MODULE_PATH = (
 )
 
 
+def _compatible_get_docs_to_update(
+    documents, db_docs, ignore_timestamp_gate=False
+):
+    id_update_time_map = {}
+    if ignore_timestamp_gate:
+        id_update_time_map = {doc.id: doc for doc in db_docs}
+    for doc in documents:
+        doc.content_hash()
+    for db_doc in db_docs:
+        _ = db_doc.content_hash
+    return documents, id_update_time_map
+
+
+def _drifted_get_docs_to_update(documents):
+    return documents
+
+
 class WebConnectorEgressPatchTests(unittest.TestCase):
-    def _load_patched_modules(self, level: str):
+    def _load_patched_modules(
+        self,
+        level: str,
+        *,
+        freshness: bool = False,
+        head_response=None,
+    ):
         requests_module = ModuleType("requests")
         sessions_module = ModuleType("requests.sessions")
         calls: list[tuple[str, str, dict]] = []
         playwright_proxies: list[str | None] = []
         validations: list[tuple[str, dict]] = []
+        scrape_calls: list[str] = []
 
         class Session:
             def __init__(self):
@@ -38,6 +64,13 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
 
         sessions_module.Session = Session
         requests_module.sessions = sessions_module
+        if head_response is None:
+            head_response = SimpleNamespace(
+                status_code=200,
+                headers={"content-type": "application/pdf"},
+                url="http://doc-drop-web:8091/example.pdf",
+            )
+        requests_module.head = lambda *args, **kwargs: head_response
 
         connector_module = ModuleType("onyx.connectors.web.connector")
 
@@ -56,7 +89,93 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
                 )
                 yield "loaded"
 
+            def _do_scrape(self, index, initial_url, session_ctx, slim=False):
+                del index, session_ctx, slim
+                if False:  # Pinned source-contract markers; never executed here.
+                    head_response = requests.head(  # noqa: F821
+                        initial_url,
+                        headers=DEFAULT_HEADERS,  # noqa: F821
+                        allow_redirects=True,
+                        timeout=30,
+                    )
+                    content_type = head_response.headers.get("content-type")
+                    is_pdf = is_pdf_resource(initial_url, content_type)  # noqa: F821
+                    response = requests.get(initial_url)  # noqa: F821
+                    extract_pdf_text(response.content)  # noqa: F821
+                    result = ScrapeResult()  # noqa: F821
+                    result.doc = Document(  # noqa: F821
+                        id=initial_url,
+                        sections=[],
+                        source="web",
+                        semantic_identifier=initial_url,
+                        metadata={},
+                    )
+                    return result, is_pdf
+                scrape_calls.append(initial_url)
+                result = connector_module.ScrapeResult()
+                result.doc = ConnectorDocument(
+                    id=initial_url,
+                    sections=[],
+                    source="web",
+                    semantic_identifier=initial_url,
+                    metadata={},
+                )
+                return result
+
+        class ScrapeResult:
+            doc = None
+            retry = False
+
+            def __init__(self):
+                self.doc = None
+                self.retry = False
+
+        class ConnectorDocument:
+            model_fields = {
+                name: object()
+                for name in (
+                    "id",
+                    "sections",
+                    "source",
+                    "semantic_identifier",
+                    "metadata",
+                    "doc_metadata",
+                    "doc_updated_at",
+                )
+            }
+
+            def __init__(self, **kwargs):
+                self.id = kwargs.get("id")
+                self.sections = kwargs.get("sections", [])
+                self.source = kwargs.get("source")
+                self.semantic_identifier = kwargs.get("semantic_identifier")
+                self.metadata = kwargs.get("metadata", {})
+                self.doc_metadata = kwargs.get("doc_metadata")
+                self.doc_updated_at = kwargs.get("doc_updated_at")
+
+            def content_hash(self):
+                return "new-content-hash"
+
+        class DatabaseDocument:
+            id = None
+            doc_updated_at = None
+            doc_metadata = None
+            content_hash = None
+
+        def get_docs_to_update(
+            documents, db_docs, ignore_timestamp_gate=False
+        ):
+            id_update_time_map = {doc.id: doc for doc in db_docs}
+            if ignore_timestamp_gate:
+                id_update_time_map.clear()
+            for doc in documents:
+                doc.content_hash()
+            for db_doc in db_docs:
+                _ = db_doc.content_hash
+            return documents
+
         connector_module.WebConnector = WebConnector
+        connector_module.ScrapeResult = ScrapeResult
         connector_module.protected_url_check = lambda url: None
 
         models_module = ModuleType("onyx.server.security.models")
@@ -81,6 +200,30 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             return url
 
         url_module.validate_outbound_http_url = validate_outbound_http_url
+
+        app_configs_module = ModuleType("onyx.configs.app_configs")
+        app_configs_module.REQUEST_TIMEOUT_SECONDS = 30
+        constants_module = ModuleType("onyx.configs.constants")
+        constants_module.DocumentSource = SimpleNamespace(WEB="web")
+        connector_models_module = ModuleType("onyx.connectors.models")
+        connector_models_module.Document = ConnectorDocument
+        db_models_module = ModuleType("onyx.db.models")
+        db_models_module.Document = DatabaseDocument
+        indexing_pipeline_module = ModuleType("onyx.indexing.indexing_pipeline")
+        indexing_pipeline_module.get_docs_to_update = get_docs_to_update
+        logger_module = ModuleType("onyx.utils.logger")
+        logger_module.setup_logger = lambda *args, **kwargs: SimpleNamespace(
+            debug=lambda *args, **kwargs: None,
+            info=lambda *args, **kwargs: None,
+            warning=lambda *args, **kwargs: None,
+            exception=lambda *args, **kwargs: None,
+        )
+        playwright_fetch_module = ModuleType("onyx.utils.playwright_fetch")
+        playwright_fetch_module.DEFAULT_HEADERS = {"user-agent": "test"}
+        web_content_module = ModuleType("onyx.utils.web_content")
+        web_content_module.is_pdf_resource = lambda url, content_type: (
+            str(url).endswith(".pdf") or content_type == "application/pdf"
+        )
 
         wrapper_module = ModuleType("wrapper_env_patches")
         wrapper_module.apply_embedding_tokenizer_alias_patch = lambda: None
@@ -116,6 +259,9 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         server_module = ModuleType("onyx.server")
         security_module = ModuleType("onyx.server.security")
         utils_module = ModuleType("onyx.utils")
+        configs_module = ModuleType("onyx.configs")
+        db_module = ModuleType("onyx.db")
+        indexing_module = ModuleType("onyx.indexing")
         web_module.connector = connector_module
         connectors_module.web = web_module
         security_module.models = models_module
@@ -126,6 +272,9 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         onyx_module.background = background_module
         onyx_module.server = server_module
         onyx_module.utils = utils_module
+        onyx_module.configs = configs_module
+        onyx_module.db = db_module
+        onyx_module.indexing = indexing_module
 
         fake_modules = {
             "requests": requests_module,
@@ -139,16 +288,28 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             "onyx.connectors": connectors_module,
             "onyx.connectors.web": web_module,
             "onyx.connectors.web.connector": connector_module,
+            "onyx.connectors.models": connector_models_module,
+            "onyx.configs": configs_module,
+            "onyx.configs.app_configs": app_configs_module,
+            "onyx.configs.constants": constants_module,
+            "onyx.db": db_module,
+            "onyx.db.models": db_models_module,
+            "onyx.indexing": indexing_module,
+            "onyx.indexing.indexing_pipeline": indexing_pipeline_module,
             "onyx.server": server_module,
             "onyx.server.security": security_module,
             "onyx.server.security.models": models_module,
             "onyx.server.security.store": store_module,
             "onyx.utils": utils_module,
             "onyx.utils.url": url_module,
+            "onyx.utils.logger": logger_module,
+            "onyx.utils.playwright_fetch": playwright_fetch_module,
+            "onyx.utils.web_content": web_content_module,
         }
         env = {
             "WRAPPER_PATCH_STRICT": "true",
-            "ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED": "false",
+            "ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED": str(freshness).lower(),
+            "ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS": "doc-drop-web",
             "ONYX_WEB_CONNECTOR_PUBLIC_HTTP_PROXY_URL": (
                 "http://onyx-public-egress-bridge:3128"
             ),
@@ -168,6 +329,8 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         ):
             spec.loader.exec_module(module)
 
+        self.loaded_patch_module = module
+        self.scrape_calls = scrape_calls
         return connector_module, calls, playwright_proxies, validations
 
     def test_sitemap_constructor_uses_saved_level_public_proxy(self) -> None:
@@ -233,6 +396,208 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         self.assertEqual(
             playwright_proxies, ["http://onyx-host-egress-bridge:3128"]
         )
+
+    def test_pdf_freshness_sentinels_skip_only_when_safe(self) -> None:
+        self._load_patched_modules("validate_all")
+        module = self.loaded_patch_module
+        updated_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+        last_modified = "Sun, 19 Jul 2026 12:00:00 GMT"
+        db_doc = SimpleNamespace(
+            id="unchanged",
+            doc_updated_at=updated_at,
+            doc_metadata=module._freshness_metadata(
+                {},
+                last_modified_raw=last_modified,
+                content_length="123",
+            ),
+        )
+        unchanged = SimpleNamespace(
+            id="unchanged",
+            doc_updated_at=updated_at,
+            doc_metadata=module._unchanged_freshness_metadata(
+                last_modified_raw=last_modified,
+                content_length="123",
+            ),
+        )
+        unreadable = SimpleNamespace(
+            id="unreadable",
+            doc_updated_at=None,
+            doc_metadata=module._unreadable_freshness_metadata(
+                status_code=404,
+                last_modified_raw=None,
+                content_length=None,
+            ),
+        )
+        stale = SimpleNamespace(
+            id="stale",
+            doc_updated_at=updated_at,
+            doc_metadata=module._unchanged_freshness_metadata(
+                last_modified_raw=last_modified,
+                content_length="999",
+            ),
+        )
+        ordinary = SimpleNamespace(id="ordinary", doc_metadata={})
+
+        passthrough, skipped = module._filter_freshness_sentinels(
+            [unchanged, unreadable, stale, ordinary], [db_doc]
+        )
+
+        self.assertEqual(skipped, 2)
+        self.assertEqual([doc.id for doc in passthrough], ["stale", "ordinary"])
+
+    def test_pdf_freshness_validates_indexing_source_and_signature(self) -> None:
+        self._load_patched_modules("validate_all")
+        module = self.loaded_patch_module
+        module._validate_callable_contract(
+            _compatible_get_docs_to_update,
+            name="get_docs_to_update",
+            expected_parameters=module._INDEXING_FRESHNESS_PARAMETERS,
+            source_markers=module._INDEXING_FRESHNESS_SOURCE_MARKERS,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "signature changed"):
+            module._validate_callable_contract(
+                _drifted_get_docs_to_update,
+                name="get_docs_to_update",
+                expected_parameters=module._INDEXING_FRESHNESS_PARAMETERS,
+                source_markers=module._INDEXING_FRESHNESS_SOURCE_MARKERS,
+            )
+
+    def test_pdf_freshness_validates_document_models(self) -> None:
+        self._load_patched_modules("validate_all")
+        module = self.loaded_patch_module
+
+        class ConnectorDocument:
+            model_fields = {
+                name: object()
+                for name in (
+                    "id",
+                    "sections",
+                    "source",
+                    "semantic_identifier",
+                    "metadata",
+                    "doc_metadata",
+                    "doc_updated_at",
+                )
+            }
+
+        class DatabaseDocument:
+            id = None
+            doc_updated_at = None
+            doc_metadata = None
+            content_hash = None
+
+        class ScrapeResult:
+            doc = None
+            retry = False
+
+        module._validate_freshness_model_contracts(
+            ConnectorDocument, DatabaseDocument, ScrapeResult
+        )
+        del ConnectorDocument.model_fields["doc_metadata"]
+        with self.assertRaisesRegex(RuntimeError, "missing fields"):
+            module._validate_freshness_model_contracts(
+                ConnectorDocument, DatabaseDocument, ScrapeResult
+            )
+
+    def test_installed_pdf_freshness_handles_head_decisions(self) -> None:
+        host_patch = patch.dict(
+            os.environ,
+            {"ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS": "doc-drop-web"},
+        )
+        host_patch.start()
+        self.addCleanup(host_patch.stop)
+        last_modified = "Sun, 19 Jul 2026 12:00:00 GMT"
+        updated_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+        good_head = SimpleNamespace(
+            status_code=200,
+            headers={
+                "content-type": "application/pdf",
+                "last-modified": last_modified,
+                "content-length": "123",
+            },
+            url="http://doc-drop-web:8091/example.pdf",
+        )
+        connector, *_ = self._load_patched_modules(
+            "validate_all", freshness=True, head_response=good_head
+        )
+        module = self.loaded_patch_module
+        matching_db_doc = SimpleNamespace(
+            id="http://doc-drop-web:8091/example.pdf",
+            doc_updated_at=updated_at,
+            doc_metadata=module._freshness_metadata(
+                {},
+                last_modified_raw=last_modified,
+                content_length="123",
+            ),
+            content_hash="old-content-hash",
+            chunk_count=1,
+        )
+        module._get_db_document = lambda document_id: matching_db_doc
+        session = SimpleNamespace(last_error=None)
+
+        result = connector.WebConnector(
+            "http://doc-drop-web:8091/example.pdf"
+        )._do_scrape(0, "http://doc-drop-web:8091/example.pdf", session)
+        self.assertEqual(self.scrape_calls, [])
+        self.assertEqual(
+            result.doc.doc_metadata[module.FRESHNESS_UNCHANGED_KEY],
+            module.FRESHNESS_VERSION,
+        )
+
+        module._get_db_document = lambda document_id: SimpleNamespace(
+            **{
+                **vars(matching_db_doc),
+                "doc_metadata": module._freshness_metadata(
+                    {},
+                    last_modified_raw=last_modified,
+                    content_length="999",
+                ),
+            }
+        )
+        result = connector.WebConnector(
+            "http://doc-drop-web:8091/example.pdf"
+        )._do_scrape(0, "http://doc-drop-web:8091/example.pdf", session)
+        self.assertEqual(self.scrape_calls, ["http://doc-drop-web:8091/example.pdf"])
+        self.assertEqual(result.doc.doc_updated_at, updated_at)
+
+        missing_head = SimpleNamespace(
+            status_code=200,
+            headers={"content-type": "application/pdf"},
+            url="http://doc-drop-web:8091/missing.pdf",
+        )
+        connector, *_ = self._load_patched_modules(
+            "validate_all", freshness=True, head_response=missing_head
+        )
+        connector.WebConnector(
+            "http://doc-drop-web:8091/missing.pdf"
+        )._do_scrape(0, "http://doc-drop-web:8091/missing.pdf", session)
+        self.assertEqual(self.scrape_calls, ["http://doc-drop-web:8091/missing.pdf"])
+
+        terminal_head = SimpleNamespace(
+            status_code=404,
+            headers={"content-type": "application/pdf"},
+            url="http://doc-drop-web:8091/gone.pdf",
+        )
+        connector, *_ = self._load_patched_modules(
+            "validate_all", freshness=True, head_response=terminal_head
+        )
+        result = connector.WebConnector(
+            "http://doc-drop-web:8091/gone.pdf"
+        )._do_scrape(0, "http://doc-drop-web:8091/gone.pdf", session)
+        self.assertEqual(self.scrape_calls, [])
+        self.assertEqual(
+            result.doc.doc_metadata[self.loaded_patch_module.FRESHNESS_UNREADABLE_KEY],
+            self.loaded_patch_module.FRESHNESS_VERSION,
+        )
+
+        connector, *_ = self._load_patched_modules(
+            "validate_all", freshness=True, head_response=good_head
+        )
+        connector.WebConnector("https://public.example/example.pdf")._do_scrape(
+            0, "https://public.example/example.pdf", session
+        )
+        self.assertEqual(self.scrape_calls, ["https://public.example/example.pdf"])
 
 
 if __name__ == "__main__":

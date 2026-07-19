@@ -6,6 +6,7 @@ Loaded automatically by Python when this directory is on PYTHONPATH.
 from __future__ import annotations
 
 import functools
+import inspect
 import os
 import sys
 from contextlib import redirect_stdout
@@ -32,6 +33,32 @@ _INDEXING_SKIP_PATCHED = False
 _LOG_ONCE_KEYS: set[str] = set()
 _WEB_CONNECTOR_PROXY: ContextVar[str | None] = ContextVar(
     "wrapper_web_connector_proxy", default=None
+)
+
+_INDEXING_FRESHNESS_PARAMETERS = (
+    "documents",
+    "db_docs",
+    "ignore_timestamp_gate",
+)
+_INDEXING_FRESHNESS_SOURCE_MARKERS = (
+    "id_update_time_map",
+    "ignore_timestamp_gate",
+    "doc.content_hash()",
+    "db_doc.content_hash",
+)
+_WEB_SCRAPE_PARAMETERS = (
+    "self",
+    "index",
+    "initial_url",
+    "session_ctx",
+    "slim",
+)
+_WEB_SCRAPE_SOURCE_MARKERS = (
+    "requests.head(",
+    "is_pdf_resource(initial_url, content_type)",
+    "requests.get(",
+    "extract_pdf_text(response.content)",
+    "result.doc = Document(",
 )
 
 
@@ -543,6 +570,107 @@ def _seed_db_freshness(
         db_session.commit()
 
 
+def _validate_callable_contract(
+    callable_obj,  # noqa: ANN001
+    *,
+    name: str,
+    expected_parameters: tuple[str, ...],
+    source_markers: tuple[str, ...],
+) -> None:
+    parameters = tuple(inspect.signature(callable_obj).parameters)
+    if parameters != expected_parameters:
+        raise RuntimeError(
+            f"{name} signature changed: expected {expected_parameters!r}, "
+            f"got {parameters!r}"
+        )
+    try:
+        source = inspect.getsource(callable_obj)
+    except (OSError, TypeError) as e:
+        raise RuntimeError(f"could not inspect {name} source") from e
+    missing = [marker for marker in source_markers if marker not in source]
+    if missing:
+        raise RuntimeError(
+            f"{name} source contract changed; missing markers: {missing!r}"
+        )
+
+
+def _validate_freshness_model_contracts(Document, DbDocument, ScrapeResult) -> None:  # noqa: N803, ANN001
+    model_fields = getattr(Document, "model_fields", {})
+    required_document_fields = {
+        "id",
+        "sections",
+        "source",
+        "semantic_identifier",
+        "metadata",
+        "doc_metadata",
+        "doc_updated_at",
+    }
+    missing_document_fields = required_document_fields.difference(model_fields)
+    if missing_document_fields:
+        raise RuntimeError(
+            "connector Document model contract changed; missing fields: "
+            f"{sorted(missing_document_fields)!r}"
+        )
+
+    required_db_attributes = {"id", "doc_updated_at", "doc_metadata", "content_hash"}
+    missing_db_attributes = {
+        name for name in required_db_attributes if not hasattr(DbDocument, name)
+    }
+    if missing_db_attributes:
+        raise RuntimeError(
+            "database Document model contract changed; missing attributes: "
+            f"{sorted(missing_db_attributes)!r}"
+        )
+
+    if not hasattr(ScrapeResult, "doc") or not hasattr(ScrapeResult, "retry"):
+        raise RuntimeError("Web connector ScrapeResult contract changed")
+
+
+def _filter_freshness_sentinels(documents, db_docs):  # noqa: ANN001
+    """Return safe passthrough documents and the number of sentinels skipped."""
+    db_doc_by_id = {db_doc.id: db_doc for db_doc in db_docs}
+    passthrough_documents = []
+    skipped = 0
+
+    for doc in documents:
+        metadata = dict(doc.doc_metadata or {})
+        if metadata.get(FRESHNESS_UNREADABLE_KEY) == FRESHNESS_VERSION:
+            skipped += 1
+            continue
+
+        if metadata.get(FRESHNESS_UNCHANGED_KEY) != FRESHNESS_VERSION:
+            passthrough_documents.append(doc)
+            continue
+
+        db_doc = db_doc_by_id.get(doc.id)
+        last_modified_raw = metadata.get(FRESHNESS_LAST_MODIFIED_KEY)
+        content_length = metadata.get(FRESHNESS_CONTENT_LENGTH_KEY)
+        if (
+            doc.doc_updated_at is not None
+            and isinstance(last_modified_raw, str)
+            and isinstance(content_length, str)
+            and _doc_matches_freshness(
+                db_doc,
+                last_modified_dt=doc.doc_updated_at,
+                last_modified_raw=last_modified_raw,
+                content_length=content_length,
+            )
+        ):
+            skipped += 1
+            continue
+
+        _log_once(
+            "sentinel_mismatch",
+            "warning",
+            "PDF freshness sentinel did not match DB validators; "
+            "allowing normal indexing for url=%s",
+            doc.id,
+        )
+        passthrough_documents.append(doc)
+
+    return passthrough_documents, skipped
+
+
 def _apply_indexing_freshness_skip_patch() -> None:
     """Keep wrapper PDF skip sentinels out of forced reindex paths.
 
@@ -554,6 +682,8 @@ def _apply_indexing_freshness_skip_patch() -> None:
     unreadable status, so it is safe to skip even when ignore_time_skip is true.
     """
     global _INDEXING_SKIP_PATCHED
+    if _INDEXING_SKIP_PATCHED:
+        return
 
     try:
         from onyx.indexing import indexing_pipeline
@@ -568,51 +698,21 @@ def _apply_indexing_freshness_skip_patch() -> None:
         return
 
     original_get_docs_to_update = indexing_pipeline.get_docs_to_update
+    _validate_callable_contract(
+        original_get_docs_to_update,
+        name="indexing_pipeline.get_docs_to_update",
+        expected_parameters=_INDEXING_FRESHNESS_PARAMETERS,
+        source_markers=_INDEXING_FRESHNESS_SOURCE_MARKERS,
+    )
 
     def _patched_get_docs_to_update(  # noqa: ANN001
         documents,
         db_docs,
         ignore_timestamp_gate=False,
     ):
-        db_doc_by_id = {db_doc.id: db_doc for db_doc in db_docs}
-        passthrough_documents = []
-        skipped = 0
-
-        for doc in documents:
-            metadata = dict(doc.doc_metadata or {})
-            if metadata.get(FRESHNESS_UNREADABLE_KEY) == FRESHNESS_VERSION:
-                skipped += 1
-                continue
-
-            if metadata.get(FRESHNESS_UNCHANGED_KEY) != FRESHNESS_VERSION:
-                passthrough_documents.append(doc)
-                continue
-
-            db_doc = db_doc_by_id.get(doc.id)
-            last_modified_raw = metadata.get(FRESHNESS_LAST_MODIFIED_KEY)
-            content_length = metadata.get(FRESHNESS_CONTENT_LENGTH_KEY)
-            if (
-                doc.doc_updated_at is not None
-                and isinstance(last_modified_raw, str)
-                and isinstance(content_length, str)
-                and _doc_matches_freshness(
-                    db_doc,
-                    last_modified_dt=doc.doc_updated_at,
-                    last_modified_raw=last_modified_raw,
-                    content_length=content_length,
-                )
-            ):
-                skipped += 1
-                continue
-
-            _log_once(
-                "sentinel_mismatch",
-                "warning",
-                "PDF freshness sentinel did not match DB validators; "
-                "allowing normal indexing for url=%s",
-                doc.id,
-            )
-            passthrough_documents.append(doc)
+        passthrough_documents, skipped = _filter_freshness_sentinels(
+            documents, db_docs
+        )
 
         if skipped:
             _log_debug(
@@ -642,6 +742,7 @@ def _apply_web_connector_http_freshness_patch() -> None:
         from onyx.configs.constants import DocumentSource
         from onyx.connectors.models import Document
         from onyx.connectors.web import connector as web_connector
+        from onyx.db.models import Document as DbDocument
         from onyx.utils.logger import setup_logger
         from onyx.utils.playwright_fetch import DEFAULT_HEADERS
         from onyx.utils.web_content import is_pdf_resource
@@ -663,6 +764,17 @@ def _apply_web_connector_http_freshness_patch() -> None:
         )
 
     original_do_scrape = web_connector.WebConnector._do_scrape
+    if getattr(original_do_scrape, "_private_onyx_pdf_freshness_patch", False):
+        return
+    _validate_callable_contract(
+        original_do_scrape,
+        name="WebConnector._do_scrape",
+        expected_parameters=_WEB_SCRAPE_PARAMETERS,
+        source_markers=_WEB_SCRAPE_SOURCE_MARKERS,
+    )
+    _validate_freshness_model_contracts(
+        Document, DbDocument, web_connector.ScrapeResult
+    )
     _apply_indexing_freshness_skip_patch()
 
     def _scrape_with_display_links(self, index, initial_url, session_ctx, slim=False):  # noqa: ANN001
@@ -977,6 +1089,7 @@ def _apply_web_connector_http_freshness_patch() -> None:
         result.doc.doc_metadata = freshness_metadata
         return result
 
+    setattr(_patched_do_scrape, "_private_onyx_pdf_freshness_patch", True)
     web_connector.WebConnector._do_scrape = _patched_do_scrape
     _log(
         "info",

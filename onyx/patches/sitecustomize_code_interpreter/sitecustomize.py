@@ -9,7 +9,27 @@ network namespace or the operator's upstream proxy URL.
 
 from __future__ import annotations
 
+import inspect
 import os
+from collections.abc import Callable, Sequence
+from typing import Any
+
+
+_EXPECTED_BUILD_RUN_COMMAND_PARAMETERS = (
+    "self",
+    "container_name",
+    "cpu_time_limit_sec",
+    "memory_limit_mb",
+    "sleep_seconds",
+    "labels",
+)
+_EXPECTED_BUILD_RUN_COMMAND_SOURCE_MARKERS = (
+    "self.docker_binary,",
+    '"run",',
+    '"--network",',
+    "PYTHON_EXECUTOR_DOCKER_NETWORK,",
+    'cmd.extend([self.image, "sleep", str(sleep_seconds)])',
+)
 
 
 def _env_enabled(name: str, default: bool = True) -> bool:
@@ -92,6 +112,63 @@ def _executor_env_vars() -> list[str]:
     return args
 
 
+def _validate_build_run_command_target(build_run_command: Callable[..., Any]) -> None:
+    """Reject upstream executor drift before replacing its command builder."""
+    if getattr(build_run_command, "_private_onyx_executor_proxy_patch", False):
+        return
+
+    parameters = tuple(inspect.signature(build_run_command).parameters)
+    if parameters != _EXPECTED_BUILD_RUN_COMMAND_PARAMETERS:
+        raise RuntimeError(
+            "DockerExecutor._build_run_command signature changed: "
+            f"expected {_EXPECTED_BUILD_RUN_COMMAND_PARAMETERS!r}, got {parameters!r}"
+        )
+
+    try:
+        source = inspect.getsource(build_run_command)
+    except (OSError, TypeError) as e:
+        raise RuntimeError(
+            "could not inspect DockerExecutor._build_run_command source"
+        ) from e
+
+    missing = [
+        marker
+        for marker in _EXPECTED_BUILD_RUN_COMMAND_SOURCE_MARKERS
+        if marker not in source
+    ]
+    if missing:
+        raise RuntimeError(
+            "DockerExecutor._build_run_command source contract changed; "
+            f"missing markers: {missing!r}"
+        )
+
+
+def _inject_executor_env_args(
+    command: Sequence[str], executor_env_args: Sequence[str]
+) -> list[str]:
+    """Insert executor-only proxy variables into a validated Docker command."""
+    if not isinstance(command, (list, tuple)) or not all(
+        isinstance(token, str) for token in command
+    ):
+        raise RuntimeError(
+            "DockerExecutor._build_run_command returned a non-string command"
+        )
+
+    patched = list(command)
+    if len(patched) < 4 or patched[1] != "run" or patched.count("run") != 1:
+        raise RuntimeError(
+            "DockerExecutor._build_run_command returned an unexpected Docker "
+            "run command"
+        )
+    if patched.count("--network") != 1 or patched.index("--network") <= 1:
+        raise RuntimeError(
+            "DockerExecutor._build_run_command returned an unexpected network "
+            "argument layout"
+        )
+
+    return patched[:2] + list(executor_env_args) + patched[2:]
+
+
 def _apply_executor_patches() -> None:
     """Monkeypatch DockerExecutor to inject proxy settings into executor pods."""
     executor_env_args = _executor_env_vars()
@@ -110,47 +187,33 @@ def _apply_executor_patches() -> None:
         return
 
     _original_build_run_command = DockerExecutor._build_run_command
-    print(
-        "sitecustomize: installed DockerExecutor run-command patch "
-        f"(network={os.environ.get('PYTHON_EXECUTOR_DOCKER_NETWORK')}, "
-        f"executor_http_proxy_url={_executor_http_proxy_url()})",
-        flush=True,
-    )
+    if getattr(
+        _original_build_run_command,
+        "_private_onyx_executor_proxy_patch",
+        False,
+    ):
+        return
+    _validate_build_run_command_target(_original_build_run_command)
 
     def _patched_build_run_command(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
         cmd = _original_build_run_command(self, *args, **kwargs)
 
-        patched = list(cmd)
+        return _inject_executor_env_args(cmd, executor_env_args)
 
-        # Inject proxy/policy env vars. Insert them right after the docker binary
-        # and "run" tokens so they apply to the container being created. We
-        # find the first "run" token and insert after it (and after any global
-        # docker flags that precede the first "run"). A simple, robust approach:
-        # insert immediately before the first "--network" token if present,
-        # otherwise before the first image name. To keep it simple and safe,
-        # insert right after the "run" subcommand token.
-        if executor_env_args:
-            out: list[str] = []
-            injected = False
-            for tok in patched:
-                out.append(tok)
-                if not injected and tok == "run":
-                    out.extend(executor_env_args)
-                    injected = True
-            if not injected:
-                # No "run" token found (unexpected); append at the end as a
-                # best-effort so the env vars are at least present in the argv.
-                out.extend(executor_env_args)
-            patched = out
-            print(
-                "sitecustomize: injected executor network env vars into "
-                f"executor pod command ({len(executor_env_args) // 2} vars)",
-                flush=True,
-            )
-
-        return patched
+    setattr(
+        _patched_build_run_command,
+        "_private_onyx_executor_proxy_patch",
+        True,
+    )
 
     DockerExecutor._build_run_command = _patched_build_run_command  # type: ignore[assignment]
+    print(
+        "sitecustomize: installed validated DockerExecutor run-command patch "
+        f"(network={os.environ.get('PYTHON_EXECUTOR_DOCKER_NETWORK')}, "
+        f"executor_http_proxy_url={_executor_http_proxy_url()}, "
+        f"injected_vars={len(executor_env_args) // 2})",
+        flush=True,
+    )
 
 
 _apply_executor_patches()

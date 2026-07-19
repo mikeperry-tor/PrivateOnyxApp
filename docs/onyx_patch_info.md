@@ -2,8 +2,11 @@
 
 The wrapper uses runtime `sitecustomize` patches because several required
 behaviors are not configurable in the pinned Onyx release. Patches are narrow,
-source-shape checked, and strict: a required patch that no longer matches must
-stop startup rather than silently restore an unsafe upstream path.
+and strict: required callable targets validate signatures plus source markers,
+or exact structural text where a string/prompt is the target. A required patch
+that no longer matches must stop startup rather than silently restore an unsafe
+upstream path. Focused deterministic tests cover the wrapper-owned behavior;
+the upgrade checklist also requires installation against the pinned images.
 
 ## Bootstrap ownership
 
@@ -309,26 +312,122 @@ download and PDF parse when a document has not changed. It stores the wrapper
 freshness metadata on the Onyx document record for later syncs.
 
 The behavior is deliberately limited to configured local origins; ordinary
-external Web connector PDFs retain upstream Onyx behavior. Patch installation
-validates the pinned connector, document, and database shapes and fails visibly
-if an Onyx upgrade changes them. See
+external Web connector PDFs retain upstream Onyx behavior. Before changing
+either method, patch installation validates the exact signatures and critical
+source operations of `WebConnector._do_scrape()` and
+`indexing_pipeline.get_docs_to_update()`. It also validates the connector
+`Document` fields, database document attributes, and `ScrapeResult` shape.
+Only an unreadable sentinel or an unchanged sentinel whose HTTP validators
+still match the database record is removed before indexing. A stale or
+malformed sentinel falls through to normal indexing, including forced reindex.
+
+`tests/test_web_connector_egress_patch.py` covers installed unchanged, changed,
+missing-validator, terminal-error, and non-allowlisted HEAD paths; matching,
+unreadable, stale, and ordinary sentinel behavior; and callable/model drift.
+The upgrade audit
+installs the patch against the pinned backend image and then exercises a real
+doc-drop PDF crawl. Remove the freshness and sentinel patches together if
+upstream gains an equivalent trusted-origin pre-download validator and forced-
+reindex-safe skip mechanism. See
 [Local document RAG search](local_docs_rag_search.md#pdf-freshness-patch).
 
-## Other retained patches
+## Deep Research tools, batches, and tool choice
 
-The migration does not change the following independently tested behavior:
+The shared API patch passes every tool selected for the chat Agent into nested
+Deep Research instead of reducing the set to search and URL tools. Exact source
+replacement checks guard both the orchestrator and nested research loop. The
+patch also:
 
-- LLM context-window override and reasoning-content preservation;
-- Deep Research selected-Agent tools, bounded tool batches, and cycle limit;
-- automatic tool choice for GLM/reasoning and coding/research agents;
-- coding-agent final-answer and saved tool-result preservation;
-- `open_url` and `web_search` post-fetch character budgets;
-- coding-agent repository/upload byte-limit alignment;
-- internal-search content caps;
+- rejects a model-emitted batch before execution when it exceeds the configured
+  maximum;
+- prevents control tools such as `think_tool` and `generate_report` from being
+  mixed with another call;
+- preserves every accepted merged call, gives it a distinct nested UI
+  placement, and bounds worker concurrency independently of batch size;
+- updates both cycle-limit prompts and constants together; and
+- changes only the four known forced-tool call sites to automatic tool choice,
+  avoiding the pinned vLLM structured-decoding failure while retaining each
+  loop's existing no-tool completion branch.
+
+The installer source-checks every rewritten call site. Focused tests in
+`tests/test_shared_agent_patch_contracts.py` cover batch rejection, control-
+tool isolation, placement mapping, and all four forced-to-auto wrappers; strict
+installation is also tested against the pinned Onyx image. Remove individual
+rewrites when upstream preserves selected tools, mixed batches, bounded
+concurrency, placement, and compatible automatic tool choice natively.
+
+## Reasoning, tool history, and coding finalization
+
+The reasoning patch family carries assistant `reasoning_content` across Onyx's
+structured-message, reconstructed-history, and LiteLLM serialization
+boundaries. Exact source checks protect every rebuilt loop and serializer. The
+native-reasoning override now additionally validates the pinned detector's
+two-argument signature and its model-map/LiteLLM fallback source before
+replacing it. The saved-tool-result patch validates both the upstream response
+helper and complete `convert_chat_history()` signature before retaining stored
+responses and recomputing their token counts.
+
+Coding-agent final synthesis receives a plain-text transcript containing tool
+requests, tool output, and retained reasoning. If only final synthesis fails,
+the fallback returns sanitized, bounded tool output without disclosing the
+exception message; setup and execution failures retain their normal failure
+semantics. The relevant upstream final-answer source is checked before
+wrapping.
+
+Focused tests cover reasoning attachment/serialization, native-detector drift,
+saved response selection/token recounting, and the bounded final-answer
+fallback. Strict installation of the complete composed reasoning and Deep
+Research rewrites is tested against the pinned backend image. Remove each patch
+only after the corresponding upstream model types and reconstruction paths
+preserve reasoning/tool results and finalization failures no longer discard
+successful tool evidence.
+
+## Context and result-size patches
+
+The configured LLM context override validates both upstream token-limit lookup
+functions before making `GEN_AI_MAX_TOKENS` authoritative. The internal-search
+patch validates the complete formatter signature and its result/content JSON
+construction before applying per-result and aggregate character caps. The
+`open_url`/web-search patch validates the positional defaults it changes, and
+the repository-download patch validates the downloader signature and defaults
+before aligning it with the code-interpreter upload receiver.
+
+Focused tests cover each configured value and drift boundary. They also cover
+small internal-search budgets: if the human-readable truncation notice cannot
+fit, raw content is cut at the exact cap instead of allowing the notice itself
+to exceed the configured total. Remove these patches when upstream exposes
+equivalent settings at the same preflight/post-format boundaries.
+
+## Code-interpreter executor networking
+
+When optional executor networking is enabled, the code-interpreter bootstrap
+validates the exact pinned `DockerExecutor._build_run_command()` signature and
+critical Docker-run source layout before wrapping it. Every generated command
+must remain a string argv with one `run` subcommand and one network argument;
+the eight upper/lower-case proxy variables are inserted immediately after
+`docker run`. An unexpected command now raises instead of appending variables
+at the end as a best-effort fallback.
+
+The API-side capability patch uses exact upstream text replacements for the
+Python tool, Bash tool, coding-agent mock tool, Python guidance, and both
+coding-agent prompts. It tells the model about restricted proxy-only access
+without claiming direct sockets, private targets, or direct search-engine URLs
+are reachable. `tests/test_code_interpreter_executor_env.py` exercises the
+actual command wrapper, malformed output, configuration, and upstream drift;
+`tests/test_shared_agent_patch_contracts.py` covers every capability string and
+strict text drift. The command contract is additionally installed against the
+pinned code-interpreter image.
+
+Remove both halves when code-interpreter natively supports this dedicated
+network/proxy configuration and Onyx derives accurate capability text from it.
+Do not retain only the capability text or only the executor mutation.
+
+## Other retained wrapper behavior
+
+Other retained behavior has its own focused tests and upgrade checks:
+
 - lite-mode `open_url` availability;
 - local doc-drop behavior;
-- optional code-interpreter executor networking, proxy injection, and
-  capability descriptions;
 - local embedding shim model-name/query-prefix behavior, including the exact
   fake-nomic v23-to-v1 tokenizer-only alias that preserves Onyx feature gates;
 - host publisher, Tailscale, MinIO, authentication, and Teep integration.

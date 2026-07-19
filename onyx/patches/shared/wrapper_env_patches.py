@@ -622,6 +622,63 @@ def _required_positive_int(var_name: str, default: int) -> int:
     return value
 
 
+def _validate_deep_research_control_tool_batch(tool_calls) -> None:  # noqa: ANN001
+    if len(tool_calls) <= 1:
+        return
+    control_names = {"think_tool", "generate_report"}
+    mixed_controls = sorted(
+        {call.tool_name for call in tool_calls if call.tool_name in control_names}
+    )
+    if mixed_controls:
+        raise RuntimeError(
+            "Deep Research control tools must be called alone; mixed batch contained "
+            + ", ".join(mixed_controls)
+        )
+
+
+def _deep_research_sub_turn_index(index: int, stride: int = 1024) -> int:
+    return index * stride
+
+
+def _prepare_deep_research_tool_calls(
+    tool_runner,  # noqa: ANN001
+    tool_calls,  # noqa: ANN001
+    *,
+    max_tool_calls_per_batch: int,
+    nested_placement_stride: int = 1024,
+):
+    """Validate, merge, and give every nested tool call a unique placement."""
+    tool_calls = list(tool_calls or [])
+    if len(tool_calls) > max_tool_calls_per_batch:
+        raise RuntimeError(
+            "Deep Research model emitted "
+            f"{len(tool_calls)} tool calls in one batch; configured maximum is "
+            f"{max_tool_calls_per_batch}. No calls from this batch were executed."
+        )
+
+    merged_tool_calls = tool_runner._merge_tool_calls(tool_calls)
+    if not merged_tool_calls:
+        return merged_tool_calls
+
+    base_sub_turn = merged_tool_calls[0].placement.sub_turn_index
+    if base_sub_turn is None:
+        raise RuntimeError("Deep Research nested tool batch is missing sub_turn_index")
+    return [
+        tool_call.model_copy(
+            update={
+                "placement": tool_call.placement.model_copy(
+                    update={
+                        "sub_turn_index": (
+                            base_sub_turn + index * nested_placement_stride
+                        )
+                    }
+                )
+            }
+        )
+        for index, tool_call in enumerate(merged_tool_calls)
+    ]
+
+
 def apply_deep_research_chat_agent_tools_patch() -> None:
     """Provide selected chat-Agent tools to nested Deep Research agents.
 
@@ -764,35 +821,12 @@ def apply_deep_research_chat_agent_tools_patch() -> None:
         tool_calls = kwargs.get("tool_calls")
         if tool_calls is None and args:
             tool_calls = args[0]
-        tool_calls = list(tool_calls or [])
-        if len(tool_calls) > max_tool_calls_per_batch:
-            raise RuntimeError(
-                "Deep Research model emitted "
-                f"{len(tool_calls)} tool calls in one batch; configured maximum is "
-                f"{max_tool_calls_per_batch}. No calls from this batch were executed."
-            )
-
-        merged_tool_calls = tool_runner._merge_tool_calls(tool_calls)
-        if merged_tool_calls:
-            base_sub_turn = merged_tool_calls[0].placement.sub_turn_index
-            if base_sub_turn is None:
-                raise RuntimeError(
-                    "Deep Research nested tool batch is missing sub_turn_index"
-                )
-            merged_tool_calls = [
-                tool_call.model_copy(
-                    update={
-                        "placement": tool_call.placement.model_copy(
-                            update={
-                                "sub_turn_index": (
-                                    base_sub_turn + index * nested_placement_stride
-                                )
-                            }
-                        )
-                    }
-                )
-                for index, tool_call in enumerate(merged_tool_calls)
-            ]
+        merged_tool_calls = _prepare_deep_research_tool_calls(
+            tool_runner,
+            tool_calls,
+            max_tool_calls_per_batch=max_tool_calls_per_batch,
+            nested_placement_stride=nested_placement_stride,
+        )
 
         if args:
             args = (merged_tool_calls, *args[1:])
@@ -804,22 +838,6 @@ def apply_deep_research_chat_agent_tools_patch() -> None:
             return original_run_tool_calls(*args, **kwargs)
         finally:
             _DEEP_RESEARCH_WORKER_LIMIT.reset(token)
-
-    def _validate_deep_research_control_tool_batch(tool_calls) -> None:
-        if len(tool_calls) <= 1:
-            return
-        control_names = {"think_tool", "generate_report"}
-        mixed_controls = sorted(
-            {call.tool_name for call in tool_calls if call.tool_name in control_names}
-        )
-        if mixed_controls:
-            raise RuntimeError(
-                "Deep Research control tools must be called alone; mixed batch contained "
-                + ", ".join(mixed_controls)
-            )
-
-    def _deep_research_sub_turn_index(index: int) -> int:
-        return index * nested_placement_stride
 
     coding_run_source = inspect.getsource(CodingAgentTool.run)
     if "run_coding_agent_call" not in coding_run_source:
@@ -970,7 +988,9 @@ def apply_deep_research_chat_agent_tools_patch() -> None:
     research_agent._wrapper_validate_control_tool_batch = (
         _validate_deep_research_control_tool_batch
     )
-    research_agent._wrapper_sub_turn_index = _deep_research_sub_turn_index
+    research_agent._wrapper_sub_turn_index = lambda index: (
+        _deep_research_sub_turn_index(index, nested_placement_stride)
+    )
     try:
         _patch_function_source(
             module=dr_loop,
@@ -1008,8 +1028,12 @@ def _truncate_text_with_notice(text: str, max_chars: int) -> str:
     # Compute the suffix using a first-pass omitted count, then recompute once
     # because suffix length can change with digit count.
     suffix = notice_template.format(omitted=len(text))
+    if len(suffix) >= max_chars:
+        return text[:max_chars]
     keep = max(0, max_chars - len(suffix))
     suffix = notice_template.format(omitted=len(text) - keep)
+    if len(suffix) >= max_chars:
+        return text[:max_chars]
     keep = max(0, max_chars - len(suffix))
     return text[:keep] + suffix
 
@@ -1277,6 +1301,25 @@ def apply_native_reasoning_detection_override_patch() -> None:
     original = llm_utils.model_is_reasoning_model
     if getattr(original, "_wrapper_native_reasoning_override", False):
         return
+    signature = inspect.signature(original)
+    if tuple(signature.parameters) != ("model_name", "model_provider"):
+        _warn_or_raise(
+            "llm_utils.model_is_reasoning_model signature changed; "
+            f"found {signature}"
+        )
+        return
+    try:
+        source = inspect.getsource(original)
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(f"could not inspect model_is_reasoning_model: {e}")
+        return
+    for marker in ("get_model_map()", "_litellm_supports_reasoning"):
+        if marker not in source:
+            _warn_or_raise(
+                "llm_utils.model_is_reasoning_model source contract changed; "
+                f"missing {marker!r}"
+            )
+            return
 
     @functools.wraps(original)
     def _model_is_reasoning_model_native_override(  # noqa: ANN001
@@ -2534,6 +2577,35 @@ def apply_internal_search_context_patches() -> None:
         return
 
     original_convert = tool_utils.convert_inference_sections_to_llm_string
+    signature = inspect.signature(original_convert)
+    if tuple(signature.parameters) != (
+        "top_sections",
+        "citation_start",
+        "limit",
+        "include_source_type",
+        "include_link",
+        "include_document_id",
+    ):
+        _warn_or_raise(
+            "convert_inference_sections_to_llm_string signature changed; "
+            f"found {signature}"
+        )
+        return
+    try:
+        source = inspect.getsource(original_convert)
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(
+            "could not inspect convert_inference_sections_to_llm_string: "
+            f"{e}"
+        )
+        return
+    for marker in ('result["content"]', 'json.dumps({"results": results}'):
+        if marker not in source:
+            _warn_or_raise(
+                "convert_inference_sections_to_llm_string source contract "
+                f"changed; missing {marker!r}"
+            )
+            return
 
     @functools.wraps(original_convert)
     def _limited_convert_inference_sections_to_llm_string(*args, **kwargs):
@@ -2644,7 +2716,35 @@ def apply_preserve_tool_results_patch() -> None:
         )
         return
 
+    helper_signature = inspect.signature(
+        chat_utils._build_tool_call_response_history_message
+    )
+    if tuple(helper_signature.parameters) != (
+        "tool_name",
+        "generated_images",
+        "tool_call_response",
+    ):
+        _warn_or_raise(
+            "chat_utils._build_tool_call_response_history_message signature "
+            f"changed; found {helper_signature}"
+        )
+        return
+
     original_convert_chat_history = chat_utils.convert_chat_history
+    convert_signature = inspect.signature(original_convert_chat_history)
+    if tuple(convert_signature.parameters) != (
+        "chat_history",
+        "files",
+        "context_image_files",
+        "additional_context",
+        "token_counter",
+        "tool_id_to_name_map",
+    ):
+        _warn_or_raise(
+            "chat_utils.convert_chat_history signature changed; "
+            f"found {convert_signature}"
+        )
+        return
 
     def _preserving_tool_call_response_history_message(
         tool_name: str,

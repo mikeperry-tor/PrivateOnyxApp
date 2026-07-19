@@ -8,11 +8,11 @@ steps in `README.md` and the line-oriented upgrade checklist in
 Use this document for operator-facing setup, request flow, and diagnostics. For
 the patch rationale and possible upstream shape, see
 [`docs/onyx_patch_info.md`](onyx_patch_info.md), especially
-[Other retained patches](onyx_patch_info.md#other-retained-patches), and
+[Other retained wrapper behavior](onyx_patch_info.md#other-retained-wrapper-behavior), and
 [Compose wrapper changes](onyx_patch_info.md#compose-wrapper-changes).
 For line-numbered Onyx upgrade checks, use
 [`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md), especially
-[Other patch regression audit](onyx_patches_upgrade.md#other-patch-regression-audit), and
+[Runtime patch contract audit](onyx_patches_upgrade.md#runtime-patch-contract-audit), and
 [Routing and Compose audit](onyx_patches_upgrade.md#routing-and-compose-audit).
 For the tested interaction between Onyx SSRF defaults, local doc-drop
 reachability, Obscura private-network blocking, and code-interpreter
@@ -153,7 +153,7 @@ rationale is in
 [Background Web connector PDF freshness](onyx_patch_info.md#background-web-connector-pdf-freshness);
 the upstream symbols and line references to re-check during an Onyx upgrade are
 in
-[Other patch regression audit](onyx_patches_upgrade.md#other-patch-regression-audit).
+[Runtime patch contract audit](onyx_patches_upgrade.md#runtime-patch-contract-audit).
 
 Onyx v4.2.5 intentionally avoids trusting `Last-Modified` for Web PDFs because
 public websites often emit unreliable validators. That is sensible for the
@@ -218,9 +218,9 @@ Implementation:
 
 This section focuses on how to run and diagnose the shim. The rationale and
 upstreamable design are described below, with a summary in
-[Other retained patches](onyx_patch_info.md#other-retained-patches). The
+[Other retained wrapper behavior](onyx_patch_info.md#other-retained-wrapper-behavior). The
 model-server contract and upstream references to verify during upgrades are in
-[Other patch regression audit](onyx_patches_upgrade.md#other-patch-regression-audit).
+[Runtime patch contract audit](onyx_patches_upgrade.md#runtime-patch-contract-audit).
 
 The shim listens on `0.0.0.0:9101` on its own container and joins the internal
 `onyx-backend` network. Full mode sets these env vars for `api_server` and
@@ -507,7 +507,7 @@ Common failure modes:
 This is the short RAG-specific checklist. The authoritative line-oriented
 inventory is
 [`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md), especially
-[Other patch regression audit](onyx_patches_upgrade.md#other-patch-regression-audit)
+[Runtime patch contract audit](onyx_patches_upgrade.md#runtime-patch-contract-audit)
 for background freshness and the embedding shim, and
 [Routing and Compose audit](onyx_patches_upgrade.md#routing-and-compose-audit)
 for full-mode Compose. Before upgrading Onyx across a major version, re-check

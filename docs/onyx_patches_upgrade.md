@@ -326,15 +326,47 @@ Validate the nginx fragment with the pinned nginx image and inspect the
 effective Compose mount. A generated `onyx/onyx_data` refresh must not remove
 the tracked `/etc/nginx/conf.d/webui-csp.conf` bind mount.
 
-## Other patch regression audit
+## Runtime patch contract audit
 
-Retest the wrapper patches summarized in
-[Patch information](onyx_patch_info.md), especially
-reasoning preservation, selected Deep Research tools/batches, character and
-upload limits, helper routes, lite `open_url`, background PDF freshness,
-executor networking/capability text, the embedding shim, explicit privacy
-environment, and the WebUI restrictive CSP. Moving the shared helper must not
-change their source-shape or import behavior.
+Retest every wrapper patch summarized in
+[Patch information](onyx_patch_info.md). Do not treat a successful import as
+sufficient. For each family, confirm both its strict installation boundary and
+its user-visible behavior:
+
+- **Deep Research and tool choice:** the two rewritten agent loops must match
+  every exact replacement once; all accepted mixed tool calls execute, control
+  tools remain single-call-only, nested placements are unique, batch overflow
+  executes nothing, worker concurrency remains bounded, and only the four
+  audited forced-tool call sites become automatic.
+- **Reasoning and saved history:** re-audit the structured-message builder,
+  chat reconstruction, LiteLLM serialization, all rebuilt agent loops, native
+  detector signature/model-map fallback, saved response helper, and complete
+  `convert_chat_history()` signature. Exercise a reasoning-bearing tool turn,
+  a follow-up that needs saved tool output, successful final synthesis, and a
+  final-synthesis-only failure.
+- **Context and output limits:** re-audit both configured-token lookup source
+  markers, the complete internal-search formatter signature/JSON construction,
+  all three `open_url`/search positional defaults, and the repository downloader
+  signature/defaults. Test invalid, zero/unlimited, normal, and smaller-than-
+  notice budgets; no result may exceed its per-result or aggregate cap.
+- **PDF freshness:** validate exact `_do_scrape()` and
+  `get_docs_to_update()` signatures/source markers plus connector, database,
+  and result shapes. Exercise unchanged, changed, missing-validator, 401/403/404,
+  non-PDF, non-allowlisted, normal sync, and forced-reindex cases. Only a
+  matching unchanged or terminal-unreadable sentinel may skip indexing.
+- **Executor networking:** validate the exact code-interpreter command-builder
+  signature/source, one `docker run`, one network argument, and eight injected
+  proxy variables. Malformed argv must fail closed. Verify every API-side tool
+  description/prompt matches restricted proxy-only access in enabled mode and
+  remains stock in disabled mode.
+- **Lite `open_url`, helper routes, embedding tokenizer/shim, privacy settings,
+  and CSP:** retain their dedicated audits elsewhere in this checklist.
+
+Run the focused deterministic suite before image checks. Then install the API
+patch families and PDF freshness patch inside the pinned Onyx backend image,
+and the executor patch inside the pinned code-interpreter image, with
+`WRAPPER_PATCH_STRICT=true`. Any source, signature, model, prompt, or command
+shape mismatch is an upgrade blocker, not a reason to weaken validation.
 
 Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
 background services unless the wrapper deliberately adds and documents a
