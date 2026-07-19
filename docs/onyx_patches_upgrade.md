@@ -54,6 +54,9 @@ Audit these Obscura 0.1.10 areas (or their new equivalents):
   DOM commands, body-stream creation and reads; exact post-navigation expiry
   stages; and the five-second-before-outer-deadline Onyx partial collector that
   finalizes queued work, preserves ordered completions, and does not retry;
+- the common `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` ceiling on both retained
+  main-resource body and serialized rendered DOM, while SearXNG retains its
+  independent fixed 20 MiB search-DOM ceiling;
 - proxy resolution, redirect/subresource enforcement, logging/full-URL
   exposure, file-access guards, and the accepted ES-module local-file path.
 - bounded structural challenge parsing that excludes script/style/template/
@@ -175,10 +178,14 @@ Re-audit the pinned Onyx symbols for:
 - `is_pdf_resource`, `extract_pdf_text`, HTML extraction, raw-text decoding,
   and character-budget call sites. Confirm the per-URL character cap touches
   crawler sections only, while the aggregate LLM-output cap follows the merge;
-- direct-Obscura size scope: `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` must remain
-  an API crawler body cap and must not be passed to `background`, aliased to
-  Onyx `MAX_FILE_SIZE_BYTES`, or applied to exact-ID indexed retrieval. Test an
-  oversized crawler sibling alongside a usable indexed sibling;
+- built-in-crawler size scope: `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` must remain
+  authoritative for stock requests PDF/HTML, stock Chromium rendered HTML, and
+  direct-Obscura main-body/rendered-DOM limits. Validate the stock constructor
+  signature, its pinned 50 MiB PDF and 20 MiB HTML defaults, every downstream
+  size-check call site, and UTF-8 byte accounting for rendered HTML. Confirm the
+  setting remains absent from `background`, external content providers and
+  exact-ID indexed retrieval remain unaffected, and an oversized crawler
+  sibling can coexist with a usable indexed sibling;
 - built-in versus external provider dispatch and Admin/provider test APIs;
 - any new requests, local-browser, Firecrawl, parser, or generic fallback.
 
@@ -367,7 +374,7 @@ its user-visible behavior:
   signature/defaults. Test invalid, zero/unlimited, normal, and smaller-than-
   notice budgets; no result may exceed its per-result or aggregate cap. Keep
   the crawler-only per-URL cap distinct from the post-merge aggregate cap and
-  from the direct-Obscura response-body cap.
+  from the built-in crawler's response/rendered-document byte cap.
 - **PDF freshness:** validate exact `_do_scrape()` and
   `get_docs_to_update()` signatures/source markers plus connector, database,
   and result shapes. Exercise unchanged, changed, missing-validator, 401/403/404,

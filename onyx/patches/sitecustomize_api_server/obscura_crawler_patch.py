@@ -21,7 +21,6 @@ from private_onyx_obscura import validate_wait_until
 OPEN_URL_TIMEOUT_SECONDS = 120
 BROWSER_ATTEMPT_TIMEOUT_SECONDS = 105.0
 RESULT_COLLECTION_HEADROOM_SECONDS = 5.0
-RENDERED_DOM_LIMIT_BYTES = 20 * 1024 * 1024
 ACTIVE_FETCHES = threading.BoundedSemaphore(5)
 _STATE: contextvars.ContextVar["InvocationState | None"] = contextvars.ContextVar(
     "wrapper_open_url_invocation_state", default=None
@@ -76,7 +75,7 @@ class CrawledSection:
 
 
 def _parse_document_limit() -> int:
-    raw = os.environ.get("ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB", "50")
+    raw = os.environ.get("ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB", "20")
     if not raw or not raw.isdecimal():
         raise RuntimeError("ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB must be a positive base-10 integer")
     mib = int(raw)
@@ -206,7 +205,7 @@ def _direct_fetch(url: str, state: InvocationState):
             wait_until=WAIT_UNTIL,
             allow_http=ALLOW_HTTP,
             body_limit=DOCUMENT_LIMIT_BYTES,
-            dom_limit=RENDERED_DOM_LIMIT_BYTES,
+            dom_limit=DOCUMENT_LIMIT_BYTES,
             want="both",
             request_timeout_seconds=attempt_timeout,
             pre_navigation_guard=state.permits_navigation,
@@ -419,4 +418,8 @@ def install() -> None:
     crawler.OnyxWebCrawler._fetch_url = lambda self, url: _direct_fetch(
         url, _STATE.get() or InvocationState(time.monotonic() + OPEN_URL_TIMEOUT_SECONDS)
     )
-    print("sitecustomize_api_server: installed strict direct Obscura crawler", flush=True)
+    print(
+        "sitecustomize_api_server: installed strict direct Obscura crawler "
+        f"(document_limit_bytes={DOCUMENT_LIMIT_BYTES})",
+        flush=True,
+    )

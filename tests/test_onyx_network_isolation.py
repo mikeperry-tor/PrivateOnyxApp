@@ -562,14 +562,14 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             background_volumes,
         )
 
-    def test_open_url_document_body_limit_is_not_an_indexing_setting(self) -> None:
+    def test_open_url_document_limit_is_not_an_indexing_setting(self) -> None:
         model = _compose_model("full")
         services = model["services"]
         api_environment = services["api_server"]["environment"]
         background_environment = services["background"]["environment"]
 
         self.assertEqual(
-            api_environment["ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB"], "50"
+            api_environment["ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB"], "20"
         )
         self.assertNotIn(
             "ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB", background_environment

@@ -34,6 +34,8 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
         cls.module = _load_patch()
 
     def test_document_limit_is_positive_decimal_mib(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(self.module._parse_document_limit(), 20 * 1024 * 1024)
         with patch.dict(os.environ, {"ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB": "7"}):
             self.assertEqual(self.module._parse_document_limit(), 7 * 1024 * 1024)
         for value in ("", "0", "-1", "1.5", "unlimited"):
@@ -128,7 +130,8 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
         self.assertNotIn("Partial open_url failure report:", source)
         self.assertNotIn("HTML response exceeded the 20 MiB", source)
         self.assertIn("body_limit=DOCUMENT_LIMIT_BYTES", source)
-        self.assertIn("dom_limit=RENDERED_DOM_LIMIT_BYTES", source)
+        self.assertIn("dom_limit=DOCUMENT_LIMIT_BYTES", source)
+        self.assertNotIn("RENDERED_DOM_LIMIT_BYTES", source)
         self.assertIn("BROWSER_ATTEMPT_TIMEOUT_SECONDS = 105.0", source)
         self.assertIn("executor.shutdown(wait=False, cancel_futures=True)", source)
 

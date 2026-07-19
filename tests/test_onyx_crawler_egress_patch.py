@@ -4,6 +4,7 @@ import importlib.util
 import os
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +81,38 @@ class CrawlerEgressPatchTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "exactly true or false"):
                 self.module.use_obscura_browser()
+
+    def test_document_limit_is_positive_decimal_mib(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(self.module._parse_document_limit(), 20 * 1024 * 1024)
+        with patch.dict(os.environ, {"ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB": "7"}):
+            self.assertEqual(self.module._parse_document_limit(), 7 * 1024 * 1024)
+        for value in ("", "0", "-1", "1.5", "unlimited"):
+            with self.subTest(value=value), patch.dict(
+                os.environ, {"ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB": value}
+            ):
+                with self.assertRaises(RuntimeError):
+                    self.module._parse_document_limit()
+
+    def test_document_limit_overrides_stock_pdf_and_html_limits(self):
+        recorded = {}
+
+        def original_init(instance, *, max_pdf_size_bytes=None, max_html_size_bytes=None):
+            del instance
+            recorded["pdf"] = max_pdf_size_bytes
+            recorded["html"] = max_html_size_bytes
+
+        configured_init = self.module._configured_crawler_init(original_init, 1234)
+        configured_init(
+            object(), max_pdf_size_bytes=50, max_html_size_bytes=20
+        )
+        self.assertEqual(recorded, {"pdf": 1234, "html": 1234})
+
+    def test_rendered_html_limit_counts_utf8_bytes(self):
+        rendered = SimpleNamespace(html="éé")
+        self.assertFalse(self.module._rendered_html_exceeds_limit(rendered, 4))
+        self.assertTrue(self.module._rendered_html_exceeds_limit(rendered, 3))
+        self.assertFalse(self.module._rendered_html_exceeds_limit(None, 1))
 
     def test_request_uses_fixed_proxy_without_environment_or_local_dns(self):
         response = FakeResponse()
@@ -162,6 +195,8 @@ class CrawlerEgressPatchTests(unittest.TestCase):
         self.assertNotIn("socket.", source)
         self.assertIn("session.trust_env = False", source)
         self.assertIn('"proxies" in kwargs', source)
+        self.assertIn('kwargs["max_pdf_size_bytes"] = document_limit_bytes', source)
+        self.assertIn('kwargs["max_html_size_bytes"] = document_limit_bytes', source)
 
 
 if __name__ == "__main__":

@@ -147,8 +147,10 @@ endif
 SEARXNG_WRAPPER_IMAGE ?= $(SEARXNG_WRAPPER_IMAGE_REPOSITORY):$(SEARXNG_IMAGE_TAG)-$(SEARXNG_WRAPPER_SOURCE_HASH)
 ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB ?= $(call env_value,ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)
 ifeq ($(strip $(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)),)
-ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB := 50
+ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB := 20
 endif
+# The shared Obscura server must accommodate both the configurable built-in
+# open_url document limit and SearXNG's independent fixed 20 MiB DOM limit.
 OBSCURA_RETENTION_FLOOR_BYTES := $(shell python3 -c 'v=int("$(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)"); assert 0 < v <= ((1<<63)-1)//1048576; print(max(v*1048576,20971520))')
 OBSCURA_IO_STREAM_MAX_BYTES := $(shell python3 -c 'v=int("$(OBSCURA_RETENTION_FLOOR_BYTES)"); assert v <= ((1<<63)-1)//5; print(v*5)')
 export SEARXNG_WRAPPER_IMAGE

@@ -103,7 +103,8 @@ containment when Obscura is upgraded.
 The browser's main-response retention limit applies per entry, not per
 process. Multiple retained entries, base64 representation, and request/loader
 aliases can multiply memory use. The distinct IO stream store has aggregate
-accounting, while rendered DOM and API body limits are separately enforced.
+accounting. The API enforces the same configured ceiling independently on the
+rendered DOM and main body; SearXNG has its own fixed DOM ceiling.
 Obscura may allocate the full initial response before any of those retained
 limits. None is a complete aggregate process-memory bound.
 

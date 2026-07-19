@@ -213,12 +213,17 @@ This stack protects private research, document contents, browsing behavior, infe
     retrieval. Indexed and crawler work remain failure-tolerant siblings, with
     indexed content preferred only after both paths complete.
   - The built-in Onyx Web Crawler defaults to the stock requests/local-Chromium mode because it was blocked less often in Obscura 0.1.10 testing; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path.
+  - Keep `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` authoritative for the built-in
+    crawler in both modes: stock requests PDF/HTML bytes, stock Chromium
+    rendered-HTML bytes, and the direct-Obscura main body and rendered DOM. It
+    remains a per-representation post-materialization check on the stock path,
+    not a complete download or peak-memory bound. It must not affect external
+    content providers, background RAG ingestion, indexed document retrieval, or
+    SearXNG's independent fixed search-DOM limit.
   - When explicitly switched to Obscura, preserve one navigation, event-based
-    waits, the `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` fresh-crawl main-response
-    byte limit (including HTML), the separate fixed DOM limit, anti-bot
-    visibility, and complete cleanup. That setting must remain API-crawler-only:
-    do not map it to Onyx `MAX_FILE_SIZE_BYTES`, background ingestion, or indexed
-    document retrieval. Re-test the default on Obscura upgrades.
+    waits, anti-bot visibility, complete cleanup, and the common configured
+    limit on both main-response body and rendered DOM. Re-test the default on
+    Obscura upgrades.
   - Do not add other hidden retries, fallbacks, or fixed sleeps.
 - Documentation:
   - Update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change.

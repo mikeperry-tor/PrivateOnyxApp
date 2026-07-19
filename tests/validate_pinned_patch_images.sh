@@ -39,6 +39,31 @@ echo "Validating API patch contracts in $onyx_backend_image"
     "$onyx_backend_image" \
     -c "import wrapper_env_patches as w; w.apply_llm_max_tokens_override_patch(); w.apply_open_url_char_limit_patches(); w.apply_internal_search_context_patches(); w.apply_native_reasoning_detection_override_patch(); w.apply_vllm_glm_auto_tool_choice_patch(); w.apply_deep_research_chat_agent_tools_patch(); w.apply_reasoning_content_preservation_patch(); w.apply_coding_agent_final_answer_fallback_patch(); w.apply_preserve_tool_results_patch(); print('PINNED_API_PATCH_CONTRACTS_OK')"
 
+echo "Validating stock open_url crawler patch in $onyx_backend_image"
+"$container_bin" run --rm \
+    --network none \
+    --entrypoint python \
+    -e PYTHONPATH=/obscura-client \
+    -e ONYX_HELPER_HTTP_PROXY_URL=http://onyx-public-egress-bridge:3128 \
+    -e EGRESS_ALLOW_HTTP_URLS=false \
+    -e ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB=7 \
+    -v "$repo_root/browser/obscura_client:/obscura-client:ro" \
+    -v "$repo_root/onyx/patches/sitecustomize_api_server:/api-patches:ro" \
+    "$onyx_backend_image" \
+    -c "import importlib.util, sys; s=importlib.util.spec_from_file_location('stock_crawler_patch_validation', '/api-patches/onyx_crawler_egress_patch.py'); m=importlib.util.module_from_spec(s); sys.modules[s.name]=m; s.loader.exec_module(m); m.install(); from onyx.tools.tool_implementations.open_url.onyx_web_crawler import OnyxWebCrawler; c=OnyxWebCrawler(max_pdf_size_bytes=1, max_html_size_bytes=1); assert c._max_pdf_size_bytes == 7 * 1024 * 1024; assert c._max_html_size_bytes == 7 * 1024 * 1024; print('PINNED_STOCK_CRAWLER_PATCH_CONTRACT_OK')"
+
+echo "Validating direct-Obscura open_url crawler patch in $onyx_backend_image"
+"$container_bin" run --rm \
+    --network none \
+    --entrypoint python \
+    -e PYTHONPATH=/obscura-client \
+    -e ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB=7 \
+    -e OBSCURA_BROWSER_WAIT_UNTIL_WEB=domcontentloaded \
+    -v "$repo_root/browser/obscura_client:/obscura-client:ro" \
+    -v "$repo_root/onyx/patches/sitecustomize_api_server:/api-patches:ro" \
+    "$onyx_backend_image" \
+    -c "import importlib.util, sys; s=importlib.util.spec_from_file_location('obscura_crawler_patch_validation', '/api-patches/obscura_crawler_patch.py'); m=importlib.util.module_from_spec(s); sys.modules[s.name]=m; s.loader.exec_module(m); m.install(); assert m.DOCUMENT_LIMIT_BYTES == 7 * 1024 * 1024; from onyx.tools.tool_implementations.open_url.onyx_web_crawler import OnyxWebCrawler; assert OnyxWebCrawler.contents.__module__ == 'obscura_crawler_patch_validation'; print('PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK')"
+
 echo "Validating background PDF freshness contracts in $onyx_backend_image"
 "$container_bin" run --rm \
     --network none \

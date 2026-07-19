@@ -56,7 +56,7 @@ The limits apply at distinct boundaries:
 
 | Setting | Fresh crawler result | Previously indexed result |
 | --- | --- | --- |
-| `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` | Main-resource response-body cap in direct Obscura mode only | No |
+| `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` | Stock PDF/HTML and Chromium rendered HTML; direct-Obscura main body and rendered DOM | No |
 | `ONYX_OPEN_URL_MAX_CHARS_PER_URL` | Post-parse per-page character cap | No |
 | `ONYX_OPEN_URL_MAX_TOTAL_CHARS` | Final LLM-facing output after merge | Yes |
 
@@ -64,14 +64,18 @@ The total character budget does not limit the index read itself. Onyx constructs
 and emits the rich document response before applying that final LLM-facing
 budget, so the model may receive less content than the UI document payload.
 
-`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` is already isolated from indexing. Compose
-passes it only to `api_server`; it is not mapped to Onyx's ingestion
-`MAX_FILE_SIZE_BYTES` setting and is absent from the full-mode `background`
-service. An oversized direct-Obscura crawl can therefore fail while a matching
-previously indexed copy still succeeds. The Makefile also uses the value to
-size retention floors in the shared Obscura server. That affects browser memory
-provisioning shared with SearXNG, but SearXNG keeps its independent fixed DOM
-limit and no Onyx indexing path uses Obscura.
+`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` is isolated from indexing. Compose passes
+it only to `api_server`, and it is absent from the full-mode `background`
+service. An oversized crawl can therefore fail while a matching previously
+indexed copy still succeeds. It applies only to the built-in Onyx Web Crawler;
+Firecrawl, Exa, and other selected external content providers own their limits.
+
+The Makefile also uses the value to size retention floors in the shared Obscura
+server. That affects browser memory provisioning shared with SearXNG, but
+SearXNG keeps its independent fixed 20 MiB DOM limit and no Onyx indexing path
+uses Obscura. If the configured `open_url` limit is below 20 MiB, the server
+retention floor remains 20 MiB for search while the API client still enforces
+the smaller configured limit on `open_url` results.
 
 In direct Obscura mode, the API container and SearXNG import the same client
 implementation from `browser/obscura_client`. SearXNG connects on
@@ -184,20 +188,21 @@ them byte-identical, and rendered DOM is never described as response-byte
 identical. Declared non-UTF-8 text must satisfy the strict permitted decoding
 contract.
 
-`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` defaults to 50 MiB and is a positive
-integer. In direct Obscura mode it is the sole main-resource response-body cap
-for the fresh crawler sibling, including HTML responses, and it drives Obscura
-retention floors. It does not cap exact-ID reads of previously indexed
-documents or configure ingestion. Serialized rendered DOM has a separate fixed
-20 MiB cap; search DOM also has a fixed 20 MiB cap. Existing Onyx character
-budgets apply after parsing. Increasing the document limit increases potential
-memory use across five simultaneous API fetches and five browser workers.
+`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` defaults to 20 MiB and is a positive
+integer. In direct Obscura mode the same value independently caps the retained
+main-resource response body, including HTML, and serialized rendered DOM for
+the fresh crawler sibling. It drives the shared Obscura retention floors but
+does not cap exact-ID reads of previously indexed documents or configure RAG
+ingestion. SearXNG search DOM retains its independent fixed 20 MiB cap.
+Existing Onyx character budgets apply after parsing. Increasing the document
+limit increases potential memory use across five simultaneous API fetches and
+five browser workers.
 
-These limits do not bound Obscura's initial response allocation. The pinned
-server can read a complete response before applying retained-body limits. Its
-network retention limit is per body and may be amplified by entry count,
-base64 representation, and request/loader aliases. The IO stream store has
-separate aggregate accounting, but neither limit is an aggregate browser
+These limits do not bound Obscura's initial response or DOM allocation. The
+pinned server can read a complete response before applying retained-body
+limits. Its network retention limit is per body and may be amplified by entry
+count, base64 representation, and request/loader aliases. The IO stream store
+has separate aggregate accounting, but neither limit is an aggregate browser
 process-memory bound. In-process PDF parsing also has no complete CPU,
 transient-memory, or parser wall-time bound beyond the outer invocation.
 
@@ -269,10 +274,21 @@ does not install the direct Obscura crawler replacement. It retains the pinned
 upstream `OnyxWebCrawler`, including its requests-first behavior and its local
 Playwright Chromium fallback for qualifying 403/challenge responses. One URL
 can consequently produce a requests fetch followed by a second browser
-navigation. Upstream request, browser, parser, timeout, size, and failure
-semantics apply; `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` and
-`OBSCURA_BROWSER_WAIT_UNTIL_WEB` do not configure this mode. Wrapper character
-budgets and mixed-result failure reporting remain installed.
+navigation. Upstream request, browser, parser, timeout, and failure semantics
+otherwise apply. The wrapper makes `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB`
+authoritative for both the requests-fetched PDF/HTML byte checks and the UTF-8
+byte size of local Chromium's rendered HTML. `OBSCURA_BROWSER_WAIT_UNTIL_WEB`
+does not configure this mode. Wrapper character budgets and mixed-result
+failure reporting remain installed.
+
+The stock size checks occur after materialization: requests has already loaded
+the final response body, and Playwright has already constructed
+`page.content()`. The limit prevents oversized content from reaching parsing
+and the LLM, but it is not a transport download cap or complete peak-memory
+bound. Apart from this unified document limit, the built-in stock crawler has
+no other byte-size cap. The post-parse per-URL and aggregate character budgets
+described above still apply. An explicitly selected external content provider
+retains its own limits.
 
 The stock transport is still wrapper-constrained. A narrow startup-validated
 adapter replaces only this crawler's imported `ssrf_safe_get`: it validates

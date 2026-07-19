@@ -30,8 +30,10 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertTrue(os.access(IMAGE_SCRIPT_PATH, os.X_OK))
         self.assertIn('image inspect "$image"', IMAGE_SCRIPT)
         self.assertNotRegex(IMAGE_SCRIPT, r'(?m)^.*"\$container_bin" (pull|build)\b')
-        self.assertEqual(IMAGE_SCRIPT.count("--network none"), 5)
+        self.assertEqual(IMAGE_SCRIPT.count("--network none"), 7)
         self.assertIn("WRAPPER_PATCH_STRICT=true", IMAGE_SCRIPT)
+        self.assertIn("PINNED_STOCK_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
+        self.assertIn("PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("tests.test_searxng_obscura_engines", IMAGE_SCRIPT)
 
     def test_upgrade_flow_is_documented_for_agents_and_maintainers(self) -> None:

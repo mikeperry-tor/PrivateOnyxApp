@@ -64,9 +64,9 @@ built-in `OnyxWebCrawler` URL-fetch path. It imports the single client in
   URLs retained for successful content and citations after redirects;
 - same-navigation PDF, HTML, and exact raw-text dispatch using pinned Onyx
   extractors;
-- a positive finite configured main-response byte limit, including for HTML,
-  a separate fixed 20 MiB serialized-DOM bound, existing post-parse character
-  budgets, and normal unsuccessful
+- one positive finite configured byte limit applied independently to the
+  main-response body, including HTML, and serialized rendered DOM; existing
+  post-parse character budgets; and normal unsuccessful
   `WebContent` results for per-URL failures;
 - strict source and result-cardinality validation.
 
@@ -91,8 +91,13 @@ Redirects and subresources remain final-hop policy decisions.
 The stock path intentionally retains upstream behavior, including a
 possible second origin request when Chromium follows a qualifying requests
 failure and local Chromium's weaker containment inside `api_server`. Obscura
-document/wait settings do not apply. Wrapper character limits and
-mixed-success failure presentation remain separate retained patches.
+wait settings do not apply. The startup patch strictly validates and overrides
+the pinned crawler's separate 50 MiB PDF and 20 MiB HTML defaults so
+`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` controls requests-fetched PDF/HTML and
+UTF-8 encoded Chromium-rendered HTML alike. Those stock checks remain
+post-materialization and are not complete download or peak-memory bounds.
+Wrapper character limits and mixed-success failure presentation remain
+separate retained patches.
 
 `sitecustomize_api_server/open_url_failure_reporting_patch.py` is installed
 before either transport is selected. It records the final post-fallback
@@ -138,14 +143,15 @@ failure into an empty indexed result. Lite mode consequently returns crawler
 content while its `DisabledDocumentIndex` continues to fail loudly if called;
 the patch does not restore RAG or indexed retrieval.
 
-In direct Obscura mode, `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` caps only the
-fresh crawler sibling's retained main-resource body. It is an API-only wrapper
-setting, is not mapped to Onyx's `MAX_FILE_SIZE_BYTES`, and is not present in
-the background indexing service. Exact-ID indexed retrieval bypasses this byte
-cap, although both indexed and crawled content remain subject to the final
-`ONYX_OPEN_URL_MAX_TOTAL_CHARS` LLM-output budget after merge. The Makefile's
-derived Obscura retention floors are shared browser memory settings, not Onyx
-document-indexing limits.
+`ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` controls only the built-in crawler. In
+stock mode it applies to requests-fetched PDF/HTML and rendered Chromium HTML;
+in direct Obscura mode it applies independently to the retained main-resource
+body and rendered DOM. It is absent from the background RAG indexing service,
+and exact-ID indexed retrieval bypasses it. Both indexed and crawled content
+remain subject to the final `ONYX_OPEN_URL_MAX_TOTAL_CHARS` LLM-output budget
+after merge. The Makefile's derived Obscura retention floors are shared browser
+memory settings, not document-indexing limits, and SearXNG retains its separate
+fixed 20 MiB search-DOM ceiling.
 
 Remove this patch and its Compose switch when upstream makes crawler-backed
 `open_url` available with the vector database disabled. Until then, every
