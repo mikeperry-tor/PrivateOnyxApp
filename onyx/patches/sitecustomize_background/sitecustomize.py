@@ -12,6 +12,7 @@ import sys
 from contextlib import redirect_stdout
 from contextvars import ContextVar
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
@@ -106,41 +107,209 @@ def _apply_embedding_tokenizer_alias_patch() -> None:
             raise
 
 
-def _apply_disabled_craft_schedule_patch() -> None:
-    """Do not schedule Kubernetes sandbox cleanup when Craft is disabled."""
-    if os.environ.get("ENABLE_CRAFT", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
-        return
-
+def _apply_sleepy_background_patch() -> None:
+    """Strictly reduce idle-only background scheduling and liveness work."""
     try:
+        from onyx.background.celery.apps import app_base
+        from onyx.background.celery.apps import beat as beat_app
         from onyx.background.celery.tasks import beat_schedule
+        from onyx.configs.constants import OnyxCeleryQueues
+        from onyx.configs.constants import OnyxCeleryTask
+        from shared_configs.configs import MULTI_TENANT
 
-        matches = [
-            task
-            for task in beat_schedule.beat_task_templates
-            if task.get("name") == "cleanup-idle-sandboxes"
-        ]
-        if len(matches) != 1:
-            raise RuntimeError(
-                "expected exactly one cleanup-idle-sandboxes beat template, "
-                f"found {len(matches)}"
+        if MULTI_TENANT:
+            raise RuntimeError("sleepy background policy requires MULTI_TENANT=false")
+
+        discovery = {
+            "check-for-user-file-processing": timedelta(seconds=20),
+            "check-for-user-file-project-sync": timedelta(seconds=20),
+            "check-for-user-file-delete": timedelta(seconds=20),
+            "check-for-indexing": timedelta(seconds=15),
+            "check-for-connector-deletion": timedelta(seconds=20),
+            "check-for-vespa-sync": timedelta(seconds=20),
+            "check-for-pruning": timedelta(seconds=20),
+        }
+        for name, old_schedule in discovery.items():
+            matches = [
+                task for task in beat_schedule.tasks_to_schedule
+                if task.get("name") == name
+            ]
+            if len(matches) != 1 or matches[0].get("schedule") != old_schedule:
+                raise RuntimeError(
+                    f"expected one {name} schedule at {old_schedule}, found {matches!r}"
+                )
+            matches[0]["schedule"] = timedelta(minutes=5)
+            template_matches = [
+                task for task in beat_schedule.beat_task_templates
+                if task.get("name") == name
+            ]
+            if len(template_matches) != 1 or template_matches[0].get("schedule") != old_schedule:
+                raise RuntimeError(f"unexpected {name} beat template contract")
+            template_matches[0]["schedule"] = timedelta(minutes=5)
+
+        removals = {
+            "monitor-celery-queues": (
+                OnyxCeleryTask.MONITOR_CELERY_QUEUES,
+                timedelta(seconds=10),
+            ),
+            "monitor-background-processes": (
+                OnyxCeleryTask.MONITOR_BACKGROUND_PROCESSES,
+                timedelta(minutes=5),
+            ),
+            "monitor-process-memory": (
+                OnyxCeleryTask.MONITOR_PROCESS_MEMORY,
+                timedelta(minutes=5),
+            ),
+            "celery-beat-heartbeat": (
+                OnyxCeleryTask.CELERY_BEAT_HEARTBEAT,
+                timedelta(minutes=1),
+            ),
+        }
+        craft_enabled = os.environ.get("ENABLE_CRAFT", "false").lower() in {
+            "1", "true", "yes", "on"
+        }
+        if not craft_enabled:
+            removals.update(
+                {
+                    "cleanup-idle-sandboxes": (
+                        OnyxCeleryTask.CLEANUP_IDLE_SANDBOXES,
+                        timedelta(minutes=1),
+                    ),
+                    "dispatch-due-scheduled-tasks": (
+                        OnyxCeleryTask.SCHEDULED_TASKS_DISPATCH_DUE,
+                        timedelta(seconds=30),
+                    ),
+                    "cleanup-stuck-scheduled-runs": (
+                        OnyxCeleryTask.SCHEDULED_TASKS_CLEANUP_STUCK,
+                        timedelta(hours=1),
+                    ),
+                }
             )
-        beat_schedule.beat_task_templates[:] = [
-            task
-            for task in beat_schedule.beat_task_templates
-            if task.get("name") != "cleanup-idle-sandboxes"
-        ]
+
+        for name, (task_id, cadence) in removals.items():
+            matches = [
+                task for task in beat_schedule.tasks_to_schedule
+                if task.get("name") == name
+            ]
+            if (
+                len(matches) != 1
+                or matches[0].get("task") != task_id
+                or matches[0].get("schedule") != cadence
+            ):
+                raise RuntimeError(f"unexpected materialized {name} schedule contract")
+            beat_schedule.tasks_to_schedule[:] = [
+                task for task in beat_schedule.tasks_to_schedule
+                if task.get("name") != name
+            ]
+            template_matches = [
+                task for task in beat_schedule.beat_task_templates
+                if task.get("name") == name
+            ]
+            if template_matches:
+                if (
+                    len(template_matches) != 1
+                    or template_matches[0].get("task") != task_id
+                    or template_matches[0].get("schedule") != cadence
+                ):
+                    raise RuntimeError(f"unexpected {name} beat template contract")
+                beat_schedule.beat_task_templates[:] = [
+                    task for task in beat_schedule.beat_task_templates
+                    if task.get("name") != name
+                ]
+
+        unexpected_conditional = {
+            "check-for-doc-permissions-sync",
+            "check-for-external-group-sync",
+            "check-for-auto-llm-update",
+            "migrate-chunks-from-vespa-to-opensearch",
+        }
+        materialized_names = {
+            task.get("name") for task in beat_schedule.tasks_to_schedule
+        }
+        unexpected = materialized_names & unexpected_conditional
+        if unexpected:
+            raise RuntimeError(
+                f"unexpected conditional background schedules: {sorted(unexpected)}"
+            )
+        removed_names = set(removals)
+        if materialized_names & removed_names:
+            raise RuntimeError("removed background schedules remain materialized")
+        if any(
+            task.get("options", {}).get("queue") == OnyxCeleryQueues.MONITORING
+            for task in beat_schedule.tasks_to_schedule
+        ):
+            raise RuntimeError("a self-hosted task still targets the monitoring queue")
+        if beat_schedule.get_tasks_to_schedule() is not beat_schedule.tasks_to_schedule:
+            raise RuntimeError("get_tasks_to_schedule no longer returns the materialized list")
+
+        housekeeping = {
+            "check-for-checkpoint-cleanup": timedelta(hours=1),
+            "check-for-index-attempt-cleanup": timedelta(minutes=30),
+            "check-for-hierarchy-fetching": timedelta(hours=1),
+        }
+        effective_by_name = {
+            task.get("name"): task for task in beat_schedule.tasks_to_schedule
+        }
+        expected_names = set(discovery) | set(housekeeping)
+        if set(effective_by_name) != expected_names:
+            raise RuntimeError(
+                "unclassified self-hosted background schedules: "
+                f"expected={sorted(expected_names)!r} "
+                f"actual={sorted(effective_by_name)!r}"
+            )
+        for name, cadence in housekeeping.items():
+            if effective_by_name[name].get("schedule") != cadence:
+                raise RuntimeError(f"unexpected {name} housekeeping cadence")
+
+        if beat_app.DynamicTenantScheduler.RELOAD_INTERVAL != 60:
+            raise RuntimeError("unexpected Beat scheduler reload interval")
+        tick_source = inspect.getsource(beat_app.DynamicTenantScheduler.tick)
+        for marker in (
+            "self._liveness_probe_path.touch()",
+            "self._try_updating_schedule()",
+            "self._last_reload = now",
+        ):
+            if marker not in tick_source:
+                raise RuntimeError(f"Beat scheduler tick drifted: missing {marker}")
+        beat_app.DynamicTenantScheduler.RELOAD_INTERVAL = 300
+
+        def _sleepy_tick(self):  # noqa: ANN001
+            retval = super(beat_app.DynamicTenantScheduler, self).tick()
+            now = self.app.now()
+            if (
+                self._last_reload is None
+                or (now - self._last_reload) > self._reload_interval
+            ):
+                beat_app.task_logger.debug(
+                    "Reload interval reached, initiating task update"
+                )
+                try:
+                    self._try_updating_schedule()
+                except (AttributeError, KeyError):
+                    beat_app.task_logger.exception(
+                        "Failed to process task configuration"
+                    )
+                except Exception:
+                    beat_app.task_logger.exception("Unexpected error updating tasks")
+                else:
+                    self._liveness_probe_path.touch()
+                self._last_reload = now
+            return retval
+
+        beat_app.DynamicTenantScheduler.tick = _sleepy_tick
+
+        bootsteps = app_base.get_bootsteps()
+        if bootsteps != [app_base.LivenessProbe]:
+            raise RuntimeError(f"unexpected worker bootsteps: {bootsteps!r}")
+        app_base.get_bootsteps = lambda: []
+
         print(
-            "sitecustomize_background: disabled Craft sandbox cleanup schedule",
+            "sitecustomize_background: installed strict sleepy background policy",
             flush=True,
         )
     except Exception as e:  # pragma: no cover
         print(
-            "sitecustomize_background: failed to patch disabled-Craft schedule: "
+            "sitecustomize_background: failed to patch sleepy background policy: "
             f"{e}",
             flush=True,
         )
@@ -1100,7 +1269,7 @@ def _apply_web_connector_http_freshness_patch() -> None:
 
 def _install() -> None:
     _apply_embedding_tokenizer_alias_patch()
-    _apply_disabled_craft_schedule_patch()
+    _apply_sleepy_background_patch()
     _apply_playwright_helper_proxy_patch()
     _apply_configured_inference_proxy_patch()
     _apply_web_connector_egress_patch()

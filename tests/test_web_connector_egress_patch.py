@@ -6,6 +6,7 @@ import sys
 import unittest
 from contextlib import contextmanager
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from types import ModuleType
@@ -37,6 +38,12 @@ def _compatible_get_docs_to_update(
 
 def _drifted_get_docs_to_update(documents):
     return documents
+
+
+def _compatible_beat_tick(self):
+    self._liveness_probe_path.touch()
+    self._try_updating_schedule()
+    self._last_reload = now  # noqa: F821
 
 
 class WebConnectorEgressPatchTests(unittest.TestCase):
@@ -243,15 +250,79 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         onyx_module = ModuleType("onyx")
         background_module = ModuleType("onyx.background")
         celery_module = ModuleType("onyx.background.celery")
+        apps_module = ModuleType("onyx.background.celery.apps")
+        app_base_module = ModuleType("onyx.background.celery.apps.app_base")
+        beat_app_module = ModuleType("onyx.background.celery.apps.beat")
+        liveness_probe = type("LivenessProbe", (), {})
+        app_base_module.LivenessProbe = liveness_probe
+        app_base_module.get_bootsteps = lambda: [liveness_probe]
+        beat_app_module.DynamicTenantScheduler = type(
+            "DynamicTenantScheduler",
+            (),
+            {"RELOAD_INTERVAL": 60, "tick": _compatible_beat_tick},
+        )
+        beat_app_module.task_logger = SimpleNamespace(
+            debug=lambda *args, **kwargs: None,
+            exception=lambda *args, **kwargs: None,
+        )
+        apps_module.app_base = app_base_module
+        apps_module.beat = beat_app_module
         tasks_module = ModuleType("onyx.background.celery.tasks")
         beat_schedule_module = ModuleType(
             "onyx.background.celery.tasks.beat_schedule"
         )
+        task_ids = SimpleNamespace(
+            MONITOR_CELERY_QUEUES="monitor-celery-queues-task",
+            MONITOR_BACKGROUND_PROCESSES="monitor-background-processes-task",
+            MONITOR_PROCESS_MEMORY="monitor-process-memory-task",
+            CELERY_BEAT_HEARTBEAT="celery-beat-heartbeat-task",
+            CLEANUP_IDLE_SANDBOXES="cleanup-idle-sandboxes-task",
+            SCHEDULED_TASKS_DISPATCH_DUE="dispatch-due-scheduled-tasks-task",
+            SCHEDULED_TASKS_CLEANUP_STUCK="cleanup-stuck-scheduled-runs-task",
+        )
+        queue_ids = SimpleNamespace(MONITORING="monitoring")
+        constants_module.OnyxCeleryTask = task_ids
+        constants_module.OnyxCeleryQueues = queue_ids
+        schedule_specs = {
+            "check-for-user-file-processing": timedelta(seconds=20),
+            "check-for-user-file-project-sync": timedelta(seconds=20),
+            "check-for-user-file-delete": timedelta(seconds=20),
+            "check-for-indexing": timedelta(seconds=15),
+            "check-for-connector-deletion": timedelta(seconds=20),
+            "check-for-vespa-sync": timedelta(seconds=20),
+            "check-for-pruning": timedelta(seconds=20),
+            "check-for-checkpoint-cleanup": timedelta(hours=1),
+            "check-for-index-attempt-cleanup": timedelta(minutes=30),
+            "check-for-hierarchy-fetching": timedelta(hours=1),
+        }
+        removal_specs = {
+            "monitor-celery-queues": (task_ids.MONITOR_CELERY_QUEUES, timedelta(seconds=10)),
+            "monitor-background-processes": (task_ids.MONITOR_BACKGROUND_PROCESSES, timedelta(minutes=5)),
+            "monitor-process-memory": (task_ids.MONITOR_PROCESS_MEMORY, timedelta(minutes=5)),
+            "celery-beat-heartbeat": (task_ids.CELERY_BEAT_HEARTBEAT, timedelta(minutes=1)),
+            "cleanup-idle-sandboxes": (task_ids.CLEANUP_IDLE_SANDBOXES, timedelta(minutes=1)),
+            "dispatch-due-scheduled-tasks": (task_ids.SCHEDULED_TASKS_DISPATCH_DUE, timedelta(seconds=30)),
+            "cleanup-stuck-scheduled-runs": (task_ids.SCHEDULED_TASKS_CLEANUP_STUCK, timedelta(hours=1)),
+        }
         beat_schedule_module.beat_task_templates = [
-            {"name": "cleanup-idle-sandboxes"},
-            {"name": "unrelated-task"},
+            {"name": name, "task": name + "-task", "schedule": cadence, "options": {}}
+            for name, cadence in schedule_specs.items()
+        ] + [
+            {"name": name, "task": task_id, "schedule": cadence, "options": {"queue": queue_ids.MONITORING} if name.startswith("monitor-") else {}}
+            for name, (task_id, cadence) in removal_specs.items()
+            if name not in {"monitor-celery-queues", "monitor-process-memory", "celery-beat-heartbeat"}
         ]
+        beat_schedule_module.tasks_to_schedule = [
+            {"name": task["name"], "task": task["task"], "schedule": task["schedule"], "options": dict(task["options"])}
+            for task in beat_schedule_module.beat_task_templates
+        ] + [
+            {"name": name, "task": task_id, "schedule": cadence, "options": {"queue": queue_ids.MONITORING} if name.startswith("monitor-") else {}}
+            for name, (task_id, cadence) in removal_specs.items()
+            if name in {"monitor-celery-queues", "monitor-process-memory", "celery-beat-heartbeat"}
+        ]
+        beat_schedule_module.get_tasks_to_schedule = lambda: beat_schedule_module.tasks_to_schedule
         tasks_module.beat_schedule = beat_schedule_module
+        celery_module.apps = apps_module
         celery_module.tasks = tasks_module
         background_module.celery = celery_module
         connectors_module = ModuleType("onyx.connectors")
@@ -262,6 +333,10 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         configs_module = ModuleType("onyx.configs")
         db_module = ModuleType("onyx.db")
         indexing_module = ModuleType("onyx.indexing")
+        shared_configs_module = ModuleType("shared_configs")
+        shared_configs_configs_module = ModuleType("shared_configs.configs")
+        shared_configs_configs_module.MULTI_TENANT = False
+        shared_configs_module.configs = shared_configs_configs_module
         web_module.connector = connector_module
         connectors_module.web = web_module
         security_module.models = models_module
@@ -283,6 +358,9 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             "onyx": onyx_module,
             "onyx.background": background_module,
             "onyx.background.celery": celery_module,
+            "onyx.background.celery.apps": apps_module,
+            "onyx.background.celery.apps.app_base": app_base_module,
+            "onyx.background.celery.apps.beat": beat_app_module,
             "onyx.background.celery.tasks": tasks_module,
             "onyx.background.celery.tasks.beat_schedule": beat_schedule_module,
             "onyx.connectors": connectors_module,
@@ -305,6 +383,8 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             "onyx.utils.logger": logger_module,
             "onyx.utils.playwright_fetch": playwright_fetch_module,
             "onyx.utils.web_content": web_content_module,
+            "shared_configs": shared_configs_module,
+            "shared_configs.configs": shared_configs_configs_module,
         }
         env = {
             "WRAPPER_PATCH_STRICT": "true",
@@ -331,7 +411,43 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
 
         self.loaded_patch_module = module
         self.scrape_calls = scrape_calls
+        self.beat_schedule_module = beat_schedule_module
+        self.beat_app_module = beat_app_module
+        self.app_base_module = app_base_module
         return connector_module, calls, playwright_proxies, validations
+
+    def test_sleepy_background_schedule_and_bootsteps_are_effective(self) -> None:
+        self._load_patched_modules("validate_all")
+        schedule = self.beat_schedule_module.get_tasks_to_schedule()
+        by_name = {task["name"]: task for task in schedule}
+        discovery = {
+            "check-for-user-file-processing",
+            "check-for-user-file-project-sync",
+            "check-for-user-file-delete",
+            "check-for-indexing",
+            "check-for-connector-deletion",
+            "check-for-vespa-sync",
+            "check-for-pruning",
+        }
+        for name in discovery:
+            self.assertEqual(by_name[name]["schedule"], timedelta(minutes=5))
+        self.assertEqual(by_name["check-for-checkpoint-cleanup"]["schedule"], timedelta(hours=1))
+        self.assertEqual(by_name["check-for-index-attempt-cleanup"]["schedule"], timedelta(minutes=30))
+        self.assertEqual(by_name["check-for-hierarchy-fetching"]["schedule"], timedelta(hours=1))
+        for removed in (
+            "monitor-celery-queues",
+            "monitor-background-processes",
+            "monitor-process-memory",
+            "celery-beat-heartbeat",
+            "cleanup-idle-sandboxes",
+            "dispatch-due-scheduled-tasks",
+            "cleanup-stuck-scheduled-runs",
+        ):
+            self.assertNotIn(removed, by_name)
+        self.assertEqual(
+            self.beat_app_module.DynamicTenantScheduler.RELOAD_INTERVAL, 300
+        )
+        self.assertEqual(self.app_base_module.get_bootsteps(), [])
 
     def test_sitemap_constructor_uses_saved_level_public_proxy(self) -> None:
         connector, calls, _, validations = self._load_patched_modules("validate_all")

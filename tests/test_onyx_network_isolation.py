@@ -179,6 +179,79 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 autoheal["volumes"][0]["source"], "/var/run/docker.sock"
             )
             self.assertIn("myst-client", autoheal["depends_on"])
+            self.assertEqual(autoheal["environment"]["AUTOHEAL_INTERVAL"], "60")
+            self.assertTrue(autoheal["healthcheck"]["disable"])
+
+    def test_sleepy_health_inventory_and_aggregate_ownership(self) -> None:
+        model = _compose_model(
+            "full",
+            "docker-compose.vpn-autoheal.yml",
+            "docker-compose.code-interpreter-network.yml",
+            "docker-compose.teep-vpn.yml",
+            profiles=("tailscale",),
+        )
+        services = model["services"]
+        disabled = {"searxng-core", "obscura", "doc-drop-web", "cache", "opensearch", "autoheal"}
+        absent = {
+            "onyx-public-egress-proxy",
+            "onyx-host-egress-proxy",
+            "host-searxng-proxy",
+            "host-webui-publisher",
+            "host-doc-display-publisher",
+            "host-teep-proxy",
+            "tailscale-funnel",
+        }
+        for name in disabled:
+            self.assertTrue(services[name]["healthcheck"]["disable"], name)
+        for name in absent:
+            self.assertNotIn("healthcheck", services[name], name)
+
+        retained = {
+            name: service["healthcheck"]
+            for name, service in services.items()
+            if service.get("healthcheck") and not service["healthcheck"].get("disable")
+        }
+        self.assertEqual(retained["myst-client"]["interval"], "1m0s")
+        self.assertEqual(retained["myst-client"]["start_interval"], "5s")
+        self.assertEqual(retained["myst-client"]["retries"], 2)
+        for name, health in retained.items():
+            if name == "myst-client":
+                continue
+            self.assertEqual(health["interval"], "10m0s", name)
+            self.assertEqual(health["start_interval"], "5s", name)
+            self.assertEqual(health["retries"], 1, name)
+
+        self.assertIn("/json/version", " ".join(retained["obscura-cdp-gateway"]["test"]))
+        self.assertIn("/health", " ".join(retained["local-embedding-shim"]["test"]))
+        self.assertNotIn("/ready", " ".join(retained["local-embedding-shim"]["test"]))
+        for gateway, origin in (
+            ("obscura-cdp-gateway", "obscura"),
+            ("searxng-service-gateway", "searxng-core"),
+            ("doc-drop-route-gateway", "doc-drop-web"),
+        ):
+            self.assertEqual(
+                services[gateway]["depends_on"][origin]["condition"],
+                "service_started",
+            )
+
+        commands = "\n".join(" ".join(health["test"]) for health in retained.values())
+        for forbidden in ("example.com", "--check-ready", "/ready"):
+            self.assertNotIn(forbidden, commands)
+
+    def test_full_storage_and_background_power_defaults(self) -> None:
+        services = _compose_model("full")["services"]
+        opensearch = services["opensearch"]
+        self.assertEqual(opensearch["environment"]["OPENSEARCH_JAVA_OPTS"], "-Xms1g -Xmx1g")
+        self.assertEqual(
+            opensearch["environment"]["DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI"],
+            "true",
+        )
+        self.assertEqual(services["minio"]["environment"]["MINIO_SCANNER_SPEED"], "slowest")
+        background = services["background"]
+        self.assertEqual(background["environment"]["PROMETHEUS_METRICS_ENABLED"], "false")
+        self.assertEqual(background["environment"]["ONYX_SLACK_BOT_ENABLED"], "false")
+        self.assertEqual(background["environment"]["ONYX_DISCORD_BOT_ENABLED"], "false")
+        self.assertEqual(background["entrypoint"], ["python", "/app/wrapper-background-entrypoint.py"])
 
     def test_lite_and_full_application_services_are_internal_only(self) -> None:
         expected = {

@@ -599,134 +599,6 @@ async def _resolve_target_host(host: str, port: int) -> set[str]:
     return await _dns_query_a(host, resolver_ip, local_ip)
 
 
-async def _probe_socks5_proxy_endpoint(
-    proxy_host: str,
-    proxy_port: int,
-    username: str | None,
-    password: str | None,
-    scheme: str,
-) -> None:
-    """Verify SOCKS reachability and authentication without opening a target."""
-    reader, writer = await _open_http_proxy_connection(
-        proxy_host, proxy_port, scheme
-    )
-    try:
-        writer.write(b"\x05\x02\x00\x02" if username else b"\x05\x01\x00")
-        await writer.drain()
-        response = await asyncio.wait_for(
-            reader.readexactly(2), timeout=TUNNEL_CONNECT_TIMEOUT
-        )
-        if response[0] != 5 or response[1] == 0xFF:
-            raise ConnectionError("SOCKS5 readiness greeting was rejected")
-        if response[1] == 0x02:
-            if not username:
-                raise ConnectionError("SOCKS5 readiness requires credentials")
-            username_bytes = username.encode("utf-8")
-            password_bytes = (password or "").encode("utf-8")
-            writer.write(
-                b"\x01"
-                + bytes([len(username_bytes)])
-                + username_bytes
-                + bytes([len(password_bytes)])
-                + password_bytes
-            )
-            await writer.drain()
-            auth_response = await asyncio.wait_for(
-                reader.readexactly(2), timeout=TUNNEL_CONNECT_TIMEOUT
-            )
-            if auth_response[1] != 0:
-                raise ConnectionError("SOCKS5 readiness authentication failed")
-        elif response[1] != 0x00:
-            raise ConnectionError(
-                f"SOCKS5 readiness selected unsupported auth method {response[1]}"
-            )
-    finally:
-        writer.close()
-        await writer.wait_closed()
-
-
-async def _probe_http_proxy_endpoint(
-    proxy_host: str,
-    proxy_port: int,
-    username: str | None,
-    password: str | None,
-    scheme: str,
-) -> None:
-    """Verify HTTP proxy protocol and credentials without naming a target."""
-    reader, writer = await _open_http_proxy_connection(
-        proxy_host, proxy_port, scheme
-    )
-    try:
-        request = "OPTIONS * HTTP/1.1\r\nHost: proxy-readiness\r\n"
-        if username is not None:
-            import base64
-
-            credentials = base64.b64encode(
-                f"{username}:{password or ''}".encode("utf-8")
-            ).decode("ascii")
-            request += f"Proxy-Authorization: Basic {credentials}\r\n"
-        request += "Connection: close\r\n\r\n"
-        writer.write(request.encode("ascii"))
-        await writer.drain()
-        response_line = await asyncio.wait_for(
-            reader.readline(), timeout=TUNNEL_CONNECT_TIMEOUT
-        )
-        parts = response_line.decode("ascii", errors="replace").split(None, 2)
-        if len(parts) < 2 or not parts[0].startswith("HTTP/"):
-            raise ConnectionError("HTTP proxy readiness returned an invalid response")
-        try:
-            status = int(parts[1])
-        except ValueError as exc:
-            raise ConnectionError(
-                "HTTP proxy readiness returned an invalid status"
-            ) from exc
-        if status in {401, 407}:
-            raise ConnectionError("HTTP proxy readiness authentication failed")
-        # 5xx is acceptable here: some otherwise usable forward proxies do
-        # not implement target-free OPTIONS *. A valid HTTP response still
-        # proves the endpoint/TLS/protocol path without opening a target.
-        if status < 200 or status > 599:
-            raise ConnectionError(
-                f"HTTP proxy readiness returned unusable status {status}"
-            )
-    finally:
-        writer.close()
-        await writer.wait_closed()
-
-
-async def _check_egress_readiness() -> None:
-    """Verify the listener and the configured DNS or proxy substrate."""
-    _reader, writer = await asyncio.wait_for(
-        asyncio.open_connection("127.0.0.1", LISTEN_PORT),
-        timeout=TUNNEL_CONNECT_TIMEOUT,
-    )
-    writer.close()
-    await writer.wait_closed()
-
-    if not UPSTREAM_PROXY:
-        addresses = await _resolve_target_host("example.com", 443)
-        if not addresses:
-            raise RuntimeError("readiness DNS query returned no addresses")
-        for address in addresses:
-            reason = _ip_block_reason(address)
-            if reason:
-                raise RuntimeError(
-                    f"readiness DNS returned blocked {address} ({reason})"
-                )
-        return
-
-    scheme, host, port, username, password = _parse_proxy_url(UPSTREAM_PROXY)
-    if scheme in {"socks5", "socks5h"}:
-        await _probe_socks5_proxy_endpoint(
-            host, port, username, password, scheme
-        )
-        return
-
-    await _probe_http_proxy_endpoint(
-        host, port, username, password, scheme
-    )
-
-
 async def _validate_destination(
     host: str, port: int
 ) -> tuple[str | None, tuple[str, ...]]:
@@ -1980,14 +1852,9 @@ async def main() -> None:
 
 if __name__ == "__main__":
     try:
-        if sys.argv[1:] == ["--check-ready"]:
-            asyncio.run(_check_egress_readiness())
-        elif sys.argv[1:]:
-            raise SystemExit(
-                "usage: final_hop_proxy.py [--check-ready]"
-            )
-        else:
-            asyncio.run(main())
+        if sys.argv[1:]:
+            raise SystemExit("usage: final_hop_proxy.py")
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:

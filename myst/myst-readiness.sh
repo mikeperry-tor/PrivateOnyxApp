@@ -44,8 +44,21 @@ if [ "${MYST_VPN_ENABLED:-true}" = "false" ]; then
   exit 0
 fi
 
-myst connection info 2>/dev/null \
-  | grep -Eiq '"status"[[:space:]]*:[[:space:]]*"Connected"|Status:[[:space:]]*Connected'
+wget -Y off -q -T 5 -O - http://127.0.0.1:4050/connection 2>/dev/null \
+  | awk '
+      { response = response $0 }
+      END {
+        if (response !~ /^[[:space:]]*\{[[:space:]]*"status"[[:space:]]*:[[:space:]]*"Connected"[[:space:]]*[,}]/ ||
+            response !~ /\}[[:space:]]*$/) exit 1
+        rest = response
+        count = 0
+        while (match(rest, /"status"[[:space:]]*:/)) {
+          count++
+          rest = substr(rest, RSTART + RLENGTH)
+        }
+        exit count != 1
+      }
+    '
 
 vpn_cidr="$(
   ip -4 -o addr show dev myst0 scope global 2>/dev/null \
@@ -56,37 +69,17 @@ if [ -z "${vpn_cidr}" ]; then
   exit 1
 fi
 
-prefix="${vpn_cidr#*/}"
 local_ip="${vpn_cidr%/*}"
-case "${prefix}" in
-  ''|*[!0-9]*)
-    echo "VPN readiness failed: invalid myst0 prefix ${prefix}" >&2
-    exit 1
-    ;;
-esac
-if [ "${prefix}" -ge 32 ]; then
-  echo "VPN readiness failed: myst0 /${prefix} has no provider resolver" >&2
-  exit 1
-fi
 
-ip -4 route show dev myst0 | grep -q .
-
-# The provider resolver is the first usable IPv4 address of the Myst subnet.
-# Query a fixed, non-user hostname from the tunnel address so stale Connected
-# state or a dead data plane makes myst-client unhealthy and triggers autoheal.
-provider_dns="$({
-  awk -v cidr="${vpn_cidr}" 'BEGIN {
-    split(cidr, parts, "/"); split(parts[1], octets, ".");
-    ip = (((octets[1] * 256) + octets[2]) * 256 + octets[3]) * 256 + octets[4];
-    block = 2 ^ (32 - parts[2]); network = int(ip / block) * block + 1;
-    printf "%d.%d.%d.%d\n", int(network / 16777216) % 256,
-      int(network / 65536) % 256, int(network / 256) % 256, network % 256;
-  }'
-} 2>/dev/null)"
-if [ -z "${provider_dns}" ]; then
-  echo "VPN readiness failed: could not derive provider DNS" >&2
-  exit 1
-fi
-
-dig +time=5 +tries=1 +short -b "${local_ip}" @"${provider_dns}" example.com A \
-  | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
+# `route get` is a kernel lookup only: it neither resolves nor sends a packet.
+# Require ordinary public traffic to select the tunnel and its current source.
+ip -4 route get 198.51.100.1 2>/dev/null \
+  | awk -v expected_src="${local_ip}" '
+      NR == 1 {
+        for (i = 1; i <= NF; i++) {
+          if ($i == "dev") dev = $(i + 1)
+          if ($i == "src") src = $(i + 1)
+        }
+      }
+      END { exit !(dev == "myst0" && src == expected_src) }
+    '

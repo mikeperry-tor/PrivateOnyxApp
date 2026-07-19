@@ -35,6 +35,18 @@ def _load_module() -> ModuleType:
 
 
 class LocalEmbeddingShimReadinessTests(unittest.TestCase):
+    def test_health_never_requests_embeddings(self) -> None:
+        module = _load_module()
+        handler = self._handler(module)
+        handler.path = "/health"
+        with patch.object(
+            module,
+            "request_local_embeddings",
+            side_effect=AssertionError("health must remain inference-free"),
+        ):
+            handler.do_GET()
+        handler._send_json.assert_called_once_with(200, {"status": "ok"})
+
     def _handler(self, module: ModuleType):
         handler = module.Handler.__new__(module.Handler)
         handler.path = "/ready"

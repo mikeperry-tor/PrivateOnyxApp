@@ -137,11 +137,17 @@ container; restarting Myst alone can leave a half-open `myst0` interface and
 split default routes in the long-lived holder namespace. Recover such a state
 with the matching full `make down-*` then `make up-*` cycle.
 
-With `MYST_VPN_ENABLED=true`, health requires a connected Myst daemon, a usable
-`myst0` address, route, and provider-resolver data path. VPN-only autoheal may
-restart Myst after that data-plane health fails. The final-hop proxies wait for
-route health and never expose a system-route fallback while VPN mode is
-selected.
+With `MYST_VPN_ENABLED=true`, health reads only Myst's loopback
+`/connection` status plus the local `myst0` address and route. It requires a
+single top-level `Connected` status and verifies that a reserved public test
+address routes through `myst0` with that interface's source address. The check
+does not perform public DNS or HTTP traffic and does not log the API response,
+which can contain provider or identity details. VPN-only autoheal checks once
+per minute and may restart Myst after a failing local data-plane check. This
+lower cadence can leave a failed route visible for nearly a minute before
+recovery begins. Request-time final-hop DNS and destination validation remain
+authoritative and fail closed throughout that interval; there is no periodic
+upstream-proxy probe or system-route fallback while VPN mode is selected.
 
 With `MYST_VPN_ENABLED=false`, the Myst container idles as namespace owner,
 requires no wallet, and readiness requires that no stale `myst0` remains plus
@@ -168,7 +174,17 @@ docker inspect onyx-api_server-1
 docker inspect onyx-obscura-1
 docker logs onyx-onyx-public-egress-proxy-1 --since 10m
 docker logs myst-client-vpn --since 10m
+make health-inventory
 ```
+
+The inventory renders effective lite and full Compose models and reports each
+retained check's command, startup cadence, steady cadence, and approximate
+steady checks per hour. Retained checks use fast `start_interval` polling only
+during their bounded startup period and a ten-minute steady cadence, except
+Myst's one-minute recovery check. Origin services whose sole readiness value is
+already represented by a fixed gateway or publisher have their duplicate check
+disabled. Docker Engine 25.0+ and Compose 2.20.2+ are required; startup rejects
+Podman until its health-startup behavior has an equivalent validated contract.
 
 Check that application, browser, executor, and host-capable networks remain
 distinct; the fixed bridges point at the intended listener; target DNS does

@@ -1,5 +1,35 @@
 # Power saving plan
 
+## Current status (2026-07-19)
+
+**Implementation state: the complete pre-measurement bundle is implemented.**
+This includes the pinned component baseline, sleepy/local health and recovery
+checks, aggregate gateway checks, staged embedding readiness, idle MLX unload
+and cold reload, reduced Celery/Beat scheduling and worker overhead, removal of
+disabled monitoring/Craft/bot activity, the 1 GiB OpenSearch heap with
+Performance Analyzer disabled, and MinIO's `slowest` scanner profile. Tests and
+the user-facing and upgrade documentation cover these changes.
+
+**Validation state: deterministic and pinned-image validation passes.**
+`make check` passed 195 tests (with five image-only skips), and
+`make check-upgrade` passed the pinned-image contracts and five image-backed
+parser tests. Live full-stack checks covered startup/readiness, worker and Beat
+behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
+and MLX cold load, shared concurrent startup, and 10-minute idle unload. The
+long controlled before/after measurement windows and the remaining destructive
+or workload-specific fault/performance gates have not yet been run. A complete
+`make upgrade` dependency refresh was also not completed because PyPI access
+timed out; no dependency-lock input changed, and the exact Myst and Teep images
+were built and validated separately.
+
+**Deferred state: intentionally not implemented.** Every item under
+[Deferred until after the measurement gate](#deferred-until-after-the-measurement-gate)
+remains deferred: event-driven Myst route/MTU ownership; OpenSearch plugin,
+audit, refresh, and lower-memory experiments; the Kombu Redis blocking-pop
+timeout patch; API metrics and connection-pool sizing; worker consolidation;
+and supervisor log-relay or enabled-bot micro-tuning. These require comparable
+before/after measurements and separate evidence-driven changes.
+
 We want to save power for laptop users by reducing health check frequency and eliminating many pointless and expensive periodic tasks.
 
 Make the sleepy behavior the default. No power-saving preference or user-facing switch is warranted.

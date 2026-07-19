@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import re
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class ImmutableComponentPinTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.manifest = (ROOT / "stack.versions.env").read_text(encoding="utf-8")
+        cls.makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+
+    def value(self, name: str) -> str:
+        match = re.search(rf"^{re.escape(name)}=(.+)$", self.manifest, re.MULTILINE)
+        self.assertIsNotNone(match, f"missing {name}")
+        return match.group(1)
+
+    def test_source_builds_require_exact_commits(self) -> None:
+        for name in ("MYST_NODE_REF", "TEEP_REF", "MINIO_SOURCE_REF"):
+            self.assertRegex(self.value(name), r"^[0-9a-f]{40}$")
+
+        for path, argument in (
+            ("myst/build/Dockerfile", "MYST_NODE_REF"),
+            ("teep/build/Dockerfile", "TEEP_REF"),
+        ):
+            dockerfile = (ROOT / path).read_text(encoding="utf-8")
+            self.assertIn(f"ARG {argument}", dockerfile)
+            self.assertIn("git checkout --detach", dockerfile)
+            self.assertIn("org.opencontainers.image.revision", dockerfile)
+            self.assertNotRegex(dockerfile, rf"ARG {argument}=.+")
+
+        self.assertIn(
+            'MYST_NODE_REF="$(MYST_NODE_REF)"', self.makefile
+        )
+        self.assertIn('TEEP_REF="$(TEEP_REF)"', self.makefile)
+        fallback = re.search(
+            r"^TEEP_DEFAULT_REF := ([0-9a-f]{40})$",
+            self.makefile,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(fallback)
+        self.assertEqual(fallback.group(1), self.value("TEEP_REF"))
+
+    def test_mutable_support_tags_are_not_allowed(self) -> None:
+        for name in ("TAILSCALE_IMAGE", "AUTOHEAL_IMAGE"):
+            image = self.value(name)
+            self.assertRegex(image, r"@sha256:[0-9a-f]{64}$")
+            self.assertNotIn(":latest", image)
+            self.assertNotIn(":stable", image)
+        self.assertNotIn("tailscale/tailscale:stable", self.makefile)
+
+    def test_minio_release_records_its_image_source_revision(self) -> None:
+        self.assertRegex(
+            self.value("MINIO_IMAGE"),
+            r"^minio/minio:RELEASE\.[0-9TZ-]+-cpuv1$",
+        )
+        self.assertRegex(self.value("MINIO_SOURCE_REF"), r"^[0-9a-f]{40}$")
+
+
+if __name__ == "__main__":
+    unittest.main()

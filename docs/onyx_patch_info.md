@@ -457,10 +457,21 @@ Other retained behavior has its own focused tests and upgrade checks:
 
 The wrapper explicitly disables Onyx Craft because it provides the legacy
 code-interpreter service, not a Craft Kubernetes or Docker sandbox backend.
-The background bootstrap removes the otherwise unconditional
-`cleanup-idle-sandboxes` beat template when Craft is disabled. The removal is
-strictly shape-checked so an Onyx scheduling change fails visibly instead of
-causing periodic attempts to initialize an unconfigured Kubernetes backend.
+The strict background bootstrap materializes seven connector-discovery
+schedules at five minutes, removes their one-minute templates, removes the
+three Craft cleanup schedules, and removes the queue/process/memory monitoring
+producers. It also raises Beat's schedule reload interval to five minutes,
+removes worker liveness bootsteps, and moves Beat liveness publication until
+after a successful schedule update.
+
+`onyx/background_entrypoint.py` derives a supervisor file only after validating
+the pinned eight-worker, beat, watchdog, bot, and log-tail shapes. It retains
+six bounded workers without Celery heartbeat/gossip, drops monitoring workers,
+selects bot programs from two default-off Compose booleans, and replaces the
+Redis-based watchdog with a local liveness-file watchdog that can restart only
+Beat. Any source or configuration drift is a startup failure. These behaviors
+are power policy, not compatibility fallbacks, and should be removed if Onyx
+gains equivalent explicit configuration.
 
 ## Compose wrapper changes
 

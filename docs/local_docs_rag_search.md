@@ -263,11 +263,14 @@ or query-analysis model server. If Onyx starts requiring reranking or
 query-analysis for the workflows you use, route those calls to a real Onyx
 model server or extend the shim with compatible implementations.
 
-`GET /health` is process liveness. Compose uses `GET /ready`, which sends the
-fixed text `readiness` to the configured default embedding model and requires
-one non-empty vector. Full-mode `api_server` and `background` therefore do not
-start while the host/LAN embedding endpoint, its route, or its model is
-unusable. The response and logs expose no API key or upstream response body.
+`GET /health` is process liveness and is the shim's low-frequency Compose
+healthcheck. `GET /ready` sends the fixed text `readiness` to the configured
+default embedding model and requires one non-empty vector. `make up-full`
+starts only the shim and its routing dependencies, calls `/ready` exactly once,
+and proceeds to create the API/background tier only after that succeeds. A
+failure is returned without retry and leaves the diagnostic subset running;
+already-running API/background services are not recreated by a later failed
+validation. The response and logs expose no API key or upstream response body.
 The default plain-HTTP `host.docker.internal` endpoint uses the host route's
 fixed exact-host exception even when public cleartext URLs are disabled;
 arbitrary public HTTP destinations remain blocked. RFC1918 HTTP destinations
@@ -355,18 +358,24 @@ make embedserv-verify-model
 make embedserv-serve
 ```
 
-Once the selected model is installed, `make up-full` automatically launches
-`make embedserv-serve` in the background when the shim uses the bundled default
-URL. It skips this startup when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` selects
-Teep or another custom service. If the default URL is selected without an
-installed or already-running server, startup fails immediately with setup
-guidance. Automatic startup waits for the listener and shows recent log output
-directly if the process exits or times out.
-The background server writes to `embedserv/serve.log`; direct
-`make embedserv-serve` remains the foreground form. `make down-full` validates
-the recorded process identity before stopping an automatically launched
-server. Missing, stale, or reused PIDs are reported and ignored; manually
-launched servers are never stopped by this lifecycle hook.
+Once the selected model is installed, `make up-full` automatically launches a
+small host lifecycle proxy when the shim uses the bundled default URL. It skips
+this startup when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` selects Teep or another
+custom service. The proxy accepts only bounded `POST /v1/embeddings` requests,
+starts the pinned `mlx-openai-server` child on the first request, and unloads
+the child ten minutes after the last active request completes. Concurrent cold
+requests share one startup, and a request is forwarded exactly once: a child
+crash is returned as an error instead of replaying an embedding batch. Cold
+startup and forwarding share the shim's 30-second outer deadline.
+
+If the default URL is selected without an installed server/model, startup fails
+immediately with setup guidance. Automatic startup waits only for the lifecycle
+proxy listener; the staged `/ready` request proves the actual model separately.
+The proxy writes to `embedserv/serve.log`; direct `make embedserv-serve` remains
+the foreground form. `make down-full` validates the recorded proxy identity,
+signals its child process group, waits a bounded grace period, and force-stops
+only that validated child if needed. Missing, stale, or reused PIDs are reported
+and ignored; manually launched and custom servers are never stopped.
 
 `make embedserv-install` installs from the hashed lock file with
 `--require-hashes`. To upgrade package versions during a stack upgrade, edit
@@ -394,10 +403,9 @@ ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:3210/v1/embedd
 defaults it to `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` for the bundled MLX server
 flow.
 
-`make embedserv-serve` reads `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`, requires an explicit port,
-requires the path to end in `/v1/embeddings`, and binds to `0.0.0.0` when the
-configured host is `host.docker.internal`. The Docker-side shim reaches that
-host service through `host.docker.internal`.
+`make embedserv-serve` owns only the bundled default URL and binds its lifecycle
+proxy to host port 3210; its MLX child binds only to `127.0.0.1:3211`. The
+Docker-side shim reaches the proxy through `host.docker.internal`.
 
 To use Teep instead of the bundled MLX server, configure:
 
@@ -423,8 +431,36 @@ ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true
 The shim itself has no direct route. It uses HTTP absolute-form or HTTPS
 CONNECT through `onyx-host-egress-bridge`, verifies TLS, reuses pooled
 connections, and disables ambient proxy discovery. Without the required host
-policy permission, `/ready` remains unhealthy and full-stack startup fails
-closed instead of accepting later embedding errors.
+policy permission, the one-shot `/ready` validation fails and full-stack
+startup stops before creating a new API/background tier.
+
+## Full-Mode Idle Storage Policy
+
+Full mode trades some background responsiveness for lower idle CPU and memory:
+
+- OpenSearch uses a fixed 1 GiB initial/maximum JVM heap and disables the
+  performance-analyzer agent.
+- MinIO uses `MINIO_SCANNER_SPEED=slowest`; object healing, lifecycle cleanup,
+  and scanner-driven maintenance can therefore take longer. Its retained
+  healthcheck uses the common slow steady cadence.
+- Redis and OpenSearch origin checks are disabled because dependent local
+  consumers surface failures and their duplicate polling added no route
+  assurance.
+- Background discovery schedules are materialized every five minutes, queue
+  monitoring producers/workers are removed, worker heartbeats/gossip are
+  disabled, and worker event metrics are off. New or changed connector work can
+  wait up to roughly five minutes before discovery.
+- Slack and Discord bot processes are disabled by default. Enable only the
+  needed process with `ONYX_SLACK_BOT_ENABLED` or
+  `ONYX_DISCORD_BOT_ENABLED`; a Compose boolean is required.
+
+The retained worker pool is explicitly bounded: primary 2, light 4, heavy 2,
+doc-processing 2, user-file-processing 1, and document-fetching 1. Beat writes
+its liveness marker only after a successful schedule update. A local watchdog
+checks that marker without Redis and restarts only `celery_beat` after two
+missing observations or a stale interval. Startup validates the pinned
+supervisor and schedule shapes; drift is fatal rather than silently restoring
+the higher-frequency upstream configuration.
 
 The Makefile uses `mlx-embeddings` through `mlx-openai-server` because this
 stack expects an OpenAI-compatible embedding endpoint with stable vector output.

@@ -70,6 +70,13 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     --entrypoint python \
     -e PYTHONPATH=/shared \
     -e WRAPPER_PATCH_STRICT=true \
+    -e ENABLE_CRAFT=false \
+    -e ONYX_DISABLE_VESPA=true \
+    -e AUTO_LLM_CONFIG_URL= \
+    -e LICENSE_ENFORCEMENT_ENABLED=false \
+    -e ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=false \
+    -e ONYX_SLACK_BOT_ENABLED=false \
+    -e ONYX_DISCORD_BOT_ENABLED=false \
     -e ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED=false \
     -e ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS=doc-drop-web \
     -e ONYX_HELPER_HTTP_PROXY_URL=http://onyx-public-egress-bridge:3128 \
@@ -81,8 +88,10 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     -e ONYX_WEB_CONNECTOR_DISPLAY_BASE_URL=http://localhost:3000/doc-drop/ \
     -v "$repo_root/onyx/patches/shared:/shared:ro" \
     -v "$repo_root/onyx/patches/sitecustomize_background:/background:ro" \
+    -v "$repo_root/onyx/background_entrypoint.py:/wrapper-background-entrypoint.py:ro" \
+    -v "$repo_root/onyx/beat_liveness_watchdog.py:/wrapper-beat-liveness-watchdog.py:ro" \
     "$onyx_backend_image" \
-    -c "import importlib.util, os; s=importlib.util.spec_from_file_location('background_patch_validation', '/background/sitecustomize.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); os.environ['WRAPPER_PATCH_STRICT']='true'; os.environ['ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED']='true'; m._apply_web_connector_http_freshness_patch(); assert m._INDEXING_SKIP_PATCHED; print('PINNED_PDF_FRESHNESS_CONTRACT_OK')"
+    -c "import importlib.util, os, sys; s=importlib.util.spec_from_file_location('background_patch_validation', '/background/sitecustomize.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); from datetime import timedelta; from onyx.background.celery.apps.beat import DynamicTenantScheduler; from onyx.background.celery.apps import app_base; from onyx.background.celery.tasks import beat_schedule as b; effective={t['name']: t for t in b.get_tasks_to_schedule()}; sleepy={'check-for-user-file-processing','check-for-user-file-project-sync','check-for-user-file-delete','check-for-indexing','check-for-connector-deletion','check-for-vespa-sync','check-for-pruning'}; assert all(effective[n]['schedule'] == timedelta(minutes=5) for n in sleepy); removed={'monitor-celery-queues','monitor-background-processes','monitor-process-memory','celery-beat-heartbeat','cleanup-idle-sandboxes','dispatch-due-scheduled-tasks','cleanup-stuck-scheduled-runs'}; assert not removed.intersection(effective); assert DynamicTenantScheduler.RELOAD_INTERVAL == 300; assert app_base.get_bootsteps() == []; assert not any(name.startswith('onyx.background.celery.apps.monitoring') or name.startswith('onyx.background.celery.tasks.monitoring') for name in sys.modules); e=importlib.util.spec_from_file_location('background_entrypoint_validation','/wrapper-background-entrypoint.py'); em=importlib.util.module_from_spec(e); e.loader.exec_module(em); cfg=em.derive_config(); workers=[x for x in cfg.sections() if x.startswith('program:celery_worker_')]; assert len(workers) == 6; assert all(cfg.get(x,'command').count('--without-heartbeat') == 1 and cfg.get(x,'command').count('--without-gossip') == 1 for x in workers); assert not cfg.has_section('program:celery_worker_monitoring'); assert not cfg.has_section('program:celery_worker_scheduled_tasks'); assert not cfg.has_section('program:slack_bot'); assert not cfg.has_section('program:discord_bot'); os.environ['WRAPPER_PATCH_STRICT']='true'; os.environ['ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED']='true'; m._apply_web_connector_http_freshness_patch(); assert m._INDEXING_SKIP_PATCHED; print('PINNED_BACKGROUND_CONTRACTS_OK')"
 
 echo "Validating executor command contract in $code_interpreter_image"
 "$container_bin" run --rm \

@@ -13,15 +13,18 @@ COMPOSE_ENV_FILES = --env-file "$(VERSION_FILE)" --env-file "$(ENV_FILE)"
 ONYX_COMPOSE_ENV_FILES = $(COMPOSE_ENV_FILES) --env-file "$(ONYX_ENV_FILE)"
 
 MYST_NODE_REPO ?= https://github.com/mikeperry-tor/node.git
-MYST_NODE_BRANCH ?= docker_host_fixes_with_logs
+MYST_NODE_REF ?= $(call env_value,MYST_NODE_REF)
+ifeq ($(strip $(MYST_NODE_REF)),)
+$(error MYST_NODE_REF is not set in $(VERSION_FILE))
+endif
 MYST_DOCKERFILE ?= myst/build/Dockerfile
 MYST_IMAGE ?= $(call env_value,MYST_IMAGE)
 ifeq ($(strip $(MYST_IMAGE)),)
-MYST_IMAGE := local/private-onyx-myst:20260713
+MYST_IMAGE := local/private-onyx-myst:$(shell printf '%s' '$(MYST_NODE_REF)' | cut -c1-12)
 endif
 
 TEEP_REPO ?= https://github.com/13rac1/teep.git
-TEEP_DEFAULT_REF := 46ee4b854641d3932c880ae5ac66d5f2d2a26791
+TEEP_DEFAULT_REF := 6413fe0547b449e67f7296986fe8b8ffbc9bbcd2
 TEEP_REF ?= $(call env_value,TEEP_REF)
 ifeq ($(strip $(TEEP_REF)),)
 TEEP_REF := $(TEEP_DEFAULT_REF)
@@ -33,7 +36,7 @@ TEEP_IMAGE := 13rac1/teep:$(TEEP_REF)
 endif
 TAILSCALE_IMAGE ?= $(call env_value,TAILSCALE_IMAGE)
 ifeq ($(strip $(TAILSCALE_IMAGE)),)
-TAILSCALE_IMAGE := tailscale/tailscale:stable
+$(error TAILSCALE_IMAGE is not set in $(VERSION_FILE))
 endif
 PYTHON_SLIM_IMAGE ?= $(call env_value,PYTHON_SLIM_IMAGE)
 OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
@@ -205,7 +208,7 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help test check test-images check-upgrade up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images check-upgrade health-inventory up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -213,6 +216,7 @@ help:
 	@echo "  make check        # Run deterministic tests and local static checks"
 	@echo "  make test-images  # Validate patches against already-built pinned images"
 	@echo "  make check-upgrade # Run check plus pinned-image validation after an upgrade"
+	@echo "  make health-inventory # Print effective lite/full health cadence inventory"
 	@echo "  make up-lite      # Start wrapper + Onyx lite"
 	@echo "  make up-full      # Start wrapper + Onyx full and an installed default MLX server"
 	@echo "  make down-lite    # Stop wrapper + Onyx lite"
@@ -249,10 +253,17 @@ check: test
 		onyx/patches \
 		onyx/doc_drop_webserver.py \
 		onyx/local_embedding_shim.py \
+		onyx/background_entrypoint.py \
+		onyx/beat_liveness_watchdog.py \
+		embedserv/idle_embedding_proxy.py \
 		searxng/engines \
 		searxng/patches \
 		tests
 	git diff --check
+
+health-inventory:
+	@python3 tests/health_inventory.py lite
+	@python3 tests/health_inventory.py full
 
 test-images:
 	@CONTAINER_BIN="$(CONTAINER_BIN)" \
@@ -309,13 +320,31 @@ searxng-build:
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
-up-lite: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
+check-container-health-capability:
+	@set -eu; \
+	case "$(CONTAINER_BIN)" in \
+		*podman*) \
+			echo "ERROR: Podman startup-health has not passed this wrapper's fast-start/slow-steady contract; use Docker Engine 25.0+ with Compose 2.20.2+"; \
+			exit 1 \
+			;; \
+	esac; \
+	engine_version="$$($(CONTAINER_BIN) version --format '{{.Server.Version}}')"; \
+	compose_version="$$($(CONTAINER_BIN) compose version --short)"; \
+	ENGINE_VERSION="$$engine_version" COMPOSE_VERSION="$$compose_version" python3 -c 'import os; from re import findall; parse=lambda v: tuple((list(map(int, findall(r"\d+", v)))+[0,0,0])[:3]); assert parse(os.environ["ENGINE_VERSION"]) >= (25,0,0), "Docker Engine 25.0+ is required for start_interval"; assert parse(os.environ["COMPOSE_VERSION"]) >= (2,20,2), "Docker Compose 2.20.2+ is required for start_interval"'
+
+up-lite: ensure-onyx-config sync-onyx-env check-container-health-capability ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
-up-full: ensure-onyx-config sync-onyx-env ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
+up-full: ensure-onyx-config sync-onyx-env check-container-health-capability ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait local-embedding-shim
+	@$(MAKE) --no-print-directory embedding-ready-once
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
+
+embedding-ready-once:
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) exec -T local-embedding-shim \
+		wget -q -T 35 -O /dev/null http://127.0.0.1:9101/ready
 
 ensure-onyx-config:
 	@set -eu; \
@@ -458,11 +487,11 @@ myst-image-ready:
 		echo "Myst image already present: $(MYST_IMAGE)"; \
 	else \
 		echo "Myst image not found: $(MYST_IMAGE). Building..."; \
-		$(MAKE) myst-build MYST_IMAGE="$(MYST_IMAGE)" MYST_NODE_REPO="$(MYST_NODE_REPO)" MYST_NODE_BRANCH="$(MYST_NODE_BRANCH)" MYST_DOCKERFILE="$(MYST_DOCKERFILE)"; \
+		$(MAKE) myst-build MYST_IMAGE="$(MYST_IMAGE)" MYST_NODE_REPO="$(MYST_NODE_REPO)" MYST_NODE_REF="$(MYST_NODE_REF)" MYST_DOCKERFILE="$(MYST_DOCKERFILE)"; \
 	fi
 
 myst-build:
-	@echo "Building $(MYST_IMAGE) using $(MYST_DOCKERFILE) (repo=$(MYST_NODE_REPO), branch=$(MYST_NODE_BRANCH))..."
+	@echo "Building $(MYST_IMAGE) using $(MYST_DOCKERFILE) (repo=$(MYST_NODE_REPO), ref=$(MYST_NODE_REF))..."
 	@set -eu; set --; \
 	[ -z "$${HTTP_PROXY:-}" ] || set -- "$$@" --build-arg HTTP_PROXY; \
 	[ -z "$${HTTPS_PROXY:-}" ] || set -- "$$@" --build-arg HTTPS_PROXY; \
@@ -473,7 +502,7 @@ myst-build:
 	"$(CONTAINER_BIN)" build "$$@" \
 		--file "$(MYST_DOCKERFILE)" \
 		--build-arg MYST_NODE_REPO="$(MYST_NODE_REPO)" \
-		--build-arg MYST_NODE_BRANCH="$(MYST_NODE_BRANCH)" \
+		--build-arg MYST_NODE_REF="$(MYST_NODE_REF)" \
 		--tag "$(MYST_IMAGE)" \
 		.
 
@@ -566,33 +595,17 @@ embedserv-serve: embedserv-verify-model
 	served_model="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL:-$$model_repo}"; \
 	embeddings_url="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-http://host.docker.internal:3210/v1/embeddings}"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
-	parsed_url=$$(URL="$$embeddings_url" python3 -c 'from urllib.parse import urlparse; import os; parsed = urlparse(os.environ["URL"]); print(parsed.scheme); print(parsed.hostname or ""); print("" if parsed.port is None else parsed.port); print(parsed.path.rstrip("/"))'); \
-	scheme=$$(printf '%s\n' "$$parsed_url" | sed -n '1p'); \
-	host=$$(printf '%s\n' "$$parsed_url" | sed -n '2p'); \
-	port=$$(printf '%s\n' "$$parsed_url" | sed -n '3p'); \
-	path=$$(printf '%s\n' "$$parsed_url" | sed -n '4p'); \
-	if [ "$$scheme" != "http" ]; then \
-		echo "ERROR: ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL must use http: $$embeddings_url"; \
+	if [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; then \
+		echo "ERROR: embedserv-serve owns only the bundled default upstream: $(EMBEDSERV_DEFAULT_UPSTREAM_URL)"; \
 		exit 1; \
 	fi; \
-	if [ -z "$$host" ] || [ -z "$$port" ]; then \
-		echo "ERROR: ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL must include a host and explicit port: $$embeddings_url"; \
-		exit 1; \
-	fi; \
-	if [ "$$path" != "/v1/embeddings" ]; then \
-		echo "ERROR: ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL must end with /v1/embeddings: $$embeddings_url"; \
-		exit 1; \
-	fi; \
-	if [ "$$host" = "host.docker.internal" ]; then \
-		host="0.0.0.0"; \
-	fi; \
-	echo "Launching mlx-openai-server for $$served_model on $$host:$$port (source URL: $$embeddings_url)"; \
-	exec "$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server" launch \
-		--model-type embeddings \
+	echo "Launching idle lifecycle proxy for $$served_model on 127.0.0.1:3210"; \
+	exec python3 "$(EMBEDSERV_DIR)/idle_embedding_proxy.py" \
+		--listen-port 3210 \
+		--child-port 3211 \
+		--server-executable "$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server" \
 		--model-path "$$model_dir" \
-		--served-model-name "$$served_model" \
-		--host "$$host" \
-		--port "$$port"
+		--served-model-name "$$served_model"
 
 # Start the bundled host MLX server for full mode only after its selected model
 # has been installed and only while the shim still targets the bundled default
@@ -605,6 +618,7 @@ embedserv-start-if-installed:
 	fi; \
 	set -a; . "$(ENV_FILE)"; set +a; \
 	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	served_model="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL:-$$model_repo}"; \
 	embeddings_url="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-$(EMBEDSERV_DEFAULT_UPSTREAM_URL)}"; \
 	venv_server="$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
@@ -621,14 +635,19 @@ embedserv-start-if-installed:
 		echo "Run 'make embedserv-install' or configure ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL for Teep/custom embeddings"; \
 		exit 1; \
 	fi; \
-	echo "Starting bundled MLX embedding server for $$model_repo (log: $(EMBEDSERV_LOG))"; \
-	nohup "$${MAKE:-make}" embedserv-serve EMBEDSERV_SKIP_INSTALL=true >"$(EMBEDSERV_LOG)" 2>&1 & \
+	echo "Starting bundled MLX embedding lifecycle proxy for $$model_repo (log: $(EMBEDSERV_LOG))"; \
+	nohup python3 "$(EMBEDSERV_DIR)/idle_embedding_proxy.py" \
+		--listen-port 3210 \
+		--child-port 3211 \
+		--server-executable "$$venv_server" \
+		--model-path "$$model_dir" \
+		--served-model-name "$$served_model" >"$(EMBEDSERV_LOG)" 2>&1 & \
 	pid=$$!; \
 	printf '%s\n' "$$pid" >"$(EMBEDSERV_PID_FILE)"; \
 	attempt=0; \
 	while [ "$$attempt" -lt 240 ]; do \
 		if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 3210), timeout=1); s.close()' >/dev/null 2>&1; then \
-			echo "Bundled MLX embedding server is listening on 127.0.0.1:3210"; \
+			echo "Bundled MLX embedding lifecycle proxy is listening on port 3210"; \
 			exit 0; \
 		fi; \
 		if ! kill -0 "$$pid" 2>/dev/null; then \
@@ -645,7 +664,7 @@ embedserv-start-if-installed:
 	kill -TERM "$$pid"; \
 	exit 1
 
-# Stop only the make process recorded by the automatic full-mode startup. An
+# Stop only the lifecycle proxy recorded by the automatic full-mode startup. An
 # absent, exited, malformed, or reused PID is a diagnosed no-op so down-full is
 # not made brittle by stale host state. Foreground/manual servers are untouched.
 embedserv-stop-if-started:
@@ -672,7 +691,7 @@ embedserv-stop-if-started:
 		exit 0; \
 	fi; \
 	case "$$command_line" in \
-		*' embedserv-serve EMBEDSERV_SKIP_INSTALL=true'*) ;; \
+		*'/embedserv/idle_embedding_proxy.py '*) ;; \
 		*) \
 			echo "PID $$pid no longer belongs to the automatically started MLX embedding server; leaving it untouched"; \
 			rm -f -- "$(EMBEDSERV_PID_FILE)"; \
@@ -685,12 +704,12 @@ embedserv-stop-if-started:
 		exit 1; \
 	fi; \
 	attempt=0; \
-	while kill -0 "$$pid" 2>/dev/null && [ "$$attempt" -lt 50 ]; do \
+	while kill -0 "$$pid" 2>/dev/null && [ "$$attempt" -lt 500 ]; do \
 		sleep 0.1; \
 		attempt=$$((attempt + 1)); \
 	done; \
 	if kill -0 "$$pid" 2>/dev/null; then \
-		echo "ERROR: MLX embedding server PID $$pid did not stop after SIGTERM; inspect $(EMBEDSERV_LOG)"; \
+		echo "ERROR: MLX lifecycle proxy PID $$pid did not stop after its bounded request and child grace; inspect $(EMBEDSERV_LOG)"; \
 		exit 1; \
 	fi; \
 	rm -f -- "$(EMBEDSERV_PID_FILE)"; \

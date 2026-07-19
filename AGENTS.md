@@ -28,6 +28,10 @@ At a high level:
 
 - Users reach nginx through a hardened fixed host publisher or the optional fixed Tailscale frontend gateway; nginx stays internal-only.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
+- Full mode validates embedding readiness in a staged one-shot gate before a
+  fresh API/background tier, uses an on-demand host MLX lifecycle proxy for the
+  bundled backend, and applies the documented low-idle background/storage
+  policy. Bot workers are explicit default-off options.
 - The recommended local-RAG Admin model name `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only tokenizer construction to the bundled v1 tokenizer.
 - The wrapper uses the legacy code-interpreter service and explicitly disables unsupported Craft sandbox scheduling.
 - Onyx sends LLM requests through the included Teep local inference service.
@@ -153,10 +157,13 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
 - `make check-upgrade` - run `make check` followed by `make test-images`. Run
   this after `make upgrade` and before the practical live validation matrix.
 - `make up-lite` / `make up-full` - start the lite or full stack. Full mode
-  also starts the bundled host MLX embedding server when its selected model is
-  already installed and the shim still uses the bundled default endpoint;
-  `make down-full` stops only that identity-validated automatically launched
-  process. Custom upstreams and manually launched servers are not touched.
+  also starts the bundled host MLX lifecycle proxy when its selected model is
+  already installed and the shim still uses the bundled default endpoint, then
+  validates `/ready` once before creating a new API/background tier;
+  `make down-full` stops only that identity-validated proxy and child group.
+  Custom upstreams and manually launched servers are not touched.
+- `make health-inventory` - render effective lite/full healthcheck commands,
+  startup/steady cadences, and approximate steady checks per hour.
 - `make down-lite` / `make down-full` - stop the matching stack.
 - `make ps-lite` / `make ps-full` - inspect containers.
 - `make logs-lite` / `make logs-full` - follow logs.

@@ -267,13 +267,14 @@ services:
       # on-chain instead of getting a CoinGate order auto-created.
       MYST_SKIP_ORDER_CREATION: "${MYST_SKIP_ORDER_CREATION:-false}"
     healthcheck:
-      # VPN mode requires Connected plus a usable myst0 IPv4 subnet. Explicit
+      # VPN mode requires Connected plus a usable myst0 IPv4 route. Explicit
       # no-VPN mode instead requires a usable non-myst0 IPv4 default route and
       # no stale myst0; it must not assume Docker assigned that route to eth0.
       test: ["CMD", "/bin/sh", "/usr/local/bin/myst-readiness.sh"]
-      interval: 15s
-      timeout: 15s
-      retries: 4
+      interval: 1m
+      start_interval: 5s
+      timeout: 10s
+      retries: 2
       # Keep this above worst-case connect startup budget:
       # max_attempts * (connection_up_timeout + status_timeout) + retry_gaps.
       # With defaults: 6 * (30 + 15) + 5 * 5 = 295s.

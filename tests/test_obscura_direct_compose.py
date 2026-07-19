@@ -56,11 +56,13 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         background_patch = (
             ROOT / "onyx/patches/sitecustomize_background/sitecustomize.py"
         ).read_text()
-        self.assertIn("_apply_disabled_craft_schedule_patch()", background_patch)
-        self.assertIn(
-            'task.get("name") != "cleanup-idle-sandboxes"',
-            background_patch,
-        )
+        self.assertIn("_apply_sleepy_background_patch()", background_patch)
+        for name in (
+            "cleanup-idle-sandboxes",
+            "dispatch-due-scheduled-tasks",
+            "cleanup-stuck-scheduled-runs",
+        ):
+            self.assertIn(name, background_patch)
 
     def test_searxng_build_consumes_generated_dependency_lock(self):
         image_tag = re.search(

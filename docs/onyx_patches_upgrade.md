@@ -397,10 +397,13 @@ upgrade blocker, not a reason to weaken validation.
 
 Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
 background services unless the wrapper deliberately adds and documents a
-Craft backend. With Craft disabled, the background bootstrap must find and
-remove exactly one `cleanup-idle-sandboxes` beat template; beat logs must not
-show Kubernetes sandbox-manager initialization attempts. Re-audit the template
-name and collection shape on every Onyx upgrade.
+Craft backend. Re-audit the exact schedule names, tasks, and original cadences:
+seven discovery schedules must be rewritten to five minutes; the three Craft
+cleanup schedules and queue/process/memory monitoring schedules must be
+removed; conditional schedules must remain absent; and Beat reload must remain
+five minutes. Confirm liveness is written only after schedule update succeeds,
+worker bootsteps are empty, and beat logs show no sandbox-manager or monitoring
+task initialization.
 
 Confirm the background image's supervisor `environment=PYTHONPATH=...` setting.
 While it resets worker `PYTHONPATH` to `/app`, full-mode Compose must mount the
@@ -409,6 +412,23 @@ strict background bootstrap at `/app/sitecustomize.py` and its shared helper at
 by the container entry process. Verify patch-success diagnostics in the actual
 Celery worker and in a spawn-based document-fetching child, then run a real
 doc-drop Web connector crawl and PDF extraction.
+
+Also diff the pinned supervisor configuration against
+`onyx/background_entrypoint.py`. It must still identify exactly eight upstream
+worker programs, remove only the scheduled/monitoring pair, retain six workers
+with `--without-heartbeat --without-gossip`, preserve the bounded concurrency
+values, and select the exact two bot programs from default-off booleans.
+Validate that the local watchdog accepts only an owner-matched regular file,
+uses two-observation missing-file handling plus the bounded startup grace, and
+invokes `supervisorctl restart celery_beat` only. Exercise one representative
+connector indexing workload before accepting lower concurrency.
+
+For support and source pins, require immutable Tailscale/autoheal digests,
+exact Myst and Teep Git revisions in both image labels and build arguments, and
+the MinIO source revision associated with its release image. Run
+`make health-inventory`, inspect effective startup/steady intervals, and verify
+Docker Engine 25+/Compose 2.20.2+ preserve `start_interval`; Podman remains
+unsupported until that contract passes independently.
 
 ## Minimum deterministic validation
 

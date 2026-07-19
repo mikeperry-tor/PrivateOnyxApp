@@ -4,7 +4,7 @@ FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 RUN apk add --no-cache git bash gcc musl-dev make linux-headers
 
 ARG MYST_NODE_REPO=https://github.com/mikeperry-tor/node.git
-ARG MYST_NODE_BRANCH=docker_host_fixes_with_logs
+ARG MYST_NODE_REF
 
 ARG BUILD_BRANCH=""
 ARG BUILD_COMMIT=""
@@ -13,13 +13,22 @@ ARG BUILD_VERSION=""
 
 # Compile application
 WORKDIR /go/src/github.com/mysteriumnetwork/node
-RUN git clone --branch "$MYST_NODE_BRANCH" --single-branch --depth 1 "$MYST_NODE_REPO" .
+RUN test -n "$MYST_NODE_REF" \
+    && git clone "$MYST_NODE_REPO" . \
+    && git checkout --detach "$MYST_NODE_REF" \
+    && test "$(git rev-parse HEAD)" = "$MYST_NODE_REF"
 RUN go mod download
 ARG TARGETOS TARGETARCH
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH BUILD_STATIC=1 bin/build
 
 
 FROM alpine:3.22
+
+ARG MYST_NODE_REPO=https://github.com/mikeperry-tor/node.git
+ARG MYST_NODE_REF
+
+LABEL org.opencontainers.image.source=$MYST_NODE_REPO \
+      org.opencontainers.image.revision=$MYST_NODE_REF
 
 # Install packages
 RUN apk add --no-cache iptables ipset ca-certificates openvpn bash sudo openresolv bind-tools

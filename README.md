@@ -53,7 +53,9 @@ The Docker Compose files in this stack relies on the following components:
 
 ## Prerequisites
 
-- Docker or Podman
+- Docker Engine 25.0 or later with Docker Compose 2.20.2 or later. The wrapper
+  currently rejects Podman startup because its separate startup-health model
+  has not passed the required fast-start/slow-steady contract.
 - Internet access for image builds and provider APIs
 - `make`
 - `uv` for unit tests and MLX embedding server installation.
@@ -119,8 +121,8 @@ Edit `.env.wrapper` as needed, based on the `.env.wrapper.example` template.
 Most likely variables you want to change:
 
 - Container engine selection:
-  - Set `CONTAINER_BIN` to the docker or podman executable you want the wrapper to use.
-  - In Podman mode, the wrapper disables `code-interpreter` and the VPN-only `autoheal` service by default because they require a functional Docker-compatible daemon socket inside containers.
+  - Keep `CONTAINER_BIN=docker`. Podman fails before startup with an actionable
+    capability error until its startup-health behavior is validated.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **VPN and Proxy Use**:
@@ -417,6 +419,9 @@ Notes:
   directly, e.g. `http://doc-drop-web:8091/my-paper.pdf`.
 - Later syncs skip downloading and parsing unchanged local PDFs, making routine
   document updates substantially faster than stock Onyx.
+- Background discovery runs every five minutes. A newly uploaded
+  project/assistant file, connector change, or deletion can therefore take up
+  to five minutes to begin processing.
 - Browser-visible result links are rewritten to the host display origin,
   `http://localhost:8091/` by default. This enables you to click on source links in a host browser and view them locally.
 
@@ -441,11 +446,25 @@ You can select a different model via `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` in
 `.env.wrapper`, using the huggingface ID of any MLX-packaged embedding model.
 
 After `make embedserv-install` has installed the selected model, `make up-full`
-automatically launches `make embedserv-serve` when the shim uses the bundled
-default endpoint, `http://host.docker.internal:3210/v1/embeddings`. You can also run
-`make embedserv-serve` directly when you want the server in the foreground.
-`make down-full` stops only the bundled server that `make up-full` started; it
-does not stop a server that was launched manually.
+automatically launches a lightweight lifecycle proxy at the bundled default
+endpoint, `http://host.docker.internal:3210/v1/embeddings`. It loads the MLX
+model for the first embedding request and unloads it ten minutes after the last
+request completes. A request after unload includes the measured cold-start
+delay and still uses the shim's unchanged 30-second deadline. You can run
+`make embedserv-serve` directly in the foreground. `make down-full` stops only
+the wrapper-managed proxy and its identity-validated child; manual and custom
+upstreams are untouched.
+
+`make up-full` first starts the embedding shim and its routing dependencies,
+then calls `/ready` exactly once before creating a fresh API/background tier.
+Failure returns nonzero with that subset left running for diagnosis and no
+automatic retry. On a repeated start, already-running API/background services
+are neither stopped nor recreated by a failed validation.
+
+Full mode favors low idle activity: connector discovery can take up to about
+five minutes, and Slack and Discord bot processes are disabled by default.
+Enable only a bot you use with `ONYX_SLACK_BOT_ENABLED=true` or
+`ONYX_DISCORD_BOT_ENABLED=true` in `.env.wrapper`.
 
 MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
 the download libraries when the host requires a build/download proxy.
