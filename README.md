@@ -20,6 +20,8 @@ Additionally, the full mode of Onyx provides RAG search results to the agent fro
 
 In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
 
+- Onyx telemetry, third-party analytics and error reporting, cloud billing, CAPTCHA, and automatic remote configuration/data-list downloads are explicitly disabled.
+- A restrictive browser Content Security Policy blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's VPN/proxy routing through the user's browser.
 - Stock Onyx strips reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality.
 - Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results; this has been patched.
 - The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
@@ -28,7 +30,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
 
-I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit. It is also not clear that Onyx prioritizes compatibility with the Open Weight frontier. (It is not unique in this regard; it still remains the most capable research agent framework I have found).
+I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
 
 If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 

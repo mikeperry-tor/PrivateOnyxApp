@@ -69,6 +69,16 @@ This stack has hardened the Onyx networking usage to ensure that both egress and
   trusted component into the same namespace, including its loopback,
   interfaces, routes, and policy listeners. Their fixed gateways constrain
   application ingress; they are not a sandbox between co-resident processes.
+- Optional Onyx telemetry, third-party analytics/tracing, cloud billing,
+  CAPTCHA, and automatic remote configuration/data-list fetches are explicitly
+  disabled in Compose. Release-note polling and local administrative analytics
+  intentionally remain enabled.
+- Nginx adds a restrictive WebUI CSP because browser requests are outside the
+  container routing boundary. Preserve its same-origin resource policy,
+  locally generated chat-file images, and local preview schemes. The stock
+  Next.js image requires inline bootstrap/stream scripts, so the current
+  `'unsafe-inline'` exception is a documented XSS residual, not a claim of
+  complete XSS prevention.
 
 Those bullets are only a map. Read the docs above before changing any runtime networking path. Keep the documentation up-to-date.
 
@@ -89,6 +99,8 @@ Those bullets are only a map. Read the docs above before changing any runtime ne
 - `searxng/` - derived image, custom direct-Obscura offline engines, and SearXNG overlay.
 - `myst/` - Mysterium image build file, entrypoint, signup compose, and helper CLI.
 - `teep/` - Teep image build file and entrypoint.
+- `onyx/nginx/` - tracked browser security headers, including the restrictive
+  WebUI CSP mounted independently of generated upstream nginx configuration.
 - `onyx/patches/` - runtime `sitecustomize` patches applied inside Onyx and code-interpreter containers.
 - `onyx/helper-egress.env` - stack-owned `NO_PROXY` set for trusted Onyx
   backend dependencies; update it when Compose service names or aliases change.
