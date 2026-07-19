@@ -19,7 +19,7 @@ SECRET_ENV = {
     "MINIO_ROOT_PASSWORD": "test",
     "S3_AWS_ACCESS_KEY_ID": "test",
     "S3_AWS_SECRET_ACCESS_KEY": "test",
-    "PODMAN_RAG_DOC_VOLUME": "onyx-podman-rag-docs",
+    "PODMAN_DOC_SERVER_PORT": "18091",
 }
 
 
@@ -212,27 +212,32 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                     opensearch["volumes"][0]["source"],
                     str(ROOT / "docker-data/opensearch"),
                 )
-                doc_mounts = services["doc-drop-web"]["volumes"]
+                doc_relay = services["doc-drop-web"]
+                self.assertFalse(doc_relay.get("volumes"))
+                self.assertEqual(doc_relay["user"], "65534:65534")
+                self.assertTrue(doc_relay["read_only"])
+                self.assertEqual(doc_relay["cap_drop"], ["ALL"])
                 self.assertEqual(
-                    doc_mounts[0],
-                    {
-                        "type": "volume",
-                        "source": "podman-rag-docs",
-                        "target": "/import",
-                        "read_only": True,
-                        "volume": {},
-                    },
+                    doc_relay["command"],
+                    [
+                        "tcp-listen:8091,fork,reuseaddr",
+                        "tcp-connect:host.containers.internal:18091",
+                    ],
                 )
-                self.assertEqual(doc_mounts[1]["type"], "bind")
                 self.assertEqual(
-                    doc_mounts[1]["target"], "/app/doc_drop_webserver.py"
+                    set(doc_relay["networks"]),
+                    {"doc-drop-route", "doc-drop-publish", "podman-doc-host-uplink"},
                 )
-                self.assertTrue(doc_mounts[1]["read_only"])
-
-                self.assertEqual(
-                    model["volumes"]["podman-rag-docs"],
-                    {"name": "onyx-podman-rag-docs", "external": True},
+                self.assertFalse(
+                    model["networks"]["podman-doc-host-uplink"].get("internal", False)
                 )
+                joined = {
+                    name
+                    for name, service in services.items()
+                    if "podman-doc-host-uplink" in service.get("networks", {})
+                }
+                self.assertEqual(joined, {"doc-drop-web"})
+                self.assertNotIn("podman-rag-docs", model.get("volumes", {}))
 
     def test_makefile_uses_only_the_two_core_podman_storage_overlays(self) -> None:
         files = _make_compose_files(vpn_enabled=False, container_bin="podman")

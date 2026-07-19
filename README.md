@@ -70,10 +70,11 @@ The stack comes in two flavors: lite and full. This specifies the mode of the On
 
 It is possible to switch between full and lite modes between restarts.
 
-Docker persists stack data in bind mounts under `./docker-data`. Podman keeps
-PostgreSQL, OpenSearch, and its staged RAG source cache in engine-native named
-volumes for macOS rootless compatibility; the engine-switch consequences are
-described below.
+Docker and Podman persist PostgreSQL and OpenSearch in the same bind mounts
+under `./docker-data`. For the configured RAG source—`./doc-drop` by default—
+Podman uses a wrapper-managed host-local server rather than copying the
+directory into its VM. This also supports external mounts that virtiofs cannot
+re-export reliably.
 
 ### Lite Mode
 
@@ -134,19 +135,14 @@ Most likely variables you want to change:
   - On rootless Podman for macOS, code interpreter and Docker-socket autoheal
     are unavailable. Routing remains fail-closed, but a failed Myst connection
     requires `podman restart myst-client-vpn` or a stack restart.
-  - PostgreSQL and OpenSearch use Podman-native named volumes because macOS
-    bind-mount ownership is incompatible with those images. Docker's existing
-    bind data is left untouched; the two engines' database/index state is not
-    automatically synchronized.
-  - Full mode inventories `ONYX_RAG_DOC_SOURCE_DIR` on every `make up-full`
-    and stages it into a Podman-native volume when its names, sizes, or
-    modification times changed, then mounts the cache read-only in
-    `doc-drop-web`. This also supports macOS user-mounted WebDAV paths that
-    cannot be re-exported through the Podman machine's virtiofs shares.
-    AppleDouble metadata and extended attributes are omitted; document bytes,
-    names, and modification times are retained. Podman keeps a private cached
-    copy until its named volume or machine is removed. An unchanged source
-    avoids the document-body transfer.
+  - PostgreSQL and OpenSearch reuse Docker's initialized bind data through
+    guarded Podman user mappings. Never run both engines against it at once.
+  - In full mode, `make up-full` starts a PID-tracked read-only document server
+    on the Mac for `ONYX_RAG_DOC_SOURCE_DIR` (`./doc-drop` by default); a
+    hardened fixed relay keeps the internal `doc-drop-web:8091` origin
+    unchanged. `make down-full` stops only that identity-validated
+    wrapper-owned process. No document collection is copied into the Podman
+    VM. External mounts, including WebDAV mounts, use the same path.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **VPN and Proxy Use**:

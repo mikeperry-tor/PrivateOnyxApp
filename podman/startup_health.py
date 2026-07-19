@@ -4,14 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
-import stat
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -146,226 +143,6 @@ def check_capability(container_bin: str) -> str:
     return server_version
 
 
-def stage_document_source(
-    container_bin: str, source: str, image: str, volume: str
-) -> str:
-    """Atomically refresh a Podman-native read-only document cache.
-
-    A metadata-free tar stream feeds the remote Podman client.  This works even
-    when macOS cannot re-export the source filesystem through virtiofs (notably
-    user-mounted WebDAV volumes), and avoids AppleDouble/xattr failures without
-    modifying the source.
-    """
-    _require_podman_binary(container_bin)
-    source_path = os.path.abspath(source)
-    if not os.path.isdir(source_path):
-        raise ContractError("the configured RAG document source is not a host directory")
-    if not image:
-        raise ContractError("the Podman document-staging image is not configured")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", volume):
-        raise ContractError("the Podman document-cache volume name is invalid")
-
-    manifest = _document_source_manifest(source_path)
-
-    if _run([container_bin, "volume", "inspect", volume], check=False).returncode != 0:
-        _run([container_bin, "volume", "create", volume])
-
-    volume_mount = f"type=volume,src={volume},target=/volume"
-    cached_manifest = _run(
-        [
-            container_bin,
-            "run",
-            "--rm",
-            "--network=none",
-            "--pull=never",
-            f"--mount={volume_mount},ro",
-            image,
-            "cat",
-            "/volume/.source-manifest",
-        ],
-        check=False,
-    )
-    if cached_manifest.returncode == 0 and cached_manifest.stdout.strip() == manifest:
-        return volume
-
-    prepare_script = "rm -rf /volume/.incoming; mkdir /volume/.incoming"
-    _run(
-        [
-            container_bin,
-            "run",
-            "--rm",
-            "--network=none",
-            "--pull=never",
-            f"--mount={volume_mount}",
-            image,
-            "sh",
-            "-ceu",
-            prepare_script,
-        ]
-    )
-
-    tar_command = [
-        "tar",
-        "--no-mac-metadata",
-        "--no-xattrs",
-        "--no-acls",
-        "--no-fflags",
-        "--exclude=._*",
-        "--exclude=.DS_Store",
-        "-C",
-        source_path,
-        "-cf",
-        "-",
-        ".",
-    ]
-    receive_command = [
-        container_bin,
-        "run",
-        "--rm",
-        "--interactive",
-        "--network=none",
-        "--pull=never",
-        f"--mount={volume_mount}",
-        image,
-        "tar",
-        "-xf",
-        "-",
-        "-C",
-        "/volume/.incoming",
-    ]
-    archive_env = os.environ.copy()
-    archive_env["COPYFILE_DISABLE"] = "1"
-    with tempfile.TemporaryFile() as tar_errors, tempfile.TemporaryFile() as podman_errors:
-        tar_process = subprocess.Popen(
-            tar_command,
-            stdout=subprocess.PIPE,
-            stderr=tar_errors,
-            env=archive_env,
-        )
-        assert tar_process.stdout is not None
-        receive_process = subprocess.Popen(
-            receive_command,
-            stdin=tar_process.stdout,
-            stdout=subprocess.DEVNULL,
-            stderr=podman_errors,
-        )
-        tar_process.stdout.close()
-        receive_status = receive_process.wait()
-        tar_status = tar_process.wait()
-        tar_error_class = _archive_error_class(tar_errors)
-        receiver_error_class = _archive_error_class(podman_errors)
-    if tar_status != 0 or receive_status != 0:
-        raise ContractError(
-            "Podman could not stage the configured RAG document source into "
-            "its native volume; the previous staged copy was preserved "
-            f"(archive status {tar_status}, archive error {tar_error_class}; "
-            f"receiver status {receive_status}, receiver error "
-            f"{receiver_error_class})"
-        )
-
-    rotate_script = (
-        "rm -f /volume/.source-manifest.tmp; "
-        "printf '%s\\n' \"$1\" > /volume/.source-manifest.tmp; "
-        "rm -rf /volume/.previous; "
-        "if [ -e /volume/docs ]; then mv /volume/docs /volume/.previous; fi; "
-        "if mv /volume/.incoming /volume/docs && "
-        "mv /volume/.source-manifest.tmp /volume/.source-manifest; then "
-        "rm -rf /volume/.previous; "
-        "else "
-        "rm -rf /volume/docs /volume/.source-manifest.tmp; "
-        "if [ -e /volume/.previous ]; then "
-        "mv /volume/.previous /volume/docs; "
-        "fi; "
-        "exit 1; "
-        "fi"
-    )
-    try:
-        _run(
-            [
-                container_bin,
-                "run",
-                "--rm",
-                "--network=none",
-                "--pull=never",
-                f"--mount={volume_mount}",
-                image,
-                "sh",
-                "-ceu",
-                rotate_script,
-                "sh",
-                manifest,
-            ]
-        )
-    except subprocess.CalledProcessError as exc:
-        raise ContractError(
-            "Podman staged the RAG document source but could not activate the "
-            "new native-volume copy"
-        ) from exc
-    return volume
-
-
-def _archive_error_class(stream: Any) -> str:
-    """Classify archive stderr without returning private path-bearing text."""
-    stream.seek(0)
-    message = stream.read().decode("utf-8", errors="replace")
-    classes = (
-        ("No space left on device", "no-space"),
-        ("Operation not permitted", "operation-not-permitted"),
-        ("Permission denied", "permission-denied"),
-        ("File changed as we read it", "source-changed"),
-        ("Broken pipe", "broken-pipe"),
-        ("Unexpected EOF", "unexpected-eof"),
-        ("Cannot write", "write-failed"),
-    )
-    matched = [label for needle, label in classes if needle in message]
-    return ",".join(matched) if matched else "unclassified"
-
-
-def _document_source_manifest(source_path: str) -> str:
-    """Hash sync-relevant metadata without reading or disclosing file bodies."""
-    digest = hashlib.sha256(b"private-onyx-podman-rag-v1\0")
-    try:
-        for root, directories, files in os.walk(source_path, followlinks=False):
-            directories[:] = sorted(
-                item for item in directories if not item.startswith("._")
-            )
-            names = directories + sorted(
-                item
-                for item in files
-                if not item.startswith("._") and item != ".DS_Store"
-            )
-            for name in names:
-                path = os.path.join(root, name)
-                metadata = os.lstat(path)
-                relative = os.path.relpath(path, source_path)
-                if stat.S_ISLNK(metadata.st_mode):
-                    kind = b"l"
-                    extra = os.fsencode(os.readlink(path))
-                elif stat.S_ISDIR(metadata.st_mode):
-                    kind = b"d"
-                    extra = b""
-                elif stat.S_ISREG(metadata.st_mode):
-                    kind = b"f"
-                    extra = b""
-                else:
-                    kind = b"o"
-                    extra = b""
-                for value in (
-                    kind,
-                    os.fsencode(relative),
-                    str(metadata.st_size).encode("ascii"),
-                    str(metadata.st_mtime_ns).encode("ascii"),
-                    extra,
-                ):
-                    digest.update(len(value).to_bytes(8, "big"))
-                    digest.update(value)
-    except OSError as exc:
-        raise ContractError(
-            "could not inventory the configured RAG document source"
-        ) from exc
-    return digest.hexdigest()
-
-
 def _health_enabled(health: Any) -> bool:
     if not isinstance(health, dict):
         return False
@@ -491,13 +268,10 @@ def configure_project(container_bin: str, project: str) -> int:
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "action", choices=("check", "configure", "stage-docs", "prepare-shared-data")
+        "action", choices=("check", "configure", "prepare-shared-data")
     )
     parser.add_argument("--container-bin", default="podman")
     parser.add_argument("--project", default="onyx")
-    parser.add_argument("--path")
-    parser.add_argument("--image")
-    parser.add_argument("--volume")
     parser.add_argument("--postgres")
     parser.add_argument("--opensearch")
     return parser.parse_args(argv)
@@ -509,13 +283,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.action == "check":
             version = check_capability(args.container_bin)
             print(f"Podman {version} startup-health controls are available.")
-        elif args.action == "stage-docs":
-            if args.path is None or args.image is None or args.volume is None:
-                raise ContractError("stage-docs requires --path, --image, and --volume")
-            stage_document_source(
-                args.container_bin, args.path, args.image, args.volume
-            )
-            print("Podman RAG document source staged into a native volume.")
         elif args.action == "prepare-shared-data":
             prepared = prepare_shared_data(
                 postgres=args.postgres, opensearch=args.opensearch

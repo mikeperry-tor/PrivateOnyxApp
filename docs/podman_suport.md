@@ -67,13 +67,12 @@ unusable overlay image store after restart, reporting
 not a claim about every Podman installation. The capability gate deliberately
 runs `podman images` so a broken post-restart store fails before stack changes.
 If that probe fails, report the machine as unusable. Never recreate a machine
-that may contain user data without explicit approval: recreation deletes
-Podman-native database volumes and the staged RAG cache.
+that may contain user data without explicit approval.
 
 Starting Podman Desktop or approving macOS access to a new volume does not
 necessarily update an existing process or VM. Restart Podman Desktop after a
 new approval when access still fails, then rerun the capability, image-store,
-mount/staging, and startup-health checks. Do not assume a pre-restart result is
+mount, and startup-health checks. Do not assume a pre-restart result is
 still valid.
 
 ## Compose overlay model
@@ -89,9 +88,7 @@ the engine-specific layers when `CONTAINER_BIN` resolves to Podman:
 Keep Docker and Podman behavior separated in those override files. Preserve
 Compose `${VAR:?message}` checks and the Makefile-generated ephemeral secret
 flow. When using `!override`, remember that the entire inherited sequence is
-replaced. Re-add every required mount explicitly; for example,
-`doc-drop-web` needs both the native RAG volume and the tracked
-`onyx/doc_drop_webserver.py` read-only bind.
+replaced.
 
 ### Common Podman override
 
@@ -117,12 +114,8 @@ replaced. Re-add every required mount explicitly; for example,
 - makes `background` wait for PostgreSQL health;
 - always uses the same initialized `docker-data/opensearch` bind as Docker
   Desktop with the required `keep-id` mapping; and
-- mounts the externally managed `onyx-podman-rag-docs` volume read-only at
-  `/import`, while preserving the document-server script bind.
-
-The RAG volume is marked `external: true` because the Makefile staging step
-creates and owns it before Compose starts. Compose must not silently create a
-project-scoped substitute or remove it as ordinary project state.
+- replaces container-side document serving with a hardened fixed relay to the
+  wrapper-managed macOS document server.
 
 ### Shared Docker data
 
@@ -174,7 +167,7 @@ The Compose provider accepts and renders `healthcheck.start_interval`, but the
 tested Podman compatibility API drops it when creating containers. A rendered
 Compose model is therefore necessary but not sufficient evidence.
 
-`podman/startup_health.py` provides four strict actions:
+`podman/startup_health.py` provides three strict actions:
 
 - `check` validates that the selected binary is Podman, inspects the Linux
   server version, probes the image store, checks the Compose provider, and
@@ -182,7 +175,6 @@ Compose model is therefore necessary but not sufficient evidence.
 - `configure` discovers containers by Compose project label, validates each
   retained regular check, installs an exact native startup check on stopped
   containers, and reinspects the complete project.
-- `stage-docs` implements the full-mode native RAG cache described below.
 - `prepare-shared-data` validates an initialized Docker database/index path
   and performs the narrow PostgreSQL mount-root xattr cleanup described above.
 
@@ -205,7 +197,7 @@ The Podman Makefile lifecycle is consequently create/configure/start:
 1. `check-container-health-capability` runs the capability gate.
 2. The mode-appropriate database preflights validate the shared binds and
    remove only the unsafe PostgreSQL mount-root override when present. Full
-   mode also stages the RAG document source.
+   mode also starts or validates the PID-tracked host document server.
 3. `podman compose create` creates stopped containers.
 4. `startup_health.py configure` installs and verifies native startup checks.
 5. `podman compose up -d --wait` starts the verified graph.
@@ -243,9 +235,9 @@ do not map directly to macOS bind mounts:
   entrypoint creates a root-owned Podman override on the mount root;
 - PostgreSQL is shareable with the guarded direct-entrypoint overlay above,
   while OpenSearch is shareable with uid/gid 1000 `keep-id`; and
-- a user-mounted WebDAV source under `/Volumes` appeared empty or inaccessible
-  inside the VM even when the exact directory was configured, macOS approved
-  it, and Podman Desktop was restarted.
+- some externally mounted sources may appear empty or inaccessible inside the
+  VM even when the exact directory is configured and macOS access is approved;
+  WebDAV mounts are one supported example.
 
 Do not broaden a share to `/`, all of `/Volumes`, or a symlinked parent as a
 workaround. Aside from unnecessary exposure, a macOS-visible symlink does not
@@ -264,48 +256,41 @@ broader VM sharing to private database or RAG sources. The tracked preflight's
 single mount-root xattr removal is the supported exception. Database state is
 not duplicated into Podman-native volumes.
 
-## RAG document staging workaround
+## Host document server
 
-Direct `podman cp` and ordinary macOS archive behavior may try to preserve
-AppleDouble sidecars or extended attributes. The tested WebDAV source failed
-with `operation not permitted` while handling a `._.DS_Store` attribute.
-Full-mode startup avoids both the virtiofs re-export and metadata-preservation
-paths.
+For every Podman full-mode source, including the default `./doc-drop`, the
+wrapper serves `ONYX_RAG_DOC_SOURCE_DIR` without mounting or copying it into
+the VM. This uniform path also supports externally mounted sources, including
+WebDAV mounts, that are fully readable on macOS yet absent at the Podman VM's
+`statfs` boundary. Ownership mappings, SELinux suffixes, and xattr cleanup
+cannot repair a path that virtiofs did not expose.
 
-`stage-podman-full-docs` ensures the pinned small Python/Alpine staging image is
-present and calls `startup_health.py stage-docs`. The implementation:
+`podman-doc-server-start` validates the source, rejects an unrelated listener
+on fixed host port 18091, and starts
+`onyx/doc_drop_webserver.py` with a PID and private log under
+`docker-data/host-services`. A tracked process is reused only when its command
+identity and `/_health` response both match. Malformed, stale, or reused PID
+records never authorize signaling an unrelated process.
 
-1. Validates the source directory and a conservative native-volume name.
-2. Computes a SHA-256 manifest over relative names, entry types, sizes,
-   modification times, and symlink targets. It does not read file bodies or
-   print names/content. AppleDouble entries and `.DS_Store` are excluded.
-3. Reuses the existing cache immediately when `.source-manifest` matches.
-4. Creates `.incoming` inside `onyx-podman-rag-docs` when a refresh is needed.
-5. Runs host `tar` with `COPYFILE_DISABLE=1`, `--no-mac-metadata`,
-   `--no-xattrs`, `--no-acls`, `--no-fflags`, and AppleDouble/`.DS_Store`
-   exclusions.
-6. Pipes that archive to an interactive `podman run` receiver with
-   `--network=none` and `--pull=never`. The receiver extracts only into
-   `.incoming` in the native volume.
-7. Activates the completed tree as `docs`, atomically replaces the manifest,
-   and removes `.previous`. Activation failure rolls the previous tree back.
+The Podman `doc-drop-web` service is a non-root, read-only, capability-free
+`socat` relay. It keeps the existing internal route and display networks but
+has no document mounts. Its only additional network is a dedicated
+non-internal host uplink, and its fixed command connects only
+`host.containers.internal:18091`. Podman's userspace gateway reaches the
+macOS listener as a loopback peer; the server rejects non-loopback peers before
+serving any URL. This restriction is enabled only by the host process's
+`--loopback-peers-only` flag; Docker's internal document server does not use
+it. Application containers do not join that uplink. The existing
+`doc-drop-route-gateway` and exact host final-hop policy remain authoritative
+for Web Connector access.
 
-A transfer failure leaves the previous active cache in place and makes
-`make up-full` fail. This is intentionally not a silent stale-data fallback:
-the old copy remains recoverable, but the operator is told that the requested
-refresh did not occur. A transient host filesystem read failure requires a
-later explicit retry.
-
-The cache duplicates the selected source inside the Podman VM and persists
-until its named volume or the machine is removed. Change detection is metadata
-based; a source that changes bytes while preserving name, type, size, and
-nanosecond mtime will not trigger a refresh. Preserve this explicit trade-off
-unless replacing it with another privacy-preserving bounded inventory.
-
-`doc-drop-web` sees `/import/docs` through a read-only volume mount. Always
-validate the effective mount and a denied write probe after changing its
-Compose definition. Never display document listings, names, or contents in
-diagnostic output.
+`make down-full` first removes the Compose graph and then calls
+`podman-doc-server-stop-if-started`. The stop path validates command identity,
+sends SIGTERM only to the recorded wrapper-owned server, waits for bounded
+exit, and removes the PID record. Docker full mode retains its ordinary
+read-only bind-mounted `doc-drop-web` container and never starts the host
+process. Request logging is suppressed because URLs can contain private file
+names; the server log contains lifecycle diagnostics only.
 
 ## Networking differences
 
@@ -326,16 +311,16 @@ The primary Podman-specific tests are:
 
 - `tests/test_podman_startup_health.py`: binary refusal, capability and image
   store gates, regular/startup cadence contracts, stopped-container update,
-  running-container fail-closed behavior, metadata-free offline document
-  streaming, shared-data preflight, cache reuse, atomic failure preservation,
-  and volume-name validation.
+  running-container fail-closed behavior, and shared-data preflight.
 - `tests/test_myst_lifecycle_makefile.py`: capability prerequisites,
-  create/configure/start ordering, staged full-mode documents, direct Onyx
-  image pulls, and exclusion of the upstream installer/socket-only executor.
+  create/configure/start ordering, host document-server PID lifecycle, direct
+  Onyx image pulls, and exclusion of the upstream installer/socket-only
+  executor.
 - `tests/test_onyx_network_isolation.py`: effective Podman overlay selection,
   optional VPN behavior, tmpfs options, unconditional shared Docker
-  PostgreSQL/OpenSearch storage, database health dependencies, external RAG
-  volume, script bind, and read-only mount semantics.
+  PostgreSQL/OpenSearch storage, database health dependencies, and the fixed
+  hardened host document relay.
+- `tests/test_doc_drop_webserver.py`: the non-indexed host readiness endpoint.
 - `tests/test_myst_readiness.py`: interface/route parsing that must remain
   valid with Podman's network layout.
 
@@ -361,10 +346,10 @@ direct inspection; do not mix Docker engine results into the evidence.
 4. Inspect `.Config.StartupHealthCheck` and `.Config.Healthcheck` separately.
    Observe fast startup probes followed by a ten-minute ordinary interval or
    Myst's one-minute interval; Compose rendering alone is not a pass.
-5. For full mode, exercise both a changed-source transfer and the unchanged
-   manifest fast path when safe. Confirm the external native volume, retained
-   script bind, `/import/docs` availability, and denied writes without printing
-   private document names.
+5. For full mode, confirm the host document server PID identity and readiness,
+   the absence of document mounts/volumes on the relay, internal and published
+   document access, immediate source visibility, and identity-safe shutdown.
+   Never print private document names or contents.
 6. Validate the shared Docker binds. Confirm the core Podman overlays,
    PostgreSQL direct entrypoint, `keep-id` mappings, initialization checks,
    mount-root xattr preflight, clean shutdown, and engine exclusivity.

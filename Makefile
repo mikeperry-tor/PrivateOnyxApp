@@ -165,8 +165,11 @@ ONYX_RAG_DOC_SOURCE_DIR ?= $(call env_value,ONYX_RAG_DOC_SOURCE_DIR)
 ifeq ($(strip $(ONYX_RAG_DOC_SOURCE_DIR)),)
 ONYX_RAG_DOC_SOURCE_DIR := ./doc-drop
 endif
-PODMAN_RAG_DOC_VOLUME := onyx-podman-rag-docs
-export PODMAN_RAG_DOC_VOLUME
+PODMAN_DOC_SERVER_PORT := 18091
+PODMAN_DOC_SERVER_STATE_DIR := docker-data/host-services
+PODMAN_DOC_SERVER_PID_FILE := $(PODMAN_DOC_SERVER_STATE_DIR)/podman-doc-server.pid
+PODMAN_DOC_SERVER_LOG := $(PODMAN_DOC_SERVER_STATE_DIR)/podman-doc-server.log
+export PODMAN_DOC_SERVER_PORT
 # The shared Obscura server must accommodate both the configurable built-in
 # open_url document limit and SearXNG's independent fixed 20 MiB DOM limit.
 OBSCURA_RETENTION_FLOOR_BYTES := $(shell python3 -c 'v=int("$(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)"); assert 0 < v <= ((1<<63)-1)//1048576; print(max(v*1048576,20971520))')
@@ -228,7 +231,7 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help test check test-images check-upgrade health-inventory up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data stage-podman-full-docs embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images check-upgrade health-inventory up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -352,16 +355,113 @@ check-container-health-capability:
 	compose_version="$$($(CONTAINER_BIN) compose version --short)"; \
 	ENGINE_VERSION="$$engine_version" COMPOSE_VERSION="$$compose_version" python3 -c 'import os; from re import findall; parse=lambda v: tuple((list(map(int, findall(r"\d+", v)))+[0,0,0])[:3]); assert parse(os.environ["ENGINE_VERSION"]) >= (25,0,0), "Docker Engine 25.0+ is required for start_interval"; assert parse(os.environ["COMPOSE_VERSION"]) >= (2,20,2), "Docker Compose 2.20.2+ is required for start_interval"'
 
-stage-podman-full-docs:
+podman-doc-server-start:
 ifeq ($(PODMAN_SELECTED),true)
-	@"$(CONTAINER_BIN)" image inspect "$(PYTHON_ALPINE_IMAGE)" >/dev/null 2>&1 || \
-		"$(CONTAINER_BIN)" pull "$(PYTHON_ALPINE_IMAGE)"
-	@python3 podman/startup_health.py stage-docs \
-		--container-bin "$(CONTAINER_BIN)" \
-		--path "$(ONYX_RAG_DOC_SOURCE_DIR)" \
-		--image "$(PYTHON_ALPINE_IMAGE)" \
-		--volume "$(PODMAN_RAG_DOC_VOLUME)"
+	@set -eu; \
+	source_dir="$(abspath $(ONYX_RAG_DOC_SOURCE_DIR))"; \
+	pid_file="$(PODMAN_DOC_SERVER_PID_FILE)"; \
+	log_file="$(PODMAN_DOC_SERVER_LOG)"; \
+	server_script="$(CURDIR)/onyx/doc_drop_webserver.py"; \
+	if [ ! -d "$$source_dir" ]; then \
+		echo "ERROR: configured RAG document source is not a directory"; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(PODMAN_DOC_SERVER_STATE_DIR)"; \
+	if [ -f "$$pid_file" ]; then \
+		pid=$$(sed -n '1p' "$$pid_file"); \
+		case "$$pid" in ''|*[!0-9]*) pid="" ;; esac; \
+		command_line=""; \
+		if [ -n "$$pid" ] && current_command=$$(ps -p "$$pid" -o command= 2>/dev/null); then command_line="$$current_command"; fi; \
+		case "$$command_line" in \
+			*"$$server_script $(PODMAN_DOC_SERVER_PORT) --bind 0.0.0.0 --directory $$source_dir --loopback-peers-only"*) \
+				if python3 -c 'import http.client; c=http.client.HTTPConnection("127.0.0.1", $(PODMAN_DOC_SERVER_PORT), timeout=1); c.request("GET", "/_health"); r=c.getresponse(); r.read(); c.close(); raise SystemExit(0 if r.status == 200 else 1)' >/dev/null 2>&1; then \
+					echo "Podman host document server is already ready on port $(PODMAN_DOC_SERVER_PORT)"; \
+					exit 0; \
+				fi; \
+				echo "ERROR: tracked Podman host document server is running but not ready; stop it with make down-full"; \
+				exit 1 \
+				;; \
+			*'/onyx/doc_drop_webserver.py '*) \
+				echo "Restarting tracked Podman host document server after configuration changed"; \
+				kill -TERM "$$pid"; \
+				attempt=0; \
+				while kill -0 "$$pid" 2>/dev/null && [ "$$attempt" -lt 100 ]; do sleep 0.1; attempt=$$((attempt + 1)); done; \
+				if kill -0 "$$pid" 2>/dev/null; then echo "ERROR: prior Podman host document server did not stop"; exit 1; fi \
+				;; \
+		esac; \
+		rm -f -- "$$pid_file"; \
+	fi; \
+	if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", $(PODMAN_DOC_SERVER_PORT)), timeout=1); s.close()' >/dev/null 2>&1; then \
+		echo "ERROR: port $(PODMAN_DOC_SERVER_PORT) is already owned by an untracked process"; \
+		exit 1; \
+	fi; \
+	echo "Starting loopback-peer-restricted Podman host document server on port $(PODMAN_DOC_SERVER_PORT)"; \
+	pid=$$(python3 -c 'import subprocess,sys; log=open(sys.argv[1], "ab", buffering=0); child=subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True); print(child.pid)' \
+		"$$log_file" python3 "$$server_script" "$(PODMAN_DOC_SERVER_PORT)" --bind 0.0.0.0 --directory "$$source_dir" --loopback-peers-only); \
+	printf '%s\n' "$$pid" >"$$pid_file"; \
+	attempt=0; \
+	while [ "$$attempt" -lt 40 ]; do \
+		if python3 -c 'import http.client; c=http.client.HTTPConnection("127.0.0.1", $(PODMAN_DOC_SERVER_PORT), timeout=1); c.request("GET", "/_health"); r=c.getresponse(); r.read(); c.close(); raise SystemExit(0 if r.status == 200 else 1)' >/dev/null 2>&1; then \
+			echo "Podman host document server is ready"; \
+			exit 0; \
+		fi; \
+		if ! kill -0 "$$pid" 2>/dev/null; then \
+			echo "ERROR: Podman host document server exited during startup; inspect $$log_file"; \
+			rm -f -- "$$pid_file"; \
+			exit 1; \
+		fi; \
+		sleep 0.25; \
+		attempt=$$((attempt + 1)); \
+	done; \
+	echo "ERROR: Podman host document server did not become ready; inspect $$log_file"; \
+	kill -TERM "$$pid"; \
+	rm -f -- "$$pid_file"; \
+	exit 1
 endif
+
+podman-doc-server-stop-if-started:
+	@set -eu; \
+	pid_file="$(PODMAN_DOC_SERVER_PID_FILE)"; \
+	if [ ! -f "$$pid_file" ]; then \
+		echo "No automatically started Podman host document server PID is recorded"; \
+		exit 0; \
+	fi; \
+	pid=$$(sed -n '1p' "$$pid_file"); \
+	case "$$pid" in \
+		''|*[!0-9]*) \
+			echo "Ignoring malformed Podman host document server PID file"; \
+			rm -f -- "$$pid_file"; \
+			exit 0 \
+			;; \
+	esac; \
+	command_line=""; \
+	if current_command=$$(ps -p "$$pid" -o command= 2>/dev/null); then command_line="$$current_command"; fi; \
+	if [ -z "$$command_line" ]; then \
+		echo "Automatically started Podman host document server is no longer running"; \
+		rm -f -- "$$pid_file"; \
+		exit 0; \
+	fi; \
+	case "$$command_line" in \
+		*'/onyx/doc_drop_webserver.py '*) ;; \
+		*) \
+			echo "PID $$pid no longer belongs to the Podman host document server; leaving it untouched"; \
+			rm -f -- "$$pid_file"; \
+			exit 0 \
+			;; \
+	esac; \
+	echo "Stopping automatically started Podman host document server (PID $$pid)"; \
+	kill -TERM "$$pid"; \
+	attempt=0; \
+	while kill -0 "$$pid" 2>/dev/null && [ "$$attempt" -lt 100 ]; do \
+		sleep 0.1; \
+		attempt=$$((attempt + 1)); \
+	done; \
+	if kill -0 "$$pid" 2>/dev/null; then \
+		echo "ERROR: Podman host document server PID $$pid did not stop; inspect $(PODMAN_DOC_SERVER_LOG)"; \
+		exit 1; \
+	fi; \
+	rm -f -- "$$pid_file"; \
+	echo "Automatically started Podman host document server stopped"
 
 prepare-podman-postgres-data:
 ifeq ($(PODMAN_SELECTED),true)
@@ -382,7 +482,7 @@ endif
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
-up-full: ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data stage-podman-full-docs ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
+up-full: ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
 	@python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx
@@ -484,6 +584,7 @@ down-lite:
 
 down-full:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
+	@"$${MAKE:-make}" podman-doc-server-stop-if-started
 	@"$${MAKE:-make}" embedserv-stop-if-started
 
 ps-lite:

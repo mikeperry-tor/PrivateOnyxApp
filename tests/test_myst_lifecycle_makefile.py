@@ -86,21 +86,26 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             full_start.index("up -d --wait local-embedding-shim"),
         )
 
-    def test_podman_full_start_stages_document_source(self) -> None:
+    def test_podman_full_start_manages_host_document_server(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         full_prerequisites = next(
             line
             for line in makefile.splitlines()
             if line.startswith("up-full: ensure-onyx-config")
         )
-        self.assertIn("stage-podman-full-docs", full_prerequisites)
-        stage_target = makefile.split("stage-podman-full-docs:", 1)[1].split(
+        self.assertIn("podman-doc-server-start", full_prerequisites)
+        start_target = makefile.split("podman-doc-server-start:", 1)[1].split(
             "\n\n", 1
         )[0]
-        self.assertIn("startup_health.py stage-docs", stage_target)
-        self.assertIn('"$(CONTAINER_BIN)"', stage_target)
-        self.assertIn('"$(ONYX_RAG_DOC_SOURCE_DIR)"', stage_target)
-        self.assertIn('"$(PODMAN_RAG_DOC_VOLUME)"', stage_target)
+        self.assertIn("doc_drop_webserver.py", start_target)
+        self.assertIn("start_new_session=True", start_target)
+        self.assertIn("stdin=subprocess.DEVNULL", start_target)
+        self.assertIn("--loopback-peers-only", start_target)
+        self.assertIn("/_health", start_target)
+        self.assertIn("PODMAN_DOC_SERVER_PID_FILE", makefile)
+        self.assertIn("podman-doc-server-stop-if-started", makefile)
+        self.assertNotIn("stage-podman-full-docs", makefile)
+        self.assertNotIn("PODMAN_RAG_DOC_VOLUME", makefile)
 
     def test_podman_shared_database_preflights_are_unconditional(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

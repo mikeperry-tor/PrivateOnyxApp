@@ -47,23 +47,15 @@ boundary.
 ## End-To-End Flow
 
 1. Files are placed under `ONYX_RAG_DOC_SOURCE_DIR`, defaulting to `./doc-drop`.
-   Docker bind-mounts this host directory directly. Before a Podman full-mode
-   start, the wrapper hashes sync-relevant metadata (relative names, entry
-   types, sizes, and modification times) without reading file bodies. An
-   unchanged digest reuses the cache. When it changed, the wrapper streams a
-   metadata-free tar archive through the remote Podman client into an
-   engine-native named volume. This supports sources on
-   macOS user-mounted WebDAV filesystems, which libkrun/virtiofs may expose as
-   empty or inaccessible even when the machine configuration lists the share.
-   The transfer disables AppleDouble, ACL, file-flag, and extended-attribute
-   archiving because those metadata reads can fail on such filesystems. It
-   does not modify the source.
-2. `doc-drop-web` mounts the directory read-only at `/import/docs`. In Podman
-   mode this is an atomically refreshed cached copy under the private
-   `onyx-podman-rag-docs` named volume. A failed transfer preserves the previous
-   active copy and stops `make up-full`; a successful start reflects source
-   additions, changes, and deletions. The cache remains in the Podman machine
-   until that volume or the machine is removed.
+   Docker bind-mounts this host directory directly. Podman instead starts the
+   same read-only Python server on macOS without making a VM copy. The process
+   is PID tracked and identity validated by the Makefile. This applies equally
+   to the default directory and another configured local directory; it also
+   permits external mounts such as WebDAV when virtiofs cannot re-export them.
+2. In Docker mode, `doc-drop-web` serves its read-only bind directly. In Podman
+   mode, a capability-free fixed `socat` relay forwards only the internal
+   origin to the host-local document server. It has no source bind or
+   persistent document volume, so source changes are visible immediately.
 3. `doc-drop-web` serves the files on dedicated internal route and publisher
    networks. The host display origin is
    `http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/` by default.

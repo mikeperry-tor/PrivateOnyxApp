@@ -216,19 +216,18 @@ rejected with `lchown ... operation not permitted` on the tested macOS
 virtiofs share. A disposable live probe found the same uid/gid and write denial
 with and without `:Z`; changing only ordinary mode bits permitted the write.
 Do not broaden permissions or rewrite attributes on the private Docker data
-directories as a workaround; the Podman-native volumes avoid that mutation.
+directories as a workaround; the guarded `keep-id` mappings and PostgreSQL
+mount-root preflight avoid that mutation.
 
-Full-mode startup inventories `ONYX_RAG_DOC_SOURCE_DIR` and, when its private
-metadata digest changed, stages it into the `onyx-podman-rag-docs`
-engine-native volume before it creates the stack. It then mounts that cache
-read-only in `doc-drop-web`. An unchanged source avoids the body transfer. The
-host archive stream and the receiving staging container have no network
-access. AppleDouble files and
-macOS ACL, file-flag, and extended-attribute metadata are omitted, avoiding
-metadata failures on user-mounted WebDAV sources without changing the source.
-The refreshed tree is activated only after a complete transfer, so failure
-preserves the previous cache and stops startup. This removes any need to share
-all of `/Volumes`; in particular, do not share it merely to follow the
+In Podman full mode, the wrapper serves `ONYX_RAG_DOC_SOURCE_DIR` directly from
+a PID-tracked macOS process. A capability-free fixed relay is the only
+container on its dedicated non-internal host uplink and forwards only
+`doc-drop-web:8091` to that fixed host port. The server accepts HTTP only when
+the peer address is loopback; Podman's userspace gateway presents its relayed
+connection that way, while LAN peers are rejected. Application containers remain
+on their internal networks, and the Web Connector continues through the exact
+doc-drop final-hop policy. This avoids both a VM document copy and any need to
+share `/Volumes`; in particular, do not share it merely to follow the
 `/Volumes/Macintosh HD` symlink back to the system volume.
 
 Myst discovers the pre-tunnel bridge gateway by parsing the tokens following
