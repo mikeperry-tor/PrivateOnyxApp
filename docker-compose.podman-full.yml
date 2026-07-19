@@ -26,8 +26,9 @@ services:
 
   # macOS cannot reliably re-export user-mounted filesystems such as WebDAV
   # through the Podman machine's virtiofs shares. The Makefile atomically
-  # refreshes this native volume through the remote `podman cp` API before
-  # Compose creates the full stack. The serving container remains read-only.
+  # refreshes this native volume through an offline host-tar-to-Podman stream
+  # before Compose creates the full stack. The serving container remains
+  # read-only.
   doc-drop-web:
     volumes: !override
       - podman-rag-docs:/import:ro

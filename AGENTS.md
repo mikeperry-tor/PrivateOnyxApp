@@ -19,6 +19,11 @@ Before changing a subsystem, read the matching document below, then inspect the 
 - `docs/onyx_patch_info.md` - why local runtime patches exist.
 - `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/Obscura/Teep upgrade checklist and patch validation, for use when image/source pins or runtime Python locks are updated.
 - `docs/local_docs_rag_search.md` - full-mode local document RAG, local doc serving, PDF freshness, embedding shim, and diagnostics.
+- `docs/podman_suport.md` - Podman/macOS Compose overlays, startup-health
+  translation, native storage, bind-mount workarounds, known regressions, and
+  the compatibility checklist. Read it before adding or validating any feature
+  that changes Compose, mounts, container lifecycle, health checks, or
+  socket-dependent behavior under Podman.
 
 When a request touches more than one path, read each relevant doc first. Prefer small, doc-aligned changes over broad rewrites.
 
@@ -208,6 +213,9 @@ This stack protects private research, document contents, browsing behavior, infe
 
 - Compose layering:
   - The Makefile assembles `COMPOSE_FILE`. Keep optional behavior in override files, keep Docker and Podman behavior separated, and preserve generated local secret flow plus Compose `${VAR:?message}` checks.
+  - Treat Podman as a separately validated runtime, not a Docker alias. Follow
+    `docs/podman_suport.md` for its overlay, mount, startup-health, socket, and
+    clean-machine/restart validation requirements.
 - VPN/proxy routing:
   - Preserve explicit VPN/no-VPN behavior, the separate public/host Onyx route classes, exact host and opt-in `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` policy, operator-local `.local`/`.internal`/`.home.arpa` DNS restriction, optional routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY` handling.
   - Public upstream-proxy names and addresses must use provider DNS and the VPN route in VPN mode; exact host and RFC1918-literal proxy endpoints use only their documented narrow route exceptions, while named operator-local proxies require `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`.
