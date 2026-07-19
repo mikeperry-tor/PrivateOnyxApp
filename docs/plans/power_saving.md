@@ -7,20 +7,27 @@ This includes the pinned component baseline, sleepy/local health and recovery
 checks, aggregate gateway checks, staged embedding readiness, idle MLX unload
 and cold reload, reduced Celery/Beat scheduling and worker overhead, removal of
 disabled monitoring/Craft/bot activity, the 1 GiB OpenSearch heap with
-Performance Analyzer disabled, and MinIO's `slowest` scanner profile. Tests and
-the user-facing and upgrade documentation cover these changes.
+Performance Analyzer disabled, MinIO's `slowest` scanner profile, and a strict
+Podman-native startup-health layer. Tests and the user-facing and upgrade
+documentation cover these changes.
 
 **Validation state: deterministic and pinned-image validation passes.**
-`make check` passed 195 tests (with five image-only skips), and
+`make check` passed 209 tests (with five image-only skips), and
 `make check-upgrade` passed the pinned-image contracts and five image-backed
-parser tests. Live full-stack checks covered startup/readiness, worker and Beat
+parser tests. Live Docker checks covered startup/readiness, worker and Beat
 behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
-and MLX cold load, shared concurrent startup, and 10-minute idle unload. The
-long controlled before/after measurement windows and the remaining destructive
-or workload-specific fault/performance gates have not yet been run. A complete
-`make upgrade` dependency refresh was also not completed because PyPI access
-timed out; no dependency-lock input changed, and the exact Myst and Teep images
-were built and validated separately.
+and MLX cold load, shared concurrent startup, and 10-minute idle unload. Live
+rootless Podman 5.8.1 checks covered lite and full startup, all native startup
+health contracts, exact host-route preservation, PostgreSQL/OpenSearch native
+volumes, MinIO CRUD, embedding readiness, WebUI, and a ten-result SearXNG
+search. Full mode used the repo-local document source because the separately
+configured `/Volumes` source is not shared into the existing Podman machine;
+the implemented preflight rejects that configuration before stack creation.
+The long controlled before/after measurement windows and the remaining
+destructive or workload-specific fault/performance gates have not yet been
+run. A complete `make upgrade` dependency refresh was also not completed
+because PyPI access timed out; no dependency-lock input changed, and the exact
+Myst and Teep images were built and validated separately.
 
 **Deferred state: intentionally not implemented.** Every item under
 [Deferred until after the measurement gate](#deferred-until-after-the-measurement-gate)
@@ -106,11 +113,15 @@ carry the field, but that alone does not prove that the selected engine
 schedules it. Make Engine 25.0 and Compose 2.20.2 the documented Docker
 minimums, verify the rendered `StartInterval` in `docker inspect`, and verify
 the effective Docker and Podman models selected by the Makefile. Podman
-exposes a separate startup-health model (`HealthStartup*`); do not assume that
-accepting the Compose key gives Docker-equivalent behavior. A supported Podman
-path must either demonstrate the fast-start/slow-steady transition in a live
-contract test or use a narrow Podman-specific startup layer. Otherwise fail
-before starting the stack with an actionable version/capability error.
+exposes a separate startup-health model (`HealthStartup*`), and live testing
+confirmed that its Compose compatibility API accepts but drops
+`start_interval`. The implemented Podman 5.8.1+ path therefore creates stopped
+containers, copies each exact regular command and timeout into a native
+five-second startup check, verifies the native and regular configuration, and
+only then starts the services. It rejects running containers that lack that
+configuration and never treats successful Compose rendering as proof. Full
+mode also performs a no-network, no-pull bind probe before stack creation so an
+unshared macOS document source fails with an actionable Podman-machine error.
 
 Use the official [Dockerfile `HEALTHCHECK`
 reference](https://docs.docker.com/reference/dockerfile/), [Compose
@@ -1291,10 +1302,11 @@ Add or extend deterministic coverage before live validation:
   grace, missing/future-mtime states, supervisor restart failure, and the
   calculated restart bound. Assert it imports no Onyx, Redis, Celery, or
   SQLAlchemy modules.
-- Add Docker Engine/Compose and Podman capability tests that inspect the
+- Keep Docker Engine/Compose and Podman capability tests that inspect the
   runtime health configuration and observe fast startup checks followed by a
   slow steady interval. Merely accepting/rendering `start_interval` is not a
-  pass.
+  pass; the Podman contract test must inspect `StartupHealthCheck` and the
+  ordinary 10-minute or Myst one-minute interval separately.
 - Add effective-Compose and live OpenSearch tests for the 1 GiB heap and
   disabled Performance Analyzer agent CLI. Assert the exact plugin list,
   Security/TLS settings, refresh/index settings, and image remain unchanged;
@@ -1444,7 +1456,8 @@ Validation should prove:
   exactly one before API/background start and returns nonzero without an
   automatic retry when it fails.
 - Effective Docker Compose models retain fast startup checks and 10-minute
-  steady checks; supported Podman models either do the same or fail clearly.
+  steady checks; Podman installs the equivalent native startup check before
+  start and fails clearly on any command, timeout, or cadence mismatch.
 - Removed leaf checks are absent from the effective model, not merely shadowed
   in one Compose source file.
 - The Beat watchdog restarts a deliberately hung Beat process within the

@@ -1,5 +1,39 @@
 services:
+  # The Makefile creates Podman containers stopped, installs an exact native
+  # startup health check from each retained regular check, verifies the 5s to
+  # 10m/1m transition contract, and only then starts them. Compose rendering
+  # start_interval is insufficient because Podman's compatibility API drops it.
+  #
   # These services require a functional Docker daemon socket inside containers.
   # In podman machine mode on macOS, that socket path is not reliably usable.
   code-interpreter:
     profiles: ["requires-docker-socket"]
+
+  # Docker's tmpfs uid=/gid= mount options are rejected by Podman. `U` asks
+  # Podman to chown the new tmpfs to the container's configured 101:101 user;
+  # the service remains non-root, read-only, capability-free, and no-new-privs.
+  tailscale-frontend-gateway:
+    tmpfs: !override
+      - /var/cache/nginx:U,mode=0755
+      - /var/run:U,mode=0755
+      - /tmp
+
+  # macOS Podman presents mode-0700 host binds through virtiofs as nobody,
+  # preventing postgres from safely changing ownership. Use an engine-native
+  # named volume; Docker's bind data remains untouched and recoverable. `:Z`
+  # changes SELinux labels, not ownership, while `:U` recursive chown is
+  # rejected by this virtiofs path.
+  relational_db:
+    volumes: !override
+      - podman-postgres-data:/var/lib/postgresql/data
+
+  # Podman starts more concurrently than the Docker path and reports an exited
+  # dependent immediately. Gate database consumers on the native startup check
+  # so migrations never race PostgreSQL bind-mount initialization.
+  api_server:
+    depends_on:
+      relational_db:
+        condition: service_healthy
+
+volumes:
+  podman-postgres-data:

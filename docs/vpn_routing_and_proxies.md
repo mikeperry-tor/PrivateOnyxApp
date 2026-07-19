@@ -183,8 +183,54 @@ steady checks per hour. Retained checks use fast `start_interval` polling only
 during their bounded startup period and a ten-minute steady cadence, except
 Myst's one-minute recovery check. Origin services whose sole readiness value is
 already represented by a fixed gateway or publisher have their duplicate check
-disabled. Docker Engine 25.0+ and Compose 2.20.2+ are required; startup rejects
-Podman until its health-startup behavior has an equivalent validated contract.
+disabled. Docker Engine 25.0+ and Compose 2.20.2+ are required. With a Podman
+5.8.1+ server and Compose provider 2.20.2+, the Makefile first creates stopped
+containers, copies each regular command and timeout into Podman's native
+five-second startup health check, strictly inspects both cadences, and only then
+starts the services. A running container without that native configuration is
+rejected rather than modified in place. Podman Compose accepting or rendering
+`start_interval` alone is not treated as support because its compatibility API
+drops that field.
+
+Rootless Podman on macOS cannot reliably expose the Docker-compatible socket to
+stack containers, so its overlays omit code interpreter and VPN autoheal.
+Request routing still fails closed when Myst is unhealthy, but automatic Myst
+restart is unavailable; use `podman restart myst-client-vpn` or restart the
+matching stack after diagnosing the local readiness failure. The Podman layer
+also replaces Docker's unsupported tmpfs `uid`/`gid` options on the optional
+Tailscale frontend gateway with Podman's user-owned `U` mount option; the
+gateway continues to run as uid/gid 101 with its other hardening unchanged.
+PostgreSQL and OpenSearch use Podman-native named volumes because macOS
+virtiofs presents their Docker-oriented host binds with ownership those images
+cannot safely change. The existing `docker-data/postgres` and
+`docker-data/opensearch` directories remain untouched; storage is not
+automatically synchronized when switching engines. Podman API and background
+startup also wait for PostgreSQL's native startup health check so database
+migrations cannot race volume initialization.
+
+The Podman volume suffixes solve different Linux-side problems. `:z`/`:Z`
+relabel a source for SELinux sharing/isolation and do not change ownership or
+make an unshared macOS path visible to the VM. `:U` recursively changes the
+source ownership for the container user, which mutates the source and is
+rejected with `lchown ... operation not permitted` on the tested macOS
+virtiofs share. A disposable live probe found the same uid/gid and write denial
+with and without `:Z`; changing only ordinary mode bits permitted the write.
+Do not broaden permissions or rewrite attributes on the private Docker data
+directories as a workaround; the Podman-native volumes avoid that mutation.
+
+Full-mode startup also performs a no-network, no-pull read-only bind probe for
+`ONYX_RAG_DOC_SOURCE_DIR` before it creates the stack. This does not enumerate
+or read documents. On macOS, a source outside the Podman machine's shared
+roots must be relocated or added when the machine is created (for example,
+`podman machine init -v /Volumes:/Volumes`); restarting an existing machine
+does not add the share.
+
+Myst discovers the pre-tunnel bridge gateway by parsing the tokens following
+`via` and `dev`, not fixed `ip route` field positions. This matters on Podman,
+whose device-filtered route output omits the redundant `dev eth0` tokens. The
+exact `host.docker.internal` route therefore remains on the engine bridge for
+host-capable policy traffic such as the bundled embedding server, while the
+VPN default route remains authoritative for public traffic.
 
 Check that application, browser, executor, and host-capable networks remain
 distinct; the fixed bridges point at the intended listener; target DNS does

@@ -53,9 +53,10 @@ The Docker Compose files in this stack relies on the following components:
 
 ## Prerequisites
 
-- Docker Engine 25.0 or later with Docker Compose 2.20.2 or later. The wrapper
-  currently rejects Podman startup because its separate startup-health model
-  has not passed the required fast-start/slow-steady contract.
+- Docker Engine 25.0 or later with Docker Compose 2.20.2 or later; or a
+  rootless Podman 5.8.1 or later server with a Compose provider 2.20.2 or
+  later. The Podman path installs and verifies Podman's separate native
+  startup health checks before starting any created service.
 - Internet access for image builds and provider APIs
 - `make`
 - `uv` for unit tests and MLX embedding server installation.
@@ -121,8 +122,21 @@ Edit `.env.wrapper` as needed, based on the `.env.wrapper.example` template.
 Most likely variables you want to change:
 
 - Container engine selection:
-  - Keep `CONTAINER_BIN=docker`. Podman fails before startup with an actionable
-    capability error until its startup-health behavior is validated.
+  - Keep `CONTAINER_BIN=docker` for Docker Desktop, or set it to `podman` for a
+    running Podman machine. Podman mode requires a clean `make down-*` when
+    switching engines; it never falls back to Docker.
+  - On rootless Podman for macOS, code interpreter and Docker-socket autoheal
+    are unavailable. Routing remains fail-closed, but a failed Myst connection
+    requires `podman restart myst-client-vpn` or a stack restart.
+  - PostgreSQL and OpenSearch use Podman-native named volumes because macOS
+    bind-mount ownership is incompatible with those images. Docker's existing
+    bind data is left untouched; the two engines' database/index state is not
+    automatically synchronized.
+  - Full mode checks that `ONYX_RAG_DOC_SOURCE_DIR` is visible to the Podman VM
+    before starting services. Podman Desktop normally shares paths under
+    `/Users`; an external path such as `/Volumes/...` must be relocated or the
+    machine must be recreated with an explicit `-v /Volumes:/Volumes` mount.
+    Restarting an existing machine does not add that mount.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **VPN and Proxy Use**:

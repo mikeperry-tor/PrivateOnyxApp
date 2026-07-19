@@ -167,6 +167,42 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         for compose_file in optional_files:
             self.assertIn(compose_file, enabled_files)
 
+    def test_podman_override_uses_user_owned_tmpfs_without_docker_uid_options(self) -> None:
+        model = _compose_model(
+            "lite", "docker-compose.podman.yml", profiles=("tailscale",)
+        )
+        tmpfs = model["services"]["tailscale-frontend-gateway"]["tmpfs"]
+        self.assertEqual(
+            tmpfs,
+            ["/var/cache/nginx:U,mode=0755", "/var/run:U,mode=0755", "/tmp"],
+        )
+        self.assertNotIn("uid=", " ".join(tmpfs))
+        self.assertNotIn("gid=", " ".join(tmpfs))
+
+    def test_podman_override_uses_native_storage_and_gates_database_consumers(self) -> None:
+        for mode in ("lite", "full"):
+            extra = ["docker-compose.podman.yml"]
+            if mode == "full":
+                extra.append("docker-compose.podman-full.yml")
+            services = _compose_model(mode, *extra)["services"]
+            self.assertEqual(
+                services["relational_db"]["volumes"][0]["source"],
+                "podman-postgres-data",
+            )
+            self.assertEqual(
+                services["api_server"]["depends_on"]["relational_db"]["condition"],
+                "service_healthy",
+            )
+            if mode == "full":
+                self.assertEqual(
+                    services["background"]["depends_on"]["relational_db"]["condition"],
+                    "service_healthy",
+                )
+                self.assertEqual(
+                    services["opensearch"]["volumes"][0]["source"],
+                    "podman-opensearch-data",
+                )
+
     def test_autoheal_is_present_only_in_vpn_models(self) -> None:
         for mode in ("lite", "full"):
             no_vpn_model = _compose_model(mode)
@@ -529,6 +565,17 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertEqual(exempt_cidrs("socks5h://proxy.internal:1080"), "")
         self.assertEqual(exempt_cidrs("ftp://192.168.1.20:21"), "")
         self.assertEqual(exempt_cidrs("https://192.168.1.20:70000"), "")
+
+    def test_myst_default_route_parser_is_not_positional(self) -> None:
+        entrypoint = (ROOT / "myst" / "myst-client-entrypoint.sh").read_text()
+        route_setup = entrypoint.split(
+            "# Capture the container-engine bridge gateway", 1
+        )[1].split("# Start daemon in consumer-only mode", 1)[0]
+        self.assertIn('$i == "via"', route_setup)
+        self.assertIn('$i == "dev"', route_setup)
+        self.assertIn('DOCKER_BRIDGE_DEV="eth0"', route_setup)
+        self.assertNotIn("print $3", route_setup)
+        self.assertNotIn("print $5", route_setup)
 
     def test_host_publish_edge_contains_only_fixed_publishers(self) -> None:
         for mode in ("lite", "full"):

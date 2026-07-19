@@ -47,6 +47,12 @@ boundary.
 ## End-To-End Flow
 
 1. Files are placed under `ONYX_RAG_DOC_SOURCE_DIR`, defaulting to `./doc-drop`.
+   On macOS Podman, this path must also be shared into the Podman machine.
+   `make up-full` probes the read-only bind without reading directory contents
+   and fails before stack creation when the source is unavailable. Paths under
+   `/Users` are normally shared; using `/Volumes` requires relocating the
+   source or recreating the machine with `-v /Volumes:/Volumes`. A machine
+   restart alone cannot add a share.
 2. `doc-drop-web` mounts that directory read-only at `/import/docs` and serves
    it on dedicated internal route and publisher networks.
 3. The host display origin is

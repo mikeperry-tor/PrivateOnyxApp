@@ -2,18 +2,27 @@
 ## Applied by `make up-full` (and `make down-full`) via COMPOSE_FILE layering
 ## when CONTAINER_BIN resolves to a podman binary.
 ##
-## OpenSearch runs as uid/gid 1000 inside its container. Under rootless podman
-## the default userns maps container uid 1000 to a high host uid (e.g. 100999),
-## which cannot write to the bind-mounted ./docker-data/opensearch directory
-## owned by the host user. This causes:
+## OpenSearch runs as uid/gid 1000 inside its container. macOS Podman exposes
+## host binds through virtiofs with ownership that uid 1000 cannot safely
+## change. This causes:
 ##   AccessDeniedException[/usr/share/opensearch/data/nodes]
 ##   OpenSearchException[failed to bind service]
 ##
-## keep-id:uid=1000,gid=1000 maps the container's opensearch user (1000:1000)
-## directly to the host user running podman, so the bind mount is writable.
-## This override is full-mode only because the lite stack has no opensearch
-## service (it uses DISABLE_VECTOR_DB=true with a postgres backend).
+## `:Z` changes the SELinux label but not uid/gid, and `:U` recursive chown is
+## rejected by the macOS virtiofs share. Use an engine-native named volume
+## rather than widening the host directory. Docker's bind data remains
+## untouched. This override is full-mode only because the lite stack has no
+## opensearch service.
 
 services:
+  background:
+    depends_on:
+      relational_db:
+        condition: service_healthy
+
   opensearch:
-    userns_mode: "keep-id:uid=1000,gid=1000"
+    volumes: !override
+      - podman-opensearch-data:/usr/share/opensearch/data
+
+volumes:
+  podman-opensearch-data:

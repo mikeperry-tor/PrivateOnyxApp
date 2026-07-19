@@ -114,14 +114,20 @@ if [ "${MYST_SKIP_UPDATE_RESOLV_CONF:-false}" = "true" ]; then
   chmod +x "${OS_DIR_CONFIG}/update-resolv-conf"
 fi
 
-# Capture the Docker bridge gateway before removing its default route so the
-# kill-switch and route exemptions keep using the host-side path only.
-DOCKER_BRIDGE_GW="$(ip -4 route show default dev eth0 2>/dev/null | awk '/default/ {print $3; exit}')"
-DOCKER_BRIDGE_DEV="$(ip -4 route show default dev eth0 2>/dev/null | awk '/default/ {print $5; exit}')"
-if [ -z "${DOCKER_BRIDGE_GW:-}" ] || [ -z "${DOCKER_BRIDGE_DEV:-}" ]; then
-  DOCKER_BRIDGE_GW="$(ip -4 route show default 2>/dev/null | awk '/default/ {print $3; exit}')"
-  DOCKER_BRIDGE_DEV="$(ip -4 route show default 2>/dev/null | awk '/default/ {print $5; exit}')"
+# Capture the container-engine bridge gateway before removing its default
+# route so the kill-switch and route exemptions keep using the host-side path
+# only. Podman omits `dev eth0` from a device-filtered route listing, so find
+# values by token rather than by field position.
+_default_route="$(ip -4 route show default dev eth0 2>/dev/null | awk '/default/ {print; exit}')"
+DOCKER_BRIDGE_GW="$(printf '%s\n' "${_default_route}" | awk '{for (i=1; i<NF; i++) if ($i == "via") {print $(i+1); exit}}')"
+if [ -n "${DOCKER_BRIDGE_GW:-}" ]; then
+  DOCKER_BRIDGE_DEV="eth0"
+else
+  _default_route="$(ip -4 route show default 2>/dev/null | awk '/default/ {print; exit}')"
+  DOCKER_BRIDGE_GW="$(printf '%s\n' "${_default_route}" | awk '{for (i=1; i<NF; i++) if ($i == "via") {print $(i+1); exit}}')"
+  DOCKER_BRIDGE_DEV="$(printf '%s\n' "${_default_route}" | awk '{for (i=1; i<NF; i++) if ($i == "dev") {print $(i+1); exit}}')"
 fi
+unset _default_route
 
 # Start daemon in consumer-only mode (no provider services).
 # Disable LAN discovery to avoid mDNS/Bonjour conflicts in host-network tests.

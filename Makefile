@@ -39,6 +39,7 @@ ifeq ($(strip $(TAILSCALE_IMAGE)),)
 $(error TAILSCALE_IMAGE is not set in $(VERSION_FILE))
 endif
 PYTHON_SLIM_IMAGE ?= $(call env_value,PYTHON_SLIM_IMAGE)
+PYTHON_ALPINE_IMAGE ?= $(call env_value,PYTHON_ALPINE_IMAGE)
 OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
 ifeq ($(strip $(OBSCURA_IMAGE)),)
 OBSCURA_IMAGE := h4ckf0r0day/obscura:0.1.10
@@ -55,6 +56,7 @@ PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
 endif
+PODMAN_SELECTED := $(if $(findstring podman,$(notdir $(CONTAINER_BIN))),true,false)
 ifeq ($(strip $(DOCKER_SOCK_PATH)),)
 ifneq ($(findstring podman,$(CONTAINER_BIN)),)
 DOCKER_SOCK_PATH := $(strip $(shell "$(CONTAINER_BIN)" machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | head -1))
@@ -152,6 +154,10 @@ ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB ?= $(call env_value,ONYX_OPEN_URL_MAX_DOCUMEN
 ifeq ($(strip $(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)),)
 ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB := 20
 endif
+ONYX_RAG_DOC_SOURCE_DIR ?= $(call env_value,ONYX_RAG_DOC_SOURCE_DIR)
+ifeq ($(strip $(ONYX_RAG_DOC_SOURCE_DIR)),)
+ONYX_RAG_DOC_SOURCE_DIR := ./doc-drop
+endif
 # The shared Obscura server must accommodate both the configurable built-in
 # open_url document limit and SearXNG's independent fixed 20 MiB DOM limit.
 OBSCURA_RETENTION_FLOOR_BYTES := $(shell python3 -c 'v=int("$(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)"); assert 0 < v <= ((1<<63)-1)//1048576; print(max(v*1048576,20971520))')
@@ -183,6 +189,11 @@ $(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=..
 endif
 CODE_INTERPRETER_IMAGE ?= onyxdotapp/code-interpreter:$(CODE_INTERPRETER_IMAGE_TAG)
 export CODE_INTERPRETER_IMAGE_TAG
+ifeq ($(PODMAN_SELECTED),true)
+ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
+else
+ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
+endif
 ONYX_INSTALL_SCRIPT ?= ./install.sh
 ONYX_INSTALL_WRAPPER ?= ./install-with-container-bin.sh
 ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
@@ -208,7 +219,7 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help test check test-images check-upgrade health-inventory up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images check-upgrade health-inventory up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability check-podman-full-bind embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -256,6 +267,7 @@ check: test
 		onyx/background_entrypoint.py \
 		onyx/beat_liveness_watchdog.py \
 		embedserv/idle_embedding_proxy.py \
+		podman \
 		searxng/engines \
 		searxng/patches \
 		tests
@@ -319,27 +331,48 @@ searxng-build:
 		.
 
 up-lite: ONYX_INSTALL_ARGS=--lite
-up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
+up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
 check-container-health-capability:
 	@set -eu; \
 	case "$(CONTAINER_BIN)" in \
 		*podman*) \
-			echo "ERROR: Podman startup-health has not passed this wrapper's fast-start/slow-steady contract; use Docker Engine 25.0+ with Compose 2.20.2+"; \
-			exit 1 \
+			exec python3 podman/startup_health.py check --container-bin "$(CONTAINER_BIN)" \
 			;; \
 	esac; \
 	engine_version="$$($(CONTAINER_BIN) version --format '{{.Server.Version}}')"; \
 	compose_version="$$($(CONTAINER_BIN) compose version --short)"; \
 	ENGINE_VERSION="$$engine_version" COMPOSE_VERSION="$$compose_version" python3 -c 'import os; from re import findall; parse=lambda v: tuple((list(map(int, findall(r"\d+", v)))+[0,0,0])[:3]); assert parse(os.environ["ENGINE_VERSION"]) >= (25,0,0), "Docker Engine 25.0+ is required for start_interval"; assert parse(os.environ["COMPOSE_VERSION"]) >= (2,20,2), "Docker Compose 2.20.2+ is required for start_interval"'
 
+check-podman-full-bind:
+ifeq ($(PODMAN_SELECTED),true)
+	@"$(CONTAINER_BIN)" image inspect "$(PYTHON_ALPINE_IMAGE)" >/dev/null 2>&1 || \
+		"$(CONTAINER_BIN)" pull "$(PYTHON_ALPINE_IMAGE)"
+	@python3 podman/startup_health.py check-bind \
+		--container-bin "$(CONTAINER_BIN)" \
+		--path "$(ONYX_RAG_DOC_SOURCE_DIR)" \
+		--image "$(PYTHON_ALPINE_IMAGE)"
+endif
+
 up-lite: ensure-onyx-config sync-onyx-env check-container-health-capability ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
+ifeq ($(PODMAN_SELECTED),true)
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
+	@python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx
+endif
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
-up-full: ONYX_REQUIRED_IMAGES=$(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
-up-full: ensure-onyx-config sync-onyx-env check-container-health-capability ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
+up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
+up-full: ensure-onyx-config sync-onyx-env check-container-health-capability check-podman-full-bind ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
+ifeq ($(PODMAN_SELECTED),true)
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
+	@python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx
+endif
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait local-embedding-shim
 	@$(MAKE) --no-print-directory embedding-ready-once
+ifeq ($(PODMAN_SELECTED),true)
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
+	@python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx
+endif
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 embedding-ready-once:
@@ -481,6 +514,15 @@ onyx-build:
 		"$(CONTAINER_BIN)" pull "$$image"; \
 	done
 	@cd onyx && CONTAINER_BIN="$(CONTAINER_BIN)" PODMAN_COMPOSE_PROVIDER="$(PODMAN_COMPOSE_PROVIDER)" ONYX_DESIRED_IMAGE_TAG="$(ONYX_IMAGE_TAG)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)" HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_WRAPPER)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
+ifeq ($(PODMAN_SELECTED),true)
+	@set -eu; \
+	for container_id in $$($(CONTAINER_BIN) ps -a -q \
+		--filter label=com.docker.compose.project=onyx \
+		--filter label=com.docker.compose.service=code-interpreter); do \
+		echo "Removing unsupported Podman code-interpreter container: $$container_id"; \
+		"$(CONTAINER_BIN)" rm -f "$$container_id" >/dev/null; \
+	done
+endif
 
 myst-image-ready:
 	@if "$(CONTAINER_BIN)" image inspect "$(MYST_IMAGE)" >/dev/null 2>&1; then \
