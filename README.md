@@ -56,7 +56,9 @@ The Docker Compose files in this stack relies on the following components:
 - Docker Engine 25.0 or later with Docker Compose 2.20.2 or later; or a
   rootless Podman 5.8.1 or later server with a Compose provider 2.20.2 or
   later. The Podman path installs and verifies Podman's separate native
-  startup health checks before starting any created service.
+  startup health checks before starting any created service. The currently
+  verified macOS guest is the official 5.8.1 machine-os image; startup also
+  probes the image store so a broken post-restart guest fails early.
 - Internet access for image builds and provider APIs
 - `make`
 - `uv` for unit tests and MLX embedding server installation.
@@ -67,7 +69,10 @@ The stack comes in two flavors: lite and full. This specifies the mode of the On
 
 It is possible to switch between full and lite modes between restarts.
 
-All persistent data is bind-mounted to subdirectories in `./docker-data`
+Docker persists stack data in bind mounts under `./docker-data`. Podman keeps
+PostgreSQL, OpenSearch, and its staged RAG source cache in engine-native named
+volumes for macOS rootless compatibility; the engine-switch consequences are
+described below.
 
 ### Lite Mode
 
@@ -132,11 +137,15 @@ Most likely variables you want to change:
     bind-mount ownership is incompatible with those images. Docker's existing
     bind data is left untouched; the two engines' database/index state is not
     automatically synchronized.
-  - Full mode checks that `ONYX_RAG_DOC_SOURCE_DIR` is visible to the Podman VM
-    before starting services. Podman Desktop normally shares paths under
-    `/Users`; an external path such as `/Volumes/...` must be relocated or the
-    machine must be recreated with an explicit `-v /Volumes:/Volumes` mount.
-    Restarting an existing machine does not add that mount.
+  - Full mode inventories `ONYX_RAG_DOC_SOURCE_DIR` on every `make up-full`
+    and stages it into a Podman-native volume when its names, sizes, or
+    modification times changed, then mounts the cache read-only in
+    `doc-drop-web`. This also supports macOS user-mounted WebDAV paths that
+    cannot be re-exported through the Podman machine's virtiofs shares.
+    AppleDouble metadata and extended attributes are omitted; document bytes,
+    names, and modification times are retained. Podman keeps a private cached
+    copy until its named volume or machine is removed. An unchanged source
+    avoids the document-body transfer.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **VPN and Proxy Use**:

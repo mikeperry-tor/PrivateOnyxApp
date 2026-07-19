@@ -69,30 +69,32 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             full_start.index("up -d --wait local-embedding-shim"),
         )
 
-    def test_podman_full_start_preflights_document_bind(self) -> None:
+    def test_podman_full_start_stages_document_source(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         full_prerequisites = next(
             line
             for line in makefile.splitlines()
             if line.startswith("up-full: ensure-onyx-config")
         )
-        self.assertIn("check-podman-full-bind", full_prerequisites)
-        bind_target = makefile.split("check-podman-full-bind:", 1)[1].split(
+        self.assertIn("stage-podman-full-docs", full_prerequisites)
+        stage_target = makefile.split("stage-podman-full-docs:", 1)[1].split(
             "\n\n", 1
         )[0]
-        self.assertIn("startup_health.py check-bind", bind_target)
-        self.assertIn('"$(CONTAINER_BIN)"', bind_target)
-        self.assertIn('"$(ONYX_RAG_DOC_SOURCE_DIR)"', bind_target)
+        self.assertIn("startup_health.py stage-docs", stage_target)
+        self.assertIn('"$(CONTAINER_BIN)"', stage_target)
+        self.assertIn('"$(ONYX_RAG_DOC_SOURCE_DIR)"', stage_target)
+        self.assertIn('"$(PODMAN_RAG_DOC_VOLUME)"', stage_target)
 
-    def test_podman_excludes_and_cleans_up_socket_only_code_interpreter(self) -> None:
+    def test_podman_excludes_socket_only_code_interpreter_and_pulls_directly(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn(
             "ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)",
             makefile,
         )
         onyx_build = makefile.split("onyx-build:", 1)[1].split("\n\nmyst-image-ready:", 1)[0]
-        self.assertIn("com.docker.compose.service=code-interpreter", onyx_build)
-        self.assertIn('"$(CONTAINER_BIN)" rm -f', onyx_build)
+        podman_build = onyx_build.split("else", 1)[0]
+        self.assertIn('"$(CONTAINER_BIN)" pull', podman_build)
+        self.assertNotIn("ONYX_INSTALL_WRAPPER", podman_build)
 
 
 if __name__ == "__main__":

@@ -218,12 +218,18 @@ with and without `:Z`; changing only ordinary mode bits permitted the write.
 Do not broaden permissions or rewrite attributes on the private Docker data
 directories as a workaround; the Podman-native volumes avoid that mutation.
 
-Full-mode startup also performs a no-network, no-pull read-only bind probe for
-`ONYX_RAG_DOC_SOURCE_DIR` before it creates the stack. This does not enumerate
-or read documents. On macOS, a source outside the Podman machine's shared
-roots must be relocated or added when the machine is created (for example,
-`podman machine init -v /Volumes:/Volumes`); restarting an existing machine
-does not add the share.
+Full-mode startup inventories `ONYX_RAG_DOC_SOURCE_DIR` and, when its private
+metadata digest changed, stages it into the `onyx-podman-rag-docs`
+engine-native volume before it creates the stack. It then mounts that cache
+read-only in `doc-drop-web`. An unchanged source avoids the body transfer. The
+host archive stream and the receiving staging container have no network
+access. AppleDouble files and
+macOS ACL, file-flag, and extended-attribute metadata are omitted, avoiding
+metadata failures on user-mounted WebDAV sources without changing the source.
+The refreshed tree is activated only after a complete transfer, so failure
+preserves the previous cache and stops startup. This removes any need to share
+all of `/Volumes`; in particular, do not share it merely to follow the
+`/Volumes/Macintosh HD` symlink back to the system volume.
 
 Myst discovers the pre-tunnel bridge gateway by parsing the tokens following
 `via` and `dev`, not fixed `ip route` field positions. This matters on Podman,

@@ -12,7 +12,7 @@ Podman-native startup-health layer. Tests and the user-facing and upgrade
 documentation cover these changes.
 
 **Validation state: deterministic and pinned-image validation passes.**
-`make check` passed 209 tests (with five image-only skips), and
+`make check` passed 212 tests (with five image-only skips), and
 `make check-upgrade` passed the pinned-image contracts and five image-backed
 parser tests. Live Docker checks covered startup/readiness, worker and Beat
 behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
@@ -20,9 +20,16 @@ and MLX cold load, shared concurrent startup, and 10-minute idle unload. Live
 rootless Podman 5.8.1 checks covered lite and full startup, all native startup
 health contracts, exact host-route preservation, PostgreSQL/OpenSearch native
 volumes, MinIO CRUD, embedding readiness, WebUI, and a ten-result SearXNG
-search. Full mode used the repo-local document source because the separately
-configured `/Volumes` source is not shared into the existing Podman machine;
-the implemented preflight rejects that configuration before stack creation.
+search. A clean-machine Podman full start directly pulled the required Onyx
+images without invoking the Docker-oriented upstream bootstrap, started all 29
+expected containers without code interpreter or socket autoheal, and staged the
+configured macOS WebDAV source into the native read-only document cache. The
+live cache contained 1,444 files (about 8.6 GiB), its unchanged-manifest fast
+path was exercised, and a serving-container write probe was denied. Native
+health timestamps confirmed five-second startup checks, a 600-second ordinary
+steady interval, and Myst's one-minute interval. The bundled MLX child also
+unloaded after its completed readiness request while the lightweight host
+proxy remained listening.
 The long controlled before/after measurement windows and the remaining
 destructive or workload-specific fault/performance gates have not yet been
 run. A complete `make upgrade` dependency refresh was also not completed
@@ -120,8 +127,11 @@ containers, copies each exact regular command and timeout into a native
 five-second startup check, verifies the native and regular configuration, and
 only then starts the services. It rejects running containers that lack that
 configuration and never treats successful Compose rendering as proof. Full
-mode also performs a no-network, no-pull bind probe before stack creation so an
-unshared macOS document source fails with an actionable Podman-machine error.
+mode also refreshes a private Podman-native document volume through an offline
+container and metadata-free host archive stream before stack creation. This
+avoids unsupported virtiofs re-export of user-mounted macOS filesystems while
+keeping `doc-drop-web` read-only; a failed refresh preserves the previous copy
+and fails the start.
 
 Use the official [Dockerfile `HEALTHCHECK`
 reference](https://docs.docker.com/reference/dockerfile/), [Compose

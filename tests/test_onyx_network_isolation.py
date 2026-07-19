@@ -19,6 +19,7 @@ SECRET_ENV = {
     "MINIO_ROOT_PASSWORD": "test",
     "S3_AWS_ACCESS_KEY_ID": "test",
     "S3_AWS_SECRET_ACCESS_KEY": "test",
+    "PODMAN_RAG_DOC_VOLUME": "onyx-podman-rag-docs",
 }
 
 
@@ -184,7 +185,8 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             extra = ["docker-compose.podman.yml"]
             if mode == "full":
                 extra.append("docker-compose.podman-full.yml")
-            services = _compose_model(mode, *extra)["services"]
+            model = _compose_model(mode, *extra)
+            services = model["services"]
             self.assertEqual(
                 services["relational_db"]["volumes"][0]["source"],
                 "podman-postgres-data",
@@ -201,6 +203,27 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 self.assertEqual(
                     services["opensearch"]["volumes"][0]["source"],
                     "podman-opensearch-data",
+                )
+                doc_mounts = services["doc-drop-web"]["volumes"]
+                self.assertEqual(
+                    doc_mounts[0],
+                    {
+                        "type": "volume",
+                        "source": "podman-rag-docs",
+                        "target": "/import",
+                        "read_only": True,
+                        "volume": {},
+                    },
+                )
+                self.assertEqual(doc_mounts[1]["type"], "bind")
+                self.assertEqual(
+                    doc_mounts[1]["target"], "/app/doc_drop_webserver.py"
+                )
+                self.assertTrue(doc_mounts[1]["read_only"])
+
+                self.assertEqual(
+                    model["volumes"]["podman-rag-docs"],
+                    {"name": "onyx-podman-rag-docs", "external": True},
                 )
 
     def test_autoheal_is_present_only_in_vpn_models(self) -> None:

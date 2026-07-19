@@ -24,5 +24,17 @@ services:
     volumes: !override
       - podman-opensearch-data:/usr/share/opensearch/data
 
+  # macOS cannot reliably re-export user-mounted filesystems such as WebDAV
+  # through the Podman machine's virtiofs shares. The Makefile atomically
+  # refreshes this native volume through the remote `podman cp` API before
+  # Compose creates the full stack. The serving container remains read-only.
+  doc-drop-web:
+    volumes: !override
+      - podman-rag-docs:/import:ro
+      - ./onyx/doc_drop_webserver.py:/app/doc_drop_webserver.py:ro
+
 volumes:
   podman-opensearch-data:
+  podman-rag-docs:
+    name: ${PODMAN_RAG_DOC_VOLUME:?PODMAN_RAG_DOC_VOLUME must be set}
+    external: true

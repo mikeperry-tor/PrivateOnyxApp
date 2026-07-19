@@ -47,15 +47,25 @@ boundary.
 ## End-To-End Flow
 
 1. Files are placed under `ONYX_RAG_DOC_SOURCE_DIR`, defaulting to `./doc-drop`.
-   On macOS Podman, this path must also be shared into the Podman machine.
-   `make up-full` probes the read-only bind without reading directory contents
-   and fails before stack creation when the source is unavailable. Paths under
-   `/Users` are normally shared; using `/Volumes` requires relocating the
-   source or recreating the machine with `-v /Volumes:/Volumes`. A machine
-   restart alone cannot add a share.
-2. `doc-drop-web` mounts that directory read-only at `/import/docs` and serves
-   it on dedicated internal route and publisher networks.
-3. The host display origin is
+   Docker bind-mounts this host directory directly. Before a Podman full-mode
+   start, the wrapper hashes sync-relevant metadata (relative names, entry
+   types, sizes, and modification times) without reading file bodies. An
+   unchanged digest reuses the cache. When it changed, the wrapper streams a
+   metadata-free tar archive through the remote Podman client into an
+   engine-native named volume. This supports sources on
+   macOS user-mounted WebDAV filesystems, which libkrun/virtiofs may expose as
+   empty or inaccessible even when the machine configuration lists the share.
+   The transfer disables AppleDouble, ACL, file-flag, and extended-attribute
+   archiving because those metadata reads can fail on such filesystems. It
+   does not modify the source.
+2. `doc-drop-web` mounts the directory read-only at `/import/docs`. In Podman
+   mode this is an atomically refreshed cached copy under the private
+   `onyx-podman-rag-docs` named volume. A failed transfer preserves the previous
+   active copy and stops `make up-full`; a successful start reflects source
+   additions, changes, and deletions. The cache remains in the Podman machine
+   until that volume or the machine is removed.
+3. `doc-drop-web` serves the files on dedicated internal route and publisher
+   networks. The host display origin is
    `http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/` by default.
 4. In Onyx Admin -> Connectors -> Web, create a Recursive Web connector pointed
    at `http://doc-drop-web:8091/`.
