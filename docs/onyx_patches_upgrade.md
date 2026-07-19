@@ -275,8 +275,18 @@ a policy unconditionally from `web/src/proxy.ts`; the documented
 `WEB_STRICT_CSP_ENABLED` environment name has no implementation and must not be
 counted as a defense. Keep the tracked nginx policy as a second CSP header so
 the browser intersects it with upstream policy. If upstream implements an
-equivalent strict `img-src`, remove the wrapper header only after testing the
+equivalent restrictive policy, remove the wrapper header only after testing the
 effective combined response.
+
+The wrapper's current `script-src 'self' 'unsafe-inline'` is an intentional
+no-rebuild compatibility exception for Next.js bootstrap and React stream
+scripts. Keep `script-src-attr 'none'`; never add `unsafe-eval` or remote script
+origins. Do not replace this with a static self-only or nginx-filtered nonce
+policy based on response text tests alone: at the pinned baseline those variants
+returned HTML but left a real browser blank and unhydrated. A stricter upgrade
+requires a source-level per-response nonce that reaches every rendered stream
+script while keeping same-origin preload and lazy chunks functional. Once that
+browser test passes, remove `'unsafe-inline'`.
 
 Test through both the localhost publisher and every enabled Tailscale frontend:
 
@@ -287,11 +297,23 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
   different configured `WEB_DOMAIN` origin;
 - uploaded/local/background images, a `blob:` image preview, and an embedded
   `data:` DOCX image must still render;
-- the response must contain both Onyx's CSP and the wrapper `img-src 'self'
-  blob: data:` policy, with no remote HTTP(S) image source;
+- login, chat hydration/streaming, same-origin fetches, voice HTTP/WebSockets,
+  lazy route chunks, downloads, and local/blob PDF previews must still work;
+- Stripe Elements, GTM, reCAPTCHA, external analytics/crash clients, remote
+  frames/media/fonts/workers, remote scripts, inline event-handler attributes,
+  and eval must be blocked; required Next inline script blocks remain the known
+  compatibility exception;
+- the response must contain both Onyx's CSP and one wrapper policy with no
+  remote HTTP(S) source;
 - external user navigation and configured backend integrations must retain
-  their documented behavior; do not describe the image policy as a general
-  browser VPN or proxy.
+  their documented behavior; do not describe CSP as a browser VPN or proxy.
+
+Re-audit `PythonToolRenderer.tsx`. Its highlight.js exception path must HTML-
+escape `&`, `<`, and `>` or render the original code as a normal React text
+child; raw code must never reach `dangerouslySetInnerHTML`. The current wrapper
+does not rewrite compiled chunks because their immutable cache URLs would make
+that incomplete for existing clients. Remove this checkpoint once the pinned
+source and built image contain the safe fallback.
 
 Validate the nginx fragment with the pinned nginx image and inspect the
 effective Compose mount. A generated `onyx/onyx_data` refresh must not remove
@@ -304,8 +326,8 @@ Retest the wrapper patches summarized in
 reasoning preservation, selected Deep Research tools/batches, character and
 upload limits, helper routes, lite `open_url`, background PDF freshness,
 executor networking/capability text, the embedding shim, explicit privacy
-environment, and the WebUI image CSP. Moving the shared helper must not change
-their source-shape or import behavior.
+environment, and the WebUI restrictive CSP. Moving the shared helper must not
+change their source-shape or import behavior.
 
 Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
 background services unless the wrapper deliberately adds and documents a

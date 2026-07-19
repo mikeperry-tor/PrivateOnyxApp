@@ -541,8 +541,8 @@ services:
     networks: [onyx-frontend]
     volumes:
       # Onyx already emits its own CSP. Browsers enforce this additional
-      # image-source policy at the same time, so remote Markdown/tracking
-      # images cannot bypass the container VPN/proxy path through the client.
+      # restrictive policy at the same time, so remote scripts and resource
+      # loads cannot bypass the container VPN/proxy path through the client.
       - ./onyx/nginx/webui-csp.conf:/etc/nginx/conf.d/webui-csp.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/ || exit 1"]

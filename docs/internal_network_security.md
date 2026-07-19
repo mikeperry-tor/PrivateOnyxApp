@@ -114,10 +114,13 @@ bridge. A compromised caller cannot select another bridge merely by choosing
 a proxy address.
 
 The end-user browser is outside these container networks. As defense in depth,
-nginx supplies a separate `img-src 'self' blob: data:` CSP that prevents
-rendered Markdown and WebUI components from opening remote image connections
-through the user's network. It preserves same-origin chat-file images and
-local preview schemes. This is a browser image-load boundary only; it neither
+nginx supplies a separate restrictive CSP that limits external scripts to
+same-origin chunks, denies inline event-handler attributes and eval, and
+restricts browser connections, frames, media, fonts, workers, manifests, and
+images to the documented same-origin/local schemes. It preserves the inline
+Next.js bootstrap/React stream blocks required by the stock image, same-origin
+APIs and WebSockets, chat-file images, and local previews. This is a browser
+resource-load boundary with a documented inline-script XSS residual; it neither
 places the browser in the trusted routing namespace nor changes server-side
 destination policy.
 
@@ -137,6 +140,7 @@ logging can also be incomplete.
   destinations fail according to the selected DNS mode.
 - Proxy, VPN, gateway, or bridge failure cannot produce direct application
   egress.
-- WebUI responses include the wrapper image-source CSP; remote Markdown images
-  are blocked while same-origin chat-file and local preview images work.
+- WebUI responses include the wrapper CSP; remote resources, inline event
+  handler attributes, and eval are blocked while login hydration, same-origin
+  APIs/WebSockets, and local previews work.
 - Full-mode doc-drop remains a local path and does not gain browser/CDP access.

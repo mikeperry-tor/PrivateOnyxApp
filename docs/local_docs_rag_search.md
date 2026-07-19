@@ -341,6 +341,12 @@ Implementation:
 - `embedserv/requirements.in`
 - `embedserv/requirements.txt` (hashed lock file)
 
+Model verification uses the pinned Hugging Face verifier's exit status rather
+than matching its human-readable output. Checksum mismatches, missing remote
+files, and failures to obtain the remote manifest remain fatal; warnings for
+local cache/metadata files that are not part of the remote repository do not
+invalidate an otherwise successful verification.
+
 On macOS, the Makefile can install and launch an MLX embedding server:
 
 ```sh

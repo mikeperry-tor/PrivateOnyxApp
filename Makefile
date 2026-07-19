@@ -507,13 +507,18 @@ embedserv-verify-model:
 		exit 1; \
 	fi; \
 	echo "Verifying served model directory: $$model_dir"; \
-	verify_out=$$("$(PWD)/$(EMBEDSERV_VENV)/bin/hf" cache verify "$$model_repo" \
+	verify_out_file=$$(mktemp); \
+	if "$(PWD)/$(EMBEDSERV_VENV)/bin/hf" cache verify "$$model_repo" \
 		--local-dir "$$model_dir" \
-		--fail-on-missing-files 2>&1 || true); \
-	printf '%s\n' "$$verify_out"; \
-	if ! printf '%s\n' "$$verify_out" | grep -q "All checksums match."; then \
+		--fail-on-missing-files >"$$verify_out_file" 2>&1; then \
+		cat "$$verify_out_file"; \
+		rm -f -- "$$verify_out_file"; \
+	else \
+		verify_rc=$$?; \
+		cat "$$verify_out_file"; \
+		rm -f -- "$$verify_out_file"; \
 		echo "ERROR: local embedserv model verification failed"; \
-		exit 1; \
+		exit "$$verify_rc"; \
 	fi
 
 embedserv-serve: embedserv-verify-model
@@ -723,10 +728,16 @@ ensure-myst-funded:
 		exit 0; \
 	fi; \
 	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
-		echo "Stopping standalone Myst signup container (wallet data is preserved)..."; \
-		COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) down --remove-orphans 2>/dev/null || \
-			"$(CONTAINER_BIN)" stop $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
-		"$(CONTAINER_BIN)" rm -f $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
+		myst_project=""; \
+		if myst_project="$$($(CONTAINER_BIN) inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' $(MYST_CONTAINER_NAME) 2>/dev/null)"; then :; fi; \
+		if [ "$$myst_project" = "onyx" ]; then \
+			echo "Integrated Onyx Myst container is already running; preserving its routing namespace."; \
+		else \
+			echo "Stopping standalone Myst signup container (wallet data is preserved)..."; \
+			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) down --remove-orphans 2>/dev/null || \
+				"$(CONTAINER_BIN)" stop $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
+			"$(CONTAINER_BIN)" rm -f $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
+		fi; \
 	fi; \
 	if [ ! -d "$(MYST_DATA_DIR)/keystore" ] || [ -z "$$(ls -A $(MYST_DATA_DIR)/keystore 2>/dev/null)" ]; then \
 		echo ""; \

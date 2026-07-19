@@ -94,28 +94,33 @@ documented narrow route exceptions. Named operator-local proxies require the
 RFC1918 opt-in and never fall back to external DNS when local lookup is empty
 or fails.
 
-## WebUI browser image egress
+## WebUI browser egress
 
 The route classes above govern container traffic. They cannot transparently
 route requests made by the WebUI after JavaScript and rendered content reach a
-user's browser: without another control, a remote Markdown image would be
-loaded through the user's ordinary DNS and network, outside Myst and the
-final-hop proxies.
+user's browser: without another control, injected script, browser fetches,
+WebSockets, frames, media, fonts, workers, and remote Markdown images would use
+the user's ordinary DNS and network, outside Myst and the final-hop proxies.
 
-Nginx therefore adds a second CSP with `img-src 'self' blob: data:`. The
-browser intersects it with Onyx's own CSP and refuses HTTP(S) images from any
-other origin before opening a connection. This blocks arbitrary Markdown
-tracking images and the upstream Google favicon service. Same-origin packaged
-assets and `/api/chat/file/{id}` remain available, while local `blob:` and
-`data:` sources preserve previews. Code-interpreter image links are recognized
-by their `/api/chat/file/` path and rewritten by the WebUI to a relative
-same-origin image source, so no `http://localhost:3000` exception is present.
+Nginx therefore adds a second restrictive CSP. It permits external scripts
+only from the WebUI origin, denies inline event-handler attributes and eval,
+and restricts connections, frames, media, fonts, workers, manifests, and
+default resources to the WebUI origin. The stock Next.js image requires inline
+bootstrap and React stream script blocks for hydration, so the no-rebuild
+policy retains `'unsafe-inline'` for those blocks.
+Images additionally allow only local `blob:` and `data:` previews. The browser
+intersects this with Onyx's own policy and refuses disallowed loads before
+opening a connection. Code-interpreter image links are recognized by their
+`/api/chat/file/` path and rewritten to a relative same-origin source, so no
+`http://localhost:3000` exception is present.
 
-This closes the browser-image bypass; it does not send browser traffic through
-the VPN and is not a general browser egress firewall. User-opened external
-links remain possible. Server-side connectors, inference, search, release-note
-refresh, and other configured operations continue to use their documented
-container route class.
+This closes the listed automatic browser resource bypasses and reduces XSS
+impact, but it is not full XSS prevention: an injection sink that creates an
+executable inline script block remains allowed until a rebuilt WebUI can use a
+per-response nonce. The policy does not send browser traffic through the VPN.
+User-opened external links and top-level navigation remain possible.
+Server-side connectors, inference, search, release-note refresh, and other
+configured operations continue to use their documented container route class.
 
 ## VPN and no-VPN lifecycle
 
@@ -124,6 +129,13 @@ final-hop proxies are trusted co-resident processes; optional Teep or
 Tailscale routing switches deliberately promote those processes into the same
 namespace. This is a routing boundary, not a sandbox between its residents.
 Onyx applications never join it.
+
+Repeated `make up-lite`/`make up-full` calls distinguish the standalone Myst
+signup project from the integrated `onyx` Compose project. They stop the
+former before stack startup but preserve an already-running integrated Myst
+container; restarting Myst alone can leave a half-open `myst0` interface and
+split default routes in the long-lived holder namespace. Recover such a state
+with the matching full `make down-*` then `make up-*` cycle.
 
 With `MYST_VPN_ENABLED=true`, health requires a connected Myst daemon, a usable
 `myst0` address, route, and provider-resolver data path. VPN-only autoheal may
@@ -162,6 +174,7 @@ Check that application, browser, executor, and host-capable networks remain
 distinct; the fixed bridges point at the intended listener; target DNS does
 not appear at Docker's embedded resolver; private/internal/metadata targets
 are rejected; and an interrupted VPN or proxy produces a visible failure with
-no direct route. Also inspect the WebUI response for the wrapper image-source
-CSP and confirm a remote Markdown image produces no client-side request while
-same-origin chat images still render.
+no direct route. Also inspect the effective WebUI CSP and prove remote
+resources, inline event-handler attributes, and eval are blocked while login
+hydration, same-origin APIs, WebSockets, chat images, and local/blob previews
+still work.

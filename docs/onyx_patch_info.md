@@ -193,21 +193,54 @@ connectors, MCP servers, inference providers, web-search providers, OAuth
 flows, and similar configured integrations retain their intended outbound
 behavior through the documented route class.
 
-The WebUI executes in the user's browser, so a Markdown image or embedded
-component would otherwise use the user's ordinary network and bypass every
-container VPN/proxy control. The tracked `onyx/nginx/webui-csp.conf` adds a
-second response policy:
+The WebUI executes in the user's browser, so injected script, a Markdown image,
+or an embedded component would otherwise use the user's ordinary network and
+bypass every container VPN/proxy control. The tracked
+`onyx/nginx/webui-csp.conf` adds a second response policy with these effective
+source classes:
 
 ```text
+default-src 'self';
+script-src 'self' 'unsafe-inline';
+script-src-attr 'none';
+style-src 'self' 'unsafe-inline';
 img-src 'self' blob: data:;
+font-src 'self';
+connect-src 'self';
+media-src 'self' blob:;
+frame-src 'self' blob:;
+worker-src 'self' blob:;
+manifest-src 'self';
 ```
 
-Browsers enforce that policy together with Onyx's existing CSP. It blocks
-arbitrary remote Markdown images and the Web-result Google favicon request
-before a network request is made. `'self'` preserves packaged images,
-backgrounds, logos, uploaded images, and `/api/chat/file/{id}`. `blob:` keeps
-local preview object URLs working, and `data:` keeps embedded DOCX preview
-images working; neither permits an HTTP(S) image destination.
+Browsers enforce that policy together with Onyx's existing object, base, form,
+and frame-ancestor restrictions. It blocks third-party scripts, browser
+connections, frames, media, fonts, workers, manifests, arbitrary remote
+Markdown images, and the Web-result Google favicon request before a network
+request is made. It also blocks inline event-handler attributes. Same-origin
+API calls, packaged assets, backgrounds, logos, uploaded images, and
+`/api/chat/file/{id}` remain available. `blob:` keeps local image/audio/PDF and
+worker URLs working, and `data:` is limited to images so embedded DOCX preview
+images work without permitting a general data-document source.
+
+The official image's dynamic Next.js HTML contains inline bootstrap and React
+stream scripts, so a static `script-src 'self'` policy breaks hydration. A
+runtime nginx response-filter prototype successfully added nonces to the HTML
+but broke the current Next chunk/preload path with `strict-dynamic`. Passing a
+CSP nonce into the pinned Next 16.2.6 renderer also failed because the compiled
+Onyx Proxy does not preserve that request header through to rendering. Browser
+testing produced a complete response but a blank, unhydrated DOM in both strict
+variants.
+
+The compatible no-rebuild policy consequently allows inline script blocks but
+not inline event-handler attributes or `eval`, and permits external scripts
+only from the WebUI origin. This is weaker than a source-level nonce policy: an
+XSS sink capable of creating an executable inline script block can still run
+code. The policy nevertheless blocks common event-handler injection, remote
+script loading, and the network/resource classes normally used for automatic
+browser-side exfiltration. A future rebuilt WebUI should implement a real
+per-response nonce in the Onyx/Next source and remove `'unsafe-inline'` only
+after login, React streaming, and lazy chunk loading pass in a real browser.
 
 Code-interpreter output does not need a `localhost` CSP exception. The pinned
 prompt tells the model to emit `[filename](file_link)`. For an image filename,
@@ -216,9 +249,24 @@ relative `/api/chat/file/{id}` URL, even if the original backend link used the
 default absolute `http://localhost:3000` origin. Custom prompts should retain
 that ordinary-link form and should not emit a hard-coded Markdown image URL.
 
-This is an image-egress control, not a claim that CSP routes browser traffic
-through Myst. External links can still be opened by the user, and the backend
-route policy remains authoritative for server-side traffic. The generated
+The pinned Python tool renderer has an unsafe error fallback: if highlight.js
+throws, it passes raw model-emitted Python text to `dangerouslySetInnerHTML`.
+The official runtime image contains only compiled chunks, and modifying those
+chunks in place would retain their immutable cache URLs, so the wrapper does
+not apply a misleading partial bundle rewrite. The CSP blocks event-handler
+attributes and remote resource exfiltration from this path, and scripts inserted
+through `innerHTML` are normally inert, but `'unsafe-inline'` means CSP is not a
+complete containment claim for this or another executable script sink. Replace
+the fallback with escaped text in the next source/image build, or drop the
+checkpoint if upstream fixes it first.
+
+This is a browser resource-load boundary, not a claim that CSP routes traffic
+through Myst. External links and top-level user navigation remain possible,
+and the backend route policy remains authoritative for server-side traffic.
+The policy intentionally makes Stripe Elements, GTM, reCAPTCHA, third-party
+Sentry/PostHog clients, remote Craft previews/media, and the custom injected
+analytics-script feature inoperable even if accidentally configured. Local
+administrative analytics do not depend on those clients. The generated
 upstream environment template mentions `WEB_STRICT_CSP_ENABLED`, but the
 pinned WebUI does not read it; the wrapper does not rely on that dead switch.
 
@@ -276,7 +324,7 @@ RAG services; lite mode does not install an anonymous substitute bootstrap.
 The optional code-interpreter network overlay adds only the executor network
 and bridge selected by the strict runtime patch.
 
-The nginx service additionally mounts the tracked image-source CSP fragment
+The nginx service additionally mounts the tracked restrictive CSP fragment
 directly into `/etc/nginx/conf.d`. The fragment is independent of the generated
 upstream nginx template and survives regeneration of `onyx/onyx_data`; nginx
 startup remains fatal if the fragment is syntactically invalid.
