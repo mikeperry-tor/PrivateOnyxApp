@@ -201,6 +201,16 @@ to the bundled `nomic-ai/nomic-embed-text-v1` tokenizer. Confirm the strict
 installation points, no Hugging Face lookup for v23, and unchanged behavior
 for every other tokenizer model.
 
+Re-audit Onyx's embedding caller failure contract on every pin. The wrapper
+currently relies on query embedding making one request, passage embedding
+retrying explicit request/HTTP failures three times with fixed five-second
+waits, and neither path supplying its own `requests` timeout. Confirm document
+processing still propagates terminal embedding exceptions into indexing task
+failure handling, and do not mistake its independent heartbeat thread for a
+blocked-embedding watchdog. The wrapper lifecycle proxy owns the five-minute
+post-readiness blocked-socket bound; the shim must not add a timeout or retry
+that can ambiguously replay a POST.
+
 Verify `sitecustomize_api_server` is the only API bootstrap in both modes,
 neutral shared helpers are imported rather than executed, and patch drift is
 startup-fatal. Test one shared 120-second monotonic invocation state through
@@ -226,6 +236,11 @@ The current audited SearXNG pin is `2026.7.15-7b2199ecd`, sourced from commit
 online processors, engine loader, exception suspension mapping, result
 containers, timeout/late-result handling, engine selection, round-robin retry
 patch points, and last-resort scoring.
+
+Confirm that `use_default_settings.engines.keep_only` remains supported and
+that the effective engine list contains exactly `google2`, `brave2`,
+`duckduckgo2`, `startpage2`, and `bing2`. No inherited engine may initialize or
+perform startup DNS/network work.
 
 For every custom engine verify:
 

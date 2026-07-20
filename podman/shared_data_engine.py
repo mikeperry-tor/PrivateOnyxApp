@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Iterable, Sequence
 
 
 VALID_ENGINES = {"docker", "podman"}
+SHARED_WRITER_SERVICES = {"relational_db", "opensearch"}
 
 
 class GuardError(RuntimeError):
@@ -34,9 +37,80 @@ def read_owner(marker: Path) -> str | None:
     return owner
 
 
-def claim(marker: Path, engine: str) -> str:
+def _engine_for_command(command: str) -> str:
+    name = Path(command).name.lower()
+    return "podman" if "podman" in name else "docker"
+
+
+def _available_command(command: str) -> bool:
+    if os.sep in command:
+        return os.path.isfile(command) and os.access(command, os.X_OK)
+    return shutil.which(command) is not None
+
+
+def _running_shared_writers(command: str) -> set[str]:
+    inspected = subprocess.run(
+        [
+            command,
+            "ps",
+            "--filter",
+            "label=com.docker.compose.project=onyx",
+            "--filter",
+            "status=running",
+            "--format",
+            '{{.Label "com.docker.compose.service"}}',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if inspected.returncode != 0:
+        detail = inspected.stderr.strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        raise GuardError(f"could not inspect {command} for shared-data writers{suffix}")
+    return SHARED_WRITER_SERVICES.intersection(inspected.stdout.splitlines())
+
+
+def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
+    checked: set[tuple[str, str]] = set()
+    for command in commands:
+        command_engine = _engine_for_command(command)
+        identity = (
+            command_engine,
+            os.path.realpath(command) if os.sep in command else command,
+        )
+        if identity in checked or not _available_command(command):
+            continue
+        checked.add(identity)
+        writers = _running_shared_writers(command)
+        if writers and command_engine != engine:
+            names = ", ".join(sorted(writers))
+            raise GuardError(
+                f"refusing first {engine} claim while {command_engine} has running "
+                f"Onyx shared-data writer(s): {names}"
+            )
+
+
+def claim(
+    marker: Path,
+    engine: str,
+    *,
+    inspect_commands: Iterable[str] = ("docker", "podman"),
+    adopt_unclaimed: bool = False,
+) -> str:
     engine = _validate_engine(engine)
     marker.parent.mkdir(parents=True, exist_ok=True)
+    owner = read_owner(marker)
+    if owner is not None:
+        if owner != engine:
+            raise GuardError(
+                f"shared database/index data is claimed by {owner}; run that "
+                "engine's matching make down-* target before starting " + engine
+            )
+        return owner
+
+    if not adopt_unclaimed:
+        inspect_first_claim(inspect_commands, engine)
     try:
         descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
@@ -76,6 +150,15 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         type=Path,
         default=Path("docker-data/host-services/shared-data-engine"),
     )
+    parser.add_argument(
+        "--container-bin",
+        help="selected engine command to inspect before the first claim",
+    )
+    parser.add_argument(
+        "--adopt-unclaimed",
+        action="store_true",
+        help="seed an absent marker after the operator has verified both engines are down",
+    )
     args = parser.parse_args(argv)
     if args.action != "status" and args.engine is None:
         parser.error("--engine is required for claim and release")
@@ -86,7 +169,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     try:
         if args.action == "claim":
-            owner = claim(args.marker, args.engine)
+            commands = [args.container_bin] if args.container_bin else []
+            commands.extend(("docker", "podman"))
+            owner = claim(
+                args.marker,
+                args.engine,
+                inspect_commands=commands,
+                adopt_unclaimed=args.adopt_unclaimed,
+            )
             print(f"Shared database/index data claimed by {owner}.")
         elif args.action == "release":
             release(args.marker, args.engine)

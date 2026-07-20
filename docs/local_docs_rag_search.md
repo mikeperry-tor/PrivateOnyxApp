@@ -377,15 +377,33 @@ starts the pinned `mlx-openai-server` child on the first request, and unloads
 the child ten minutes after the last active request completes. Concurrent cold
 requests share one startup, and a request is forwarded exactly once: a child
 crash is returned as an error instead of replaying an embedding batch. Cold
-startup and forwarding share the shim's 30-second outer deadline.
+startup has no wrapper deadline while the owned child remains alive. After the
+child advertises the exact expected model, the one proxy-to-MLX request uses a
+five-minute blocked-socket timeout. This is not a five-minute end-to-end
+deadline: request parsing, lifecycle admission, cold loading, and shim
+concurrency-slot waits occur outside it, and a response that continues making
+socket progress may take longer. The shim adds no independent upstream timeout
+and performs no POST retry.
 
 Docker Desktop's host gateway requires the lifecycle proxy to listen on the
 host wildcard address, but gateway connections arrive at the macOS listener as
-loopback peers. The proxy rejects every non-loopback socket peer before reading
-the request body or starting the model, and caps active connection threads.
+loopback peers. The proxy rejects every non-loopback socket peer before request
+parsing or thread creation, caps active connection threads, and gives accepted
+sockets a 30-second idle timeout.
 This is a narrow trust boundary in Docker Desktop's userspace gateway, analogous
 to the Podman host document relay; it is not application-layer client
-authentication. Direct LAN clients receive HTTP 403.
+authentication. Rejected direct LAN sockets are closed without parsing enough
+HTTP to return an application response.
+
+Idle unload starts only after ten minutes since the last request completed and
+never stops an active batch. A request that races an idle child stop simply
+waits for the owned process to exit and then launches one new child; it is not
+dropped or replayed. During proxy termination, the listener stops accepting
+new connections, every already accepted request with an active child drains
+subject to the five-minute blocked-socket timeout, and only then is the
+lifecycle closed and its child stopped. A cold startup can be cancelled by
+proxy shutdown. Connections initiated after listener shutdown are necessarily
+refused by the operating system.
 
 Before every child launch, the proxy requires the loopback child port to be
 unoccupied. It records the child PID atomically, validates a stale record
@@ -397,13 +415,19 @@ listener or a reused PID fails closed and is left untouched.
 If the default URL is selected without an installed server/model, startup fails
 immediately with setup guidance. Automatic startup waits only for the lifecycle
 proxy listener; the staged `/ready` request proves the actual model separately.
+That single readiness request is deliberately visible and has no short wrapper
+timeout. `make up-full` prints that it is waiting and the lifecycle log path;
+Ctrl-C remains the operator escape when a live child never becomes ready. A
+definite child exit, occupied child port, invalid configuration, or failed
+readiness inference still fails startup rather than being hidden.
 The proxy writes to `embedserv/serve.log`; direct `make embedserv-serve` remains
 the foreground form. Automatic launch uses the absolute proxy-script path and
 an explicit detached process session so it survives the initiating shell. Its
 record contains a random per-launch ownership token and a fingerprint of every
-launch-defining argument. Repeated startup reuses it only when the live command
-contains that token and the fingerprint still matches; a configuration change
-restarts only that identity-validated proxy. `make down-full` likewise requires
+launch-defining argument plus the proxy script contents. Repeated startup
+reuses it only when the live command contains that token and the fingerprint
+still matches; a configuration or implementation change restarts only that
+identity-validated proxy. `make down-full` likewise requires
 the token in the live command before signaling it. Graceful shutdown
 signals its owned child group; a separate strict child record also lets the
 next start or `make down-full` clean up that child after a proxy crash. Both
@@ -569,10 +593,20 @@ Look for these shim messages:
 - `embed_http_error`: the upstream embedding server returned an HTTP error.
 - `embed_upstream_unreachable`: the shim could not connect to
   `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
-- `upstream_connection_retry`: a pooled keep-alive connection was stale and the
-  shim retried once.
 - `rerank_stub_called` or `query_analysis_stub_called`: Onyx used an endpoint
   this shim intentionally does not implement.
+
+The pinned Onyx embedding client does not impose its own request timeout.
+Passage embedding retries explicit request/HTTP failures three times with five
+seconds between attempts; query embedding does not. Consequently, the bundled
+proxy's five-minute blocked-socket timeout can make a repeatedly wedged passage
+batch take roughly fifteen minutes plus retry delays before Onyx receives the
+final error. Explicit failures do reach the indexing task machinery and can
+eventually mark the attempt failed, but Onyx's independent 30-second indexing
+heartbeat continues while a document-processing thread is blocked. It is not
+an embedding watchdog and will not expose an upstream that waits forever.
+The wrapper therefore owns the five-minute runtime wedge bound, while leaving
+potentially long model loads outside that bound.
 
 Common failure modes:
 

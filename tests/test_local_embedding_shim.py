@@ -35,6 +35,45 @@ def _load_module() -> ModuleType:
 
 
 class LocalEmbeddingShimReadinessTests(unittest.TestCase):
+    def test_shim_has_no_independent_upstream_timeout_or_post_retry(self) -> None:
+        module = _load_module()
+        self.assertIsNone(module.HTTP_TIMEOUT_SECONDS)
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("upstream_connection_retry", source)
+
+        failed = Mock()
+        failed.request.side_effect = OSError("connection reset")
+        with patch.object(
+            module.http.client,
+            "HTTPConnection",
+            return_value=failed,
+        ) as connection_class:
+            pool = module.UpstreamConnectionPool(
+                url="http://host.docker.internal:3210/v1/embeddings",
+                pool_size=1,
+                timeout_seconds=None,
+                proxy_url="http://onyx-host-egress-bridge:3128",
+            )
+            with self.assertRaisesRegex(OSError, "connection reset"):
+                pool.request("POST", b"{}", {"Content-Type": "application/json"})
+        failed.request.assert_called_once()
+        failed.close.assert_called_once()
+        self.assertEqual(connection_class.call_count, 1)
+
+    def test_connection_creation_failure_releases_concurrency_slot(self) -> None:
+        module = _load_module()
+        pool = module.UpstreamConnectionPool(
+            url="http://host.docker.internal:3210/v1/embeddings",
+            pool_size=1,
+            timeout_seconds=None,
+            proxy_url="http://onyx-host-egress-bridge:3128",
+        )
+        with patch.object(pool, "_new_connection", side_effect=OSError("offline")):
+            with self.assertRaisesRegex(OSError, "offline"):
+                pool.request("POST", b"{}", {"Content-Type": "application/json"})
+        self.assertTrue(pool._slots.acquire(blocking=False))
+        pool._slots.release()
+
     def test_health_never_requests_embeddings(self) -> None:
         module = _load_module()
         handler = self._handler(module)

@@ -243,7 +243,7 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -255,8 +255,9 @@ help:
 	@echo "  make check-upgrade # Run check plus pinned-image and disposable OpenSearch validation"
 	@echo "  make health-inventory # Print effective lite/full health cadence inventory"
 	@echo "  make shared-data-engine-status # Show the Docker/Podman shared-data owner"
+	@echo "  make adopt-shared-data-engine  # Seed an absent owner marker after verifying both engines are down"
 	@echo "  make up-lite      # Start wrapper + Onyx lite"
-	@echo "  make up-full      # Start wrapper + Onyx full and an installed default MLX server"
+	@echo "  make up-full      # Start full mode and the installed default MLX lifecycle proxy"
 	@echo "  make down-lite    # Stop wrapper + Onyx lite"
 	@echo "  make down-full    # Stop wrapper + Onyx full"
 	@echo "  make ps-lite      # Show lite mode containers"
@@ -308,7 +309,10 @@ shared-data-engine-status:
 	@python3 podman/shared_data_engine.py status --marker "$(SHARED_DATA_ENGINE_MARKER)"
 
 claim-shared-data-engine:
-	@python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
+	@python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --container-bin "$(CONTAINER_BIN)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
+
+adopt-shared-data-engine:
+	@python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --container-bin "$(CONTAINER_BIN)" --marker "$(SHARED_DATA_ENGINE_MARKER)" --adopt-unclaimed
 
 release-shared-data-engine:
 	@python3 podman/shared_data_engine.py release --engine "$(SHARED_DATA_ENGINE)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
@@ -575,8 +579,12 @@ endif
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420
 
 embedding-ready-once:
+	@echo "Loading and validating the configured embedding upstream; bundled MLX cold starts can take several minutes."
+	@echo "Full API/background startup will wait here. Press Ctrl-C to stop waiting."
+	@echo "Bundled MLX startup details, when selected: $(EMBEDSERV_LOG)"
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) exec -T local-embedding-shim \
-		wget -q -T 35 -O /dev/null http://127.0.0.1:9101/ready
+		python3 -c 'import urllib.request; response = urllib.request.urlopen("http://127.0.0.1:9101/ready", timeout=None); raise SystemExit(0 if response.status == 200 else 1)'
+	@echo "Configured embedding upstream is ready."
 
 ensure-onyx-config:
 	@set -eu; \
@@ -868,9 +876,10 @@ embedserv-start-if-installed:
 	venv_server="$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
 	proxy_script="$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py"; \
+	proxy_script_hash=$$(python3 -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$$proxy_script"); \
 	child_pid_file="$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)"; \
 	config_id=$$(python3 -c 'import hashlib,sys; print(hashlib.sha256("\0".join(sys.argv[1:]).encode()).hexdigest())' \
-		"$$proxy_script" "3210" "3211" "$$venv_server" "$$model_dir" "$$served_model" "$$child_pid_file"); \
+		"$$proxy_script" "$$proxy_script_hash" "3210" "3211" "$$venv_server" "$$model_dir" "$$served_model" "$$child_pid_file"); \
 	if [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; then \
 		echo "Embedding shim uses a custom upstream; not starting bundled MLX server: $$embeddings_url"; \
 		exit 0; \

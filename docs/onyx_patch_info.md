@@ -191,6 +191,10 @@ interval. Each engine owns URL construction, sanitized DOM parsing, result
 normalization, and explicit no-results detection. Parser mismatch is an
 unresponsive failure, not empty success.
 
+The overlay uses `use_default_settings.engines.keep_only: []` and explicitly
+adds only those five engines. Unused stock engines are absent rather than merely
+disabled, preventing their initialization and associated startup network work.
+
 The SearXNG startup patch keeps the existing round-robin selection/retry and
 last-resort scoring behavior. It atomically reserves a provider before thread
 creation, passes its opaque exact reservation token to that engine attempt, and
@@ -460,8 +464,10 @@ Other retained behavior has its own focused tests and upgrade checks:
 - local doc-drop behavior;
 - local embedding shim model-name/query-prefix behavior, including the exact
   fake-nomic v23-to-v1 tokenizer-only alias that preserves Onyx feature gates;
-- bundled host embedding lifecycle ownership, non-loopback peer rejection, and
-  bounded connection threads;
+- bundled host embedding lifecycle ownership, pre-thread non-loopback peer
+  rejection, socket-bounded connection threads, unbounded live-child cold
+  startup, five-minute proxy-to-child blocked-socket timeout, single-attempt
+  shim forwarding, and accepted-request shutdown draining;
 - static single-node OpenSearch policy: 512 MiB fixed heap,
   `node.processors=4`, disabled Performance Analyzer and Query Insights top-N
   collection, monthly body-free audit initialization, and zero replicas for

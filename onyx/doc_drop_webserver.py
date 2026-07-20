@@ -20,6 +20,7 @@ ALWAYS_HIDDEN_NAMES = {
 }
 HEALTH_PATH = "/_health"
 MAX_ACTIVE_CONNECTIONS = 32
+REQUEST_SOCKET_TIMEOUT_SECONDS = 30.0
 
 
 def _is_hidden_name(name: str) -> bool:
@@ -191,13 +192,25 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
         request_handler_class,
         *,
         max_active_connections: int = MAX_ACTIVE_CONNECTIONS,
+        loopback_peers_only: bool = False,
     ) -> None:
         if max_active_connections <= 0:
             raise ValueError("max_active_connections must be positive")
         self._request_slots = threading.BoundedSemaphore(max_active_connections)
+        self.loopback_peers_only = loopback_peers_only
         super().__init__(server_address, request_handler_class)
 
+    def verify_request(self, request, client_address) -> bool:
+        del request
+        if not self.loopback_peers_only:
+            return True
+        try:
+            return ipaddress.ip_address(client_address[0]).is_loopback
+        except ValueError:
+            return False
+
     def process_request(self, request, client_address) -> None:
+        request.settimeout(REQUEST_SOCKET_TIMEOUT_SECONDS)
         if not self._request_slots.acquire(blocking=False):
             self.shutdown_request(request)
             return
@@ -227,8 +240,11 @@ def main() -> None:
     if not os.path.isdir(document_root):
         parser.error(f"document directory does not exist: {args.directory}")
     handler_class = partial(DocDropRequestHandler, directory=document_root)
-    server = BoundedThreadingHTTPServer((args.bind, args.port), handler_class)
-    server.loopback_peers_only = args.loopback_peers_only
+    server = BoundedThreadingHTTPServer(
+        (args.bind, args.port),
+        handler_class,
+        loopback_peers_only=args.loopback_peers_only,
+    )
     try:
         print(f"Serving doc-drop on {args.bind}:{args.port}", flush=True)
         server.serve_forever()

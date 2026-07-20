@@ -135,11 +135,20 @@ Before either `make up-*` recipe reaches Compose, an atomic marker under
 `docker-data/host-services` claims the shared database/index data for Docker or
 Podman. Repeated starts by the same engine are allowed; the other engine fails
 closed until the owner's matching `make down-*` completes successfully. Inspect
-the marker with `make shared-data-engine-status`. A failed start deliberately
-retains its claim for a safe retry. After upgrading an already-running checkout,
-run its matching `make up-*` once to seed the marker before switching engines.
-If a machine failure leaves a stale claim, verify both engines have no Onyx
-containers before removing the marker manually.
+the marker with `make shared-data-engine-status`. On the first claim, the guard
+queries every installed Docker/Podman command (including `CONTAINER_BIN`) for
+running Onyx PostgreSQL or OpenSearch writers. A writer owned by the other
+engine, or an installed engine that cannot be inspected, stops startup before
+the marker is created. This closes the upgrade window in which a running
+pre-marker Docker stack could otherwise be claimed by Podman.
+
+A failed start deliberately retains its claim for a safe retry. If both engines
+are verifiably down but an unavailable engine command prevents first-use
+inspection, `make adopt-shared-data-engine` is the explicit operator override;
+it seeds the absent marker for the selected `CONTAINER_BIN` without inspection.
+Do not use it to bypass a reported writer. If a machine failure leaves a stale
+claim, verify both engines have no Onyx containers before removing the marker
+manually or adopting the new owner.
 
 The two stack-start targets are `.NOTPARALLEL` Make targets. Their ownership
 claim, shared-data preparation, host-side services, and Compose launch therefore
@@ -240,14 +249,20 @@ The Podman Makefile lifecycle is consequently create/configure/start:
 Podman's native startup check intentionally uses zero startup retries so it
 does not restart a slow or broken service. Podman can consequently leave such
 a container in `starting` indefinitely. The explicit Compose wait timeout is
-the fail-closed outer bound: startup returns nonzero within 420 seconds rather
-than blocking forever, while preserving the failed container and its health
-history for diagnosis.
+the fail-closed outer bound for each container-health phase: that phase returns
+nonzero within 420 seconds rather than blocking forever, while preserving the
+failed container and its health history for diagnosis.
 
 Full mode performs that sequence first for `local-embedding-shim`, makes the
 single `/ready` request, then repeats create/configure/start for the complete
 graph. Do not collapse this into a single `compose up`: that would start
 containers before the native health contract is installed.
+The intervening inference-backed `/ready` is different from a container-health
+phase: it prints the MLX log path and waits without a short wrapper deadline
+while a live bundled child loads. This preserves a visible startup contract for
+machines with slow MLX load times; Ctrl-C is the operator escape. Once ready,
+an individual proxy-to-child request has the same five-minute blocked-socket
+timeout as normal embedding traffic.
 
 ## Image preparation
 
@@ -323,9 +338,11 @@ has no document mounts. Its only additional network is a dedicated
 non-internal host uplink, and its fixed command connects only
 `host.containers.internal:18091`. Podman's userspace gateway reaches the
 macOS listener as a loopback peer; the server rejects non-loopback peers before
-serving any URL and caps active connection threads. The wildcard bind required
-by the gateway is therefore not an unauthenticated LAN document endpoint:
-direct non-loopback clients receive HTTP 403 before path handling. This
+HTTP parsing or thread creation, caps active connection threads, and gives
+accepted sockets a 30-second idle timeout. The wildcard bind required by the
+gateway is therefore not an unauthenticated LAN document endpoint: direct
+non-loopback sockets are closed without parsing enough HTTP to return a
+response. This
 restriction is enabled only by the host process's
 `--loopback-peers-only` flag; Docker's internal document server does not use
 it. Application containers do not join that uplink. The existing

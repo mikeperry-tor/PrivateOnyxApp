@@ -22,11 +22,11 @@ from typing import Callable
 REQUEST_PATH = "/v1/embeddings"
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
-OUTER_TIMEOUT_SECONDS = 30.0
 DEFAULT_IDLE_SECONDS = 600.0
-DEFAULT_STARTUP_SECONDS = 20.0
 CHILD_STOP_GRACE_SECONDS = 15.0
+CHILD_REQUEST_TIMEOUT_SECONDS = 300.0
 MAX_ACTIVE_CONNECTIONS = 16
+REQUEST_SOCKET_TIMEOUT_SECONDS = 30.0
 
 
 class Lifecycle:
@@ -38,7 +38,6 @@ class Lifecycle:
         *,
         child_pid_file: Path | None = None,
         idle_seconds: float = DEFAULT_IDLE_SECONDS,
-        startup_seconds: float = DEFAULT_STARTUP_SECONDS,
         popen: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
     ) -> None:
         self.command = command
@@ -46,7 +45,6 @@ class Lifecycle:
         self.served_model_name = served_model_name
         self.child_pid_file = child_pid_file
         self.idle_seconds = idle_seconds
-        self.startup_seconds = startup_seconds
         self._popen = popen
         self._require_port_available = require_port_available
         self._condition = threading.Condition()
@@ -56,6 +54,7 @@ class Lifecycle:
         self._active = 0
         self._last_completed = time.monotonic()
         self._closed = False
+        self._shutdown_requested = threading.Event()
 
     def _child_healthy(self, child: subprocess.Popen[bytes]) -> bool:
         if child.poll() is not None:
@@ -69,20 +68,30 @@ class Lifecycle:
             body = response.read(64 * 1024)
             if response.status != 200:
                 return False
-            payload = json.loads(body)
+            try:
+                payload = json.loads(body)
+            except (ValueError, TypeError) as exc:
+                raise RuntimeError("MLX child returned invalid model metadata") from exc
             if not isinstance(payload, dict):
-                return False
-            return any(
+                raise RuntimeError("MLX child returned invalid model metadata")
+            models = payload.get("data")
+            if not isinstance(models, list):
+                raise RuntimeError("MLX child returned invalid model metadata")
+            if any(
                 item.get("id") == self.served_model_name
-                for item in payload.get("data", ())
+                for item in models
                 if isinstance(item, dict)
+            ):
+                return True
+            raise RuntimeError(
+                "MLX child does not advertise the configured served model"
             )
-        except (OSError, ValueError, TypeError):
+        except OSError:
             return False
         finally:
             connection.close()
 
-    def begin_request(self, deadline: float) -> None:
+    def begin_request(self) -> None:
         while True:
             with self._condition:
                 if self._closed:
@@ -96,11 +105,10 @@ class Lifecycle:
                 if self._child is not None and not self._stopping:
                     self._active += 1
                     return
+                if self._shutdown_requested.is_set():
+                    raise RuntimeError("embedding lifecycle proxy is shutting down")
                 if self._starting or self._stopping:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("timed out waiting for MLX lifecycle state")
-                    self._condition.wait(remaining)
+                    self._condition.wait()
                     continue
                 self._starting = True
 
@@ -111,17 +119,18 @@ class Lifecycle:
                 child = self._popen(self.command, start_new_session=True)
                 if self.child_pid_file is not None:
                     _write_pid_file(self.child_pid_file, child.pid)
-                startup_deadline = min(deadline, time.monotonic() + self.startup_seconds)
-                while time.monotonic() < startup_deadline:
+                while True:
+                    if self._shutdown_requested.is_set():
+                        raise RuntimeError(
+                            "MLX child startup canceled by proxy shutdown"
+                        )
                     if child.poll() is not None:
                         raise RuntimeError(
                             f"MLX child exited during startup with status {child.returncode}"
                         )
                     if self._child_healthy(child):
                         break
-                    time.sleep(0.1)
-                else:
-                    raise TimeoutError("MLX child did not become healthy before startup deadline")
+                    time.sleep(0.5)
             except BaseException as exc:
                 failure = exc
 
@@ -187,6 +196,7 @@ class Lifecycle:
         return True
 
     def shutdown(self) -> None:
+        self._shutdown_requested.set()
         with self._condition:
             self._closed = True
             while self._active or self._starting or self._stopping:
@@ -195,6 +205,12 @@ class Lifecycle:
             self._child = None
         if child is not None:
             self._terminate_child(child)
+
+    def request_shutdown(self) -> None:
+        """Cancel only cold startup so accepted active requests can still drain."""
+        self._shutdown_requested.set()
+        with self._condition:
+            self._condition.notify_all()
 
 
 def require_port_available(port: int) -> None:
@@ -322,16 +338,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(400, "incomplete embedding request body")
             return
 
-        deadline = time.monotonic() + OUTER_TIMEOUT_SECONDS
         begun = False
+        connection: http.client.HTTPConnection | None = None
         try:
-            self.server.lifecycle.begin_request(deadline)
+            self.server.lifecycle.begin_request()
             begun = True
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("embedding deadline expired before forwarding")
             connection = http.client.HTTPConnection(
-                "127.0.0.1", self.server.lifecycle.child_port, timeout=remaining
+                "127.0.0.1",
+                self.server.lifecycle.child_port,
+                timeout=CHILD_REQUEST_TIMEOUT_SECONDS,
             )
             headers = {"Content-Type": self.headers.get("Content-Type", "application/json")}
             if authorization := self.headers.get("Authorization"):
@@ -349,7 +364,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(response_body)))
             self.end_headers()
             self.wfile.write(response_body)
-            connection.close()
         except (OSError, RuntimeError, TimeoutError) as exc:
             payload = json.dumps(
                 {"error": {"message": f"local MLX embedding backend unavailable: {type(exc).__name__}"}}
@@ -360,6 +374,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
         finally:
+            if connection is not None:
+                connection.close()
             if begun:
                 self.server.lifecycle.end_request()
 
@@ -373,7 +389,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
 
 class ProxyServer(http.server.ThreadingHTTPServer):
-    daemon_threads = True
+    # server_close() drains accepted request threads before the lifecycle is
+    # closed, including handlers that are still reading a bounded request.
+    daemon_threads = False
 
     def __init__(
         self,
@@ -388,9 +406,19 @@ class ProxyServer(http.server.ThreadingHTTPServer):
         self._request_slots = threading.BoundedSemaphore(max_active_connections)
         super().__init__(address, ProxyHandler)
 
+    def verify_request(
+        self, request: socket.socket, client_address: tuple[str, int]
+    ) -> bool:
+        del request
+        try:
+            return ipaddress.ip_address(client_address[0]).is_loopback
+        except ValueError:
+            return False
+
     def process_request(
         self, request: socket.socket, client_address: tuple[str, int]
     ) -> None:
+        request.settimeout(REQUEST_SOCKET_TIMEOUT_SECONDS)
         if not self._request_slots.acquire(blocking=False):
             self.shutdown_request(request)
             return
@@ -461,6 +489,7 @@ def main() -> None:
 
     def _shutdown(_signum: int, _frame: object) -> None:
         stop.set()
+        lifecycle.request_shutdown()
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _shutdown)
@@ -474,8 +503,10 @@ def main() -> None:
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
-        lifecycle.shutdown()
+        # Stop accepting, drain every accepted request, then make the child
+        # lifecycle unavailable and stop its owned process group.
         server.server_close()
+        lifecycle.shutdown()
 
 
 if __name__ == "__main__":

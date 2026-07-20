@@ -12,6 +12,7 @@ from onyx.doc_drop_webserver import (
     BoundedThreadingHTTPServer,
     DocDropRequestHandler,
     MAX_ACTIVE_CONNECTIONS,
+    REQUEST_SOCKET_TIMEOUT_SECONDS,
     _path_is_confined,
 )
 
@@ -21,6 +22,7 @@ class DocDropWebserverTests(unittest.TestCase):
         self.assertEqual(MAX_ACTIVE_CONNECTIONS, 32)
         server = BoundedThreadingHTTPServer.__new__(BoundedThreadingHTTPServer)
         server._request_slots = threading.BoundedSemaphore(1)
+        server.loopback_peers_only = False
         server.shutdown_request = Mock()
         request = Mock()
         with patch(
@@ -41,6 +43,25 @@ class DocDropWebserverTests(unittest.TestCase):
             server.process_request_thread(Mock(), ("127.0.0.1", 1))
         handle_request.assert_called_once()
         self.assertTrue(server._request_slots.acquire(blocking=False))
+
+    def test_host_peer_is_rejected_before_request_thread(self) -> None:
+        server = BoundedThreadingHTTPServer.__new__(BoundedThreadingHTTPServer)
+        server.loopback_peers_only = True
+        self.assertTrue(server.verify_request(Mock(), ("127.0.0.1", 1)))
+        self.assertFalse(server.verify_request(Mock(), ("192.0.2.10", 1)))
+        server.loopback_peers_only = False
+        self.assertTrue(server.verify_request(Mock(), ("192.0.2.10", 1)))
+
+    def test_accepted_socket_gets_bounded_idle_timeout(self) -> None:
+        server = BoundedThreadingHTTPServer.__new__(BoundedThreadingHTTPServer)
+        server._request_slots = threading.BoundedSemaphore(1)
+        server.shutdown_request = Mock()
+        request = Mock()
+        with patch(
+            "onyx.doc_drop_webserver.ThreadingHTTPServer.process_request"
+        ):
+            server.process_request(request, ("127.0.0.1", 1))
+        request.settimeout.assert_called_once_with(REQUEST_SOCKET_TIMEOUT_SECONDS)
 
     def test_health_is_local_and_request_logging_is_silent(self) -> None:
         handler = object.__new__(DocDropRequestHandler)

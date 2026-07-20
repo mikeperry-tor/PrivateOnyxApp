@@ -2,7 +2,6 @@
 import http.client
 import json
 import os
-import queue
 import ssl
 import threading
 import sys
@@ -53,7 +52,7 @@ UPSTREAM_PROXY_URL = os.environ.get(
 DEFAULT_QUERY_PREFIX = os.environ.get("SHIM_QUERY_PREFIX", "")
 DEFAULT_PASSAGE_PREFIX = os.environ.get("SHIM_PASSAGE_PREFIX", "")
 
-HTTP_TIMEOUT_SECONDS = 30.0
+HTTP_TIMEOUT_SECONDS = None
 UPSTREAM_POOL_SIZE = parse_positive_int_env("SHIM_UPSTREAM_POOL_SIZE", 8)
 METRICS_LOG_EVERY = parse_positive_int_env("SHIM_METRICS_LOG_EVERY", 50)
 GPU_AVAILABLE = True
@@ -136,7 +135,11 @@ class ShimMetrics:
 
 class UpstreamConnectionPool:
     def __init__(
-        self, url: str, pool_size: int, timeout_seconds: float, proxy_url: str
+        self,
+        url: str,
+        pool_size: int,
+        timeout_seconds: float | None,
+        proxy_url: str,
     ):
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -178,11 +181,7 @@ class UpstreamConnectionPool:
         self.proxy_port = proxy.port
 
         self.timeout_seconds = timeout_seconds
-        self._pool: queue.LifoQueue[http.client.HTTPConnection] = queue.LifoQueue(
-            maxsize=pool_size
-        )
-        for _ in range(pool_size):
-            self._pool.put(self._new_connection())
+        self._slots = threading.BoundedSemaphore(pool_size)
 
     def _new_connection(self) -> http.client.HTTPConnection:
         if self.scheme == "https":
@@ -203,57 +202,33 @@ class UpstreamConnectionPool:
     def request(
         self, method: str, body: bytes, headers: dict[str, str]
     ) -> tuple[int, str, float, float]:
-        max_attempts = 2
-        total_pool_wait_ms = 0.0
-        total_upstream_ms = 0.0
-
-        for attempt in range(1, max_attempts + 1):
-            wait_start = time.monotonic()
-            connection = self._pool.get()
-            pool_wait_ms = (time.monotonic() - wait_start) * 1000.0
-            total_pool_wait_ms += pool_wait_ms
-            replace_connection = False
-            try:
-                upstream_start = time.monotonic()
-                request_target = (
-                    self.absolute_target if self.scheme == "http" else self.target
+        wait_start = time.monotonic()
+        self._slots.acquire()
+        pool_wait_ms = (time.monotonic() - wait_start) * 1000.0
+        connection: http.client.HTTPConnection | None = None
+        try:
+            connection = self._new_connection()
+            upstream_start = time.monotonic()
+            request_target = (
+                self.absolute_target if self.scheme == "http" else self.target
+            )
+            connection.request(method, request_target, body=body, headers=headers)
+            response = connection.getresponse()
+            raw = response.read().decode("utf-8")
+            upstream_ms = (time.monotonic() - upstream_start) * 1000.0
+            status = response.status
+            if status >= 400:
+                raise UpstreamHTTPError(
+                    status=status,
+                    detail=raw,
+                    pool_wait_ms=pool_wait_ms,
+                    upstream_ms=upstream_ms,
                 )
-                connection.request(method, request_target, body=body, headers=headers)
-                response = connection.getresponse()
-                raw = response.read().decode("utf-8")
-                upstream_ms = (time.monotonic() - upstream_start) * 1000.0
-                total_upstream_ms += upstream_ms
-                status = response.status
-                if status >= 400:
-                    raise UpstreamHTTPError(
-                        status=status,
-                        detail=raw,
-                        pool_wait_ms=total_pool_wait_ms,
-                        upstream_ms=total_upstream_ms,
-                    )
-                return status, raw, total_pool_wait_ms, total_upstream_ms
-            except UpstreamHTTPError:
-                raise
-            except (OSError, TimeoutError, http.client.HTTPException) as e:
-                replace_connection = True
-                if attempt >= max_attempts:
-                    raise
-                log_line(
-                    "upstream_connection_retry"
-                    f" attempt={attempt}"
-                    f" max_attempts={max_attempts}"
-                    f" reason={e}"
-                )
-            finally:
-                if replace_connection:
-                    try:
-                        connection.close()
-                    except Exception:
-                        pass
-                    connection = self._new_connection()
-                self._pool.put(connection)
-
-        raise RuntimeError("unreachable upstream retry state")
+            return status, raw, pool_wait_ms, upstream_ms
+        finally:
+            if connection is not None:
+                connection.close()
+            self._slots.release()
 
 
 try:

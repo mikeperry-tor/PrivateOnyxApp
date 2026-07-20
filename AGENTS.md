@@ -37,7 +37,9 @@ At a high level:
   fresh API/background tier, uses an on-demand host MLX lifecycle proxy for the
   bundled backend with loopback-peer enforcement, bounded connection threads,
   tokenized launch/configuration identity plus strict child PID, port, and
-  served-model ownership, and
+  served-model ownership, visible unbounded cold-start readiness while the
+  child remains alive, a five-minute proxy-to-child blocked-socket timeout,
+  single-attempt shim forwarding, and
   applies the documented low-idle background/storage
   policy. OpenSearch uses static single-node settings: a 512 MiB heap, four
   configured processors, monthly body-free audit initialization, disabled
@@ -52,7 +54,9 @@ At a high level:
 - The wrapper uses the legacy code-interpreter service and explicitly disables unsupported Craft sandbox scheduling.
 - Onyx sends LLM requests through the included Teep local inference service.
 - The shared API runtime patches give nested Deep Research agents the tools selected for the current chat Agent and execute complete model-emitted tool batches with bounded concurrency.
-- Onyx `web_search` calls SearXNG, whose custom offline engines navigate and parse rendered provider pages through Obscura.
+- Onyx `web_search` calls SearXNG, whose explicit five-engine custom offline set
+  navigates and parses rendered provider pages through Obscura. Inherited stock
+  engines are absent so they cannot initialize or perform startup network work.
 - Onyx `open_url()` is a chat-time read tool, not an ingestion path. For every
   requested URL it concurrently performs a fresh crawl and, in full mode,
   exact-ID retrieval of any document that a connector indexed previously; it
@@ -189,10 +193,16 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
 - `make up-lite` / `make up-full` - start the lite or full stack. Full mode
   also starts the bundled host MLX lifecycle proxy when its selected model is
   already installed and the shim still uses the bundled default endpoint, then
-  validates `/ready` once before creating a new API/background tier;
+  validates `/ready` once before creating a new API/background tier. That
+  foreground readiness wait has no short wrapper deadline and prints the MLX
+  log path so a slow or stuck load remains visible and interruptible;
   `make down-full` stops only that identity-validated proxy and child group,
   including a strictly recorded orphan left by a proxy crash.
   Custom upstreams and manually launched servers are not touched.
+- The first Docker/Podman shared-data ownership claim inspects installed engine
+  commands for running Onyx PostgreSQL/OpenSearch writers and fails closed on
+  conflicting writers or an inspection failure. `make adopt-shared-data-engine`
+  is only for an absent marker after the operator verifies both engines are down.
 - `make health-inventory` - render the Makefile-selected engine/environment and
   optional overlays for lite/full healthcheck commands, startup/steady
   cadences, and approximate steady checks per hour.

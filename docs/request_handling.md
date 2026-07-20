@@ -350,6 +350,11 @@ provider-owned Google, DuckDuckGo, Startpage, and Bing redirect formats before
 returning results; omitting optional plugins does not add a search navigation
 or change final-hop routing.
 
+The settings loader also keeps none of SearXNG's inherited default engines and
+then adds only the five wrapper engines below. This is stronger than marking
+stock engines disabled: unused engines are never imported or initialized, so
+they cannot perform startup DNS/network work or retain engine-specific state.
+
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are custom
 offline engines. Each builds one provider URL, performs one direct Obscura
 navigation, verifies an exact terminal-host allowlist, classifies status and

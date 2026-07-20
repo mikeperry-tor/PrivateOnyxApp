@@ -34,6 +34,16 @@ mutable ClearURLs rules or initialize unused result/UI hooks. The local unused
 Tailscale profile is disabled in the operator environment; the tracked optional
 profile remains available.
 
+The MLX lifecycle follow-up keeps the ten-minute idle reap while simplifying
+the request contract. Cold load has no wrapper deadline while the owned child
+is alive, and full startup exposes that wait in the foreground with the MLX log
+path and Ctrl-C as the operator escape. Once ready, one proxy-to-child request
+has a five-minute blocked-socket timeout. The shim has no second timeout, opens
+one connection per request under its existing concurrency bound, and never
+retries a POST. Requests that arrive during idle unload wait for completion and
+start a new child; accepted requests with an active child drain during normal
+proxy shutdown, while shutdown cancels an incomplete cold start.
+
 The corrective follow-up `make check` passes 248 tests with five image-only
 skips. Live Podman full startup retained 14 health checks/138 checks per hour;
 lite retained 11/120, down from 16/150 and 13/132 with the unused profiles.
@@ -45,11 +55,10 @@ rootless `ping_group_range` OCI runtime error; a complete clean down/up cleared
 the transient without weakening user namespaces or container hardening.
 
 **Validation state: deterministic and pinned-image validation passes.**
-The current `make check` passed 260 tests (with five image-only skips), and the
-earlier full pinned-image run
-`make check-upgrade` passed the pinned-image contracts and five image-backed
-parser tests. Live Docker checks covered startup/readiness, worker and Beat
-behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
+The current `make check` passed 275 tests (with five image-only skips), and the
+current Docker `make test-images` run passed every pinned-image contract and
+all five image-backed parser tests. Live Docker checks covered startup/readiness,
+worker and Beat behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
 and MLX cold load, shared concurrent startup, and 10-minute idle unload. Live
 rootless Podman 5.8.1 checks covered lite and full startup, all native startup
 health contracts, exact host-route preservation, shared PostgreSQL/OpenSearch
@@ -66,6 +75,13 @@ health timestamps confirmed five-second startup checks, a 600-second ordinary
 steady interval, and Myst's one-minute interval. The bundled MLX child also
 unloaded after its completed readiness request while the lightweight host
 proxy remained listening.
+
+The simplified lifecycle was also validated live against the running full VPN
+stack. The script-content identity fingerprint restarted only the owned host
+proxy, the foreground readiness messages and log path were visible, the MLX
+child loaded and advertised the exact configured model, one embedding returned
+HTTP 200, the shim returned `/ready` HTTP 200, and the full container graph
+remained healthy.
 
 The 2026-07-20 follow-up Docker validation recreated the full VPN stack and
 left every service healthy. Exact control-process exclusions reduced
@@ -360,8 +376,8 @@ Initial-bundle release matrix:
 |---|---|---|
 | Myst health and autoheal | Startup probe 5s; steady health 1m; probe timeout 10s; 2 failures; 420s start period; autoheal poll 60s; expected restart detection roughly 2–3m. | Local TequilAPI/interface/route only; no DNS/public/upstream probe; daemon disconnect and missing tunnel autoheal; the 20s route/MTU cadence and repair bound are unchanged, while exact matching exemptions avoid route writes and success logs. |
 | Ordinary/aggregate health | Startup probe 5s; steady health 10m; 1 retry; bounded existing timeout; local start period 30–120s, API 240s. | `compose up --wait` fails on a missing origin/proxy path; rendered dependencies remain acyclic; real requests fail closed immediately; no health-triggered public traffic. |
-| One-shot embedding startup | Exactly one `/ready` call with no retry; shim upstream request remains bounded at 30s; `/health` is inference-free. | Fresh API/background creation waits for success; repeated failure neither recreates nor stops running services; lite mode never calls it. |
-| MLX idle lifecycle | 10m idle measured after request completion; cold start plus inference stays inside the unchanged 30s shim deadline; proposed child termination grace 15s. | Single child for concurrent cold calls; no ambiguous POST replay; active batches never unload; memory is released; custom/manual upstream ownership and repeated up/down remain correct. |
+| One-shot embedding startup | Exactly one foreground `/ready` call with no retry or short wrapper deadline; `/health` is inference-free. | Fresh API/background creation waits visibly for success and prints the MLX log path; Ctrl-C stops the wait; repeated failure neither recreates nor stops running services; lite mode never calls it. |
+| MLX idle lifecycle | 10m idle measured after request completion; unbounded live-child cold load; 15s child termination grace; 5m proxy-to-child blocked-socket timeout after readiness; no shim timeout or POST retry. | Single child for concurrent cold calls; one fresh connection per shim request under the concurrency cap; active-child requests drain on proxy shutdown while incomplete cold startup is cancelled; an idle-stop race waits and relaunches without dropping or replaying the request; memory is released; custom/manual upstream ownership and repeated up/down remain correct. |
 | OpenSearch | Fixed 512 MiB heap; `node.processors=4`; no new container timeout or memory limit; static monthly body-free audit, disabled Query Insights top-N, and zero replicas for new Onyx indices. | Full clean/current-volume ingestion, KNN/hybrid/search/reindex/restart workload passes without OOM, circuit-breaker, corruption, stuck recovery, queue rejection, or material tail-latency regression. |
 | MinIO scanner | Supported `slowest` profile; nominal scan cycle 30m; existing readiness timeout/startup semantics retained. | Object CRUD, multipart cleanup, lifecycle/healing, chat files, document ingestion, and restart pass; no object loss/corruption or unbounded cleanup delay. |
 | Beat discovery and housekeeping | Discovery/reload 5m; functional housekeeping 10m or existing longer cadence; newly eligible document/connector begins within 5m. | Exact pinned schedule names/cadences; no disabled task materializes; active indexing, deletion, and cleanup complete correctly. |
@@ -610,8 +626,8 @@ host process with a tracked lightweight lifecycle proxy:
    loopback at a separate fixed port. Preserve the existing host-exposure and
    routing policy; do not make the model backend itself reachable from Docker.
 2. On the first bounded `/v1/embeddings` request, serialize startup, launch the
-   exact verified command/process group, wait for model readiness within the
-   existing startup budget, and forward the original request once. Concurrent
+   exact verified command/process group, wait for model readiness while the
+   child remains alive, and forward the original request once. Concurrent
    callers wait on the same startup rather than spawning duplicate models.
 3. After 10 minutes with no in-flight or newly arrived embedding request,
    gracefully stop the identity-validated child process group, verify exit,
@@ -630,19 +646,23 @@ general forwarding capability. Place it under `embedserv/` and keep it
 independent of Onyx imports (for example,
 `embedserv/idle_embedding_proxy.py`, with focused tests rather than a new
 package or service framework). Pin and inspect the installed MLX server CLI and
-readiness contract; fail startup on drift. The shim's upstream deadline is
-currently 30 seconds, so cold model start plus forwarding and inference must
-complete within that unchanged end-to-end deadline under the accepted
-document/query batch workload. Give child readiness its own shorter bounded
-deadline selected from measurement; do not extend or retry the outer 30-second
-request merely to hide a slow cold start. If that requirement cannot be met
-reliably, omit idle unload from the bundle rather than degrading embedding
-reliability.
+readiness contract; fail startup on drift. Cold startup has no wrapper deadline
+while the exact owned child remains alive. After readiness, the single
+proxy-to-child request has a five-minute blocked-socket timeout. It is not a
+five-minute end-to-end deadline: request parsing, lifecycle admission, cold
+loading, and shim concurrency-slot waits are outside it, and response progress
+can extend elapsed time. The shim adds neither a timeout nor a retry and opens
+one connection per request, so the original POST is forwarded only once. A
+request racing idle unload waits for the old child to exit before one new child
+is launched.
 
 The one-shot full startup `/ready` intentionally loads the model once and the
-idle timer unloads it about ten minutes later. Use `time.monotonic()` for idle
-accounting. Graceful child termination must also have a fixed timeout
-(proposed 15 seconds), after which only the already identity-validated child
+idle timer unloads it about ten minutes later. The foreground Make target
+prints what it is waiting for and the lifecycle log path, and deliberately has
+no short wrapper timeout; Ctrl-C is the visible operator escape. Definite child
+exit, ownership/configuration failure, and failed readiness inference remain
+fatal. Use `time.monotonic()` for idle accounting. Graceful child termination
+has a fixed 15-second timeout, after which only the identity-validated child
 process group may be force-stopped; proxy shutdown must never target a reused
 or merely port-matching process. A later search/index operation may incur the
 measured cold-start delay, which must be documented.
@@ -1512,8 +1532,10 @@ Add or extend deterministic coverage before live validation:
   serialized cold start, single forwarding, no ambiguous POST retry, ten-minute
   post-completion idle unload, request/shutdown race, process identity, crash,
   repeated up/down, manual/custom upstream ownership, and reload correctness.
-  Record host/model memory release and cold-start latency against shim/Onyx
-  timeouts.
+  Prove live-child cold startup has no short wrapper deadline, a wrong served
+  model fails definitively, the post-ready child operation has a five-minute
+  blocked-socket timeout, and the shim has no second timeout or retry. Record
+  host/model memory release and cold-start latency.
 - Replace the Craft source-text assertion in
   `tests/test_obscura_direct_compose.py` with focused background-patch tests.
   Also extend `tests/validate_pinned_patch_images.sh` so the actual pinned
@@ -1588,7 +1610,9 @@ Update behavior documentation in the same change:
   and MinIO scanner profile, including user-visible performance/freshness
   trade-offs.
   Document the wrapper-managed MLX idle unload, ten-minute residency window,
-  cold-start delay, failure behavior, and custom/manual-upstream exclusions.
+  visible unbounded live-child cold-start delay, five-minute post-readiness
+  blocked-socket timeout, failure behavior, and custom/manual-upstream
+  exclusions.
 - `docs/onyx_patch_info.md`: document exact schedule rewrites, removal of all
   self-hosted monitoring jobs/worker/collectors, unused file probes, Celery
   event heartbeat/gossip, the corrected Craft removal, bot policy, concurrency
@@ -1649,7 +1673,7 @@ Implement and validate in dependency-safe phases:
    and single pre-API/background `up-full` `/ready` helper, then install the
    wrapper-managed MLX lifecycle proxy and prove idle unload/reload with zero
    keep-warm inference traffic.
-6. Override OpenSearch to a 1 GiB heap, set only the supported Performance
+6. Override OpenSearch to a 512 MiB heap, set only the supported Performance
    Analyzer agent-disable flag, and apply MinIO's supported `slowest` scanner
    profile. Assert the OpenSearch image, plugin, Security/TLS, refresh, index,
    and audit configuration are otherwise unchanged.
@@ -1717,8 +1741,10 @@ Validation should prove:
   automatic retry when it fails.
 - Effective Docker Compose models retain fast startup checks and 10-minute
   steady checks; Podman installs the equivalent native startup check before
-  start, fails clearly on any command, timeout, or cadence mismatch, and
-  returns nonzero within 420 seconds if startup never becomes healthy.
+  start, fails clearly on any command, timeout, or cadence mismatch, and each
+  Compose health phase returns nonzero within 420 seconds if its containers
+  never become healthy. Full mode's intervening inference readiness can wait
+  longer while a live MLX child loads, with the wait and log path visible.
 - Removed leaf checks are absent from the effective model, not merely shadowed
   in one Compose source file.
 - The Beat watchdog restarts a deliberately hung Beat process within the

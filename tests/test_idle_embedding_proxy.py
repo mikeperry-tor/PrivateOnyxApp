@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -51,7 +52,7 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
             return child
 
         lifecycle = self.module.Lifecycle(
-            ["server"], 3211, "expected-model", popen=popen, startup_seconds=1
+            ["server"], 3211, "expected-model", popen=popen
         )
         lifecycle._child_healthy = lambda child: True
         lifecycle._require_port_available = lambda port: None
@@ -61,7 +62,7 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
         def caller() -> None:
             try:
                 barrier.wait()
-                lifecycle.begin_request(self.module.time.monotonic() + 2)
+                lifecycle.begin_request()
                 lifecycle.end_request()
             except BaseException as exc:
                 failures.append(exc)
@@ -106,7 +107,7 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
         lifecycle._child = first
         lifecycle._child_healthy = lambda child: True
         lifecycle._require_port_available = lambda port: None
-        lifecycle.begin_request(self.module.time.monotonic() + 2)
+        lifecycle.begin_request()
         lifecycle.end_request()
         self.assertIs(lifecycle._child, second)
         source = MODULE_PATH.read_text(encoding="utf-8")
@@ -114,12 +115,15 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
 
     def test_proxy_surface_and_limits_are_narrow(self) -> None:
         self.assertEqual(self.module.REQUEST_PATH, "/v1/embeddings")
-        self.assertEqual(self.module.OUTER_TIMEOUT_SECONDS, 30.0)
         self.assertEqual(self.module.DEFAULT_IDLE_SECONDS, 600.0)
         self.assertEqual(self.module.CHILD_STOP_GRACE_SECONDS, 15.0)
+        self.assertEqual(self.module.CHILD_REQUEST_TIMEOUT_SECONDS, 300.0)
         self.assertEqual(self.module.MAX_ACTIVE_CONNECTIONS, 16)
         self.assertLess(self.module.MAX_REQUEST_BYTES, self.module.MAX_RESPONSE_BYTES)
         source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("OUTER_TIMEOUT_SECONDS", source)
+        self.assertNotIn("DEFAULT_STARTUP_SECONDS", source)
+        self.assertNotIn("_interrupt_idle_stop", source)
         self.assertIn('ProxyServer(("0.0.0.0", args.listen_port)', source)
         self.assertIn('"--host", "127.0.0.1"', source)
         self.assertIn('self.headers.get("Transfer-Encoding")', source)
@@ -157,6 +161,28 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
         start_thread.assert_called_once()
         server.shutdown_request.assert_called_once_with(request)
 
+    def test_non_loopback_peer_is_rejected_before_request_thread(self) -> None:
+        server = self.module.ProxyServer.__new__(self.module.ProxyServer)
+        self.assertTrue(server.verify_request(MagicMock(), ("127.0.0.1", 1)))
+        self.assertFalse(server.verify_request(MagicMock(), ("192.0.2.10", 1)))
+
+    def test_accepted_socket_gets_bounded_idle_timeout(self) -> None:
+        server = self.module.ProxyServer.__new__(self.module.ProxyServer)
+        server._request_slots = threading.BoundedSemaphore(1)
+        server.shutdown_request = MagicMock()
+        request = MagicMock()
+        with patch.object(
+            self.module.http.server.ThreadingHTTPServer,
+            "process_request",
+        ):
+            server.process_request(request, ("127.0.0.1", 1))
+        request.settimeout.assert_called_once_with(
+            self.module.REQUEST_SOCKET_TIMEOUT_SECONDS
+        )
+
+    def test_accepted_request_threads_are_drained_on_server_close(self) -> None:
+        self.assertFalse(self.module.ProxyServer.daemon_threads)
+
     def test_connection_slot_is_released_after_thread_completion(self) -> None:
         server = self.module.ProxyServer.__new__(self.module.ProxyServer)
         server._request_slots = threading.BoundedSemaphore(1)
@@ -181,7 +207,7 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
             RuntimeError(f"127.0.0.1:{port} is already occupied")
         )
         with self.assertRaisesRegex(RuntimeError, "already occupied"):
-            lifecycle.begin_request(self.module.time.monotonic() + 1)
+            lifecycle.begin_request()
         self.assertEqual(launches, [])
 
     def test_readiness_requires_expected_served_model(self) -> None:
@@ -195,7 +221,8 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
         with patch.object(
             self.module.http.client, "HTTPConnection", return_value=connection
         ):
-            self.assertFalse(lifecycle._child_healthy(child))
+            with self.assertRaisesRegex(RuntimeError, "configured served model"):
+                lifecycle._child_healthy(child)
         response.read.return_value = b'{"data":[{"id":"expected-model"}]}'
         with patch.object(
             self.module.http.client, "HTTPConnection", return_value=connection
@@ -238,6 +265,123 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
                 )
             kill_group.assert_called_once_with(424242, self.module.signal.SIGTERM)
             self.assertFalse(pid_file.exists())
+
+    def test_request_racing_idle_stop_waits_then_relaunches(self) -> None:
+        old_child = FakeChild()
+        new_child = FakeChild()
+        lifecycle = self.module.Lifecycle(
+            ["server"],
+            3211,
+            "expected-model",
+            popen=lambda *args, **kwargs: new_child,
+            idle_seconds=0,
+        )
+        lifecycle._child = old_child
+        lifecycle._last_completed = 0
+        lifecycle._child_healthy = lambda child: True
+        lifecycle._require_port_available = lambda port: None
+        stop_entered = threading.Event()
+        stop_released = threading.Event()
+
+        def terminate(child):
+            self.assertIs(child, old_child)
+            stop_entered.set()
+            self.assertTrue(stop_released.wait(2))
+            child.returncode = 0
+
+        lifecycle._terminate_child = terminate
+        reaper = threading.Thread(target=lifecycle.reap_if_idle)
+        reaper.start()
+        self.assertTrue(stop_entered.wait(1))
+        completed: list[bool] = []
+        failures: list[BaseException] = []
+
+        def request() -> None:
+            try:
+                lifecycle.begin_request()
+                completed.append(True)
+                lifecycle.end_request()
+            except BaseException as exc:
+                failures.append(exc)
+
+        caller = threading.Thread(target=request)
+        caller.start()
+        time.sleep(0.02)
+        self.assertTrue(caller.is_alive())
+        stop_released.set()
+        reaper.join(2)
+        caller.join(2)
+        self.assertEqual(failures, [])
+        self.assertEqual(completed, [True])
+        self.assertIs(lifecycle._child, new_child)
+
+    def test_startup_waits_while_child_is_alive_without_short_deadline(self) -> None:
+        child = FakeChild()
+        lifecycle = self.module.Lifecycle(
+            ["server"],
+            3211,
+            "expected-model",
+            popen=lambda *args, **kwargs: child,
+        )
+        health_results = iter((False, False, True))
+        lifecycle._child_healthy = lambda owned: next(health_results)
+        lifecycle._require_port_available = lambda port: None
+        with patch.object(self.module.time, "sleep") as sleep:
+            lifecycle.begin_request()
+        self.assertEqual(sleep.call_count, 2)
+        lifecycle.end_request()
+
+    def test_proxy_shutdown_can_cancel_an_indefinite_cold_start(self) -> None:
+        child = FakeChild()
+        lifecycle = self.module.Lifecycle(
+            ["server"],
+            3211,
+            "expected-model",
+            popen=lambda *args, **kwargs: child,
+        )
+        lifecycle._child_healthy = lambda owned: False
+        lifecycle._require_port_available = lambda port: None
+        lifecycle._terminate_child = lambda owned: setattr(owned, "returncode", 0)
+        entered_sleep = threading.Event()
+
+        def wait_for_shutdown(_seconds):
+            entered_sleep.set()
+            lifecycle._shutdown_requested.wait(1)
+
+        failure: list[BaseException] = []
+
+        def start() -> None:
+            try:
+                lifecycle.begin_request()
+            except BaseException as exc:
+                failure.append(exc)
+
+        with patch.object(self.module.time, "sleep", side_effect=wait_for_shutdown):
+            starter = threading.Thread(target=start)
+            starter.start()
+            self.assertTrue(entered_sleep.wait(1))
+            lifecycle.request_shutdown()
+            starter.join(1)
+        self.assertFalse(starter.is_alive())
+        self.assertEqual(len(failure), 1)
+        self.assertIn("canceled by proxy shutdown", str(failure[0]))
+
+    def test_lifecycle_shutdown_waits_for_active_request(self) -> None:
+        child = FakeChild()
+        lifecycle = self.module.Lifecycle(["server"], 3211, "expected-model")
+        lifecycle._child = child
+        lifecycle._active = 1
+        terminated = threading.Event()
+        lifecycle._terminate_child = lambda owned: terminated.set()
+        shutdown = threading.Thread(target=lifecycle.shutdown)
+        shutdown.start()
+        time.sleep(0.02)
+        self.assertTrue(shutdown.is_alive())
+        self.assertFalse(terminated.is_set())
+        lifecycle.end_request()
+        shutdown.join(1)
+        self.assertFalse(shutdown.is_alive())
+        self.assertTrue(terminated.is_set())
 
 
 if __name__ == "__main__":

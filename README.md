@@ -30,7 +30,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
-- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled.
+- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled with `ONYX_AGENT_SLACK_BOT` or `ONYX_AGENT_DISCORD_BOT`. Newly eligible connector work, including newly uploaded project/assistant files, can wait up to roughly five minutes for background discovery.
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
 
@@ -438,7 +438,7 @@ If you are on a Mac, the makefile has rules that can install
 make embedserv-install
 # Verify the model was downloaded correctly
 make embedserv-verify-model
-# Start the full stack; this also launches the installed embedding server
+# Start full mode; this also launches the installed MLX lifecycle proxy
 make up-full
 ```
 
@@ -449,10 +449,20 @@ After `make embedserv-install` has installed the selected model, `make up-full`
 automatically launches a lightweight lifecycle proxy at the bundled default
 endpoint, `http://host.docker.internal:3210/v1/embeddings`. It loads the MLX
 model for the first embedding request and unloads it ten minutes after the last
-request completes. A request after unload includes the measured cold-start
-delay and still uses the shim's unchanged 30-second deadline. You can run
-`make embedserv-serve` directly in the foreground. `make down-full` stops only
-the wrapper-managed proxy and its identity-validated child.
+request completes. Full startup first creates only the shim and its routing
+dependencies, performs exactly one inference-backed `/ready` call, and creates
+fresh API/background services only after that succeeds; `/health` never loads
+the model. This readiness step prints what it is waiting for and has no short
+wrapper deadline: a slow but live MLX load remains visibly in the foreground,
+where you can interrupt it with Ctrl-C and inspect `embedserv/serve.log`.
+A request after unload waits for the owned child to finish stopping, if needed,
+and then includes the full cold-start delay. Cold start is unbounded while the
+child remains alive; after readiness, each single proxy-to-MLX request has a
+five-minute blocked-socket timeout. The shim adds neither another timeout nor
+a retry, so it never ambiguously replays an embedding POST. You can run
+`make embedserv-serve` directly in the foreground.
+`make down-full` stops only the wrapper-managed proxy and its
+identity-validated child after draining requests already accepted by the proxy.
 
 MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
 the download libraries when the host requires a build/download proxy.

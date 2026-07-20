@@ -80,11 +80,17 @@ trusted local process from racing path-component replacement before open.
 
 The bundled macOS MLX lifecycle proxy uses the corresponding Docker Desktop
 gateway boundary. Its fixed host path requires a wildcard listener, but it
-rejects non-loopback socket peers before reading a body or starting the model.
-Both host HTTP servers cap active connection threads so an accepted peer cannot
-create an unbounded thread set. These controls trust the container engine's
-userspace gateway to present relay traffic as loopback; they do not authenticate
-individual application callers behind that gateway.
+rejects non-loopback socket peers in the server admission hook, before HTTP
+request parsing or thread creation. The Podman document server applies the same
+pre-thread check in host mode. Both host HTTP servers cap active connection
+threads and apply a 30-second idle socket timeout, so a loopback peer cannot
+hold a bounded slot indefinitely without making progress. These controls trust
+the container engine's userspace gateway to present relay traffic as loopback;
+they do not authenticate individual application callers behind that gateway.
+The MLX proxy's separate five-minute child-request timeout begins only after
+the owned child is ready and limits a blocked operation toward that child; it
+does not weaken the 30-second untrusted-client socket bound or place a deadline
+on cold model loading.
 
 Full mode performs no runtime OpenSearch administration. The monthly audit
 pattern and Query Insights controls are static node settings, the tracked
@@ -171,7 +177,8 @@ logging can also be incomplete.
   APIs/WebSockets, and local previews work.
 - Full-mode doc-drop remains a local path and does not gain browser/CDP access.
 - Under Podman, only the fixed doc-drop relay joins the host uplink; the host
-  server rejects non-loopback peers, caps active connection threads, and the
-  relay has no source mount.
+  server rejects non-loopback peers before thread creation, caps and
+  socket-bounds active connections, and the relay has no source mount.
 - The bundled Docker Desktop embedding listener rejects non-loopback peers
-  before model activation and caps active connection threads.
+  before thread creation, caps and socket-bounds active connections, and drains
+  accepted requests before lifecycle shutdown.

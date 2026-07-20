@@ -57,6 +57,10 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[0]
         self.assertEqual(ready_recipe.count("/ready"), 1)
         self.assertNotIn("while", ready_recipe)
+        self.assertIn("timeout=None", ready_recipe)
+        self.assertIn("can take several minutes", ready_recipe)
+        self.assertIn("Press Ctrl-C to stop waiting", ready_recipe)
+        self.assertNotIn("-T 35", ready_recipe)
         lite_start = makefile.split("up-lite:", 2)[2].split("\n\n", 1)[0]
         self.assertNotIn("embedding-ready-once", lite_start)
         self.assertNotIn("/ready", lite_start)
@@ -122,6 +126,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("recorded automatic proxy identity does not match", start)
         self.assertIn("--child-pid-file", start)
         self.assertIn("--owner-token", start)
+        self.assertIn("proxy_script_hash", start)
         self.assertIn('"$$model_dir" "$$served_model" "$$child_pid_file"', start)
         self.assertIn('recorded_config_id=$$(sed -n \'3p\'', start)
         self.assertIn(

@@ -17,6 +17,22 @@ class SearxngBootstrapRoleTests(unittest.TestCase):
         self.assertIn("plugins: {}", settings)
         self.assertNotIn("tracker_url_remover", settings)
 
+    def test_only_wrapper_engines_are_configured(self) -> None:
+        settings = (ROOT / "searxng/core-config/settings.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("keep_only: []", settings)
+        self.assertNotIn("    remove:", settings)
+        configured = {
+            line.removeprefix("  - name: ").strip()
+            for line in settings.splitlines()
+            if line.startswith("  - name: ")
+        }
+        self.assertEqual(
+            configured,
+            {"google2", "brave2", "duckduckgo2", "startpage2", "bing2"},
+        )
+
     def test_accepts_only_exact_resource_tracker_command(self) -> None:
         self.assertTrue(
             is_resource_tracker_cmdline(

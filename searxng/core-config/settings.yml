@@ -1,25 +1,8 @@
 use_default_settings:
   engines:
-    # Drop direct stock engines that are replaced by browser-backed rendered
-    # variants below.
-    remove:
-      - google
-      - google images
-      - google news
-      - google videos
-      - brave
-      - brave.images
-      - brave.videos
-      - brave.news
-      - duckduckgo
-      - duckduckgo images
-      - duckduckgo videos
-      - duckduckgo news
-      - duckduckgo web
-      - startpage
-      - startpage news
-      - startpage images
-      - bing
+    # No stock engine is used by this deployment. Keeping the inherited list
+    # empty also prevents disabled engines from running startup initialization.
+    keep_only: []
 
 search:
   # Result formats available from the web endpoint; remove a format to deny
