@@ -487,9 +487,11 @@ Craft backend. Re-audit the exact schedule names, tasks, and original cadences:
 seven discovery schedules must be rewritten to five minutes; the three Craft
 cleanup schedules and queue/process/memory monitoring schedules must be
 removed; conditional schedules must remain absent; and Beat reload must remain
-five minutes. Confirm liveness is written only after schedule update succeeds,
-worker bootsteps are empty, and beat logs show no sandbox-manager or monitoring
-task initialization.
+five minutes. Confirm `DynamicTenantScheduler.tick` remains the unmodified
+upstream method, worker bootsteps are empty, and Beat logs show no
+sandbox-manager or monitoring task initialization. The upstream marker should
+continue representing the live scheduler loop; schedule-refresh failures must
+remain logged application errors rather than causing watchdog restart loops.
 
 Confirm the background image's supervisor `environment=PYTHONPATH=...` setting.
 While it resets worker `PYTHONPATH` to `/app`, full-mode Compose must mount the

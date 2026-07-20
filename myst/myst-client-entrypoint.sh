@@ -170,10 +170,6 @@ myst_cli identities list >/dev/null 2>&1 || true
 
 echo "TequilAPI is ready."
 
-# The daemon accepts --wireguard.mtu, but some peers/sessions still come up
-# with default interface MTU. Enforce requested MTU on the live tunnel.
-apply_wireguard_mtu
-
 IDS="$(myst_cli identities list 2>/dev/null | grep -Eo '0x[0-9a-fA-F]{40}' || true)"
 if [ -z "$IDS" ]; then
   echo "No Myst identity found in /var/lib/mysterium-node; creating one."
@@ -524,7 +520,6 @@ wait_for_connected() {
     if connection_is_up; then
       _status_line="$(connection_status_line)"
       log_with_ts "Connected status observed after ${_elapsed}s: ${_status_line:-unknown}"
-      apply_wireguard_mtu
       return 0
     fi
 
@@ -534,7 +529,6 @@ wait_for_connected() {
       log_with_ts "Still waiting for Connected status at ${_elapsed}s: ${_status_line:-unknown}"
     fi
 
-    apply_wireguard_mtu
     sleep 2
     _elapsed="$(( _elapsed + 2 ))"
   done
@@ -635,8 +629,6 @@ connect_one_attempt() {
       --data-dir="${OS_DIR_DATA}" \
       --runtime-dir="${OS_DIR_RUN}" \
       connection up "${_selected_provider}" --service-type="${_svc}" --location-type="${_loc}"; then
-      apply_wireguard_mtu
-      apply_route_exemptions
       return 0
     fi
 
@@ -660,8 +652,6 @@ connect_one_attempt() {
       --data-dir="${OS_DIR_DATA}" \
       --runtime-dir="${OS_DIR_RUN}" \
       connection up --country="${MYST_COUNTRY}" --service-type="${_svc}" --location-type="${_loc}"; then
-      apply_wireguard_mtu
-      apply_route_exemptions
       return 0
     fi
   else
@@ -671,16 +661,12 @@ connect_one_attempt() {
       --data-dir="${OS_DIR_DATA}" \
       --runtime-dir="${OS_DIR_RUN}" \
       connection up --service-type="${_svc}" --location-type="${_loc}"; then
-      apply_wireguard_mtu
-      apply_route_exemptions
       return 0
     fi
   fi
 
   if connection_is_up_stable; then
     log_with_ts "Connected status became stable after provider auto-selection failure; treating as success."
-    apply_wireguard_mtu
-    apply_route_exemptions
     return 0
   fi
   return 1
@@ -703,6 +689,10 @@ if [ "${MYST_AUTO_CONNECT:-true}" = "true" ] && [ -n "$ID" ]; then
       log_with_ts "Connect attempt $_attempt/$_max_attempts mode=auto-provider-selection"
     fi
     if connect_one_attempt "$_attempt"; then
+      # Apply once immediately after success; the single background owner
+      # continues repairing route or MTU drift within 20 seconds thereafter.
+      apply_wireguard_mtu
+      apply_route_exemptions
       log_with_ts "Connection established on attempt $_attempt"
       break
     fi
@@ -718,7 +708,6 @@ if [ "${MYST_AUTO_CONNECT:-true}" = "true" ] && [ -n "$ID" ]; then
     log_with_ts "WARNING: All connect attempts failed during startup; healthcheck will continue evaluating readiness."
   fi
 
-  apply_route_exemptions
   fi
 fi
 

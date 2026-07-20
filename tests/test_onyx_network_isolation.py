@@ -303,7 +303,15 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             profiles=("tailscale",),
         )
         services = model["services"]
-        disabled = {"searxng-core", "obscura", "doc-drop-web", "cache", "opensearch", "autoheal"}
+        disabled = {
+            "searxng-core",
+            "obscura",
+            "doc-drop-web",
+            "web_server",
+            "cache",
+            "opensearch",
+            "autoheal",
+        }
         absent = {
             "onyx-public-egress-proxy",
             "onyx-host-egress-proxy",
@@ -345,6 +353,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 services[gateway]["depends_on"][origin]["condition"],
                 "service_started",
             )
+        self.assertEqual(
+            services["nginx"]["depends_on"]["web_server"]["condition"],
+            "service_started",
+        )
 
         commands = "\n".join(" ".join(health["test"]) for health in retained.values())
         for forbidden in ("example.com", "--check-ready", "/ready"):

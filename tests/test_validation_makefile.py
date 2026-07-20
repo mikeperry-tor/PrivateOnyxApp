@@ -59,6 +59,8 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertIn("WRAPPER_PATCH_STRICT=true", IMAGE_SCRIPT)
         self.assertIn("PINNED_STOCK_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
+        self.assertIn("/validation/validate_pinned_background.py", IMAGE_SCRIPT)
+        self.assertNotIn("effective={t['name']", IMAGE_SCRIPT)
         self.assertIn("tests.test_searxng_obscura_engines", IMAGE_SCRIPT)
 
     def test_podman_image_validation_skips_unsupported_executor(self) -> None:

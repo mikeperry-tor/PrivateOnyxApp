@@ -32,6 +32,9 @@ When a request touches more than one path, read each relevant doc first. Prefer 
 At a high level:
 
 - Users reach nginx through a hardened fixed host publisher or the optional fixed Tailscale frontend gateway; nginx stays internal-only.
+- Nginx is the single WebUI health boundary: its local root check traverses the
+  frontend, while API health remains a separate startup dependency. Do not add
+  a duplicate periodic `web_server` health check.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 - Full mode validates embedding readiness in a staged one-shot gate before a
   fresh API/background tier, uses an on-demand host MLX lifecycle proxy for the
@@ -50,6 +53,10 @@ At a high level:
   strictly patched. Full-mode bot workers are explicit default-off options
   selected by `ONYX_AGENT_SLACK_BOT` and `ONYX_AGENT_DISCORD_BOT`; lite mode
   has no background supervisor or bot processes.
+- The stdlib-only `host_process_manager.py` owns common detached lifecycle,
+  atomic PID/token/configuration records, readiness waits, and identity-checked
+  stops for the bundled MLX proxy and Podman host document server. Keep
+  service-specific child/model/peer/content validation in those services.
 - The recommended local-RAG Admin model name `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only tokenizer construction to the bundled v1 tokenizer.
 - The wrapper uses the legacy code-interpreter service and explicitly disables unsupported Craft sandbox scheduling.
 - Onyx sends LLM requests through the included Teep local inference service.
@@ -101,7 +108,8 @@ depend on application-level proxy settings or caller discipline alone.
   application ingress; they are not a sandbox between co-resident processes.
 - Myst retains a 20-second route/MTU reconciliation bound. Exact matching
   exemption routes are silent no-ops; writes and success logs occur only for
-  missing or drifted target/gateway/device state.
+  missing or drifted target/gateway/device state. One immediate post-connect
+  pass is followed by a single background reconciliation owner.
 - Optional Onyx telemetry, third-party analytics/tracing, cloud billing,
   CAPTCHA, and automatic remote configuration/data-list fetches are explicitly
   disabled in Compose. Release-note polling and local administrative analytics

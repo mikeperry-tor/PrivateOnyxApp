@@ -153,9 +153,12 @@ The separate reconciliation loop retains its 20-second repair and hostname-DNS
 refresh bound. Each pass compares the exact exemption target's gateway and
 device with the required bridge route. A complete match is a silent no-op;
 only a missing or drifted route invokes `ip route replace` and emits the
-change log. MTU updates were already change-only. This reduces stable-state
-netlink writes and logs without weakening reconnect repair or changing route
-ownership; an event-driven replacement remains deferred.
+change log. MTU updates were already change-only. A successful connection gets
+one immediate MTU/route reconciliation; the background loop is the single
+ongoing owner. Connection polling and provider-selection branches do not
+repeat the same operations. This reduces stable-state commands, netlink writes,
+and logs without weakening reconnect repair or changing route ownership; an
+event-driven replacement remains deferred.
 
 With `MYST_VPN_ENABLED=false`, the Myst container idles as namespace owner,
 requires no wallet, and readiness requires that no stale `myst0` remains plus
@@ -193,7 +196,9 @@ checks use fast `start_interval` polling only
 during their bounded startup period and a ten-minute steady cadence, except
 Myst's one-minute recovery check. Origin services whose sole readiness value is
 already represented by a fixed gateway or publisher have their duplicate check
-disabled. Docker Engine 25.0+ and Compose 2.20.2+ are required. With a Podman
+disabled. Nginx is likewise the single WebUI boundary: its root check traverses
+`web_server`, while its separate API dependency preserves API startup
+validation. Docker Engine 25.0+ and Compose 2.20.2+ are required. With a Podman
 5.8.1+ server and Compose provider 2.20.2+, the Makefile first creates stopped
 containers, copies each regular command and timeout into Podman's native
 five-second startup health check, strictly inspects both cadences, and only then

@@ -69,7 +69,10 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn("Docker Engine 25.0+", makefile)
         self.assertIn("Docker Compose 2.20.2+", makefile)
-        self.assertIn("podman/startup_health.py check", makefile)
+        capability_target = makefile.split(
+            "check-container-health-capability:", 1
+        )[1].split("\n\n", 1)[0]
+        self.assertIn("startup_health.py check", capability_target)
         self.assertNotIn("Podman startup-health has not passed", makefile)
         for target in ("up-lite:", "up-full:"):
             definitions = [
@@ -96,6 +99,8 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )
         full_start = makefile.split(full_definition, 1)[1].split("\n\n", 1)[0]
         self.assertEqual(full_start.count("startup_health.py configure"), 2)
+        self.assertEqual(full_start.count("--skip-capability-check"), 2)
+        self.assertEqual(lite_start.count("--skip-capability-check"), 1)
         self.assertIn("create local-embedding-shim", full_start)
         self.assertLess(
             full_start.index("create local-embedding-shim"),
@@ -121,24 +126,18 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             "embedserv-stop-if-started:", 1
         )[0]
         self.assertIn('proxy_script="$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py"', start)
-        self.assertIn("start_new_session=True", start)
-        self.assertIn("stdin=subprocess.DEVNULL", start)
-        self.assertIn("recorded automatic proxy identity does not match", start)
+        self.assertIn("host_process_manager.py start", start)
+        self.assertIn("--identity", start)
+        self.assertIn("--fingerprint-file", start)
+        self.assertIn("--allow-untracked-listener", start)
         self.assertIn("--child-pid-file", start)
-        self.assertIn("--owner-token", start)
-        self.assertIn("proxy_script_hash", start)
-        self.assertIn('"$$model_dir" "$$served_model" "$$child_pid_file"', start)
-        self.assertIn('recorded_config_id=$$(sed -n \'3p\'', start)
-        self.assertIn(
-            "Restarting the wrapper-managed MLX lifecycle proxy after configuration changed",
-            start,
-        )
-        self.assertIn("printf '%s\\n%s\\n%s\\n'", start)
+        self.assertIn("--require-executable", start)
+        self.assertIn("--require-directory", start)
         stop_target = makefile.split("embedserv-stop-if-started:", 1)[1].split(
             "embedserv-cleanup-recorded-child:", 1
         )[0]
-        self.assertIn('owner_token=$$(sed -n \'2p\'', stop_target)
-        self.assertIn('"--owner-token $$owner_token"', stop_target)
+        self.assertIn("host_process_manager.py stop", stop_target)
+        self.assertIn("--identity", stop_target)
         stop = makefile.split("down-full:", 1)[1].split("ps-lite:", 1)[0]
         self.assertIn("embedserv-cleanup-recorded-child", stop)
 
@@ -154,13 +153,10 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             "\n\n", 1
         )[0]
         self.assertIn("doc_drop_webserver.py", start_target)
-        self.assertIn("start_new_session=True", start_target)
-        self.assertIn("stdin=subprocess.DEVNULL", start_target)
+        self.assertIn("host_process_manager.py start", start_target)
         self.assertIn("--loopback-peers-only", start_target)
-        self.assertIn("--owner-token", start_target)
-        self.assertIn('recorded_config_id=$$(sed -n \'3p\'', start_target)
-        self.assertIn("Restarting tracked Podman host document server", start_target)
-        self.assertIn("printf '%s\\n%s\\n%s\\n'", start_target)
+        self.assertIn("--identity", start_target)
+        self.assertIn("--fingerprint-file", start_target)
         self.assertIn("/_health", start_target)
         self.assertIn("PODMAN_DOC_SERVER_PID_FILE", makefile)
         self.assertIn("podman-doc-server-stop-if-started", makefile)

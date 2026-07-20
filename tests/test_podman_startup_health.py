@@ -196,6 +196,28 @@ class PodmanStartupHealthTests(unittest.TestCase):
         with self.assertRaisesRegex(startup_health.ContractError, "is absent"):
             startup_health.configure_project("podman", "onyx")
 
+    @patch.object(startup_health, "_load_containers")
+    @patch.object(startup_health, "_load_expected_health", return_value=_expected())
+    @patch.object(startup_health, "check_capability")
+    def test_second_configuration_can_reuse_capability_result(
+        self, capability, _expected_health, load_containers
+    ) -> None:
+        startup = {
+            "Test": ["CMD", "true"],
+            "Interval": startup_health.STARTUP_INTERVAL_NS,
+            "Timeout": 5_000_000_000,
+            "Successes": 1,
+        }
+        container = _container(state="running", startup=startup)
+        load_containers.side_effect = [[container], [container]]
+        self.assertEqual(
+            startup_health.configure_project(
+                "podman", "onyx", check_engine=False
+            ),
+            1,
+        )
+        capability.assert_not_called()
+
     def test_missing_compose_health_check_fails_closed(self) -> None:
         container = _container()
         container = startup_health.ContainerHealth(

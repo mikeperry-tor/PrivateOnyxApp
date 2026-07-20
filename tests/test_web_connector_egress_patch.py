@@ -447,6 +447,10 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         self.assertEqual(
             self.beat_app_module.DynamicTenantScheduler.RELOAD_INTERVAL, 300
         )
+        self.assertIs(
+            self.beat_app_module.DynamicTenantScheduler.tick,
+            _compatible_beat_tick,
+        )
         self.assertEqual(self.app_base_module.get_bootsteps(), [])
 
     def test_sitemap_constructor_uses_saved_level_public_proxy(self) -> None:

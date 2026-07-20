@@ -479,9 +479,12 @@ code-interpreter service, not a Craft Kubernetes or Docker sandbox backend.
 The strict background bootstrap materializes seven connector-discovery
 schedules at five minutes, removes their one-minute templates, removes the
 three Craft cleanup schedules, and removes the queue/process/memory monitoring
-producers. It also raises Beat's schedule reload interval to five minutes,
-removes worker liveness bootsteps, and moves Beat liveness publication until
-after a successful schedule update.
+producers. It also raises Beat's schedule reload interval to five minutes and
+removes worker liveness bootsteps. It deliberately leaves the upstream Beat
+`tick()` method intact: that method publishes local process liveness when the
+reload tick runs and logs schedule-update failures independently. The wrapper
+watchdog therefore detects a stopped Beat loop without turning a persistent
+schedule or database error into a restart loop.
 
 `onyx/background_entrypoint.py` derives a supervisor file only after validating
 the pinned eight-worker, beat, watchdog, bot, and log-tail shapes. It retains

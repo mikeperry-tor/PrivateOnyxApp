@@ -238,7 +238,9 @@ The authoritative inspect fields are separate:
 
 The Podman Makefile lifecycle is consequently create/configure/start:
 
-1. `check-container-health-capability` runs the capability gate.
+1. `check-container-health-capability` runs the Podman capability gate once,
+   before shared-data or host-process mutation. Docker uses the same target for
+   its separate native engine/Compose version check.
 2. The mode-appropriate database preflights validate the shared binds and
    remove only the unsafe PostgreSQL mount-root override when present. Full
    mode also starts or validates the PID-tracked host document server.
@@ -255,7 +257,9 @@ failed container and its health history for diagnosis.
 
 Full mode performs that sequence first for `local-embedding-shim`, makes the
 single `/ready` request, then repeats create/configure/start for the complete
-graph. Do not collapse this into a single `compose up`: that would start
+graph. Both configuration passes reuse that prerequisite result rather than
+probing the engine and image store again. Do not collapse this into a single
+`compose up`: that would start
 containers before the native health contract is installed.
 The intervening inference-backed `/ready` is different from a container-health
 phase: it prints the MLX log path and waits without a short wrapper deadline
@@ -332,6 +336,11 @@ the configuration fingerprint matches, and `/_health` succeeds. Configuration
 changes restart only the token-matched process. Malformed, stale, or reused PID
 records never authorize signaling an unrelated process.
 
+The same stdlib-only `host_process_manager.py` used for the optional MLX proxy
+owns the common detached-launch, atomic record, readiness, and stop mechanics.
+The document server still owns its document-root confinement, loopback-peer
+restriction, HTTP handling, and connection bounds.
+
 The Podman `doc-drop-web` service is a non-root, read-only, capability-free
 `socat` relay. It keeps the existing internal route and display networks but
 has no document mounts. Its only additional network is a dedicated
@@ -393,10 +402,13 @@ The primary Podman-specific tests are:
   shared-data preflight.
 - `tests/test_shared_data_engine.py`: same-engine claim reuse, cross-engine
   exclusion, matching release, and corrupt-marker failure.
-- `tests/test_myst_lifecycle_makefile.py`: capability prerequisites,
+- `tests/test_myst_lifecycle_makefile.py`: capability placement,
   serialized prerequisites, bounded create/configure/start ordering, host
-  document-server PID lifecycle, direct Onyx image pulls, and exclusion of the
+  document-server lifecycle, direct Onyx image pulls, and exclusion of the
   upstream installer/socket-only executor and its unused network overlay.
+- `tests/test_host_process_manager.py`: atomic ownership records, malformed
+  record refusal, explicit operator-listener reuse, readiness enforcement, and
+  reused-PID non-signaling.
 - `tests/test_onyx_network_isolation.py`: effective Podman overlay selection,
   optional VPN behavior, tmpfs options, unconditional shared Docker
   PostgreSQL/OpenSearch storage, database health dependencies, and the fixed

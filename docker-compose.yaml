@@ -495,13 +495,9 @@ services:
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ""
       # Minimum password length enforced by the backend and surfaced in the UI.
       PASSWORD_MIN_LENGTH: "8"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:3000/ || exit 1"]
-      interval: 10m
-      start_interval: 5s
-      timeout: 10s
-      retries: 1
-      start_period: 30s
+    # Nginx's root probe traverses this service and is the externally consumed
+    # WebUI boundary; do not retain the inherited duplicate frontend probe.
+    healthcheck: {disable: true}
     depends_on:
       api_server:
         condition: service_healthy
@@ -528,7 +524,7 @@ services:
       api_server:
         condition: service_healthy
       web_server:
-        condition: service_healthy
+        condition: service_started
 
   # Docker Desktop does not activate published ports for containers attached
   # only to internal networks. Keep nginx isolated and publish it through one

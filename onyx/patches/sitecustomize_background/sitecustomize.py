@@ -270,40 +270,7 @@ def _apply_sleepy_background_patch() -> None:
 
         if beat_app.DynamicTenantScheduler.RELOAD_INTERVAL != 60:
             raise RuntimeError("unexpected Beat scheduler reload interval")
-        tick_source = inspect.getsource(beat_app.DynamicTenantScheduler.tick)
-        for marker in (
-            "self._liveness_probe_path.touch()",
-            "self._try_updating_schedule()",
-            "self._last_reload = now",
-        ):
-            if marker not in tick_source:
-                raise RuntimeError(f"Beat scheduler tick drifted: missing {marker}")
         beat_app.DynamicTenantScheduler.RELOAD_INTERVAL = 300
-
-        def _sleepy_tick(self):  # noqa: ANN001
-            retval = super(beat_app.DynamicTenantScheduler, self).tick()
-            now = self.app.now()
-            if (
-                self._last_reload is None
-                or (now - self._last_reload) > self._reload_interval
-            ):
-                beat_app.task_logger.debug(
-                    "Reload interval reached, initiating task update"
-                )
-                try:
-                    self._try_updating_schedule()
-                except (AttributeError, KeyError):
-                    beat_app.task_logger.exception(
-                        "Failed to process task configuration"
-                    )
-                except Exception:
-                    beat_app.task_logger.exception("Unexpected error updating tasks")
-                else:
-                    self._liveness_probe_path.touch()
-                self._last_reload = now
-            return retval
-
-        beat_app.DynamicTenantScheduler.tick = _sleepy_tick
 
         bootsteps = app_base.get_bootsteps()
         if bootsteps != [app_base.LivenessProbe]:

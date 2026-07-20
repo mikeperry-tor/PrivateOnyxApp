@@ -436,6 +436,13 @@ child. Missing records are harmless; malformed or reused PIDs and unowned
 listeners fail closed and are never signaled. Manually launched and custom
 servers remain untouched.
 
+The wrapper's shared stdlib-only `host_process_manager.py` owns this host
+process lifecycle and the equivalent Podman document-server lifecycle. It
+atomically writes the common PID/token/configuration record, validates command
+identity before signaling, and performs the listener/readiness wait. The
+service implementations retain their narrower peer, child, port, and model
+validation; those are not duplicated by the host manager.
+
 `make embedserv-install` installs from the hashed lock file with
 `--require-hashes`. To upgrade package versions during a stack upgrade, edit
 `embedserv/requirements.in` if needed and run `make upgrade-python-deps`.
@@ -534,8 +541,10 @@ defines only the clean/current-volume contract.
 
 The retained worker pool is explicitly bounded: primary 2, light 4, heavy 2,
 doc-processing 2, user-file-processing 1, and document-fetching 1. Beat writes
-its liveness marker only after a successful schedule update. A local watchdog
-checks that marker without Redis and restarts only `celery_beat` after two
+its upstream liveness marker when its five-minute scheduler reload tick runs;
+schedule-update errors remain logged application failures rather than being
+reclassified as process hangs. A local watchdog checks that marker without
+Redis and restarts only `celery_beat` after two
 missing observations or a stale interval. Startup validates the pinned
 supervisor and schedule shapes; drift is fatal rather than silently restoring
 the higher-frequency upstream configuration.

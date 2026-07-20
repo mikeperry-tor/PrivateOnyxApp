@@ -328,9 +328,13 @@ def _verify_startup(container: ContainerHealth) -> None:
 
 
 def configure_project(
-    container_bin: str, project: str, env_files: Sequence[str] = ()
+    container_bin: str,
+    project: str,
+    env_files: Sequence[str] = (),
+    *,
+    check_engine: bool = True,
 ) -> int:
-    server_version = check_capability(container_bin)
+    server_version = check_capability(container_bin) if check_engine else "already checked"
     expected = _load_expected_health(container_bin, env_files)
     containers = _load_containers(container_bin, project)
     relevant = _verify_expected_health_set(containers, expected)
@@ -367,8 +371,11 @@ def configure_project(
             continue
         _verify_regular(container, relevant[container.service])
         _verify_startup(container)
+    capability = (
+        f"Podman {server_version}" if check_engine else "Podman capability already checked"
+    )
     print(
-        f"Podman {server_version}: verified native startup health for "
+        f"{capability}: verified native startup health for "
         f"{len(relevant)} service(s); configured {configured} stopped container(s)."
     )
     return len(relevant)
@@ -382,6 +389,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--container-bin", default="podman")
     parser.add_argument("--project", default="onyx")
     parser.add_argument("--env-file", action="append", default=[])
+    parser.add_argument("--skip-capability-check", action="store_true")
     parser.add_argument("--postgres")
     parser.add_argument("--opensearch")
     return parser.parse_args(argv)
@@ -399,7 +407,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print("Prepared shared Docker data for Podman: " + ", ".join(prepared))
         else:
-            configure_project(args.container_bin, args.project, args.env_file)
+            configure_project(
+                args.container_bin,
+                args.project,
+                args.env_file,
+                check_engine=not args.skip_capability_check,
+            )
     except (ContractError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
