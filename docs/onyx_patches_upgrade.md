@@ -426,6 +426,9 @@ Also diff the pinned supervisor configuration against
 worker programs, remove only the scheduled/monitoring pair, retain six workers
 with `--without-heartbeat --without-gossip`, preserve the bounded concurrency
 values, and select the exact two bot programs from default-off booleans.
+Those booleans must remain the full-mode-only wrapper settings
+`ONYX_AGENT_SLACK_BOT` and `ONYX_AGENT_DISCORD_BOT`; neither belongs in the
+lite effective model.
 Validate that the local watchdog accepts only an owner-matched regular file,
 uses two-observation missing-file handling plus the bounded startup grace, and
 invokes `supervisorctl restart celery_beat` only. Exercise one representative

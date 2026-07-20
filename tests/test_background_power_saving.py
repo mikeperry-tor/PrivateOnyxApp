@@ -31,8 +31,8 @@ class BackgroundSupervisorTests(unittest.TestCase):
     def _derive(self, slack: bool = False, discord: bool = False):
         env = {
             "ENABLE_CRAFT": "false",
-            "ONYX_SLACK_BOT_ENABLED": str(slack).lower(),
-            "ONYX_DISCORD_BOT_ENABLED": str(discord).lower(),
+            "ONYX_AGENT_SLACK_BOT": str(slack).lower(),
+            "ONYX_AGENT_DISCORD_BOT": str(discord).lower(),
         }
         with patch.dict(os.environ, env, clear=False):
             return self.module.derive_config(SUPERVISOR)
@@ -110,6 +110,16 @@ class BackgroundSupervisorTests(unittest.TestCase):
             'entrypoint: ["python", "-S", "/app/wrapper-background-entrypoint.py"]',
             compose,
         )
+
+    def test_bot_options_use_agent_names_in_section_five(self) -> None:
+        example = (ROOT / ".env.wrapper.example").read_text(encoding="utf-8")
+        section_five = example.index("# 5. Agent Web")
+        section_six = example.index("# 6.")
+        for name in ("ONYX_AGENT_SLACK_BOT", "ONYX_AGENT_DISCORD_BOT"):
+            self.assertLess(section_five, example.index(f"{name}=false"))
+            self.assertLess(example.index(f"{name}=false"), section_six)
+        self.assertNotIn("ONYX_SLACK_BOT_ENABLED", example)
+        self.assertNotIn("ONYX_DISCORD_BOT_ENABLED", example)
 
 
 class BeatWatchdogTests(unittest.TestCase):

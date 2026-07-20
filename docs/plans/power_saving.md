@@ -21,7 +21,7 @@ suppresses the route replacement and success log; drift is repaired and
 logged as before.
 
 **Validation state: deterministic and pinned-image validation passes.**
-`make check` passed 235 tests (with five image-only skips), and
+`make check` passed 237 tests (with five image-only skips), and
 `make check-upgrade` passed the pinned-image contracts and five image-backed
 parser tests. Live Docker checks covered startup/readiness, worker and Beat
 behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
@@ -49,6 +49,11 @@ Torch mappings afterward. The SearXNG resource tracker fell from about 59 MiB
 to 10 MiB PSS while the parent and request worker retained all strict patch
 diagnostics. A real API-to-SearXNG-gateway query returned ten results. Pinned
 image validation and all five image-only parser tests passed.
+The later full-mode bot-option rename also passed a current isolated,
+network-disabled background contract against the pinned Onyx image in Podman.
+The aggregate Podman `make check-upgrade` could not start because the
+socket-only code-interpreter image is intentionally absent from the Podman
+store; deterministic validation completed before that image preflight.
 
 The corrected Myst live run wrote the initial fixed-host route, learned four
 distinct broker addresses as DNS rotated, corrected the tunnel MTU once, and
@@ -1011,9 +1016,10 @@ heartbeat loop (the latter has no tenants to write when dormant but still
 wakes). Credentials for both can be stored in PostgreSQL, so absence of an env
 token is not a valid disable signal.
 
-Add explicit `ONYX_SLACK_BOT_ENABLED=false` and
-`ONYX_DISCORD_BOT_ENABLED=false` wrapper feature switches to
-`.env.wrapper.example` and full-mode Compose. When false, the derived
+Add explicit `ONYX_AGENT_SLACK_BOT=false` and
+`ONYX_AGENT_DISCORD_BOT=false` wrapper feature switches to Section 5 of
+`.env.wrapper.example` and full-mode Compose. They have no effect in lite
+mode, which has no background supervisor. When false, the derived
 supervisor configuration removes the corresponding program and log-tail
 entry, so the default has no bot interpreter or polling thread. When true,
 preserve database-managed credentials and Admin UI configuration. Document

@@ -48,8 +48,8 @@ services:
       RECAPTCHA_HOSTNAME_ALLOWLIST: ""
       # Craft sandbox infrastructure is not part of this Compose wrapper.
       ENABLE_CRAFT: "false"
-      ONYX_SLACK_BOT_ENABLED: "${ONYX_SLACK_BOT_ENABLED:-false}"
-      ONYX_DISCORD_BOT_ENABLED: "${ONYX_DISCORD_BOT_ENABLED:-false}"
+      ONYX_AGENT_SLACK_BOT: "${ONYX_AGENT_SLACK_BOT:-false}"
+      ONYX_AGENT_DISCORD_BOT: "${ONYX_AGENT_DISCORD_BOT:-false}"
       PROMETHEUS_METRICS_ENABLED: "false"
       CELERY_WORKER_PRIMARY_CONCURRENCY: "2"
       CELERY_WORKER_LIGHT_CONCURRENCY: "4"

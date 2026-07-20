@@ -480,6 +480,10 @@ Beat. Any source or configuration drift is a startup failure. These behaviors
 are power policy, not compatibility fallbacks, and should be removed if Onyx
 gains equivalent explicit configuration.
 
+The bot booleans are the wrapper-owned, full-mode-only
+`ONYX_AGENT_SLACK_BOT` and `ONYX_AGENT_DISCORD_BOT`. Lite mode has no
+background supervisor, so neither setting creates a bot process there.
+
 ## Compose wrapper changes
 
 The base wrapper adds the hardened five-worker Obscura service, direct control

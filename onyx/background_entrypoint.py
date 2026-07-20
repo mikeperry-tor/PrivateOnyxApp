@@ -83,8 +83,8 @@ def derive_config(source: Path = SOURCE_CONFIG) -> configparser.RawConfigParser:
         )
 
     for env_name, program in (
-        ("ONYX_SLACK_BOT_ENABLED", "slack_bot"),
-        ("ONYX_DISCORD_BOT_ENABLED", "discord_bot"),
+        ("ONYX_AGENT_SLACK_BOT", "slack_bot"),
+        ("ONYX_AGENT_DISCORD_BOT", "discord_bot"),
     ):
         if not _flag(env_name):
             parser.remove_section(_program(program))
@@ -121,9 +121,9 @@ def derive_config(source: Path = SOURCE_CONFIG) -> configparser.RawConfigParser:
         "/var/log/celery_worker_scheduled_tasks.log",
         "/var/log/celery_worker_monitoring.log",
     }
-    if not _flag("ONYX_SLACK_BOT_ENABLED"):
+    if not _flag("ONYX_AGENT_SLACK_BOT"):
         removed_logs.add("/var/log/slack_bot.log")
-    if not _flag("ONYX_DISCORD_BOT_ENABLED"):
+    if not _flag("ONYX_AGENT_DISCORD_BOT"):
         removed_logs.add("/var/log/discord_bot.log")
     retained_lines = [line for line in lines if line.strip() not in removed_logs]
     parser.set(log_section, "command", "\n".join(retained_lines))

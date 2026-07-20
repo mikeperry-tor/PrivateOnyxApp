@@ -461,9 +461,9 @@ Full mode trades some background responsiveness for lower idle CPU and memory:
   monitoring producers/workers are removed, worker heartbeats/gossip are
   disabled, and worker event metrics are off. New or changed connector work can
   wait up to roughly five minutes before discovery.
-- Slack and Discord bot processes are disabled by default. Enable only the
-  needed process with `ONYX_SLACK_BOT_ENABLED` or
-  `ONYX_DISCORD_BOT_ENABLED`; a Compose boolean is required.
+- Full-mode Slack and Discord bot processes are disabled by default. Enable
+  only the needed process with `ONYX_AGENT_SLACK_BOT` or
+  `ONYX_AGENT_DISCORD_BOT`; these settings have no effect in lite mode.
 
 The retained worker pool is explicitly bounded: primary 2, light 4, heavy 2,
 doc-processing 2, user-file-processing 1, and document-fetching 1. Beat writes

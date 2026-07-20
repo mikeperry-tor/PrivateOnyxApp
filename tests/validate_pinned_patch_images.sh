@@ -75,8 +75,8 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     -e AUTO_LLM_CONFIG_URL= \
     -e LICENSE_ENFORCEMENT_ENABLED=false \
     -e ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=false \
-    -e ONYX_SLACK_BOT_ENABLED=false \
-    -e ONYX_DISCORD_BOT_ENABLED=false \
+    -e ONYX_AGENT_SLACK_BOT=false \
+    -e ONYX_AGENT_DISCORD_BOT=false \
     -e ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED=false \
     -e ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS=doc-drop-web \
     -e ONYX_HELPER_HTTP_PROXY_URL=http://onyx-public-egress-bridge:3128 \

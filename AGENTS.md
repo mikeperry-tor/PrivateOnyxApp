@@ -38,7 +38,9 @@ At a high level:
   bundled backend, and applies the documented low-idle background/storage
   policy. Exact background control processes stay outside the application
   `sitecustomize` bootstrap; Beat, workers, and indexing children remain
-  strictly patched. Bot workers are explicit default-off options.
+  strictly patched. Full-mode bot workers are explicit default-off options
+  selected by `ONYX_AGENT_SLACK_BOT` and `ONYX_AGENT_DISCORD_BOT`; lite mode
+  has no background supervisor or bot processes.
 - The recommended local-RAG Admin model name `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only tokenizer construction to the bundled v1 tokenizer.
 - The wrapper uses the legacy code-interpreter service and explicitly disables unsupported Craft sandbox scheduling.
 - Onyx sends LLM requests through the included Teep local inference service.

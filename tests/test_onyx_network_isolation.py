@@ -331,12 +331,19 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertEqual(services["minio"]["environment"]["MINIO_SCANNER_SPEED"], "slowest")
         background = services["background"]
         self.assertEqual(background["environment"]["PROMETHEUS_METRICS_ENABLED"], "false")
-        self.assertEqual(background["environment"]["ONYX_SLACK_BOT_ENABLED"], "false")
-        self.assertEqual(background["environment"]["ONYX_DISCORD_BOT_ENABLED"], "false")
+        self.assertEqual(background["environment"]["ONYX_AGENT_SLACK_BOT"], "false")
+        self.assertEqual(background["environment"]["ONYX_AGENT_DISCORD_BOT"], "false")
         self.assertEqual(
             background["entrypoint"],
             ["python", "-S", "/app/wrapper-background-entrypoint.py"],
         )
+
+    def test_bot_options_are_full_mode_only(self) -> None:
+        lite = _compose_model("lite")
+        self.assertNotIn("background", lite["services"])
+        rendered_lite = json.dumps(lite)
+        for name in ("ONYX_AGENT_SLACK_BOT", "ONYX_AGENT_DISCORD_BOT"):
+            self.assertNotIn(name, rendered_lite)
 
     def test_lite_and_full_application_services_are_internal_only(self) -> None:
         expected = {
