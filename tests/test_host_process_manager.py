@@ -6,10 +6,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import host_process_manager as manager
+from embedserv import host_process_manager as manager
 
 
 class HostProcessManagerTests(unittest.TestCase):
+    def test_module_documents_both_optional_full_mode_uses(self) -> None:
+        documentation = manager.__doc__ or ""
+        self.assertIn("bundled MLX", documentation)
+        self.assertIn("Podman-only host document server", documentation)
+        self.assertIn("lite mode", documentation)
+        self.assertIn("Teep", documentation)
+
     def test_record_round_trip_is_exact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "service.pid"

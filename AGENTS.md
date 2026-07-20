@@ -53,10 +53,12 @@ At a high level:
   strictly patched. Full-mode bot workers are explicit default-off options
   selected by `ONYX_AGENT_SLACK_BOT` and `ONYX_AGENT_DISCORD_BOT`; lite mode
   has no background supervisor or bot processes.
-- The stdlib-only `host_process_manager.py` owns common detached lifecycle,
+- The stdlib-only `embedserv/host_process_manager.py` owns common detached lifecycle,
   atomic PID/token/configuration records, readiness waits, and identity-checked
   stops for the bundled MLX proxy and Podman host document server. Keep
-  service-specific child/model/peer/content validation in those services.
+  service-specific child/model/peer/content validation in those services. Lite
+  mode selects neither host service; Docker full mode selects no host document
+  server and skips the manager for clean Teep/custom-embedding starts.
 - The recommended local-RAG Admin model name `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only tokenizer construction to the bundled v1 tokenizer.
 - The wrapper uses the legacy code-interpreter service and explicitly disables unsupported Craft sandbox scheduling.
 - Onyx sends LLM requests through the included Teep local inference service.

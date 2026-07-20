@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -126,7 +128,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             "embedserv-stop-if-started:", 1
         )[0]
         self.assertIn('proxy_script="$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py"', start)
-        self.assertIn("host_process_manager.py start", start)
+        self.assertIn('"$(PWD)/$(HOST_PROCESS_MANAGER)" start', start)
         self.assertIn("--identity", start)
         self.assertIn("--fingerprint-file", start)
         self.assertIn("--allow-untracked-listener", start)
@@ -136,7 +138,11 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         stop_target = makefile.split("embedserv-stop-if-started:", 1)[1].split(
             "embedserv-cleanup-recorded-child:", 1
         )[0]
-        self.assertIn("host_process_manager.py stop", stop_target)
+        self.assertIn('"$(PWD)/$(HOST_PROCESS_MANAGER)" stop', stop_target)
+        self.assertLess(
+            stop_target.index('if [ ! -e "$(EMBEDSERV_PID_FILE)" ]'),
+            stop_target.index('"$(PWD)/$(HOST_PROCESS_MANAGER)" stop'),
+        )
         self.assertIn("--identity", stop_target)
         stop = makefile.split("down-full:", 1)[1].split("ps-lite:", 1)[0]
         self.assertIn("embedserv-cleanup-recorded-child", stop)
@@ -148,12 +154,20 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             for line in makefile.splitlines()
             if line.startswith("up-full: claim-shared-data-engine")
         )
-        self.assertIn("podman-doc-server-start", full_prerequisites)
+        self.assertIn("$(FULL_MODE_HOST_PROCESS_TARGETS)", full_prerequisites)
+        selection = makefile.split(
+            "FULL_MODE_HOST_PROCESS_TARGETS :=", 1
+        )[1].split(".PHONY:", 1)[0]
+        self.assertIn("embedserv-start-if-installed", selection)
+        self.assertIn("ifeq ($(PODMAN_SELECTED),true)", selection)
+        self.assertIn(
+            "FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start", selection
+        )
         start_target = makefile.split("podman-doc-server-start:", 1)[1].split(
             "\n\n", 1
         )[0]
         self.assertIn("doc_drop_webserver.py", start_target)
-        self.assertIn("host_process_manager.py start", start_target)
+        self.assertIn('"$(PWD)/$(HOST_PROCESS_MANAGER)" start', start_target)
         self.assertIn("--loopback-peers-only", start_target)
         self.assertIn("--identity", start_target)
         self.assertIn("--fingerprint-file", start_target)
@@ -162,6 +176,70 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("podman-doc-server-stop-if-started", makefile)
         self.assertNotIn("stage-podman-full-docs", makefile)
         self.assertNotIn("PODMAN_RAG_DOC_VOLUME", makefile)
+
+    def test_lite_and_custom_embedding_skip_unused_host_manager(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        lite_prerequisites = next(
+            line
+            for line in makefile.splitlines()
+            if line.startswith("up-lite: claim-shared-data-engine")
+        )
+        self.assertNotIn("FULL_MODE_HOST_PROCESS_TARGETS", lite_prerequisites)
+        self.assertNotIn("embedserv-start-if-installed", lite_prerequisites)
+        self.assertNotIn("podman-doc-server-start", lite_prerequisites)
+
+        start = makefile.split("embedserv-start-if-installed:", 1)[1].split(
+            "embedserv-stop-if-started:", 1
+        )[0]
+        custom_branch = start.split(
+            'if [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]', 1
+        )[1].split("\tfi; \\\n", 1)[0]
+        self.assertIn('if [ -e "$(EMBEDSERV_PID_FILE)" ]', custom_branch)
+        self.assertIn("embedserv-stop-if-started", custom_branch)
+        self.assertIn("embedserv-cleanup-recorded-child", custom_branch)
+        self.assertNotIn('"$(PWD)/$(HOST_PROCESS_MANAGER)" start', custom_branch)
+
+    def test_clean_teep_start_does_not_execute_host_manager(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            env_file = temporary / "wrapper.env"
+            env_file.write_text(
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="
+                "http://host.docker.internal:8337/v1/embeddings\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "embedserv-start-if-installed",
+                    f"ENV_FILE={env_file}",
+                    "HOST_PROCESS_MANAGER=/must/not/be/executed.py",
+                    f"EMBEDSERV_PID_FILE={temporary / 'serve.pid'}",
+                    f"EMBEDSERV_CHILD_PID_FILE={temporary / 'child.pid'}",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("custom upstream; not starting bundled MLX server", result.stdout)
+
+    def test_host_manager_path_and_inactive_stop_guards_are_explicit(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn(
+            "HOST_PROCESS_MANAGER := $(EMBEDSERV_DIR)/host_process_manager.py",
+            makefile,
+        )
+        self.assertNotIn("\n\t\thost_process_manager.py \\\n", makefile)
+        podman_stop = makefile.split(
+            "podman-doc-server-stop-if-started:", 1
+        )[1].split("\n\n", 1)[0]
+        self.assertLess(
+            podman_stop.index('if [ ! -e "$(PODMAN_DOC_SERVER_PID_FILE)" ]'),
+            podman_stop.index('"$(PWD)/$(HOST_PROCESS_MANAGER)" stop'),
+        )
 
     def test_podman_shared_database_preflights_are_unconditional(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

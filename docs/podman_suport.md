@@ -336,8 +336,12 @@ the configuration fingerprint matches, and `/_health` succeeds. Configuration
 changes restart only the token-matched process. Malformed, stale, or reused PID
 records never authorize signaling an unrelated process.
 
-The same stdlib-only `host_process_manager.py` used for the optional MLX proxy
-owns the common detached-launch, atomic record, readiness, and stop mechanics.
+The same stdlib-only `embedserv/host_process_manager.py` used for the optional
+MLX proxy owns the common detached-launch, atomic record, readiness, and stop
+mechanics. Its location reflects the primary MLX use, but this document-server
+use is deliberately supported and tested. Only Podman full mode selects this
+host document target; lite mode does not, and Docker uses its containerized
+document server instead.
 The document server still owns its document-root confinement, loopback-peer
 restriction, HTTP handling, and connection bounds.
 

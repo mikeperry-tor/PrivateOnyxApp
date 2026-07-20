@@ -74,10 +74,14 @@ hour. Do not copy fixed counts into documentation.
 - Parent ownership uses an absolute command identity, random per-launch token,
   and configuration fingerprint. Child ownership separately validates the PID,
   expected complete command, child port, and advertised served model.
-- `host_process_manager.py` supplies the shared detached start/readiness/record/
+- `embedserv/host_process_manager.py` supplies the shared detached start/readiness/record/
   stop mechanics for this proxy and the Podman document server. It never signals
   a PID based only on a record number. Service-specific peer, model, child, and
   content-policy checks remain in the services themselves.
+- Lite mode selects neither host process. Docker full mode uses the manager only
+  for the bundled default MLX endpoint; Teep and other custom embedding
+  endpoints skip it unless a recorded wrapper-owned MLX process from the prior
+  configuration must be stopped. The host document server is Podman full-only.
 - Custom embedding endpoints and manually launched listeners remain
   operator-owned and are not stopped by `make down-full`.
 

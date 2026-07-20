@@ -221,6 +221,7 @@ MYST_VPN_CLI := myst/myst-vpn-cli.sh
 MYST_CONTAINER_NAME := myst-client-vpn
 MYST_DATA_DIR := docker-data/myst-data
 EMBEDSERV_DIR := embedserv
+HOST_PROCESS_MANAGER := $(EMBEDSERV_DIR)/host_process_manager.py
 EMBEDSERV_REQUIREMENTS_IN := $(EMBEDSERV_DIR)/requirements.in
 EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
@@ -242,6 +243,14 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
+
+# Lite mode has no wrapper-owned host services. Full mode always reconciles the
+# optional bundled MLX service, but selects the host document server only for
+# Podman; Docker serves documents from its container bind mount.
+FULL_MODE_HOST_PROCESS_TARGETS := embedserv-start-if-installed
+ifeq ($(PODMAN_SELECTED),true)
+FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start
+endif
 
 .PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
@@ -294,7 +303,7 @@ check: test
 		onyx/local_embedding_shim.py \
 		onyx/background_entrypoint.py \
 		onyx/beat_liveness_watchdog.py \
-		host_process_manager.py \
+		$(HOST_PROCESS_MANAGER) \
 		embedserv/idle_embedding_proxy.py \
 		podman \
 		searxng/engines \
@@ -436,7 +445,7 @@ ifeq ($(PODMAN_SELECTED),true)
 		exit 1; \
 	fi; \
 	echo "Starting loopback-peer-restricted Podman host document server on port $(PODMAN_DOC_SERVER_PORT)"; \
-	exec python3 host_process_manager.py start \
+	exec python3 "$(PWD)/$(HOST_PROCESS_MANAGER)" start \
 		--name "Podman host document server" \
 		--record-file "$(PODMAN_DOC_SERVER_PID_FILE)" \
 		--log-file "$(PODMAN_DOC_SERVER_LOG)" \
@@ -450,7 +459,8 @@ ifeq ($(PODMAN_SELECTED),true)
 endif
 
 podman-doc-server-stop-if-started:
-	@python3 host_process_manager.py stop \
+	@if [ ! -e "$(PODMAN_DOC_SERVER_PID_FILE)" ]; then exit 0; fi; \
+	python3 "$(PWD)/$(HOST_PROCESS_MANAGER)" stop \
 		--name "Podman host document server" \
 		--record-file "$(PODMAN_DOC_SERVER_PID_FILE)" \
 		--identity "$(CURDIR)/onyx/doc_drop_webserver.py" \
@@ -475,7 +485,7 @@ endif
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
-up-full: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
+up-full: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
@@ -772,7 +782,10 @@ embedserv-serve: embedserv-verify-model
 
 # Start the bundled host MLX server for full mode only after its selected model
 # has been installed and only while the shim still targets the bundled default
-# endpoint. Custom endpoints (including teep) remain entirely operator-owned.
+# endpoint. Custom endpoints (including Teep) remain entirely operator-owned.
+# If configuration changed away from the bundled endpoint, clean up only a
+# previously recorded wrapper-owned MLX process; a clean custom-upstream start
+# does not execute the host process manager at all.
 embedserv-start-if-installed:
 	@set -eu; \
 	if [ ! -f "$(ENV_FILE)" ]; then \
@@ -788,11 +801,16 @@ embedserv-start-if-installed:
 	proxy_script="$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py"; \
 	child_pid_file="$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)"; \
 	if [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; then \
+		if [ -e "$(EMBEDSERV_PID_FILE)" ] || [ -e "$(EMBEDSERV_CHILD_PID_FILE)" ]; then \
+			echo "Embedding shim changed to a custom upstream; stopping the previously managed MLX server"; \
+			"$${MAKE:-make}" --no-print-directory embedserv-stop-if-started; \
+			"$${MAKE:-make}" --no-print-directory embedserv-cleanup-recorded-child; \
+		fi; \
 		echo "Embedding shim uses a custom upstream; not starting bundled MLX server: $$embeddings_url"; \
 		exit 0; \
 	fi; \
 	echo "Starting bundled MLX embedding lifecycle proxy for $$model_repo (log: $(EMBEDSERV_LOG))"; \
-	exec python3 host_process_manager.py start \
+	exec python3 "$(PWD)/$(HOST_PROCESS_MANAGER)" start \
 		--name "MLX embedding lifecycle proxy" \
 		--record-file "$(EMBEDSERV_PID_FILE)" \
 		--log-file "$(EMBEDSERV_LOG)" \
@@ -817,7 +835,8 @@ embedserv-start-if-installed:
 # absent, exited, malformed, or reused PID is a diagnosed no-op so down-full is
 # not made brittle by stale host state. Foreground/manual servers are untouched.
 embedserv-stop-if-started:
-	@python3 host_process_manager.py stop \
+	@if [ ! -e "$(EMBEDSERV_PID_FILE)" ]; then exit 0; fi; \
+	python3 "$(PWD)/$(HOST_PROCESS_MANAGER)" stop \
 		--name "MLX embedding lifecycle proxy" \
 		--record-file "$(EMBEDSERV_PID_FILE)" \
 		--identity "$(PWD)/embedserv/idle_embedding_proxy.py" \

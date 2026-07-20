@@ -463,6 +463,12 @@ a retry, so it never ambiguously replays an embedding POST. You can run
 `make embedserv-serve` directly in the foreground.
 `make down-full` stops only the wrapper-managed proxy and its
 identity-validated child after draining requests already accepted by the proxy.
+Lite mode never starts a host embedding or document process. Full mode skips
+the MLX host manager when the embedding shim targets Teep or another custom
+upstream; the only exception is a configuration transition, where it stops a
+previously recorded wrapper-owned MLX process. Docker's document server is
+containerized, while the separate host document process exists only in Podman
+full mode. The shared manager lives at `embedserv/host_process_manager.py`.
 
 MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
 the download libraries when the host requires a build/download proxy.

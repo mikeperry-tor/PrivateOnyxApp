@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Start and stop wrapper-owned host services without PID-only signaling."""
+"""Manage the wrapper's optional full-mode host processes.
+
+This shared, stdlib-only lifecycle helper lives with the bundled MLX embedding
+server, but it also manages the Podman-only host document server. It is not
+used by lite mode, by Docker's containerized document server, or by a clean
+full-mode Docker start whose embedding shim targets Teep or another custom
+upstream. A configuration change may still use it to stop a previously
+wrapper-managed MLX process before handing ownership to a custom upstream.
+
+Service-specific policy remains in the managed services: this module owns only
+detached launch, atomic PID/token/configuration records, readiness waits, and
+identity-checked stops.
+"""
 
 from __future__ import annotations
 

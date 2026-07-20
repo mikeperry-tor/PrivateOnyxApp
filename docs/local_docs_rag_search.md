@@ -372,7 +372,10 @@ make embedserv-serve
 Once the selected model is installed, `make up-full` automatically launches a
 small host lifecycle proxy when the shim uses the bundled default URL. It skips
 this startup when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` selects Teep or another
-custom service. The proxy accepts only bounded `POST /v1/embeddings` requests,
+custom service. A clean custom-upstream start does not execute the host process
+manager; if a prior bundled run left an ownership record, startup first uses
+that record to stop only the old wrapper-owned process. Lite mode never selects
+either host service. The proxy accepts only bounded `POST /v1/embeddings` requests,
 starts the pinned `mlx-openai-server` child on the first request, and unloads
 the child ten minutes after the last active request completes. Concurrent cold
 requests share one startup, and a request is forwarded exactly once: a child
@@ -436,8 +439,10 @@ child. Missing records are harmless; malformed or reused PIDs and unowned
 listeners fail closed and are never signaled. Manually launched and custom
 servers remain untouched.
 
-The wrapper's shared stdlib-only `host_process_manager.py` owns this host
-process lifecycle and the equivalent Podman document-server lifecycle. It
+The wrapper's shared stdlib-only `embedserv/host_process_manager.py` lives with
+the bundled embedding service but also owns the equivalent Podman full-mode
+document-server lifecycle. Docker keeps the document server in a container, so
+it does not select that host target. The manager
 atomically writes the common PID/token/configuration record, validates command
 identity before signaling, and performs the listener/readiness wait. The
 service implementations retain their narrower peer, child, port, and model
