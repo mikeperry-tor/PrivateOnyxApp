@@ -20,6 +20,27 @@ repair bound and DNS freshness, but an exact target/gateway/device match now
 suppresses the route replacement and success log; drift is repaired and
 logged as before.
 
+A corrective review follow-up closes four lifecycle gaps and two additional
+idle costs. The MLX proxy now uses an absolute identity, a strict child PID
+record, an unoccupied-port precondition, and served-model verification; stale
+or wrong processes cannot satisfy readiness. Podman startup has a 420-second
+outer wait bound, shared-data startup prerequisites are serialized under
+`make -j`, and Podman omits the unused executor network overlay. The upstream
+SearXNG optional plugins are omitted so fresh cache startup does not fetch
+mutable ClearURLs rules or initialize unused result/UI hooks. The local unused
+Tailscale profile is disabled in the operator environment; the tracked optional
+profile remains available.
+
+The corrective follow-up `make check` passes 248 tests with five image-only
+skips. Live Podman full startup retained 14 health checks/138 checks per hour;
+lite retained 11/120, down from 16/150 and 13/132 with the unused profiles.
+The full stack returned healthy without executor or Tailscale services, a real
+SearXNG query returned ten results without a ClearURLs startup fetch, and an
+exact down/up cycle stopped both the detached MLX proxy and its recorded child
+before restoring the healthy stack. One intermediate Podman start hit a
+rootless `ping_group_range` OCI runtime error; a complete clean down/up cleared
+the transient without weakening user namespaces or container hardening.
+
 **Validation state: deterministic and pinned-image validation passes.**
 `make check` passed 237 tests (with five image-only skips), and
 `make check-upgrade` passed the pinned-image contracts and five image-backed
@@ -1547,7 +1568,8 @@ Validation should prove:
   automatic retry when it fails.
 - Effective Docker Compose models retain fast startup checks and 10-minute
   steady checks; Podman installs the equivalent native startup check before
-  start and fails clearly on any command, timeout, or cadence mismatch.
+  start, fails clearly on any command, timeout, or cadence mismatch, and
+  returns nonzero within 420 seconds if startup never becomes healthy.
 - Removed leaf checks are absent from the effective model, not merely shadowed
   in one Compose source file.
 - The Beat watchdog restarts a deliberately hung Beat process within the

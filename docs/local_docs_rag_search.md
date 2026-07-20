@@ -379,14 +379,26 @@ requests share one startup, and a request is forwarded exactly once: a child
 crash is returned as an error instead of replaying an embedding batch. Cold
 startup and forwarding share the shim's 30-second outer deadline.
 
+Before every child launch, the proxy requires the loopback child port to be
+unoccupied. It records the child PID atomically, validates a stale record
+against the complete expected MLX command before signaling it, and verifies
+that `/v1/models` advertises the configured served model. A port-only health
+response is never accepted as ownership or model identity. An unrecorded
+listener or a reused PID fails closed and is left untouched.
+
 If the default URL is selected without an installed server/model, startup fails
 immediately with setup guidance. Automatic startup waits only for the lifecycle
 proxy listener; the staged `/ready` request proves the actual model separately.
 The proxy writes to `embedserv/serve.log`; direct `make embedserv-serve` remains
-the foreground form. `make down-full` validates the recorded proxy identity,
-signals its child process group, waits a bounded grace period, and force-stops
-only that validated child if needed. Missing, stale, or reused PIDs are reported
-and ignored; manually launched and custom servers are never stopped.
+the foreground form. Automatic launch uses the absolute proxy-script path and
+an explicit detached process session so it survives the initiating shell and
+`make down-full` can validate the recorded process identity. Graceful shutdown
+signals its owned child group; a separate strict child record also lets the
+next start or `make down-full` clean up that child after a proxy crash. Both
+paths wait a bounded grace period and force-stop only the identity-validated
+child. Missing records are harmless; malformed or reused PIDs and unowned
+listeners fail closed and are never signaled. Manually launched and custom
+servers remain untouched.
 
 `make embedserv-install` installs from the hashed lock file with
 `--require-hashes`. To upgrade package versions during a stack upgrade, edit

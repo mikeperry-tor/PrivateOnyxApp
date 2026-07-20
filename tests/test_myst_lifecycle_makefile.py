@@ -37,9 +37,11 @@ class MystLifecycleMakefileTests(unittest.TestCase):
     def test_full_start_stages_one_embedding_readiness_call(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         full_start = makefile.split("up-full:", 2)[2].split("\n\n", 1)[0]
-        self.assertIn("up -d --wait local-embedding-shim", full_start)
+        self.assertIn("up -d --wait --wait-timeout 420 local-embedding-shim", full_start)
         self.assertIn("embedding-ready-once", full_start)
-        self.assertTrue(full_start.rstrip().endswith("up -d --wait"))
+        self.assertTrue(
+            full_start.rstrip().endswith("up -d --wait --wait-timeout 420")
+        )
         self.assertLess(
             full_start.index("local-embedding-shim"),
             full_start.index("embedding-ready-once"),
@@ -87,8 +89,34 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("create local-embedding-shim", full_start)
         self.assertLess(
             full_start.index("create local-embedding-shim"),
-            full_start.index("up -d --wait local-embedding-shim"),
+            full_start.index("up -d --wait --wait-timeout 420 local-embedding-shim"),
         )
+        self.assertEqual(lite_start.count("--wait-timeout 420"), 1)
+        self.assertEqual(full_start.count("--wait-timeout 420"), 2)
+
+    def test_stack_start_prerequisites_are_serialized(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn(".NOTPARALLEL: up-lite up-full", makefile)
+
+    def test_podman_never_selects_executor_network_overlay(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        selection = makefile.split("CODE_INTERPRETER_NETWORK_SUFFIX :=", 1)[1].split(
+            "# When EGRESS_UPSTREAM_PROXY_URL", 1
+        )[0]
+        self.assertIn("ifneq ($(PODMAN_SELECTED),true)", selection)
+
+    def test_embedding_proxy_uses_absolute_identity_and_child_record(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        start = makefile.split("embedserv-start-if-installed:", 1)[1].split(
+            "embedserv-stop-if-started:", 1
+        )[0]
+        self.assertIn('proxy_script="$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py"', start)
+        self.assertIn("start_new_session=True", start)
+        self.assertIn("stdin=subprocess.DEVNULL", start)
+        self.assertIn("recorded automatic proxy identity does not match", start)
+        self.assertIn("--child-pid-file", start)
+        stop = makefile.split("down-full:", 1)[1].split("ps-lite:", 1)[0]
+        self.assertIn("embedserv-cleanup-recorded-child", stop)
 
     def test_podman_full_start_manages_host_document_server(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

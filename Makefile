@@ -117,7 +117,9 @@ endif
 # When enabled, executor pods join only the named internal executor network.
 CODE_INTERPRETER_NETWORK_SUFFIX :=
 ifneq ($(filter true,$(ONYX_CODE_INTERPRETER_ENABLE_NETWORK)),)
+ifneq ($(PODMAN_SELECTED),true)
 CODE_INTERPRETER_NETWORK_SUFFIX :=:docker-compose.code-interpreter-network.yml
+endif
 endif
 
 # When EGRESS_UPSTREAM_PROXY_URL is non-empty, apply the proxy override
@@ -226,6 +228,7 @@ EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 EMBEDSERV_DEFAULT_UPSTREAM_URL := http://host.docker.internal:3210/v1/embeddings
 EMBEDSERV_LOG := $(EMBEDSERV_DIR)/serve.log
 EMBEDSERV_PID_FILE := $(EMBEDSERV_DIR)/serve.pid
+EMBEDSERV_CHILD_PID_FILE := $(EMBEDSERV_DIR)/child.pid
 SEARXNG_REQUIREMENTS_IN := searxng/requirements.in
 SEARXNG_REQUIREMENTS := searxng/requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
@@ -233,7 +236,9 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help test check test-images check-upgrade health-inventory shared-data-engine-status claim-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images check-upgrade health-inventory shared-data-engine-status claim-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+
+.NOTPARALLEL: up-lite up-full
 
 help:
 	@echo "Targets:"
@@ -490,7 +495,7 @@ ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
 	@COMPOSE_FILE=$(LITE_FILES) python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
@@ -499,13 +504,13 @@ ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait local-embedding-shim
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420 local-embedding-shim
 	@$(MAKE) --no-print-directory embedding-ready-once
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420
 
 embedding-ready-once:
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) exec -T local-embedding-shim \
@@ -599,6 +604,7 @@ down-full:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
 	@"$${MAKE:-make}" podman-doc-server-stop-if-started
 	@"$${MAKE:-make}" embedserv-stop-if-started
+	@"$${MAKE:-make}" embedserv-cleanup-recorded-child
 	@$(MAKE) --no-print-directory release-shared-data-engine
 
 ps-lite:
@@ -781,7 +787,8 @@ embedserv-serve: embedserv-verify-model
 		--child-port 3211 \
 		--server-executable "$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server" \
 		--model-path "$$model_dir" \
-		--served-model-name "$$served_model"
+		--served-model-name "$$served_model" \
+		--child-pid-file "$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)"
 
 # Start the bundled host MLX server for full mode only after its selected model
 # has been installed and only while the shim still targets the bundled default
@@ -803,7 +810,26 @@ embedserv-start-if-installed:
 		exit 0; \
 	fi; \
 	if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 3210), timeout=1); s.close()' >/dev/null 2>&1; then \
-		echo "An embedding server is already listening on 127.0.0.1:3210; not starting another one"; \
+		if [ -f "$(EMBEDSERV_PID_FILE)" ]; then \
+			recorded_pid=$$(sed -n '1p' "$(EMBEDSERV_PID_FILE)"); \
+			recorded_command=""; \
+			case "$$recorded_pid" in \
+				''|*[!0-9]*) ;; \
+				*) if current_command=$$(ps -p "$$recorded_pid" -o command= 2>/dev/null); then recorded_command="$$current_command"; fi ;; \
+			esac; \
+			case "$$recorded_command" in \
+				*'$(PWD)/embedserv/idle_embedding_proxy.py '*) \
+					echo "The wrapper-managed MLX lifecycle proxy is already listening on 127.0.0.1:3210"; \
+					exit 0 \
+					;; \
+				*) \
+					echo "ERROR: port 3210 is occupied but the recorded automatic proxy identity does not match"; \
+					echo "Inspect $(EMBEDSERV_PID_FILE) and $(EMBEDSERV_LOG); no process was signaled"; \
+					exit 1 \
+					;; \
+			esac; \
+		fi; \
+		echo "An operator-managed embedding server is already listening on 127.0.0.1:3210; not starting another one"; \
 		exit 0; \
 	fi; \
 	if [ ! -x "$$venv_server" ] || [ ! -d "$$model_dir" ]; then \
@@ -812,13 +838,15 @@ embedserv-start-if-installed:
 		exit 1; \
 	fi; \
 	echo "Starting bundled MLX embedding lifecycle proxy for $$model_repo (log: $(EMBEDSERV_LOG))"; \
-	nohup python3 "$(EMBEDSERV_DIR)/idle_embedding_proxy.py" \
+	proxy_script="$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py"; \
+	pid=$$(python3 -c 'import subprocess,sys; log=open(sys.argv[1], "wb", buffering=0); child=subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True); print(child.pid)' \
+		"$(EMBEDSERV_LOG)" python3 "$$proxy_script" \
 		--listen-port 3210 \
 		--child-port 3211 \
 		--server-executable "$$venv_server" \
 		--model-path "$$model_dir" \
-		--served-model-name "$$served_model" >"$(EMBEDSERV_LOG)" 2>&1 & \
-	pid=$$!; \
+		--served-model-name "$$served_model" \
+		--child-pid-file "$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)"); \
 	printf '%s\n' "$$pid" >"$(EMBEDSERV_PID_FILE)"; \
 	attempt=0; \
 	while [ "$$attempt" -lt 240 ]; do \
@@ -867,7 +895,7 @@ embedserv-stop-if-started:
 		exit 0; \
 	fi; \
 	case "$$command_line" in \
-		*'/embedserv/idle_embedding_proxy.py '*) ;; \
+		*'$(PWD)/embedserv/idle_embedding_proxy.py '*) ;; \
 		*) \
 			echo "PID $$pid no longer belongs to the automatically started MLX embedding server; leaving it untouched"; \
 			rm -f -- "$(EMBEDSERV_PID_FILE)"; \
@@ -890,6 +918,20 @@ embedserv-stop-if-started:
 	fi; \
 	rm -f -- "$(EMBEDSERV_PID_FILE)"; \
 	echo "Automatically started MLX embedding server stopped"
+
+embedserv-cleanup-recorded-child:
+	@set -eu; \
+	if [ ! -f "$(EMBEDSERV_CHILD_PID_FILE)" ]; then exit 0; fi; \
+	set -a; . "$(ENV_FILE)"; set +a; \
+	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	served_model="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL:-$$model_repo}"; \
+	python3 "$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py" \
+		--child-port 3211 \
+		--server-executable "$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server" \
+		--model-path "$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo" \
+		--served-model-name "$$served_model" \
+		--child-pid-file "$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)" \
+		--cleanup-recorded-child
 
 # ══════════════════════════════════════════════════════════════════════════════
 # VPN signup, order status, and balance

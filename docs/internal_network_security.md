@@ -14,7 +14,7 @@ the Internet. The exact routing policy is in
 | `obscura-cdp-gateway` | API-side control network and Obscura control network | none |
 | `obscura` | CDP control networks and its fixed browser bridge | shared public final-hop policy through `obscura-egress-bridge` |
 | enabled executor | executor service/control networks and its fixed bridge | shared public final-hop policy through `executor-egress-bridge` |
-| doc-drop and embedding components | their documented full-mode local networks | only their explicit host/public route where configured |
+| doc-drop and embedding components | their documented full-mode local networks; Podman relay has a dedicated host uplink | only their explicit fixed host/public route where configured |
 
 CDP is powerful browser authority. The API and SearXNG are mutually
 non-isolated with respect to the shared Obscura worker pool: either can create
@@ -66,6 +66,17 @@ integrations, inference providers, and the embedding shim. Exact
 Neither permission is inherited by agent browsing or executor code. This is an
 agent-activity boundary, not containment against arbitrary code execution in a
 trusted Onyx application process that can legitimately use the host route.
+
+Podman full mode has one additional, narrow host boundary for local documents.
+The capability-free `doc-drop-web` relay alone joins a dedicated non-internal
+host uplink and can connect only to `host.containers.internal:18091`. The
+wrapper-managed macOS server accepts loopback peers, serves a resolved trusted
+document root read-only, rejects hidden paths and symlinks, and suppresses
+request logging. Application containers do not join this uplink; the existing
+exact `doc-drop-route-gateway` and host final-hop listener remain the only Onyx
+ingress path. Loopback peer validation is trust in Podman's userspace gateway,
+not client authentication. The request-time path check also does not prevent a
+trusted local process from racing path-component replacement before open.
 
 By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` means the LLM-controlled
 stock crawler does not inherit that Admin private-network allowance. Its
@@ -145,3 +156,5 @@ logging can also be incomplete.
   handler attributes, and eval are blocked while login hydration, same-origin
   APIs/WebSockets, and local previews work.
 - Full-mode doc-drop remains a local path and does not gain browser/CDP access.
+- Under Podman, only the fixed doc-drop relay joins the host uplink; the host
+  server rejects non-loopback peers and the relay has no source mount.

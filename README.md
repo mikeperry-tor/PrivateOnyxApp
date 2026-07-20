@@ -452,8 +452,7 @@ model for the first embedding request and unloads it ten minutes after the last
 request completes. A request after unload includes the measured cold-start
 delay and still uses the shim's unchanged 30-second deadline. You can run
 `make embedserv-serve` directly in the foreground. `make down-full` stops only
-the wrapper-managed proxy and its identity-validated child; manual and custom
-upstreams are untouched.
+the wrapper-managed proxy and its identity-validated child.
 
 MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
 the download libraries when the host requires a build/download proxy.

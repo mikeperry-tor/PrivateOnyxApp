@@ -8,7 +8,9 @@ import http.client
 import http.server
 import json
 import os
+import shlex
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -30,16 +32,21 @@ class Lifecycle:
         self,
         command: list[str],
         child_port: int,
+        served_model_name: str,
         *,
+        child_pid_file: Path | None = None,
         idle_seconds: float = DEFAULT_IDLE_SECONDS,
         startup_seconds: float = DEFAULT_STARTUP_SECONDS,
         popen: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
     ) -> None:
         self.command = command
         self.child_port = child_port
+        self.served_model_name = served_model_name
+        self.child_pid_file = child_pid_file
         self.idle_seconds = idle_seconds
         self.startup_seconds = startup_seconds
         self._popen = popen
+        self._require_port_available = require_port_available
         self._condition = threading.Condition()
         self._child: subprocess.Popen[bytes] | None = None
         self._starting = False
@@ -55,11 +62,20 @@ class Lifecycle:
             "127.0.0.1", self.child_port, timeout=0.5
         )
         try:
-            connection.request("GET", "/health")
+            connection.request("GET", "/v1/models")
             response = connection.getresponse()
-            response.read(4096)
-            return response.status == 200
-        except OSError:
+            body = response.read(64 * 1024)
+            if response.status != 200:
+                return False
+            payload = json.loads(body)
+            if not isinstance(payload, dict):
+                return False
+            return any(
+                item.get("id") == self.served_model_name
+                for item in payload.get("data", ())
+                if isinstance(item, dict)
+            )
+        except (OSError, ValueError, TypeError):
             return False
         finally:
             connection.close()
@@ -70,6 +86,10 @@ class Lifecycle:
                 if self._closed:
                     raise RuntimeError("embedding lifecycle proxy is shutting down")
                 if self._child is not None and self._child.poll() is not None:
+                    if self.child_pid_file is not None:
+                        _remove_matching_pid_file(
+                            self.child_pid_file, self._child.pid
+                        )
                     self._child = None
                 if self._child is not None and not self._stopping:
                     self._active += 1
@@ -85,7 +105,10 @@ class Lifecycle:
             child: subprocess.Popen[bytes] | None = None
             failure: BaseException | None = None
             try:
+                self._require_port_available(self.child_port)
                 child = self._popen(self.command, start_new_session=True)
+                if self.child_pid_file is not None:
+                    _write_pid_file(self.child_pid_file, child.pid)
                 startup_deadline = min(deadline, time.monotonic() + self.startup_seconds)
                 while time.monotonic() < startup_deadline:
                     if child.poll() is not None:
@@ -111,6 +134,8 @@ class Lifecycle:
             if failure is not None:
                 if child is not None and child.poll() is None:
                     self._terminate_child(child)
+                if child is not None and self.child_pid_file is not None:
+                    _remove_matching_pid_file(self.child_pid_file, child.pid)
                 raise failure
             return
 
@@ -122,9 +147,10 @@ class Lifecycle:
             self._last_completed = time.monotonic()
             self._condition.notify_all()
 
-    @staticmethod
-    def _terminate_child(child: subprocess.Popen[bytes]) -> None:
+    def _terminate_child(self, child: subprocess.Popen[bytes]) -> None:
         if child.poll() is not None:
+            if self.child_pid_file is not None:
+                _remove_matching_pid_file(self.child_pid_file, child.pid)
             return
         os.killpg(child.pid, signal.SIGTERM)
         try:
@@ -132,6 +158,8 @@ class Lifecycle:
         except subprocess.TimeoutExpired:
             os.killpg(child.pid, signal.SIGKILL)
             child.wait(timeout=CHILD_STOP_GRACE_SECONDS)
+        if self.child_pid_file is not None:
+            _remove_matching_pid_file(self.child_pid_file, child.pid)
 
     def reap_if_idle(self, now: float | None = None) -> bool:
         with self._condition:
@@ -165,6 +193,95 @@ class Lifecycle:
             self._child = None
         if child is not None:
             self._terminate_child(child)
+
+
+def require_port_available(port: int) -> None:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind(("127.0.0.1", port))
+    except OSError as exc:
+        raise RuntimeError(
+            f"refusing to launch MLX child: 127.0.0.1:{port} is already occupied"
+        ) from exc
+    finally:
+        probe.close()
+
+
+def _write_pid_file(path: Path, pid: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(f"{pid}\n", encoding="ascii")
+    os.replace(temporary, path)
+
+
+def _remove_matching_pid_file(path: Path, pid: int) -> None:
+    try:
+        recorded = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        return
+    if recorded == str(pid):
+        path.unlink(missing_ok=True)
+
+
+def _command_contains_expected(actual: str, expected: list[str]) -> bool:
+    try:
+        tokens = shlex.split(actual)
+    except ValueError:
+        return False
+    width = len(expected)
+    return any(tokens[index : index + width] == expected for index in range(len(tokens)))
+
+
+def cleanup_recorded_child(command: list[str], child_pid_file: Path) -> bool:
+    try:
+        raw_pid = child_pid_file.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        return False
+    if not raw_pid.isascii() or not raw_pid.isdigit() or int(raw_pid) <= 1:
+        raise RuntimeError(f"invalid MLX child PID file: {child_pid_file}")
+    pid = int(raw_pid)
+    inspected = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "command="],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    actual = inspected.stdout.strip()
+    if inspected.returncode != 0 or not actual:
+        child_pid_file.unlink(missing_ok=True)
+        return False
+    if not _command_contains_expected(actual, command):
+        raise RuntimeError(
+            f"recorded MLX child PID {pid} has a different command; leaving it untouched"
+        )
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        child_pid_file.unlink(missing_ok=True)
+        return False
+    deadline = time.monotonic() + CHILD_STOP_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            child_pid_file.unlink(missing_ok=True)
+            return True
+        time.sleep(0.1)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        child_pid_file.unlink(missing_ok=True)
+        return True
+    kill_deadline = time.monotonic() + 5
+    while time.monotonic() < kill_deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            child_pid_file.unlink(missing_ok=True)
+            return True
+        time.sleep(0.1)
+    raise RuntimeError(f"recorded MLX child PID {pid} survived SIGKILL")
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -254,17 +371,11 @@ def main() -> None:
     parser.add_argument("--server-executable", type=Path, required=True)
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--served-model-name", required=True)
+    parser.add_argument("--child-pid-file", type=Path, required=True)
+    parser.add_argument("--cleanup-recorded-child", action="store_true")
     args = parser.parse_args()
     if args.listen_port == args.child_port:
         raise RuntimeError("proxy and child ports must differ")
-    version = subprocess.run(
-        [str(args.server_executable), "--version"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    if "Version: 1.8.1" not in version:
-        raise RuntimeError("mlx-openai-server version drifted from 1.8.1")
     command = [
         str(args.server_executable), "launch",
         "--model-type", "embeddings",
@@ -274,10 +385,32 @@ def main() -> None:
         "--port", str(args.child_port),
         "--no-log-file",
     ]
-    lifecycle = Lifecycle(command, args.child_port)
+    if args.cleanup_recorded_child:
+        cleanup_recorded_child(command, args.child_pid_file)
+        return
+    version = subprocess.run(
+        [str(args.server_executable), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if "Version: 1.8.1" not in version:
+        raise RuntimeError("mlx-openai-server version drifted from 1.8.1")
+    lifecycle = Lifecycle(
+        command,
+        args.child_port,
+        args.served_model_name,
+        child_pid_file=args.child_pid_file,
+    )
     # Docker Desktop reaches the wrapper-owned proxy through
     # host.docker.internal. Only the heavy MLX child is loopback-only.
     server = ProxyServer(("0.0.0.0", args.listen_port), lifecycle)
+    try:
+        cleanup_recorded_child(command, args.child_pid_file)
+        require_port_available(args.child_port)
+    except BaseException:
+        server.server_close()
+        raise
     stop = threading.Event()
 
     def _shutdown(_signum: int, _frame: object) -> None:

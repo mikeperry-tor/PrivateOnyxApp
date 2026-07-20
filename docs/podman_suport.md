@@ -97,6 +97,10 @@ replaced.
 - `code-interpreter` is placed behind an inactive
   `requires-docker-socket` profile. The legacy executor requires Docker socket
   behavior that the rootless macOS Podman VM does not reliably provide.
+- The Makefile also omits `docker-compose.code-interpreter-network.yml` under
+  Podman even if `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` remains in a
+  shared environment. This prevents an unused executor bridge, network, and
+  health loop from running when the executor itself is unavailable.
 - The optional Tailscale frontend gateway replaces Docker tmpfs `uid=`/`gid=`
   options with Podman's `U` option. This use is limited to newly created tmpfs
   mounts, not host data. The service remains non-root and retains its other
@@ -136,6 +140,11 @@ retains its claim for a safe retry. After upgrading an already-running checkout,
 run its matching `make up-*` once to seed the marker before switching engines.
 If a machine failure leaves a stale claim, verify both engines have no Onyx
 containers before removing the marker manually.
+
+The two stack-start targets are `.NOTPARALLEL` Make targets. Their ownership
+claim, shared-data preparation, host-side services, and Compose launch therefore
+cannot become peer jobs under `make -j`; a rejected claim stops the serial
+prerequisite chain before any shared-data or host-process mutation.
 
 PostgreSQL requires three linked settings:
 
@@ -212,7 +221,14 @@ The Podman Makefile lifecycle is consequently create/configure/start:
    mode also starts or validates the PID-tracked host document server.
 3. `podman compose create` creates stopped containers.
 4. `startup_health.py configure` installs and verifies native startup checks.
-5. `podman compose up -d --wait` starts the verified graph.
+5. `podman compose up -d --wait --wait-timeout 420` starts the verified graph.
+
+Podman's native startup check intentionally uses zero startup retries so it
+does not restart a slow or broken service. Podman can consequently leave such
+a container in `starting` indefinitely. The explicit Compose wait timeout is
+the fail-closed outer bound: startup returns nonzero within 420 seconds rather
+than blocking forever, while preserving the failed container and its health
+history for diagnosis.
 
 Full mode performs that sequence first for `local-embedding-shim`, makes the
 single `/ready` request, then repeats create/configure/start for the complete
@@ -341,9 +357,9 @@ The primary Podman-specific tests are:
 - `tests/test_shared_data_engine.py`: same-engine claim reuse, cross-engine
   exclusion, matching release, and corrupt-marker failure.
 - `tests/test_myst_lifecycle_makefile.py`: capability prerequisites,
-  create/configure/start ordering, host document-server PID lifecycle, direct
-  Onyx image pulls, and exclusion of the upstream installer/socket-only
-  executor.
+  serialized prerequisites, bounded create/configure/start ordering, host
+  document-server PID lifecycle, direct Onyx image pulls, and exclusion of the
+  upstream installer/socket-only executor and its unused network overlay.
 - `tests/test_onyx_network_isolation.py`: effective Podman overlay selection,
   optional VPN behavior, tmpfs options, unconditional shared Docker
   PostgreSQL/OpenSearch storage, database health dependencies, and the fixed

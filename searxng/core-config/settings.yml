@@ -36,6 +36,12 @@ outgoing:
   # Default timeout in seconds; engine entries can override it with `timeout`.
   request_timeout: 6.0
 
+# This JSON/diagnostic deployment uses only the custom offline engines. An
+# empty mapping prevents optional upstream plugins from being imported or
+# initialized; setting a plugin's `active` preference false is insufficient
+# because SearXNG still calls its init hook.
+plugins: {}
+
 engines:
   # Offline callbacks own one direct Obscura navigation. The normal SearXNG
   # HTTP client is intentionally not involved.

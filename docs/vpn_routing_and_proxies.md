@@ -200,10 +200,15 @@ five-second startup health check, strictly inspects both cadences, and only then
 starts the services. A running container without that native configuration is
 rejected rather than modified in place. Podman Compose accepting or rendering
 `start_interval` alone is not treated as support because its compatibility API
-drops that field.
+drops that field. Every Compose wait has an explicit 420-second outer timeout,
+so a service that remains in Podman's startup state fails stack launch instead
+of blocking indefinitely.
 
 Rootless Podman on macOS cannot reliably expose the Docker-compatible socket to
-stack containers, so its overlays omit code interpreter and VPN autoheal.
+stack containers, so its overlays omit code interpreter and VPN autoheal. The
+Makefile also omits the executor network overlay under Podman even when a shared
+environment leaves its option enabled; no unused executor bridge or health loop
+is created.
 Request routing still fails closed when Myst is unhealthy, but automatic Myst
 restart is unavailable; use `podman restart myst-client-vpn` or restart the
 matching stack after diagnosing the local readiness failure. The Podman layer

@@ -35,7 +35,8 @@ At a high level:
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 - Full mode validates embedding readiness in a staged one-shot gate before a
   fresh API/background tier, uses an on-demand host MLX lifecycle proxy for the
-  bundled backend, and applies the documented low-idle background/storage
+  bundled backend with strict child PID, port, and served-model ownership, and
+  applies the documented low-idle background/storage
   policy. Exact background control processes stay outside the application
   `sitecustomize` bootstrap; Beat, workers, and indexing children remain
   strictly patched. Full-mode bot workers are explicit default-off options
@@ -172,7 +173,8 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   also starts the bundled host MLX lifecycle proxy when its selected model is
   already installed and the shim still uses the bundled default endpoint, then
   validates `/ready` once before creating a new API/background tier;
-  `make down-full` stops only that identity-validated proxy and child group.
+  `make down-full` stops only that identity-validated proxy and child group,
+  including a strictly recorded orphan left by a proxy crash.
   Custom upstreams and manually launched servers are not touched.
 - `make health-inventory` - render the Makefile-selected engine/environment and
   optional overlays for lite/full healthcheck commands, startup/steady

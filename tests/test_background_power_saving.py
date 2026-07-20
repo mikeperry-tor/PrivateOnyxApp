@@ -3,11 +3,12 @@ from __future__ import annotations
 import importlib.util
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -149,6 +150,62 @@ class BeatWatchdogTests(unittest.TestCase):
             os.utime(target, (900, 900))
             self.assertEqual(
                 self.module._valid_mtime(target, os.getuid(), 1000), 900
+            )
+
+    def test_watch_restarts_after_two_missing_observations_outside_grace(self) -> None:
+        run = MagicMock()
+        self.module.watch(
+            self.module.EXPECTED_PATH,
+            "celery_beat",
+            Path("/tmp/supervisord.conf"),
+            sleep_fn=MagicMock(),
+            monotonic_fn=MagicMock(side_effect=[0, 1201, 1501, 1501]),
+            wall_time_fn=MagicMock(side_effect=[1201, 1501]),
+            run_fn=run,
+            max_checks=2,
+        )
+        run.assert_called_once_with(
+            [
+                "supervisorctl",
+                "-c",
+                "/tmp/supervisord.conf",
+                "restart",
+                "celery_beat",
+            ],
+            check=True,
+        )
+
+    def test_watch_restarts_stale_file_only_after_startup_grace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "liveness"
+            path.write_text("", encoding="ascii")
+            os.utime(path, (100, 100))
+            with patch.object(self.module, "EXPECTED_PATH", path):
+                run = MagicMock()
+                self.module.watch(
+                    path,
+                    "celery_beat",
+                    Path("/tmp/supervisord.conf"),
+                    sleep_fn=MagicMock(),
+                    monotonic_fn=MagicMock(side_effect=[0, 1200, 1201, 1201]),
+                    wall_time_fn=MagicMock(side_effect=[2000, 2000]),
+                    run_fn=run,
+                    max_checks=2,
+                )
+            run.assert_called_once()
+
+    def test_supervisor_failure_is_fatal(self) -> None:
+        failed = subprocess.CalledProcessError(1, ["supervisorctl"])
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.module.watch(
+                self.module.EXPECTED_PATH,
+                "celery_beat",
+                Path("/tmp/supervisord.conf"),
+                sleep_fn=MagicMock(),
+                monotonic_fn=MagicMock(side_effect=[0, 1201, 1501]),
+                wall_time_fn=MagicMock(side_effect=[1201, 1501]),
+                run_fn=MagicMock(side_effect=failed),
+                max_checks=2,
             )
 
 

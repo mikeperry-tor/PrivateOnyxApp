@@ -29,15 +29,26 @@ def _valid_mtime(path: Path, expected_uid: int, now_wall: float) -> float | None
     return metadata.st_mtime
 
 
-def watch(path: Path, program: str, conf: Path) -> None:
+def watch(
+    path: Path,
+    program: str,
+    conf: Path,
+    *,
+    sleep_fn=time.sleep,
+    monotonic_fn=time.monotonic,
+    wall_time_fn=time.time,
+    run_fn=subprocess.run,
+    max_checks: int | None = None,
+) -> None:
     if path != EXPECTED_PATH:
         raise RuntimeError(f"Beat liveness path must be {EXPECTED_PATH}")
-    started = time.monotonic()
+    started = monotonic_fn()
     missing_observations = 0
+    checks = 0
     while True:
-        time.sleep(CHECK_INTERVAL_SECONDS)
-        now_mono = time.monotonic()
-        now_wall = time.time()
+        sleep_fn(CHECK_INTERVAL_SECONDS)
+        now_mono = monotonic_fn()
+        now_wall = wall_time_fn()
         mtime = _valid_mtime(path, os.getuid(), now_wall)
         if mtime is None:
             missing_observations += 1
@@ -46,16 +57,21 @@ def watch(path: Path, program: str, conf: Path) -> None:
         in_startup_grace = now_mono - started <= STARTUP_GRACE_SECONDS
         stale = mtime is not None and now_wall - mtime > STALE_AFTER_SECONDS
         invalid = mtime is None and missing_observations >= 2
+        checks += 1
         if in_startup_grace or not (stale or invalid):
+            if max_checks is not None and checks >= max_checks:
+                return
             continue
         reason = "stale" if stale else "missing-or-invalid"
         print(f"Beat liveness {reason}; restarting {program}", flush=True)
-        subprocess.run(
+        run_fn(
             ["supervisorctl", "-c", str(conf), "restart", program],
             check=True,
         )
-        started = time.monotonic()
+        started = monotonic_fn()
         missing_observations = 0
+        if max_checks is not None and checks >= max_checks:
+            return
 
 
 def main() -> None:

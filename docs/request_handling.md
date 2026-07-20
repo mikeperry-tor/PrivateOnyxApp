@@ -339,6 +339,17 @@ The derived search service uses SearXNG `2026.7.15-7b2199ecd`. Its offline
 processor, search orchestration, result container, timeout handling, and
 exception contracts are startup-validated by the wrapper patch.
 
+The wrapper configures an empty optional-plugin mapping. This JSON/diagnostic
+deployment does not use SearXNG's calculator, hash, hostname, UI-helper, or
+tracker-remover plugins, so they are not imported or initialized. In
+particular, the tracker remover's init hook otherwise downloads a mutable
+ClearURLs rule list from unrelated Internet hosts on each fresh cache,
+producing avoidable startup traffic, delay, and failure logs even when its
+`active` preference is false. The custom engines continue to unwrap their
+provider-owned Google, DuckDuckGo, Startpage, and Bing redirect formats before
+returning results; omitting optional plugins does not add a search navigation
+or change final-hop routing.
+
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are custom
 offline engines. Each builds one provider URL, performs one direct Obscura
 navigation, verifies an exact terminal-host allowlist, classifies status and
