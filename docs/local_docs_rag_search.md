@@ -399,8 +399,12 @@ immediately with setup guidance. Automatic startup waits only for the lifecycle
 proxy listener; the staged `/ready` request proves the actual model separately.
 The proxy writes to `embedserv/serve.log`; direct `make embedserv-serve` remains
 the foreground form. Automatic launch uses the absolute proxy-script path and
-an explicit detached process session so it survives the initiating shell and
-`make down-full` can validate the recorded process identity. Graceful shutdown
+an explicit detached process session so it survives the initiating shell. Its
+record contains a random per-launch ownership token and a fingerprint of every
+launch-defining argument. Repeated startup reuses it only when the live command
+contains that token and the fingerprint still matches; a configuration change
+restarts only that identity-validated proxy. `make down-full` likewise requires
+the token in the live command before signaling it. Graceful shutdown
 signals its owned child group; a separate strict child record also lets the
 next start or `make down-full` clean up that child after a proxy crash. Both
 paths wait a bounded grace period and force-stop only the identity-validated

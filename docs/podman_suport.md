@@ -298,9 +298,12 @@ cannot repair a path that virtiofs did not expose.
 
 `podman-doc-server-start` validates the source, rejects an unrelated listener
 on fixed host port 18091, and starts
-`onyx/doc_drop_webserver.py` with a PID and private log under
-`docker-data/host-services`. A tracked process is reused only when its command
-identity and `/_health` response both match. Malformed, stale, or reused PID
+`onyx/doc_drop_webserver.py` with a private log and an ownership record under
+`docker-data/host-services`. The record contains the PID, a random per-launch
+ownership token, and a fingerprint of every launch-defining argument. A
+tracked process is reused only when the token is present in its live command,
+the configuration fingerprint matches, and `/_health` succeeds. Configuration
+changes restart only the token-matched process. Malformed, stale, or reused PID
 records never authorize signaling an unrelated process.
 
 The Podman `doc-drop-web` service is a non-root, read-only, capability-free

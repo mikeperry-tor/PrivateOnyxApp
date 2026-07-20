@@ -2,13 +2,15 @@
 
 ## Current status (2026-07-20)
 
-**Implementation state: the complete pre-measurement bundle is implemented.**
+**Implementation state: the complete pre-measurement bundle is implemented;
+the workload, fault-injection, and controlled measurement gates below remain
+pending.**
 This includes the pinned component baseline, sleepy/local health and recovery
 checks, aggregate gateway checks, staged embedding readiness, idle MLX unload
 and cold reload, reduced Celery/Beat scheduling and worker overhead, removal of
 disabled monitoring/Craft/bot activity, the 512 MiB OpenSearch heap with four
-configured processors and Performance Analyzer disabled, MinIO's `slowest`
-scanner profile, and a strict
+configured processors and the Performance Analyzer agent disabled, MinIO's
+`slowest` scanner profile, and a strict
 Podman-native startup-health layer. Tests and the user-facing and upgrade
 documentation cover these changes.
 
@@ -53,10 +55,11 @@ rootless Podman 5.8.1 checks covered lite and full startup, all native startup
 health contracts, exact host-route preservation, shared PostgreSQL/OpenSearch
 binds, MinIO CRUD, embedding readiness, WebUI, and a ten-result SearXNG
 search. A clean-machine Podman full start directly pulled the required Onyx
-images without invoking the Docker-oriented upstream bootstrap, started all 29
-expected containers without code interpreter or socket autoheal. Podman full
-mode serves the configured document source through a PID-tracked host-local
-server and fixed hardened relay, with no document collection stored in the VM.
+images without invoking the Docker-oriented upstream bootstrap, started the
+complete effective full-mode service set without code interpreter or socket
+autoheal. Podman full mode serves the configured document source through a
+PID-tracked host-local server and fixed hardened relay, with no document
+collection stored in the VM.
 The default source remains `./doc-drop`; the mechanism also supports external
 mounts, including WebDAV. Native
 health timestamps confirmed five-second startup checks, a 600-second ordinary
@@ -87,8 +90,9 @@ without the `/32` suffix; deterministic coverage now mirrors that canonical
 output.
 Podman was then cleanly restarted against the initialized Docker bind data:
 PostgreSQL exposed the expected non-empty application state and configuration,
-OpenSearch recovered 71 active primary shards, all 29 expected services became
-healthy, and the WebUI returned HTTP 200. A subsequent full down/up cycle
+OpenSearch recovered 71 active primary shards, the complete effective
+full-mode service set became healthy, and the WebUI returned HTTP 200. A
+subsequent full down/up cycle
 validated the zero-copy host document relay and restored the same shared
 database and index mounts. The relay had no mounts, only its dedicated host
 uplink, and both published and exact-policy internal health returned HTTP 200.

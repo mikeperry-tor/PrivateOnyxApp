@@ -379,6 +379,8 @@ ifeq ($(PODMAN_SELECTED),true)
 	pid_file="$(PODMAN_DOC_SERVER_PID_FILE)"; \
 	log_file="$(PODMAN_DOC_SERVER_LOG)"; \
 	server_script="$(CURDIR)/onyx/doc_drop_webserver.py"; \
+	config_id=$$(python3 -c 'import hashlib,sys; print(hashlib.sha256("\0".join(sys.argv[1:]).encode()).hexdigest())' \
+		"$$server_script" "$(PODMAN_DOC_SERVER_PORT)" "0.0.0.0" "$$source_dir" "loopback-peers-only"); \
 	if [ ! -d "$$source_dir" ]; then \
 		echo "ERROR: configured RAG document source is not a directory"; \
 		exit 1; \
@@ -386,26 +388,30 @@ ifeq ($(PODMAN_SELECTED),true)
 	mkdir -p "$(PODMAN_DOC_SERVER_STATE_DIR)"; \
 	if [ -f "$$pid_file" ]; then \
 		pid=$$(sed -n '1p' "$$pid_file"); \
+		owner_token=$$(sed -n '2p' "$$pid_file"); \
+		recorded_config_id=$$(sed -n '3p' "$$pid_file"); \
 		case "$$pid" in ''|*[!0-9]*) pid="" ;; esac; \
 		command_line=""; \
 		if [ -n "$$pid" ] && current_command=$$(ps -p "$$pid" -o command= 2>/dev/null); then command_line="$$current_command"; fi; \
-		case "$$command_line" in \
-			*"$$server_script $(PODMAN_DOC_SERVER_PORT) --bind 0.0.0.0 --directory $$source_dir --loopback-peers-only"*) \
+		owned=false; \
+		if python3 -c 'import re,sys; raise SystemExit(0 if re.fullmatch(r"[0-9a-f]{64}", sys.argv[1]) else 1)' "$$owner_token"; then \
+			case "$$command_line" in *"$$server_script "*"--owner-token $$owner_token"*) owned=true ;; esac; \
+		fi; \
+		if [ "$$owned" = true ] && [ "$$recorded_config_id" = "$$config_id" ]; then \
 				if python3 -c 'import http.client; c=http.client.HTTPConnection("127.0.0.1", $(PODMAN_DOC_SERVER_PORT), timeout=1); c.request("GET", "/_health"); r=c.getresponse(); r.read(); c.close(); raise SystemExit(0 if r.status == 200 else 1)' >/dev/null 2>&1; then \
 					echo "Podman host document server is already ready on port $(PODMAN_DOC_SERVER_PORT)"; \
 					exit 0; \
 				fi; \
 				echo "ERROR: tracked Podman host document server is running but not ready; stop it with make down-full"; \
-				exit 1 \
-				;; \
-			*'/onyx/doc_drop_webserver.py '*) \
-				echo "Restarting tracked Podman host document server after configuration changed"; \
-				kill -TERM "$$pid"; \
-				attempt=0; \
-				while kill -0 "$$pid" 2>/dev/null && [ "$$attempt" -lt 100 ]; do sleep 0.1; attempt=$$((attempt + 1)); done; \
-				if kill -0 "$$pid" 2>/dev/null; then echo "ERROR: prior Podman host document server did not stop"; exit 1; fi \
-				;; \
-		esac; \
+				exit 1; \
+		fi; \
+		if [ "$$owned" = true ]; then \
+			echo "Restarting tracked Podman host document server after configuration changed"; \
+			kill -TERM "$$pid"; \
+			attempt=0; \
+			while kill -0 "$$pid" 2>/dev/null && [ "$$attempt" -lt 100 ]; do sleep 0.1; attempt=$$((attempt + 1)); done; \
+			if kill -0 "$$pid" 2>/dev/null; then echo "ERROR: prior Podman host document server did not stop"; exit 1; fi; \
+		fi; \
 		rm -f -- "$$pid_file"; \
 	fi; \
 	if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", $(PODMAN_DOC_SERVER_PORT)), timeout=1); s.close()' >/dev/null 2>&1; then \
@@ -413,9 +419,10 @@ ifeq ($(PODMAN_SELECTED),true)
 		exit 1; \
 	fi; \
 	echo "Starting loopback-peer-restricted Podman host document server on port $(PODMAN_DOC_SERVER_PORT)"; \
+	owner_token=$$(python3 -c 'import secrets; print(secrets.token_hex(32))'); \
 	pid=$$(python3 -c 'import subprocess,sys; log=open(sys.argv[1], "ab", buffering=0); child=subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True); print(child.pid)' \
-		"$$log_file" python3 "$$server_script" "$(PODMAN_DOC_SERVER_PORT)" --bind 0.0.0.0 --directory "$$source_dir" --loopback-peers-only); \
-	printf '%s\n' "$$pid" >"$$pid_file"; \
+		"$$log_file" python3 "$$server_script" "$(PODMAN_DOC_SERVER_PORT)" --bind 0.0.0.0 --directory "$$source_dir" --loopback-peers-only --owner-token "$$owner_token"); \
+	printf '%s\n%s\n%s\n' "$$pid" "$$owner_token" "$$config_id" >"$$pid_file"; \
 	attempt=0; \
 	while [ "$$attempt" -lt 40 ]; do \
 		if python3 -c 'import http.client; c=http.client.HTTPConnection("127.0.0.1", $(PODMAN_DOC_SERVER_PORT), timeout=1); c.request("GET", "/_health"); r=c.getresponse(); r.read(); c.close(); raise SystemExit(0 if r.status == 200 else 1)' >/dev/null 2>&1; then \
@@ -444,6 +451,7 @@ podman-doc-server-stop-if-started:
 		exit 0; \
 	fi; \
 	pid=$$(sed -n '1p' "$$pid_file"); \
+	owner_token=$$(sed -n '2p' "$$pid_file"); \
 	case "$$pid" in \
 		''|*[!0-9]*) \
 			echo "Ignoring malformed Podman host document server PID file"; \
@@ -451,6 +459,11 @@ podman-doc-server-stop-if-started:
 			exit 0 \
 			;; \
 	esac; \
+	if ! python3 -c 'import re,sys; raise SystemExit(0 if re.fullmatch(r"[0-9a-f]{64}", sys.argv[1]) else 1)' "$$owner_token"; then \
+		echo "Ignoring Podman host document server record with an invalid ownership token"; \
+		rm -f -- "$$pid_file"; \
+		exit 0; \
+	fi; \
 	command_line=""; \
 	if current_command=$$(ps -p "$$pid" -o command= 2>/dev/null); then command_line="$$current_command"; fi; \
 	if [ -z "$$command_line" ]; then \
@@ -459,7 +472,7 @@ podman-doc-server-stop-if-started:
 		exit 0; \
 	fi; \
 	case "$$command_line" in \
-		*'/onyx/doc_drop_webserver.py '*) ;; \
+		*'$(CURDIR)/onyx/doc_drop_webserver.py '*"--owner-token $$owner_token"*) ;; \
 		*) \
 			echo "PID $$pid no longer belongs to the Podman host document server; leaving it untouched"; \
 			rm -f -- "$$pid_file"; \
@@ -805,6 +818,10 @@ embedserv-start-if-installed:
 	embeddings_url="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-$(EMBEDSERV_DEFAULT_UPSTREAM_URL)}"; \
 	venv_server="$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
+	proxy_script="$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py"; \
+	child_pid_file="$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)"; \
+	config_id=$$(python3 -c 'import hashlib,sys; print(hashlib.sha256("\0".join(sys.argv[1:]).encode()).hexdigest())' \
+		"$$proxy_script" "3210" "3211" "$$venv_server" "$$model_dir" "$$served_model" "$$child_pid_file"); \
 	if [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; then \
 		echo "Embedding shim uses a custom upstream; not starting bundled MLX server: $$embeddings_url"; \
 		exit 0; \
@@ -812,25 +829,37 @@ embedserv-start-if-installed:
 	if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 3210), timeout=1); s.close()' >/dev/null 2>&1; then \
 		if [ -f "$(EMBEDSERV_PID_FILE)" ]; then \
 			recorded_pid=$$(sed -n '1p' "$(EMBEDSERV_PID_FILE)"); \
+			owner_token=$$(sed -n '2p' "$(EMBEDSERV_PID_FILE)"); \
+			recorded_config_id=$$(sed -n '3p' "$(EMBEDSERV_PID_FILE)"); \
 			recorded_command=""; \
 			case "$$recorded_pid" in \
 				''|*[!0-9]*) ;; \
 				*) if current_command=$$(ps -p "$$recorded_pid" -o command= 2>/dev/null); then recorded_command="$$current_command"; fi ;; \
 			esac; \
-			case "$$recorded_command" in \
-				*'$(PWD)/embedserv/idle_embedding_proxy.py '*) \
+			owned=false; \
+			if python3 -c 'import re,sys; raise SystemExit(0 if re.fullmatch(r"[0-9a-f]{64}", sys.argv[1]) else 1)' "$$owner_token"; then \
+				case "$$recorded_command" in *"$$proxy_script "*"--owner-token $$owner_token"*) owned=true ;; esac; \
+			fi; \
+			if [ "$$owned" = true ] && [ "$$recorded_config_id" = "$$config_id" ]; then \
 					echo "The wrapper-managed MLX lifecycle proxy is already listening on 127.0.0.1:3210"; \
-					exit 0 \
-					;; \
-				*) \
-					echo "ERROR: port 3210 is occupied but the recorded automatic proxy identity does not match"; \
-					echo "Inspect $(EMBEDSERV_PID_FILE) and $(EMBEDSERV_LOG); no process was signaled"; \
-					exit 1 \
-					;; \
-			esac; \
+					exit 0; \
+			fi; \
+			if [ "$$owned" = true ]; then \
+				echo "Restarting the wrapper-managed MLX lifecycle proxy after configuration changed"; \
+				kill -TERM "$$recorded_pid"; \
+				attempt=0; \
+				while kill -0 "$$recorded_pid" 2>/dev/null && [ "$$attempt" -lt 500 ]; do sleep 0.1; attempt=$$((attempt + 1)); done; \
+				if kill -0 "$$recorded_pid" 2>/dev/null; then echo "ERROR: prior MLX lifecycle proxy did not stop"; exit 1; fi; \
+				rm -f -- "$(EMBEDSERV_PID_FILE)"; \
+			else \
+				echo "ERROR: port 3210 is occupied but the recorded automatic proxy identity does not match"; \
+				echo "Inspect $(EMBEDSERV_PID_FILE) and $(EMBEDSERV_LOG); no process was signaled"; \
+				exit 1; \
+			fi; \
+		else \
+			echo "An operator-managed embedding server is already listening on 127.0.0.1:3210; not starting another one"; \
+			exit 0; \
 		fi; \
-		echo "An operator-managed embedding server is already listening on 127.0.0.1:3210; not starting another one"; \
-		exit 0; \
 	fi; \
 	if [ ! -x "$$venv_server" ] || [ ! -d "$$model_dir" ]; then \
 		echo "ERROR: the default embedding upstream is selected, but the bundled MLX server is not installed for $$model_repo"; \
@@ -838,7 +867,7 @@ embedserv-start-if-installed:
 		exit 1; \
 	fi; \
 	echo "Starting bundled MLX embedding lifecycle proxy for $$model_repo (log: $(EMBEDSERV_LOG))"; \
-	proxy_script="$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py"; \
+	owner_token=$$(python3 -c 'import secrets; print(secrets.token_hex(32))'); \
 	pid=$$(python3 -c 'import subprocess,sys; log=open(sys.argv[1], "wb", buffering=0); child=subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True); print(child.pid)' \
 		"$(EMBEDSERV_LOG)" python3 "$$proxy_script" \
 		--listen-port 3210 \
@@ -846,8 +875,9 @@ embedserv-start-if-installed:
 		--server-executable "$$venv_server" \
 		--model-path "$$model_dir" \
 		--served-model-name "$$served_model" \
-		--child-pid-file "$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)"); \
-	printf '%s\n' "$$pid" >"$(EMBEDSERV_PID_FILE)"; \
+		--child-pid-file "$$child_pid_file" \
+		--owner-token "$$owner_token"); \
+	printf '%s\n%s\n%s\n' "$$pid" "$$owner_token" "$$config_id" >"$(EMBEDSERV_PID_FILE)"; \
 	attempt=0; \
 	while [ "$$attempt" -lt 240 ]; do \
 		if python3 -c 'import socket; s=socket.create_connection(("127.0.0.1", 3210), timeout=1); s.close()' >/dev/null 2>&1; then \
@@ -878,6 +908,7 @@ embedserv-stop-if-started:
 		exit 0; \
 	fi; \
 	pid=$$(sed -n '1p' "$(EMBEDSERV_PID_FILE)"); \
+	owner_token=$$(sed -n '2p' "$(EMBEDSERV_PID_FILE)"); \
 	case "$$pid" in \
 		''|*[!0-9]*) \
 			echo "Ignoring malformed MLX embedding server PID file: $(EMBEDSERV_PID_FILE)"; \
@@ -885,6 +916,11 @@ embedserv-stop-if-started:
 			exit 0; \
 			;; \
 	esac; \
+	if ! python3 -c 'import re,sys; raise SystemExit(0 if re.fullmatch(r"[0-9a-f]{64}", sys.argv[1]) else 1)' "$$owner_token"; then \
+		echo "Ignoring MLX embedding server record with an invalid ownership token"; \
+		rm -f -- "$(EMBEDSERV_PID_FILE)"; \
+		exit 0; \
+	fi; \
 	command_line=""; \
 	if current_command=$$(ps -p "$$pid" -o command= 2>/dev/null); then \
 		command_line="$$current_command"; \
@@ -895,7 +931,7 @@ embedserv-stop-if-started:
 		exit 0; \
 	fi; \
 	case "$$command_line" in \
-		*'$(PWD)/embedserv/idle_embedding_proxy.py '*) ;; \
+		*'$(PWD)/embedserv/idle_embedding_proxy.py '*"--owner-token $$owner_token"*) ;; \
 		*) \
 			echo "PID $$pid no longer belongs to the automatically started MLX embedding server; leaving it untouched"; \
 			rm -f -- "$(EMBEDSERV_PID_FILE)"; \

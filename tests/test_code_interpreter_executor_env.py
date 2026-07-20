@@ -92,16 +92,14 @@ def _executor_modules(executor_class: type) -> dict[str, ModuleType]:
 
 class CodeInterpreterExecutorEnvTests(unittest.TestCase):
     def test_disabled_network_does_not_inject_proxy(self) -> None:
-        env = dict(os.environ)
-        env["WRAPPER_PATCH_STRICT"] = "false"
+        env = {"WRAPPER_PATCH_STRICT": "false"}
 
         with patch.dict(os.environ, env, clear=True):
             module = _load_module()
             self.assertEqual(module._executor_env_vars(), [])
 
     def test_enabled_network_injects_only_restricted_bridge(self) -> None:
-        env = dict(os.environ)
-        env["WRAPPER_PATCH_STRICT"] = "false"
+        env = {"WRAPPER_PATCH_STRICT": "false"}
         env["ONYX_CODE_INTERPRETER_ENABLE_NETWORK"] = "true"
         env["PYTHON_EXECUTOR_DOCKER_NETWORK"] = "onyx-code-interpreter-executor"
         env["ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL"] = "http://executor-egress-bridge:3128"
@@ -119,8 +117,7 @@ class CodeInterpreterExecutorEnvTests(unittest.TestCase):
         self.assertNotIn("EGRESS_UPSTREAM_PROXY_URL", executor_env)
 
     def test_enabled_network_rejects_shared_namespace(self) -> None:
-        env = dict(os.environ)
-        env["WRAPPER_PATCH_STRICT"] = "false"
+        env = {"WRAPPER_PATCH_STRICT": "false"}
         env["ONYX_CODE_INTERPRETER_ENABLE_NETWORK"] = "true"
         env["PYTHON_EXECUTOR_DOCKER_NETWORK"] = "container:onyx-netns-holder-1"
         env["ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL"] = "http://executor-egress-bridge:3128"

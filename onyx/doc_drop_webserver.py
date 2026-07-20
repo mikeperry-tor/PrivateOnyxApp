@@ -220,6 +220,7 @@ def main() -> None:
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--directory", default="/import/docs")
     parser.add_argument("--loopback-peers-only", action="store_true")
+    parser.add_argument("--owner-token", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     document_root = os.path.realpath(args.directory)

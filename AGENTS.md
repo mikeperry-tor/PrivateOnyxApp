@@ -36,7 +36,8 @@ At a high level:
 - Full mode validates embedding readiness in a staged one-shot gate before a
   fresh API/background tier, uses an on-demand host MLX lifecycle proxy for the
   bundled backend with loopback-peer enforcement, bounded connection threads,
-  strict child PID, port, and served-model ownership, and
+  tokenized launch/configuration identity plus strict child PID, port, and
+  served-model ownership, and
   applies the documented low-idle background/storage
   policy. OpenSearch uses static single-node settings: a 512 MiB heap, four
   configured processors, monthly body-free audit initialization, disabled

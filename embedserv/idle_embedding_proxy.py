@@ -417,6 +417,7 @@ def main() -> None:
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--served-model-name", required=True)
     parser.add_argument("--child-pid-file", type=Path, required=True)
+    parser.add_argument("--owner-token", help=argparse.SUPPRESS)
     parser.add_argument("--cleanup-recorded-child", action="store_true")
     args = parser.parse_args()
     if args.listen_port == args.child_port:

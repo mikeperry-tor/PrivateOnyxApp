@@ -23,6 +23,19 @@ SECRET_ENV = {
 }
 
 
+def _wrapper_neutral_environment() -> dict[str, str]:
+    env = dict(os.environ)
+    example = (ROOT / ".env.wrapper.example").read_text(encoding="utf-8")
+    for raw_line in example.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name = line.split("=", 1)[0].strip()
+        if name.isidentifier():
+            env.pop(name, None)
+    return env
+
+
 def _compose_model(
     mode: str,
     *extra_files: str,
@@ -54,7 +67,7 @@ def _compose_model(
     completed = subprocess.run(
         command,
         cwd=ROOT,
-        env={**os.environ, **SECRET_ENV, **(env_overrides or {})},
+        env={**_wrapper_neutral_environment(), **SECRET_ENV, **(env_overrides or {})},
         check=True,
         capture_output=True,
         text=True,
@@ -78,6 +91,7 @@ def _make_compose_files(
             *override_args,
         ],
         cwd=ROOT,
+        env=_wrapper_neutral_environment(),
         check=True,
         capture_output=True,
         text=True,

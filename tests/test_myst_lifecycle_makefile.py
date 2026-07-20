@@ -121,6 +121,19 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("stdin=subprocess.DEVNULL", start)
         self.assertIn("recorded automatic proxy identity does not match", start)
         self.assertIn("--child-pid-file", start)
+        self.assertIn("--owner-token", start)
+        self.assertIn('"$$model_dir" "$$served_model" "$$child_pid_file"', start)
+        self.assertIn('recorded_config_id=$$(sed -n \'3p\'', start)
+        self.assertIn(
+            "Restarting the wrapper-managed MLX lifecycle proxy after configuration changed",
+            start,
+        )
+        self.assertIn("printf '%s\\n%s\\n%s\\n'", start)
+        stop_target = makefile.split("embedserv-stop-if-started:", 1)[1].split(
+            "embedserv-cleanup-recorded-child:", 1
+        )[0]
+        self.assertIn('owner_token=$$(sed -n \'2p\'', stop_target)
+        self.assertIn('"--owner-token $$owner_token"', stop_target)
         stop = makefile.split("down-full:", 1)[1].split("ps-lite:", 1)[0]
         self.assertIn("embedserv-cleanup-recorded-child", stop)
 
@@ -139,6 +152,10 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("start_new_session=True", start_target)
         self.assertIn("stdin=subprocess.DEVNULL", start_target)
         self.assertIn("--loopback-peers-only", start_target)
+        self.assertIn("--owner-token", start_target)
+        self.assertIn('recorded_config_id=$$(sed -n \'3p\'', start_target)
+        self.assertIn("Restarting tracked Podman host document server", start_target)
+        self.assertIn("printf '%s\\n%s\\n%s\\n'", start_target)
         self.assertIn("/_health", start_target)
         self.assertIn("PODMAN_DOC_SERVER_PID_FILE", makefile)
         self.assertIn("podman-doc-server-stop-if-started", makefile)
