@@ -17,9 +17,13 @@ contains read-only audit checkouts when present.
 4. Run `make check-upgrade`. It first runs the complete deterministic suite and
    local static checks, then validates strict patch installation against the
    exact newly pinned local Onyx, code-interpreter, and derived SearXNG images.
+   It also starts the exact pinned OpenSearch image with an isolated disposable
+   engine volume, validates its static/runtime policy plus KNN/hybrid/reindex
+   and restart behavior, and removes the exact container and volume afterward.
    Missing images are fatal and reported with the build target; validation does
-   not silently pull or build a substitute, and every validation container runs
-   with networking disabled.
+   not silently pull or build a substitute. Patch-validation containers and the
+   disposable OpenSearch container have no external network; OpenSearch uses
+   only its own loopback TLS endpoint.
 5. Inspect effective Compose models and complete every practical live-matrix
    row available in the environment. Record rows blocked by credentials,
    funding, provider stability, private documents, or long runtimes.
@@ -327,6 +331,17 @@ restart/recovery, and TLS/auth. Treat audit schema/path changes, rejected dotted
 settings, Onyx replica-setting drift, OOM, circuit-breaker failures, sustained
 queue rejection, or material indexing/search regression as blocking upgrade
 issues.
+
+`make test-opensearch-image` is the recurring clean-volume image gate and is
+part of `make check-upgrade`. It uses only the selected `CONTAINER_BIN` command
+surface and an exact-name disposable volume. With a full stack running, use
+`make integration-opensearch` for a non-restarting current-volume workload,
+`make integration-opensearch-restart` for recovery, and
+`make integration-opensearch-onyx` for the exact pinned Onyx mapping/client and
+hybrid-query path. These targets create and remove only
+`private-onyx-*-validation-*` indices. Run the live targets under both Docker
+and Podman for relevant container-engine or OpenSearch/Onyx upgrades; a pass on
+one engine does not substitute for the other engine's lifecycle validation.
 
 ## Privacy and WebUI CSP audit
 

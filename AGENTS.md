@@ -173,8 +173,19 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   SearXNG parser tests that need image dependencies. It does not pull or build
   missing images or permit validation-container networking; use the reported
   build target first.
-- `make check-upgrade` - run `make check` followed by `make test-images`. Run
-  this after `make upgrade` and before the practical live validation matrix.
+- `make test-opensearch-image` - run the pinned OpenSearch image with an
+  engine-managed disposable volume and no external network, then validate the
+  512 MiB/four-processor runtime, plugins, audit policy, indexing, KNN/hybrid
+  search, reindexing, concurrent work, failure counters, and restart recovery.
+- `make check-upgrade` - run `make check`, `make test-images`, and
+  `make test-opensearch-image`. Run this after `make upgrade` and before the
+  practical live validation matrix.
+- `make integration-opensearch` - run the same disposable-index workload
+  against the current full-stack OpenSearch volume without restarting it.
+- `make integration-opensearch-restart` - add an OpenSearch-only restart and
+  recovery check. `make integration-opensearch-onyx` separately exercises the
+  exact pinned Onyx schema, client, normalization pipeline, and hybrid query.
+  All three use `CONTAINER_BIN` and support the Docker/Podman command surface.
 - `make up-lite` / `make up-full` - start the lite or full stack. Full mode
   also starts the bundled host MLX lifecycle proxy when its selected model is
   already installed and the shim still uses the bundled default endpoint, then

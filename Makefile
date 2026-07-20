@@ -229,6 +229,13 @@ EMBEDSERV_DEFAULT_UPSTREAM_URL := http://host.docker.internal:3210/v1/embeddings
 EMBEDSERV_LOG := $(EMBEDSERV_DIR)/serve.log
 EMBEDSERV_PID_FILE := $(EMBEDSERV_DIR)/serve.pid
 EMBEDSERV_CHILD_PID_FILE := $(EMBEDSERV_DIR)/child.pid
+OPENSEARCH_VALIDATION_CONTAINER ?= onyx-opensearch-1
+OPENSEARCH_VALIDATION_API_CONTAINER ?= onyx-api_server-1
+OPENSEARCH_VALIDATION_DOCUMENTS ?= 500
+OPENSEARCH_VALIDATION_VECTOR_DIMENSION ?= 128
+OPENSEARCH_VALIDATION_CONCURRENCY ?= 4
+OPENSEARCH_VALIDATION_ITERATIONS ?= 24
+OPENSEARCH_EXPECTED_VERSION ?= 3.6.0
 SEARXNG_REQUIREMENTS_IN := searxng/requirements.in
 SEARXNG_REQUIREMENTS := searxng/requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
@@ -236,7 +243,7 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help test check test-images check-upgrade health-inventory shared-data-engine-status claim-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -245,7 +252,7 @@ help:
 	@echo "  make test         # Run the deterministic Python test suite"
 	@echo "  make check        # Run deterministic tests and local static checks"
 	@echo "  make test-images  # Validate patches against already-built pinned images"
-	@echo "  make check-upgrade # Run check plus pinned-image validation after an upgrade"
+	@echo "  make check-upgrade # Run check plus pinned-image and disposable OpenSearch validation"
 	@echo "  make health-inventory # Print effective lite/full health cadence inventory"
 	@echo "  make shared-data-engine-status # Show the Docker/Podman shared-data owner"
 	@echo "  make up-lite      # Start wrapper + Onyx lite"
@@ -313,9 +320,51 @@ test-images:
 		SEARXNG_WRAPPER_IMAGE="$(SEARXNG_WRAPPER_IMAGE)" \
 		./tests/validate_pinned_patch_images.sh
 
+test-opensearch-image:
+	@set -eu; \
+	image=$$(COMPOSE_FILE="$(FULL_FILES)" "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) config --format json \
+		| python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["opensearch"]["image"])'); \
+	"$(CONTAINER_BIN)" image inspect "$$image" >/dev/null; \
+	python3 tests/run_opensearch_image_validation.py \
+		--container-bin "$(CONTAINER_BIN)" \
+		--image "$$image" \
+		--audit-config onyx/opensearch/audit.yml \
+		--documents "$(OPENSEARCH_VALIDATION_DOCUMENTS)" \
+		--vector-dimension "$(OPENSEARCH_VALIDATION_VECTOR_DIMENSION)" \
+		--concurrency "$(OPENSEARCH_VALIDATION_CONCURRENCY)" \
+		--iterations "$(OPENSEARCH_VALIDATION_ITERATIONS)" \
+		--expected-version "$(OPENSEARCH_EXPECTED_VERSION)"
+
+integration-opensearch:
+	@python3 tests/opensearch_runtime_validation.py \
+		--container-bin "$(CONTAINER_BIN)" \
+		--container "$(OPENSEARCH_VALIDATION_CONTAINER)" \
+		--documents "$(OPENSEARCH_VALIDATION_DOCUMENTS)" \
+		--vector-dimension "$(OPENSEARCH_VALIDATION_VECTOR_DIMENSION)" \
+		--concurrency "$(OPENSEARCH_VALIDATION_CONCURRENCY)" \
+		--iterations "$(OPENSEARCH_VALIDATION_ITERATIONS)" \
+		--expected-version "$(OPENSEARCH_EXPECTED_VERSION)"
+
+integration-opensearch-restart:
+	@python3 tests/opensearch_runtime_validation.py \
+		--container-bin "$(CONTAINER_BIN)" \
+		--container "$(OPENSEARCH_VALIDATION_CONTAINER)" \
+		--documents "$(OPENSEARCH_VALIDATION_DOCUMENTS)" \
+		--vector-dimension "$(OPENSEARCH_VALIDATION_VECTOR_DIMENSION)" \
+		--concurrency "$(OPENSEARCH_VALIDATION_CONCURRENCY)" \
+		--iterations "$(OPENSEARCH_VALIDATION_ITERATIONS)" \
+		--expected-version "$(OPENSEARCH_EXPECTED_VERSION)" \
+		--restart
+
+integration-opensearch-onyx:
+	@python3 tests/onyx_opensearch_runtime_validation.py \
+		--container-bin "$(CONTAINER_BIN)" \
+		--api-container "$(OPENSEARCH_VALIDATION_API_CONTAINER)"
+
 check-upgrade:
 	@$(MAKE) --no-print-directory check
 	@$(MAKE) --no-print-directory test-images
+	@$(MAKE) --no-print-directory test-opensearch-image
 
 upgrade: upgrade-python-deps myst-build teep-build searxng-build tailscale-image-ready obscura-image-ready upgrade-onyx
 	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."

@@ -45,7 +45,7 @@ rootless `ping_group_range` OCI runtime error; a complete clean down/up cleared
 the transient without weakening user namespaces or container hardening.
 
 **Validation state: deterministic and pinned-image validation passes.**
-The current `make check` passed 255 tests (with five image-only skips), and the
+The current `make check` passed 260 tests (with five image-only skips), and the
 earlier full pinned-image run
 `make check-upgrade` passed the pinned-image contracts and five image-backed
 parser tests. Live Docker checks covered startup/readiness, worker and Beat
@@ -104,12 +104,57 @@ working mappings are now unconditional parts of the two core Podman overlays;
 there are no database-specific Compose layers, native-volume branch, or
 storage opt-out flags.
 The long controlled before/after power/resource measurement windows and the
-remaining destructive or workload-specific fault/performance gates have not
-yet been run. Fault injection is intentionally deferred until after health
+remaining application-level PDF/connector, MinIO, and worker fault/performance
+gates have not yet been run. The direct OpenSearch clean/current-volume,
+KNN/hybrid/reindex, concurrent-work, audit, and restart gates are complete as
+described below. Broader fault injection remains deferred until after health
 frequency and resource-consumption evidence is collected. A complete
 `make upgrade` dependency refresh was also not completed
 because PyPI access timed out; no dependency-lock input changed, and the exact
 Myst and Teep images were built and validated separately.
+
+The 2026-07-20 Docker OpenSearch acceptance added container-engine-neutral
+recurring gates. The current 73-primary-shard volume passed a disposable
+2,000-document, 768-dimensional workload with eight concurrent workers, 80
+mixed indexing/search operations, 2,100 documents reindexed, keyword/KNN/hybrid
+queries, deletion, and zero new breaker trips or thread-pool rejections. Sampled
+heap use peaked at 414,616,840 bytes and ended at 309,625,520 bytes; recorded GC
+collection increased by 75 ms and request p95 was 0.119 seconds. A separate
+current-volume run passed OpenSearch-only restart/recovery. The exact pinned
+Onyx client then created its generated zero-replica mapping, indexed 20 chunks,
+returned ten hybrid results through its normalization pipeline, and reindexed
+all 20 chunks.
+
+The matching clean pinned-image run used an isolated disposable engine volume
+and the same 2,000-document/768-dimensional workload. It peaked at 403,270,280
+sampled heap bytes, ended at 164,722,568 bytes, recorded 53 ms of GC collection,
+and had the same 0.119-second p95 with no breaker trips or rejections. Its data
+survived container restart, the cluster returned green, the monthly audit index
+was created, no new Query Insights index appeared, and a failed-login audit
+record omitted a recognizable request-body marker. Exact disposable indices,
+containers, and volumes were removed. Recent current-container logs contained
+no OOM, circuit-breaker, rejected-execution, corruption, or fatal workload
+failure; the pinned Performance Analyzer plugin still emits its documented
+missing-configuration errors before disabling itself.
+
+The matching Podman acceptance used a 5.8.5 client and the required rootless
+5.8.1 Linux server after a Podman Desktop restart. `make check-upgrade`, the
+current-volume workload and restart/recovery target, and the exact pinned Onyx
+client all passed. A controlled full down/up also released and reclaimed the
+shared-data owner, stopped and recreated only identity-matched host helpers,
+installed native startup health on the clean graph, reused both shared database
+binds, and returned every service to healthy state. The heavy clean-volume run
+peaked at 403,763,200 sampled
+heap bytes, ended at 229,845,480 bytes, recorded 63 ms of GC collection, and
+had a 0.345-second p95. The heavy shared current-volume run peaked at
+380,032,992 bytes, ended at 293,246,032 bytes, recorded 76 ms of GC collection,
+and had a 0.362-second p95. Both used 2,000 documents, 768-dimensional vectors,
+eight workers, 80 mixed operations, and 2,100 reindexed documents with no new
+breaker trips or thread-pool rejections. Rootless Podman capped the inherited
+unlimited memlock request at 8 MiB and OpenSearch reported that JVM memory was
+not locked; the guest reported zero swap. This is now a documented
+engine-specific constraint, not evidence that memory locking or a cgroup cap
+can be changed without the separate residency, latency, swap, and OOM study.
 
 A non-controlled Docker full-stack snapshot on 2026-07-20 showed 16 retained
 health checks: Myst contributes 60 local checks/hour and the other 15 checks
@@ -1474,7 +1519,7 @@ Add or extend deterministic coverage before live validation:
   slow steady interval. Merely accepting/rendering `start_interval` is not a
   pass; the Podman contract test must inspect `StartupHealthCheck` and the
   ordinary 10-minute or Myst one-minute interval separately.
-- Add effective-Compose and live OpenSearch tests for the 512 MiB heap,
+- Retain effective-Compose and live OpenSearch tests for the 512 MiB heap,
   `node.processors=4`, and disabled Performance Analyzer agent CLI. Assert the
   exact plugin list, Security/TLS settings, refresh/index settings, and image;
   run the clean/current-volume KNN/hybrid/ingestion/restart workload and the

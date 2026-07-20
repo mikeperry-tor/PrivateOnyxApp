@@ -18,13 +18,38 @@ class ValidationMakefileTests(unittest.TestCase):
             line for line in MAKEFILE.splitlines() if line.startswith(".PHONY:")
         )
         phony_targets = phony_line.removeprefix(".PHONY:").split()
-        for target in ("test", "check", "test-images", "check-upgrade"):
+        for target in (
+            "test",
+            "check",
+            "test-images",
+            "test-opensearch-image",
+            "check-upgrade",
+            "integration-opensearch",
+            "integration-opensearch-restart",
+            "integration-opensearch-onyx",
+        ):
             self.assertRegex(MAKEFILE, rf"(?m)^{re.escape(target)}:")
             self.assertIn(target, phony_targets)
 
         self.assertIn("./tests/validate_pinned_patch_images.sh", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory check", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory test-images", MAKEFILE)
+        self.assertIn("$(MAKE) --no-print-directory test-opensearch-image", MAKEFILE)
+        self.assertIn('tests/run_opensearch_image_validation.py', MAKEFILE)
+        self.assertIn('tests/opensearch_runtime_validation.py', MAKEFILE)
+        self.assertIn('tests/onyx_opensearch_runtime_validation.py', MAKEFILE)
+
+    def test_opensearch_validation_is_container_engine_neutral(self) -> None:
+        runtime = (ROOT / "tests" / "opensearch_runtime_validation.py").read_text()
+        image = (ROOT / "tests" / "run_opensearch_image_validation.py").read_text()
+        onyx = (ROOT / "tests" / "onyx_opensearch_runtime_validation.py").read_text()
+        for script in (runtime, image, onyx):
+            self.assertIn("container_bin", script)
+            self.assertNotIn("/var/run/docker.sock", script)
+            self.assertNotIn("docker.sock", script)
+        self.assertIn('[client.container_bin, "restart", client.container]', runtime)
+        self.assertIn('[args.container_bin, "rm", "--force", name]', image)
+        self.assertIn('[args.container_bin, "volume", "rm", "--force", volume]', image)
 
     def test_image_validation_is_executable_and_does_not_fetch_images(self) -> None:
         self.assertTrue(os.access(IMAGE_SCRIPT_PATH, os.X_OK))

@@ -170,6 +170,17 @@ The tested image can create and reuse its normal per-file Podman attributes;
 do not recursively delete them. `prepare-podman-opensearch-data` requires its
 initialized `nodes` directory before a full-mode create.
 
+On the verified rootless 5.8.1 server, Podman clamps the inherited unlimited
+OpenSearch memlock request to an 8 MiB soft/hard limit. OpenSearch consequently
+logs that JVM memory is not locked. The guest reports no configured swap, and
+both clean and shared-volume 2,000-document/768-dimensional KNN, hybrid,
+concurrent indexing, reindex, and restart validation passed without breaker
+trips, queue rejections, or OOM evidence. Treat this as an explicit rootless VM
+capability difference. Do not broaden VM privileges or disable the common
+memory-lock request merely to silence the warning; re-evaluate the limit,
+guest swap state, mapped-index residency, and failure behavior when changing
+the Podman machine or OpenSearch resource policy.
+
 ### VPN override and socket limitations
 
 `docker-compose.podman-vpn.yml` puts `autoheal` behind the inactive
