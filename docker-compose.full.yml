@@ -120,7 +120,7 @@ services:
       - background_logs:/var/log/onyx
       - ./onyx/background_entrypoint.py:/app/wrapper-background-entrypoint.py:ro
       - ./onyx/beat_liveness_watchdog.py:/app/wrapper-beat-liveness-watchdog.py:ro
-    entrypoint: ["python", "/app/wrapper-background-entrypoint.py"]
+    entrypoint: ["python", "-S", "/app/wrapper-background-entrypoint.py"]
     command: []
 
   # Onyx internal/data services (full mode only)

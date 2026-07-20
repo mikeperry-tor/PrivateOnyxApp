@@ -1,6 +1,6 @@
 # Power saving plan
 
-## Current status (2026-07-19)
+## Current status (2026-07-20)
 
 **Implementation state: the complete pre-measurement bundle is implemented.**
 This includes the pinned component baseline, sleepy/local health and recovery
@@ -11,8 +11,17 @@ Performance Analyzer disabled, MinIO's `slowest` scanner profile, and a strict
 Podman-native startup-health layer. Tests and the user-facing and upgrade
 documentation cover these changes.
 
+Two follow-up low-risk reductions are also implemented. Exact background
+control programs and SearXNG's exact multiprocessing resource tracker no
+longer install application `sitecustomize` patches. Celery workers, Beat,
+spawned indexing children, the SearXNG parent, and its request workers retain
+their strict patches. Myst still reconciles every 20 seconds for the same
+repair bound and DNS freshness, but an exact target/gateway/device match now
+suppresses the route replacement and success log; drift is repaired and
+logged as before.
+
 **Validation state: deterministic and pinned-image validation passes.**
-`make check` passed 230 tests (with five image-only skips), and
+`make check` passed 235 tests (with five image-only skips), and
 `make check-upgrade` passed the pinned-image contracts and five image-backed
 parser tests. Live Docker checks covered startup/readiness, worker and Beat
 behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
@@ -31,6 +40,23 @@ health timestamps confirmed five-second startup checks, a 600-second ordinary
 steady interval, and Myst's one-minute interval. The bundled MLX child also
 unloaded after its completed readiness request while the lightweight host
 proxy remained listening.
+
+The 2026-07-20 follow-up Docker validation recreated the full VPN stack and
+left every service healthy. Exact control-process exclusions reduced
+background supervisor PSS from about 197 MiB to 27 MiB and watchdog PSS from
+about 192 MiB to 18 MiB; both had one thread and no NumPy/OpenBLAS/tokenizer or
+Torch mappings afterward. The SearXNG resource tracker fell from about 59 MiB
+to 10 MiB PSS while the parent and request worker retained all strict patch
+diagnostics. A real API-to-SearXNG-gateway query returned ten results. Pinned
+image validation and all five image-only parser tests passed.
+
+The corrected Myst live run wrote the initial fixed-host route, learned four
+distinct broker addresses as DNS rotated, corrected the tunnel MTU once, and
+then emitted no duplicate route-change lines across subsequent 20-second
+passes. A manual exact reconciliation was also silent. Live testing caught
+and fixed an initial matcher error caused by Linux rendering host routes
+without the `/32` suffix; deterministic coverage now mirrors that canonical
+output.
 Podman was then cleanly restarted against the initialized Docker bind data:
 PostgreSQL exposed the existing application state (including 194 chat sessions,
 1,326 chat messages, 15 connectors, three LLM providers, and six personas),
@@ -64,7 +90,8 @@ because foreground/background work and Docker sampling noise were not isolated.
 
 **Deferred state: intentionally not implemented.** Every item under
 [Deferred until after the measurement gate](#deferred-until-after-the-measurement-gate)
-remains deferred: event-driven Myst route/MTU ownership; OpenSearch plugin,
+remains deferred: event-driven Myst route/MTU ownership beyond the implemented
+change-only write path; OpenSearch plugin,
 audit, refresh, and lower-memory experiments; the Kombu Redis blocking-pop
 timeout patch; API metrics and connection-pool sizing; worker consolidation;
 and supervisor log-relay or enabled-bot micro-tuning. These require comparable
@@ -248,14 +275,14 @@ Initial-bundle release matrix:
 
 | Item | Timeout/cadence contract | Stability and capability gate |
 |---|---|---|
-| Myst health and autoheal | Startup probe 5s; steady health 1m; probe timeout 10s; 2 failures; 420s start period; autoheal poll 60s; expected restart detection roughly 2–3m. | Local TequilAPI/interface/route only; no DNS/public/upstream probe; daemon disconnect and missing tunnel autoheal; existing 20s route/MTU loop and route exemptions unchanged. |
+| Myst health and autoheal | Startup probe 5s; steady health 1m; probe timeout 10s; 2 failures; 420s start period; autoheal poll 60s; expected restart detection roughly 2–3m. | Local TequilAPI/interface/route only; no DNS/public/upstream probe; daemon disconnect and missing tunnel autoheal; the 20s route/MTU cadence and repair bound are unchanged, while exact matching exemptions avoid route writes and success logs. |
 | Ordinary/aggregate health | Startup probe 5s; steady health 10m; 1 retry; bounded existing timeout; local start period 30–120s, API 240s. | `compose up --wait` fails on a missing origin/proxy path; rendered dependencies remain acyclic; real requests fail closed immediately; no health-triggered public traffic. |
 | One-shot embedding startup | Exactly one `/ready` call with no retry; shim upstream request remains bounded at 30s; `/health` is inference-free. | Fresh API/background creation waits for success; repeated failure neither recreates nor stops running services; lite mode never calls it. |
 | MLX idle lifecycle | 10m idle measured after request completion; cold start plus inference stays inside the unchanged 30s shim deadline; proposed child termination grace 15s. | Single child for concurrent cold calls; no ambiguous POST replay; active batches never unload; memory is released; custom/manual upstream ownership and repeated up/down remain correct. |
 | OpenSearch | Fixed 1 GiB heap; no new container timeout or memory limit. | Full fresh/existing-volume ingestion, KNN/hybrid/search/reindex/restart workload passes without OOM, circuit-breaker, corruption, stuck recovery, or material tail-latency regression; all non-PA configuration is effectively unchanged. |
 | MinIO scanner | Supported `slowest` profile; nominal scan cycle 30m; existing readiness timeout/startup semantics retained. | Object CRUD, multipart cleanup, lifecycle/healing, chat files, document ingestion, and restart pass; no object loss/corruption or unbounded cleanup delay. |
 | Beat discovery and housekeeping | Discovery/reload 5m; functional housekeeping 10m or existing longer cadence; newly eligible document/connector begins within 5m. | Exact pinned schedule names/cadences; no disabled task materializes; active indexing, deletion, and cleanup complete correctly. |
-| Beat watchdog | Beat file touch and watcher check 5m; stale/startup grace 20m; expected restart 20–25m after last good reload. | Stdlib/file-only watcher; no Redis/Onyx imports; hung Beat restarts once; healthy/busy workers cannot cause a false Beat restart. |
+| Beat watchdog | Beat file touch and watcher check 5m; stale/startup grace 20m; expected restart 20–25m after last good reload. | Started with `python -S`; stdlib/file-only watcher; no application bootstrap, Redis, or Onyx imports; hung Beat restarts once; healthy/busy workers cannot cause a false Beat restart. |
 | Monitoring/Craft worker removal | No replacement polling interval. | No producer targets removed queues; task registry/routing remains complete; Craft stays absent only while explicitly disabled. |
 | Celery event/file liveness removal | Broker health, revocation, leadership, and active index heartbeats retain pinned cadences. | Cancellation, remote control, kill/redelivery, stuck-index recovery, and clean shutdown pass; no task loss or unconsumed worker file writes. |
 | Bots and worker sizing | Bots absent by default; enabled programs retain exact upstream timing; discovery remains the 5m outer bound. | Either opt-in restores original Slack/Discord behavior; representative multi-document/connector concurrency completes without queue starvation, timeout, or material throughput regression. |
@@ -347,11 +374,13 @@ the one-minute autoheal poll give a roughly two-to-three-minute detection and
 restart bound. Keep `AUTOHEAL_START_PERIOD=300`; it is independent of the
 Docker health start period and prevents recycling Myst during initial setup.
 
-The separate 20-second Myst route/MTU maintenance loop remains unchanged in
-the pre-measurement bundle. It owns routing correctness across daemon-driven
-reconnects, and replacing it with a netlink state machine is too invasive
-without evidence that it remains a material cost after the safer health work.
-Its event-driven redesign is explicitly deferred below.
+The separate 20-second Myst route/MTU maintenance cadence remains unchanged.
+It owns routing correctness across daemon-driven reconnects, so each pass still
+resolves configured exemption hosts and validates exact routes. A matching
+target, gateway, and device now produces no route write or success log; only
+missing or drifted routes are replaced and logged. Replacing the loop with a
+netlink state machine is too invasive without stronger evidence, and remains
+explicitly deferred below.
 
 ### Keep, but make sleepy
 
@@ -1089,11 +1118,13 @@ one another or with an Onyx/component upgrade.
 
 ### Event-driven Myst route and MTU ownership
 
-The current entrypoint resolves exemption hosts and reapplies MTU/routes every
-20 seconds. A future design may replace that loop with a blocking, debounced
-netlink watcher plus a slow DNS reconciliation and an exact wrapper-owned route
-set. Promote it only if measurement attributes material stable-state cost to
-the loop.
+The current entrypoint resolves exemption hosts and validates MTU/routes every
+20 seconds. It performs route replacement and success logging only when the
+exact target, gateway, or device is missing or differs. A future design may
+replace the remaining polling/DNS work with a blocking, debounced netlink
+watcher plus a slow DNS reconciliation and an exact wrapper-owned route set.
+Promote it only if measurement attributes material stable-state cost to the
+remaining loop.
 
 This is high risk because it owns fail-closed routes across daemon-driven
 reconnects. Before promotion, characterize every pinned Myst link/address/route
@@ -1198,7 +1229,7 @@ Approximate steady-state changes:
 |---|---:|---:|
 | Container health/recovery checks | ~73/min | ~4/min |
 | Non-VPN container checks | ~65/min | ~2/min |
-| Myst route/MTU maintenance | DNS, route writes, and logs every 20s | unchanged pending measurement |
+| Myst route/MTU maintenance | DNS, two route writes, and two success logs every 20s in the observed configuration | DNS and exact route validation every 20s; route writes and success logs only on missing/drifted state |
 | Onyx Celery scheduled jobs | ~32/min | ~2/min |
 | Embedding health inferences | 120/hour | 0/hour |
 | Bundled MLX model residency | handler ~1.36 GiB RSS indefinitely after start | unload after 10m idle; reload on demand |
@@ -1214,6 +1245,8 @@ Approximate steady-state changes:
 | API Prometheus path | middleware, `/metrics`, histograms, DB collectors/listeners on every run | unchanged pending measurement |
 | Supervisor log relay | one `tail -F` plus duplicate rotating per-program writes | unchanged pending measurement |
 | Supervisor Celery workers | 8 | 6 |
+| Unpatched background control processes | none | entrypoint and watchdog use `python -S`; exact supervisor argv skips the background bootstrap |
+| SearXNG multiprocessing resource tracker | imported the complete SearXNG patch bootstrap | exact resource-tracker command skips application patches |
 | OpenSearch JVM heap | fixed 2 GiB | 1 GiB if the full workload passes; otherwise smallest larger passing value |
 | OpenSearch plugin schedulers | five-/15-minute and hourly activity observed | plugin set unchanged; disable only the Performance Analyzer agent CLI |
 | MinIO scanner cycle | 1m default | 30m supported `slowest` profile |
@@ -1250,6 +1283,20 @@ ten-minute health cycles, and a complete slow MinIO scanner cycle; include one
 matched window longer than 65 minutes to classify retained hourly work. Report
 median and range plus image digests. Avoid adding child RSS figures as though
 shared pages were unique memory.
+
+The 2026-07-20 focused baseline identified application imports in processes
+that never execute application work. In the background container, proportional
+set size was approximately 197 MiB for supervisor and 192 MiB for the local
+watchdog; the watchdog had 16 threads and mapped NumPy/OpenBLAS/tokenizer
+libraries. SearXNG's multiprocessing resource tracker used approximately 59
+MiB PSS. Myst emitted 30 route-exemption success lines in five minutes and
+performed the corresponding two replacements every 20 seconds. After the
+change, supervisor/watchdog PSS was approximately 27/18 MiB and the SearXNG
+resource tracker was approximately 10 MiB PSS: about 384 MiB combined PSS
+removed from these three non-application processes. Myst made only the
+initial/new-DNS-address route changes described in Current status. These are
+focused diagnostic comparisons and do not replace the controlled stack-wide
+measurement gate above.
 
 Promote a deferred high-fragility item only when measurement and a bounded
 prototype support a meaningful remaining benefit: normally at least 10% of
@@ -1362,7 +1409,8 @@ Update behavior documentation in the same change:
   the provider-resolver data path; document offline TequilAPI/local-route
   health, one-minute autoheal timing, stale health limitations, and the fact
   that real requests remain fail-closed. Explicitly state that the existing
-  20-second route/MTU correctness loop is unchanged.
+  20-second route/MTU correctness cadence and repair bound are unchanged while
+  exact matching routes no longer cause writes or success logs.
 - `docs/local_docs_rag_search.md`: change Compose readiness from repeated
   `/ready` to local `/health`, and document the staged shim-only startup,
   single pre-API/background `make up-full` `/ready` request, and failure

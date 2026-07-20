@@ -149,6 +149,14 @@ recovery begins. Request-time final-hop DNS and destination validation remain
 authoritative and fail closed throughout that interval; there is no periodic
 upstream-proxy probe or system-route fallback while VPN mode is selected.
 
+The separate reconciliation loop retains its 20-second repair and hostname-DNS
+refresh bound. Each pass compares the exact exemption target's gateway and
+device with the required bridge route. A complete match is a silent no-op;
+only a missing or drifted route invokes `ip route replace` and emits the
+change log. MTU updates were already change-only. This reduces stable-state
+netlink writes and logs without weakening reconnect repair or changing route
+ownership; an event-driven replacement remains deferred.
+
 With `MYST_VPN_ENABLED=false`, the Myst container idles as namespace owner,
 requires no wallet, and readiness requires that no stale `myst0` remains plus
 a usable IPv4 default route. The explicit no-VPN compose model omits autoheal

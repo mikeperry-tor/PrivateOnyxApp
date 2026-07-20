@@ -413,6 +413,14 @@ by the container entry process. Verify patch-success diagnostics in the actual
 Celery worker and in a spawn-based document-fetching child, then run a real
 doc-drop Web connector crawl and PDF extraction.
 
+Keep the control-process exclusion narrow. The wrapper entrypoint and local
+watchdog must use `python -S`; the exact `/usr/bin/supervisord` argv must skip
+background patch installation; and Beat, Celery workers, and spawn-based
+indexing children must still emit patch-success diagnostics. Inspect process
+PSS, mappings, and thread counts after an image upgrade to ensure the control
+programs have not resumed importing NumPy, tokenizer, or Onyx application
+modules.
+
 Also diff the pinned supervisor configuration against
 `onyx/background_entrypoint.py`. It must still identify exactly eight upstream
 worker programs, remove only the scheduled/monitoring pair, retain six workers
@@ -422,6 +430,12 @@ Validate that the local watchdog accepts only an owner-matched regular file,
 uses two-observation missing-file handling plus the bounded startup grace, and
 invokes `supervisorctl restart celery_beat` only. Exercise one representative
 connector indexing workload before accepting lower concurrency.
+
+For SearXNG, verify the exact standard-library multiprocessing resource-tracker
+command skips the application patch bootstrap while the Granian parent and
+request workers retain all strict patch diagnostics. Treat any other Python
+`-c` command as an application process unless its role is separately audited
+and tested.
 
 For support and source pins, require immutable Tailscale/autoheal digests,
 exact Myst and Teep Git revisions in both image labels and build arguments, and

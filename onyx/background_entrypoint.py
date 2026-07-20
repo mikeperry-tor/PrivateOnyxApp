@@ -100,7 +100,7 @@ def derive_config(source: Path = SOURCE_CONFIG) -> configparser.RawConfigParser:
     parser.set(
         watchdog_section,
         "command",
-        "python /app/wrapper-beat-liveness-watchdog.py\n"
+        "python -S /app/wrapper-beat-liveness-watchdog.py\n"
         f"    --conf {DERIVED_CONFIG}\n"
         "    --program celery_beat\n"
         "    --path /tmp/onyx_k8s_beat_liveness.txt",

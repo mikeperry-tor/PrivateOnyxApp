@@ -30,7 +30,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
-- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, and keeping optional Slack/Discord bot processes off unless enabled. The resulting health and scheduler cadence is substantially lower; controlled before/after power and resource measurements remain future work.
+- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled. Stable Myst routes are validated without repeated route writes or success logs. Controlled before/after power and resource measurements remain future work.
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
 
@@ -66,7 +66,7 @@ The Docker Compose files in this stack relies on the following components:
 
 ## Running the Stack
 
-The stack comes in two flavors: lite and full. This specifies the mode of the Onyx app. Lite mode provides Chat, Web, and Research only. Full mode also provides RAG, external app connectors, and groupware. Lite mode uses significantly less RAM (~1GB vs ~20GB).
+The stack comes in two flavors: lite and full. This specifies the mode of the Onyx app. Lite mode provides Chat, Web, and Research only. Full mode also provides RAG, external app connectors, and groupware. Lite mode uses significantly less RAM (~1GB vs ~10GB).
 
 It is possible to switch between full and lite modes between restarts.
 

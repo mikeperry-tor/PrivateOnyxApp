@@ -333,7 +333,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertEqual(background["environment"]["PROMETHEUS_METRICS_ENABLED"], "false")
         self.assertEqual(background["environment"]["ONYX_SLACK_BOT_ENABLED"], "false")
         self.assertEqual(background["environment"]["ONYX_DISCORD_BOT_ENABLED"], "false")
-        self.assertEqual(background["entrypoint"], ["python", "/app/wrapper-background-entrypoint.py"])
+        self.assertEqual(
+            background["entrypoint"],
+            ["python", "-S", "/app/wrapper-background-entrypoint.py"],
+        )
 
     def test_lite_and_full_application_services_are_internal_only(self) -> None:
         expected = {

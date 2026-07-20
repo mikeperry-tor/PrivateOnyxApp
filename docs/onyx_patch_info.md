@@ -25,6 +25,13 @@ bootstrap visible to the real Celery workers and their spawn-based indexing
 children; relying only on the wrapper directories in the container environment
 would patch the supervisor process but leave document fetching unpatched.
 
+The wrapper entrypoint and local Beat watchdog start with `python -S`, and the
+background bootstrap also recognizes the exact `/usr/bin/supervisord` argv.
+Those three control processes never execute Onyx application work, so they do
+not install the heavy strict patch set. This exclusion is deliberately exact:
+Beat, all Celery workers, and spawn-based indexing children still import and
+validate the background bootstrap.
+
 This split prevents a base bootstrap from running service-inappropriate code
 and makes missing API-only behavior startup-visible.
 

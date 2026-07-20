@@ -140,66 +140,7 @@ set -- "$@" daemon
 /usr/local/bin/docker-entrypoint.sh "$@" &
 svc_pid="$!"
 
-apply_route_exemptions() {
-  _gw="${DOCKER_BRIDGE_GW:-}"
-  _dev="${DOCKER_BRIDGE_DEV:-}"
-  [ -n "${_gw:-}" ] || return 0
-  [ -n "${_dev:-}" ] || return 0
-
-  _hosts="${MYST_ROUTE_EXEMPT_HOSTS:-}"
-  if [ -n "${_hosts}" ]; then
-    OLDIFS="$IFS"
-    IFS=','
-    for _host in ${_hosts}; do
-      _host="$(printf '%s' "${_host}" | xargs)"
-      [ -n "${_host}" ] || continue
-      _ips="$(getent ahostsv4 "${_host}" 2>/dev/null | awk '{print $1}' | sort -u || true)"
-      if [ -z "${_ips}" ]; then
-        echo "Route exemption: no IPv4 resolved for ${_host}"
-        continue
-      fi
-      for _ip in ${_ips}; do
-        ip route replace "${_ip}"/32 via "${_gw}" dev "${_dev}" 2>/dev/null || true
-        echo "Route exemption: host=${_host} ip=${_ip}/32 via=${_gw} dev=${_dev}"
-      done
-    done
-    IFS="$OLDIFS"
-  fi
-
-  _cidrs="${MYST_ROUTE_EXEMPT_CIDRS:-}"
-  if [ -n "${_cidrs}" ]; then
-    OLDIFS="$IFS"
-    IFS=','
-    for _cidr in ${_cidrs}; do
-      _cidr="$(printf '%s' "${_cidr}" | xargs)"
-      [ -n "${_cidr}" ] || continue
-      ip route replace "${_cidr}" via "${_gw}" dev "${_dev}" 2>/dev/null || true
-      echo "Route exemption: cidr=${_cidr} via=${_gw} dev=${_dev}"
-    done
-    IFS="$OLDIFS"
-  fi
-}
-
-apply_wireguard_mtu() {
-  [ -n "${MYST_VPN_WIREGUARD_MTU:-}" ] || return 0
-
-  if ! ip link show myst0 >/dev/null 2>&1; then
-    return 0
-  fi
-
-  _current_mtu="$(ip -o link show myst0 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "mtu") {print $(i+1); exit}}')"
-  if [ -z "${_current_mtu}" ]; then
-    return 0
-  fi
-
-  if [ "${_current_mtu}" != "${MYST_VPN_WIREGUARD_MTU}" ]; then
-    if ip link set dev myst0 mtu "${MYST_VPN_WIREGUARD_MTU}" >/dev/null 2>&1; then
-      echo "WireGuard MTU: set myst0 mtu=${MYST_VPN_WIREGUARD_MTU} (was ${_current_mtu})"
-    else
-      echo "WireGuard MTU: failed to set myst0 mtu=${MYST_VPN_WIREGUARD_MTU} (current ${_current_mtu})"
-    fi
-  fi
-}
+. /usr/local/bin/myst-route-reconciliation.sh
 
 (
   while true; do

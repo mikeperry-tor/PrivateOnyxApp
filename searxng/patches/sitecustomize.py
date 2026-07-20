@@ -10,6 +10,8 @@ import os
 import threading
 import typing as t
 
+from bootstrap_role import current_process_is_resource_tracker
+
 _ROUND_ROBIN_LOCK = threading.Lock()
 _ROUND_ROBIN_CURSOR = 0
 _ROUND_ROBIN_PROVIDER_ENV = "SEARXNG_ROUND_ROBIN_PROVIDERS"
@@ -663,6 +665,7 @@ def apply_last_resort_scoring_patch() -> None:
     )
 
 
-apply_offline_block_suspension_patch()
-apply_round_robin_search_patch()
-apply_last_resort_scoring_patch()
+if not current_process_is_resource_tracker():
+    apply_offline_block_suspension_patch()
+    apply_round_robin_search_patch()
+    apply_last_resort_scoring_patch()

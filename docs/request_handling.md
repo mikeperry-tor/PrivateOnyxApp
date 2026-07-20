@@ -24,6 +24,13 @@ Onyx web_search
   -> the same browser bridge and public final hop
 ```
 
+SearXNG's exact standard-library multiprocessing resource-tracker helper does
+not serve requests and therefore skips the application `sitecustomize` patch
+set. The Granian parent and request workers continue to install all strict
+offline-engine, reservation, and scoring patches. The match is limited to the
+canonical resource-tracker command so an unrelated Python helper cannot evade
+startup validation.
+
 By default, with `ONYX_AGENT_USE_OBSCURA_BROWSER=false`, the `open_url` half is:
 
 ```text

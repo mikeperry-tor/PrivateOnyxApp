@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -83,11 +84,32 @@ class BackgroundSupervisorTests(unittest.TestCase):
         config = self._derive()
         command = config.get("program:supervisord_watchdog_celery_beat", "command")
         self.assertIn("wrapper-beat-liveness-watchdog.py", command)
+        self.assertTrue(command.startswith("python -S "))
         self.assertIn("/tmp/onyx_k8s_beat_liveness.txt", command)
         self.assertNotIn("redis", command.lower())
         source = WATCHDOG.read_text(encoding="utf-8")
         for forbidden in ("import onyx", "import redis", "import celery", "import sqlalchemy"):
             self.assertNotIn(forbidden, source.lower())
+
+    def test_exact_control_processes_skip_background_sitecustomize(self) -> None:
+        bootstrap = (
+            ROOT / "onyx/patches/sitecustomize_background/sitecustomize.py"
+        )
+        for argv0 in (
+            "/app/wrapper-background-entrypoint.py",
+            "/app/wrapper-beat-liveness-watchdog.py",
+            "/usr/bin/supervisord",
+        ):
+            with self.subTest(argv0=argv0), patch.object(sys, "argv", [argv0]):
+                module = _load("control_audit", bootstrap)
+                self.assertTrue(module._is_background_control_process())
+
+    def test_compose_starts_background_entrypoint_without_sitecustomize(self) -> None:
+        compose = (ROOT / "docker-compose.full.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            'entrypoint: ["python", "-S", "/app/wrapper-background-entrypoint.py"]',
+            compose,
+        )
 
 
 class BeatWatchdogTests(unittest.TestCase):

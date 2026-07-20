@@ -473,6 +473,12 @@ missing observations or a stale interval. Startup validates the pinned
 supervisor and schedule shapes; drift is fatal rather than silently restoring
 the higher-frequency upstream configuration.
 
+The wrapper entrypoint and file-only watchdog run with Python site imports
+disabled, and the exact supervisor control process skips the background
+application bootstrap. Beat, Celery workers, and their spawned indexing
+children still install the strict background patches; the optimization does
+not change connector discovery, ingestion, or PDF extraction behavior.
+
 The Makefile uses `mlx-embeddings` through `mlx-openai-server` because this
 stack expects an OpenAI-compatible embedding endpoint with stable vector output.
 Do not put LiteLLM between Onyx and embeddings for this path; it tends to hide

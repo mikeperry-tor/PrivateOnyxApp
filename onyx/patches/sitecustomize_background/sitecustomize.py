@@ -35,6 +35,13 @@ _LOG_ONCE_KEYS: set[str] = set()
 _WEB_CONNECTOR_PROXY: ContextVar[str | None] = ContextVar(
     "wrapper_web_connector_proxy", default=None
 )
+_CONTROL_PROCESS_ARGV0 = frozenset(
+    {
+        "/app/wrapper-background-entrypoint.py",
+        "/app/wrapper-beat-liveness-watchdog.py",
+        "/usr/bin/supervisord",
+    }
+)
 
 _INDEXING_FRESHNESS_PARAMETERS = (
     "documents",
@@ -1276,8 +1283,14 @@ def _install() -> None:
     _apply_web_connector_http_freshness_patch()
 
 
+def _is_background_control_process() -> bool:
+    """Keep strict application patches out of exact wrapper control programs."""
+    return bool(sys.argv) and sys.argv[0] in _CONTROL_PROCESS_ARGV0
+
+
 # Keep stdout clean for Onyx subprocess protocols such as
 # onyx.utils.isolated_runner, which imports sitecustomize before writing its
 # single pickled result. Docker captures stderr alongside stdout.
-with redirect_stdout(sys.stderr):
-    _install()
+if not _is_background_control_process():
+    with redirect_stdout(sys.stderr):
+        _install()
