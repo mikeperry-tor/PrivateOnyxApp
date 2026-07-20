@@ -40,43 +40,23 @@ At a high level:
   frontend, while API health remains a separate startup dependency. Do not add
   a duplicate periodic `web_server` health check.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
-- Full mode validates embedding readiness in a staged one-shot gate before a
-  fresh API/background tier, uses an on-demand host MLX lifecycle proxy for the
-  bundled backend with loopback-peer enforcement, bounded connection threads,
-  tokenized launch/configuration identity plus strict child PID, port, and
-  served-model ownership, visible unbounded cold-start readiness while the
-  child remains alive, a five-minute proxy-to-child blocked-socket timeout,
-  single-attempt shim forwarding, and
-  applies the low-idle background/storage policy documented in
-  `docs/resource_minimization.md`. OpenSearch uses static single-node settings:
-  a 512 MiB heap, four configured processors, monthly body-free audit
-  initialization, disabled Query Insights top-N collection, and zero replicas
-  for new Onyx indices.
-  There is no runtime OpenSearch migration or administrative sidecar. Exact
-  background control processes stay outside the application
-  `sitecustomize` bootstrap; Beat, workers, and indexing children remain
-  strictly patched. Full-mode bot workers are explicit default-off options
-  selected by `ONYX_AGENT_SLACK_BOT` and `ONYX_AGENT_DISCORD_BOT`; lite mode
-  has no background supervisor or bot processes.
-- The stdlib-only `embedserv/host_process_manager.py` owns common detached lifecycle,
-  atomic PID/token/configuration records, readiness waits, and identity-checked
-  stops for the bundled MLX proxy and Podman host document server. Keep
-  service-specific child/model/peer/content validation in those services. Lite
-  mode selects neither host service; Docker full mode selects no host document
-  server and skips the manager for clean Teep/custom-embedding starts.
+- Full mode stages embedding readiness before replacing the API/background tier
+  and follows the low-idle health, worker, model-lifecycle, search, and storage
+  policy in `docs/resource_minimization.md`. Keep those controls static,
+  explicit, and fail-closed rather than adding runtime administrative work.
+- `embedserv/host_process_manager.py` provides shared lifecycle ownership for
+  wrapper-managed host services. Keep service-specific peer, model, child, and
+  content validation in the services; see `docs/local_docs_rag_search.md` and
+  `docs/podman_suport.md` for selection and shutdown semantics.
 - The recommended local-RAG Admin model name `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only tokenizer construction to the bundled v1 tokenizer.
 - The wrapper uses the legacy code-interpreter service and explicitly disables unsupported Craft sandbox scheduling.
 - Onyx sends LLM requests through the included Teep local inference service.
 - The shared API runtime patches give nested Deep Research agents the tools selected for the current chat Agent and execute complete model-emitted tool batches with bounded concurrency.
-- Onyx `web_search` calls SearXNG, whose explicit five-engine custom offline set
-  navigates and parses rendered provider pages through Obscura. Inherited stock
-  engines are absent so they cannot initialize or perform startup network work.
-- Onyx `open_url()` is a chat-time read tool, not an ingestion path. For every
-  requested URL it concurrently performs a fresh crawl and, in full mode,
-  exact-ID retrieval of any document that a connector indexed previously; it
-  prefers that indexed copy when present. The default crawler uses Python
-  `requests` with a local Chromium fallback; both stages are restricted to
-  public-only egress through the fixed Onyx bridge.
+- Onyx `web_search` uses only the wrapper's supported SearXNG engines, which
+  render through Obscura; inherited stock engines are absent.
+- Onyx `open_url()` is a chat-time read tool, not an ingestion path. Full mode
+  may prefer an exact-ID indexed copy after concurrent crawler/indexed lookup;
+  the default crawler remains the public-only stock requests/Chromium path.
 - Lite mode keeps crawler-backed `open_url()` available through a strict runtime
   patch while indexed URL retrieval remains disabled.
 - Setting `ONYX_AGENT_USE_OBSCURA_BROWSER=true` moves only the built-in crawler to the single-navigation Obscura path. At Obscura 0.1.10, testing found the stock crawler was blocked less often; re-evaluate this default on Obscura upgrades.
@@ -84,25 +64,19 @@ At a high level:
 ## Network Security
 
 This stack controls egress and internal reachability through network-namespace
-topology, explicit routes, and final-hop destination policy. Safety must not
-depend on application-level proxy settings or caller discipline alone.
+topology, explicit routes, and final-hop destination policy, as documented in
+`docs/internal_network_security.md`. Safety must not depend on application-level
+proxy settings or caller discipline alone.
 
 - SearXNG, Obscura, and optional executor pods use narrow internal networks. Internet traffic crosses component bridges to final-hop policy proxies in the trusted Mysterium routing namespace.
 - Direct callers validate URL syntax without resolving target names; authoritative destination DNS and address validation remain at the final-hop policy.
-- Isolated Obscura allows private-address resolution only so its HTTP client can
-  resolve the mandatory Docker egress-bridge proxy. Its narrow network prevents
-  direct Internet egress, and the final-hop policy remains authoritative for
-  target DNS and private-target rejection.
+- Obscura's narrow network permits its mandatory bridge proxy but no direct
+  Internet route; final-hop policy remains authoritative for target DNS and
+  private-target rejection.
 - Onyx applications use internal-only networks. Generic helpers use a fixed
-  public bridge; saved-level MCP/Web Connector traffic and configured
-  chat inference plus the dedicated embedding shim use separate public or
-  host-capable bridges and route-class-specific final-hop policy listeners.
-  Identical public policies share a proxy process but keep distinct bridges
-  and caller networks. Direct sockets have no external route; executor pods
-  never inherit Onyx exceptions. The exact internal Teep chat base is a
-  startup-validated direct-service exception, and doc-drop Web Connector
-  traffic uses an exact host final-hop gateway rather than a process-wide
-  direct crawl.
+  public bridge, while configured integrations, inference, and embeddings use
+  separate route-class bridges. Direct sockets have no external route, and
+  executors never inherit Onyx exceptions.
 - `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` is the user-facing opt-in for
   validated RFC1918 endpoints used by configured MCP/Web integrations,
   inference providers, and the embedding shim. It must never grant LAN access
@@ -113,25 +87,20 @@ depend on application-level proxy settings or caller discipline alone.
   trusted component into the same namespace, including its loopback,
   interfaces, routes, and policy listeners. Their fixed gateways constrain
   application ingress; they are not a sandbox between co-resident processes.
-- Myst retains a 20-second route/MTU reconciliation bound. Exact matching
-  exemption routes are silent no-ops; writes and success logs occur only for
-  missing or drifted target/gateway/device state. One immediate post-connect
-  pass is followed by a single background reconciliation owner.
-- `myst/myst-readiness.sh` remains the pure local readiness predicate. The
-  socket-free `myst/myst-healthcheck.sh` wrapper arms only after the first VPN
-  readiness success in each container lifetime and requests one graceful PID-1
-  restart after 60 seconds of continuous later failure. Docker and Podman use
-  the same contract; startup and explicit no-VPN mode never arm recovery.
+- Myst route/MTU reconciliation and post-readiness recovery each have one
+  socket-free owner. Preserve their bounded, fail-closed behavior and the
+  startup/no-VPN non-arming rules documented in
+  `docs/vpn_routing_and_proxies.md` and `docs/resource_minimization.md`.
+- Myst signup is a non-restarting, host-driven workflow separate from integrated
+  startup. Never retry an ambiguous financial mutation; see
+  `docs/onyx_patches_upgrade.md` when upgrading Myst.
 - Optional Onyx telemetry, third-party analytics/tracing, cloud billing,
-  CAPTCHA, and automatic remote configuration/data-list fetches are explicitly
-  disabled in Compose. Release-note polling and local administrative analytics
-  intentionally remain enabled.
+  CAPTCHA, and remote configuration/data-list fetches are disabled; intentional
+  local administrative analytics and release-note behavior are documented in
+  `docs/onyx_patches_upgrade.md`.
 - Nginx adds a restrictive WebUI CSP because browser requests are outside the
-  container routing boundary. Preserve its same-origin resource policy,
-  locally generated chat-file images, and local preview schemes. The stock
-  Next.js image requires inline bootstrap/stream scripts, so the current
-  `'unsafe-inline'` exception is a documented XSS residual, not a claim of
-  complete XSS prevention.
+  container routing boundary. Preserve the tested policy and its documented
+  compatibility exception; do not describe it as complete XSS prevention.
 
 Those bullets are only a map. Read the docs above before changing any runtime networking path. Keep the documentation up-to-date.
 
@@ -197,40 +166,20 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   SearXNG parser tests that need image dependencies. It does not pull or build
   missing images or permit validation-container networking; use the reported
   build target first.
-- `make test-opensearch-image` - run the pinned OpenSearch image with an
-  engine-managed disposable volume and no external network, then validate the
-  512 MiB/four-processor runtime, plugins, audit policy, indexing, KNN/hybrid
-  search, reindexing, concurrent work, failure counters, and restart recovery.
+- `make test-opensearch-image` - validate the pinned OpenSearch image in an
+  isolated disposable environment.
 - `make check-upgrade` - run `make check`, `make test-images`, and
   `make test-opensearch-image`. Run this after `make upgrade` and before the
   practical live validation matrix.
-- `make integration-opensearch` - run the same disposable-index workload
-  against the current full-stack OpenSearch volume without restarting it.
-- `make integration-opensearch-restart` - add an OpenSearch-only restart and
-  recovery check. `make integration-opensearch-onyx` separately exercises the
-  exact pinned Onyx schema, client, normalization pipeline, and hybrid query.
-  All three use `CONTAINER_BIN` and support the Docker/Podman command surface.
-- `make up-lite` / `make up-full` - start the lite or full stack. Full mode
-  also starts the bundled host MLX lifecycle proxy when its selected model is
-  already installed and the shim still uses the bundled default endpoint, then
-  validates `/ready` once before creating a new API/background tier. That
-  foreground readiness wait has no short wrapper deadline and prints the MLX
-  log path so a slow or stuck load remains visible and interruptible;
-  `make down-full` stops only that identity-validated proxy and child group,
-  including a strictly recorded orphan left by a proxy crash.
-  Custom upstreams and manually launched servers are not touched.
-- Every Docker/Podman shared-data ownership claim inspects installed engine
-  commands for running Onyx PostgreSQL/OpenSearch writers plus integrated or
-  standalone Myst wallet writers and fails closed on
-  conflicting writers or an inspection failure, except that an unselected
-  Podman command is skipped when its default machine positively reports that it
-  is stopped. `make adopt-shared-data-engine` is only for an absent marker after
-  the operator verifies both engines are down.
-- Myst signup uses a fixed non-restarting setup project. Its entrypoint only
-  hosts TequilAPI; `myst/vpn_cli.py` exclusively owns exact-identity creation,
-  registration, balance refresh, order validation/creation, and postcondition
-  checks. Integrated startup performs no signup/order mutation. Preserve
-  fail-closed parsing and never retry an ambiguous financial result.
+- `make integration-opensearch`, `make integration-opensearch-restart`, and
+  `make integration-opensearch-onyx` - validate the running full-stack
+  OpenSearch volume, restart recovery, and pinned Onyx integration.
+- `make up-lite` / `make up-full` - start the selected stack; full mode also
+  performs its documented staged embedding-readiness flow; `CONTAINER_BIN` selects
+  between docker and podman runtimes for the stack.
+- Shared-data directory access checks fail closed on Docker/Podman runtime
+  ownership status. Use `make adopt-shared-data-engine` to reset ownership
+  only after verifying both engines are down; see `docs/podman_suport.md`.
 - `make health-inventory` - render the Makefile-selected engine/environment and
   optional overlays for lite/full healthcheck commands, startup/steady
   cadences, and approximate steady checks per hour.
@@ -282,9 +231,9 @@ This stack protects private research, document contents, browsing behavior, infe
     `docs/podman_suport.md` for its overlay, mount, startup-health, socket, and
     clean-machine/restart validation requirements.
 - VPN/proxy routing:
-  - Preserve explicit VPN/no-VPN behavior, the separate public/host Onyx route classes, exact host and opt-in `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` policy, operator-local `.local`/`.internal`/`.home.arpa` DNS restriction, optional routing switches, and `EGRESS_UPSTREAM_PROXY_URL`/`NO_PROXY` handling.
-  - Public upstream-proxy names and addresses must use provider DNS and the VPN route in VPN mode; exact host and RFC1918-literal proxy endpoints use only their documented narrow route exceptions, while named operator-local proxies require `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`.
-  - Empty or failed operator-local target lookups fail closed without external fallback; only non-empty all-global answers return to the selected public final hop.
+  - Preserve explicit VPN/no-VPN behavior, separate public/host route classes,
+    narrow host/LAN exceptions, final-hop DNS ownership, and documented proxy
+    environment handling.
   - Onyx applications must never join `netns-holder` or gain direct fallback when VPN, policy-proxy, or bridge connectivity fails.
 - Request handling:
   - Keep supported search engines on the shared direct-Obscura path and preserve their atomic pre-thread provider reservation.
@@ -292,22 +241,20 @@ This stack protects private research, document contents, browsing behavior, infe
     crawled pages, replace `internal_search`, or turn URL opening into semantic
     retrieval. Indexed and crawler work remain failure-tolerant siblings, with
     indexed content preferred only after both paths complete.
-  - The built-in Onyx Web Crawler defaults to the stock requests/local-Chromium mode because it was blocked less often in Obscura 0.1.10 testing; preserve its public-only fixed-proxy adapter, no local target DNS, disabled environment/loopback bypasses, and unchanged SearXNG path.
+  - Keep the built-in crawler's default stock requests/local-Chromium transport
+    public-only; switching it to Obscura must not alter SearXNG's path.
   - Keep `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` authoritative for the built-in
-    crawler in both modes: stock requests PDF/HTML bytes, stock Chromium
-    rendered-HTML bytes, and the direct-Obscura main body and rendered DOM. It
-    remains a per-representation post-materialization check on the stock path,
-    not a complete download or peak-memory bound. It must not affect external
-    content providers, background RAG ingestion, indexed document retrieval, or
-    SearXNG's independent fixed search-DOM limit.
+    crawler in both transports without extending it to indexed retrieval,
+    external providers, background ingestion, or SearXNG search limits.
   - When explicitly switched to Obscura, preserve one navigation, event-based
-    waits, anti-bot visibility, complete cleanup, and the common configured
-    limit on both main-response body and rendered DOM. Re-test the default on
-    Obscura upgrades.
+    waits, anti-bot visibility, cleanup, and body/DOM limits. Re-test the
+    default on Obscura upgrades.
   - Do not add other hidden retries, fallbacks, or fixed sleeps.
 - Documentation:
   - Update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change.
-  - Remove obsolete text instead of keeping long historical sections.
+  - AGENTS.md is for orientation material; specifics belong in the docs directory.
+  - README.md is for user-facing deployment properties, not implementation details.
+  - Remove/replace obsolete text instead of keeping historical sections or adding dated journal entries.
 - Patch upgrades:
   - Before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`.
   - Runtime patches should remain narrow, startup-validated, strict by default, and documented.
