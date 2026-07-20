@@ -219,12 +219,18 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   `make down-full` stops only that identity-validated proxy and child group,
   including a strictly recorded orphan left by a proxy crash.
   Custom upstreams and manually launched servers are not touched.
-- The first Docker/Podman shared-data ownership claim inspects installed engine
-  commands for running Onyx PostgreSQL/OpenSearch writers and fails closed on
+- Every Docker/Podman shared-data ownership claim inspects installed engine
+  commands for running Onyx PostgreSQL/OpenSearch writers plus integrated or
+  standalone Myst wallet writers and fails closed on
   conflicting writers or an inspection failure, except that an unselected
   Podman command is skipped when its default machine positively reports that it
   is stopped. `make adopt-shared-data-engine` is only for an absent marker after
   the operator verifies both engines are down.
+- Myst signup uses a fixed non-restarting setup project. Its entrypoint only
+  hosts TequilAPI; `myst/vpn_cli.py` exclusively owns exact-identity creation,
+  registration, balance refresh, order validation/creation, and postcondition
+  checks. Integrated startup performs no signup/order mutation. Preserve
+  fail-closed parsing and never retry an ambiguous financial result.
 - `make health-inventory` - render the Makefile-selected engine/environment and
   optional overlays for lite/full healthcheck commands, startup/steady
   cadences, and approximate steady checks per hour.

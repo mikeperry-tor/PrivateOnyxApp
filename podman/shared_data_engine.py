@@ -14,6 +14,7 @@ from typing import Iterable, Sequence
 
 VALID_ENGINES = {"docker", "podman"}
 SHARED_WRITER_SERVICES = {"relational_db", "opensearch"}
+MYST_CONTAINER_NAME = "myst-client-vpn"
 
 
 class GuardError(RuntimeError):
@@ -68,7 +69,29 @@ def _running_shared_writers(command: str) -> set[str]:
         detail = inspected.stderr.strip().splitlines()
         suffix = f": {detail[-1]}" if detail else ""
         raise GuardError(f"could not inspect {command} for shared-data writers{suffix}")
-    return SHARED_WRITER_SERVICES.intersection(inspected.stdout.splitlines())
+    writers = SHARED_WRITER_SERVICES.intersection(inspected.stdout.splitlines())
+    myst = subprocess.run(
+        [
+            command,
+            "ps",
+            "--filter",
+            f"name=^{MYST_CONTAINER_NAME}$",
+            "--filter",
+            "status=running",
+            "--format",
+            "{{.Names}}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if myst.returncode != 0:
+        detail = myst.stderr.strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        raise GuardError(f"could not inspect {command} for Myst writer{suffix}")
+    if MYST_CONTAINER_NAME in myst.stdout.splitlines():
+        writers.add("myst-client")
+    return writers
 
 
 def _podman_machine_is_stopped(command: str) -> bool:
@@ -112,7 +135,7 @@ def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
             names = ", ".join(sorted(writers))
             raise GuardError(
                 f"refusing first {engine} claim while {command_engine} has running "
-                f"Onyx shared-data writer(s): {names}"
+                f"shared-data writer(s): {names}"
             )
 
 
@@ -129,9 +152,14 @@ def claim(
     if owner is not None:
         if owner != engine:
             raise GuardError(
-                f"shared database/index data is claimed by {owner}; run that "
+                f"shared persistent data is claimed by {owner}; run that "
                 "engine's matching make down-* target before starting " + engine
             )
+        # Re-inspect on every same-engine claim. This catches an out-of-band
+        # container started by the other engine after the marker was created,
+        # especially a Myst daemon sharing the wallet/database bind.
+        if not adopt_unclaimed:
+            inspect_first_claim(inspect_commands, engine)
         return owner
 
     if not adopt_unclaimed:
@@ -142,7 +170,7 @@ def claim(
         owner = read_owner(marker)
         if owner != engine:
             raise GuardError(
-                f"shared database/index data is claimed by {owner}; run that "
+                f"shared persistent data is claimed by {owner}; run that "
                 "engine's matching make down-* target before starting {engine}"
             )
         return owner
@@ -202,10 +230,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 inspect_commands=commands,
                 adopt_unclaimed=args.adopt_unclaimed,
             )
-            print(f"Shared database/index data claimed by {owner}.")
+            print(f"Shared persistent data claimed by {owner}.")
         elif args.action == "release":
             release(args.marker, args.engine)
-            print(f"Shared database/index data released for {args.engine}.")
+            print(f"Shared persistent data released for {args.engine}.")
         else:
             owner = read_owner(args.marker)
             print(owner if owner is not None else "unclaimed")

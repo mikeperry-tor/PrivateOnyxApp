@@ -172,21 +172,63 @@ myst_cli identities list >/dev/null 2>&1 || true
 
 echo "TequilAPI is ready."
 
-IDS="$(myst_cli identities list 2>/dev/null | grep -Eo '0x[0-9a-fA-F]{40}' || true)"
-if [ -z "$IDS" ]; then
-  echo "No Myst identity found in /var/lib/mysterium-node; creating one."
-  myst_cli identities new
-  IDS="$(myst_cli identities list 2>/dev/null | grep -Eo '0x[0-9a-fA-F]{40}' || true)"
-fi
-
-ID="$(printf '%s\n' "$IDS" | head -n1)"
-if [ -n "$ID" ]; then
-  myst_cli identities unlock "$ID" || true
-fi
+# Standalone signup/payment containers deliberately stop here.  The host-side
+# helper is the sole owner of identity creation, registration, and funding
+# mutations so two independent processes can never race an order creation.
+# Keep the daemon alive across an arbitrarily long user payment pause.
+case "${MYST_SETUP_ONLY:-false}" in
+  true)
+    echo "MYST_SETUP_ONLY=true: Myst daemon is ready for explicit signup/payment commands."
+    set +e
+    wait "$svc_pid"
+    svc_status="$?"
+    set -e
+    stop_children
+    exit "${svc_status}"
+    ;;
+  false) ;;
+  *)
+    echo "ERROR: MYST_SETUP_ONLY must be true or false." >&2
+    exit 1
+    ;;
+esac
 
 strip_ansi() {
   sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g'
 }
+
+# The pinned CLI renders each identity as an optional `[+]` marker followed by
+# one address on its own line. Do not accept an arbitrary address embedded in
+# diagnostics as the wallet selection.
+IDS="$(myst_cli identities list 2>/dev/null \
+  | strip_ansi \
+  | grep -E '^[[:space:]]*(\[\+\][[:space:]]*)?0x[0-9a-fA-F]{40}[[:space:]]*$' \
+  | grep -Eo '0x[0-9a-fA-F]{40}' || true)"
+ID=""
+IDENTITY_COUNT="$(printf '%s\n' "$IDS" | awk 'NF { count++ } END { print count + 0 }')"
+if [ -n "${MYST_VPN_IDENTITY:-}" ]; then
+  if ! printf '%s\n' "${MYST_VPN_IDENTITY}" | grep -Eq '^0x[0-9a-fA-F]{40}$'; then
+    echo "WARNING: MYST_VPN_IDENTITY is malformed; explicit signup repair is required."
+  else
+    ID="$(printf '%s\n' "$IDS" | awk -v wanted="${MYST_VPN_IDENTITY}" \
+      'tolower($0) == tolower(wanted) { print; exit }')"
+    if [ -z "$ID" ]; then
+      echo "WARNING: MYST_VPN_IDENTITY does not select an available identity; explicit signup repair is required."
+    fi
+  fi
+elif [ "$IDENTITY_COUNT" -eq 1 ]; then
+  ID="$IDS"
+elif [ "$IDENTITY_COUNT" -gt 1 ]; then
+  echo "WARNING: Multiple Myst identities exist; set MYST_VPN_IDENTITY explicitly."
+fi
+
+if [ -n "$ID" ]; then
+  if ! myst_cli identities unlock "$ID"; then
+    echo "WARNING: Could not unlock Myst identity $ID; explicit signup repair is required."
+  fi
+else
+  echo "WARNING: No usable Myst identity is available; run make vpn-signup-orderform or make vpn-signup-blockchain."
+fi
 
 registration_status() {
   myst_cli identities get "$ID" 2>/dev/null \
@@ -200,280 +242,17 @@ identity_balance() {
     | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true
 }
 
-# Registration
-# Attempt on-chain registration (Mysterium sponsors gas for new identities).
-REG_STATUS="$(registration_status)"
-
-if [ "$REG_STATUS" != "registered" ]; then
-  submit_registration() {
-    if [ -n "${MYST_REFERRAL_TOKEN:-}" ]; then
-      if $MYST account register --token="${MYST_REFERRAL_TOKEN}"; then
-        echo "Registration request submitted."
-      else
-        echo "WARNING: Failed to register the identity. Will retry while status remains unregistered."
-      fi
-    else
-      if $MYST account register; then
-        echo "Registration request submitted."
-      else
-        echo "WARNING: Failed to register the identity. Will retry while status remains unregistered."
-      fi
-    fi
-  }
-
-  echo "Identity $ID is not registered (status: ${REG_STATUS:-unknown}). Submitting registration..."
-  submit_registration
-
-  # Wait for registration to confirm on-chain.
-  # Default is no timeout because confirmation timing depends on
-  # transactor/Hermes availability and blockchain conditions.
-  _timeout="${MYST_REGISTRATION_TIMEOUT:-0}"
-  _retry_interval="${MYST_REGISTRATION_RETRY_INTERVAL:-60}"
-  case "$_retry_interval" in
-    ''|0) _retry_interval=60 ;;
-  esac
-  REG_NEEDS_FUNDING=false
-  _elapsed=0
-  if [ "$_timeout" = "0" ]; then
-    echo "Waiting for registration to confirm on-chain (no timeout)."
-    while true; do
-      REG_STATUS="$(registration_status)"
-      echo "Registration status after ${_elapsed}s: ${REG_STATUS:-unknown}"
-      [ "$REG_STATUS" = "registered" ] && break
-
-      # `inprogress` with zero balance means registration has started
-      # but requires a payment-channel top-up to complete.
-      if [ "$REG_STATUS" = "inprogress" ]; then
-        REG_BALANCE="$(identity_balance)"
-        case "${REG_BALANCE:-0}" in
-          ''|0|0.0|0.00|0.000|0.0000|0.00000|0.000000)
-            echo "Registration is inprogress with zero balance; proceeding to funding/order creation."
-            REG_NEEDS_FUNDING=true
-            break
-          ;;
-        esac
-      fi
-
-      if [ "$_elapsed" -gt 0 ] && [ "$(( $_elapsed % _retry_interval ))" -eq 0 ]; then
-        case "${REG_STATUS:-unknown}" in
-          unregistered|registrationerror|unknown)
-            echo "Registration still ${REG_STATUS:-unknown} after ${_elapsed}s; re-submitting registration request..."
-            submit_registration
-          ;;
-        esac
-      fi
-      sleep 5
-      _elapsed="$(( _elapsed + 5 ))"
-    done
-  else
-    echo "Waiting up to ${_timeout}s for registration to confirm on-chain..."
-    while [ "$_elapsed" -lt "$_timeout" ]; do
-      REG_STATUS="$(registration_status)"
-      echo "Registration status after ${_elapsed}s: ${REG_STATUS:-unknown}"
-      [ "$REG_STATUS" = "registered" ] && break
-
-      if [ "$REG_STATUS" = "inprogress" ]; then
-        REG_BALANCE="$(identity_balance)"
-        case "${REG_BALANCE:-0}" in
-          ''|0|0.0|0.00|0.000|0.0000|0.00000|0.000000)
-            echo "Registration is inprogress with zero balance; proceeding to funding/order creation."
-            REG_NEEDS_FUNDING=true
-            break
-          ;;
-        esac
-      fi
-
-      if [ "$_elapsed" -gt 0 ] && [ "$(( $_elapsed % _retry_interval ))" -eq 0 ]; then
-        case "${REG_STATUS:-unknown}" in
-          unregistered|registrationerror|unknown)
-            echo "Registration still ${REG_STATUS:-unknown} after ${_elapsed}s; re-submitting registration request..."
-            submit_registration
-          ;;
-        esac
-      fi
-      sleep 5
-      _elapsed="$(( _elapsed + 5 ))"
-    done
-  fi
-
-  if [ "$REG_STATUS" = "registered" ]; then
-    echo "Identity $ID registered successfully."
-  elif [ "$REG_NEEDS_FUNDING" = "true" ]; then
-    echo "Identity $ID registration is pending funding; top-up flow will run next."
-  elif [ "$_timeout" != "0" ]; then
-    echo "WARNING: Identity $ID registration did not confirm within ${_timeout}s (status: ${REG_STATUS:-unknown})."
-    echo "         Connection attempt will still be made, but may fail until registration completes."
-  else
-    echo "WARNING: Registration status is still ${REG_STATUS:-unknown}; continuing."
-  fi
-else
-  echo "Identity $ID is already registered."
+REG_STATUS=""
+BALANCE=""
+if [ -n "$ID" ]; then
+  REG_STATUS="$(registration_status)"
+  BALANCE="$(identity_balance)"
 fi
-
 REG_FINAL_STATUS="${REG_STATUS:-unknown}"
-
-# Balance / Funding
-BALANCE="$(identity_balance)"
 echo "Identity: $ID  |  Balance: ${BALANCE:-unknown} MYST"
 
-NEEDS_ORDER_CHECK=false
-case "${REG_FINAL_STATUS}" in
-  registered) ;;
-  *)
-    NEEDS_ORDER_CHECK=true
-    echo "Registration status is ${REG_FINAL_STATUS}; checking payment orders before connect attempts."
-  ;;
-esac
-
-case "${BALANCE:-0}" in
-  ''|0|0.0|0.00|0.000|0.0000|0.00000|0.000000)
-    NEEDS_ORDER_CHECK=true
-  ;;
-esac
-
-# When MYST_SKIP_ORDER_CREATION=true, skip the entire order check/creation
-# block. Used by the blockchain signup flow (make vpn-signup-blockchain) where
-# the user will transfer $MYST directly on-chain instead of using a payment
-# order. The CLI helper (myst-vpn-cli.sh blockchain) handles printing the
-# channel address after the entrypoint finishes registration.
-if [ "${MYST_SKIP_ORDER_CREATION:-false}" = "true" ]; then
-  echo "MYST_SKIP_ORDER_CREATION=true: skipping payment order check/creation."
-  NEEDS_ORDER_CHECK=false
-fi
-
-# Extract a payment URL from order output (the "Data: {json}" line).
-# Tries python3 for structured JSON parsing, falls back to grep for any https URL.
-extract_payment_url() {
-  _input="$1"
-  _url=""
-  if command -v python3 >/dev/null 2>&1; then
-    _url="$(printf '%s' "$_input" | python3 -c '
-import sys, json
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-for key in ("payment_url", "pay_url", "url", "payment_link", "redirect_url", "checkout_url"):
-    val = data.get(key)
-    if val and isinstance(val, str) and val.startswith("http"):
-        print(val)
-        sys.exit(0)
-def find_url(obj):
-    if isinstance(obj, dict):
-        for v in obj.values():
-            r = find_url(v)
-            if r:
-                return r
-    elif isinstance(obj, list):
-        for v in obj:
-            r = find_url(v)
-            if r:
-                return r
-    elif isinstance(obj, str) and obj.startswith("http"):
-        return obj
-    return None
-r = find_url(data)
-if r:
-    print(r)
-' 2>/dev/null || true)"
-  fi
-  if [ -z "$_url" ]; then
-    _url="$(printf '%s' "$_input" | grep -oE 'https://[^"[:space:]]+' | head -n1 || true)"
-  fi
-  [ -n "$_url" ] && printf '%s' "$_url" && return 0
-  return 1
-}
-
-# Print a payment URL in a prominent, greppable banner.
-print_payment_banner() {
-  _url="$1"
-  printf '%s\n' "═══════════════════════════════════════════════════════════"
-  printf 'PAYMENT URL: %s\n' "$_url"
-  printf '%s\n' "═══════════════════════════════════════════════════════════"
-}
-
-if [ "$NEEDS_ORDER_CHECK" = "true" ]; then
-    # Show any existing orders so the user can track pending payments.
-    echo "Checking existing payment orders..."
-    EXISTING="$(myst_cli orders get-all "$ID" 2>/dev/null || true)"
-    HAS_EXISTING_ORDERS=false
-    if [ -n "$EXISTING" ] && ! printf '%s' "$EXISTING" | grep -qi 'no orders found'; then
-      HAS_EXISTING_ORDERS=true
-    fi
-    [ -n "$EXISTING" ] && echo "$EXISTING"
-
-    # For existing unpaid orders, try to extract and display the payment URL.
-    if [ "$HAS_EXISTING_ORDERS" = "true" ]; then
-      _existing_ids="$(printf '%s' "$EXISTING" | grep -oE "Order ID '[^']+'" | sed "s/Order ID '//; s/'//" || true)"
-      for _oid in $_existing_ids; do
-        _detail="$(myst_cli orders get "$ID" "$_oid" 2>/dev/null || true)"
-        _data_line="$(printf '%s' "$_detail" | grep -i '^.*Data:' || true)"
-        if [ -n "$_data_line" ]; then
-          _json_part="$(printf '%s' "$_data_line" | sed 's/^.*Data:[[:space:]]*//' || true)"
-          _pay_url="$(extract_payment_url "$_json_part" || true)"
-          if [ -n "$_pay_url" ]; then
-            print_payment_banner "$_pay_url"
-            break
-          fi
-        fi
-      done
-    fi
-
-    # Auto-create a new order if all four required vars are set.
-    if [ -n "${MYST_VPN_ORDER_AMOUNT:-}" ] && [ -n "${MYST_VPN_ORDER_CURRENCY:-}" ] && \
-       [ -n "${MYST_VPN_ORDER_GATEWAY:-}" ] && [ -n "${MYST_VPN_ORDER_COUNTRY:-}" ]; then
-      if [ "$HAS_EXISTING_ORDERS" = "true" ]; then
-        echo "Skipping auto-create: existing order(s) found."
-      else
-        echo "Creating order: amount=${MYST_VPN_ORDER_AMOUNT} pay_currency=${MYST_VPN_ORDER_CURRENCY} gateway=${MYST_VPN_ORDER_GATEWAY} country=${MYST_VPN_ORDER_COUNTRY}..."
-        set +e
-        CREATE_OUT="$(myst_cli orders create \
-          "$ID" \
-          "${MYST_VPN_ORDER_AMOUNT}" \
-          "${MYST_VPN_ORDER_CURRENCY}" \
-          "${MYST_VPN_ORDER_GATEWAY}" \
-          "${MYST_VPN_ORDER_COUNTRY}" \
-          "${MYST_VPN_ORDER_GATEWAY_DATA}" 2>&1)"
-        CREATE_RC=$?
-        set -e
-        if [ -n "$CREATE_OUT" ]; then
-          printf '%s\n' "$CREATE_OUT"
-        fi
-        if [ "$CREATE_RC" -ne 0 ]; then
-          echo "WARNING: Order creation failed (exit ${CREATE_RC})."
-        else
-          # Extract and display the payment URL from the newly created order.
-          _data_line="$(printf '%s' "$CREATE_OUT" | grep -i '^.*Data:' || true)"
-          if [ -n "$_data_line" ]; then
-            _json_part="$(printf '%s' "$_data_line" | sed 's/^.*Data:[[:space:]]*//' || true)"
-            _pay_url="$(extract_payment_url "$_json_part" || true)"
-            if [ -n "$_pay_url" ]; then
-              print_payment_banner "$_pay_url"
-            fi
-          fi
-        fi
-      fi
-    else
-      echo "Set MYST_VPN_ORDER_AMOUNT / MYST_VPN_ORDER_CURRENCY / MYST_VPN_ORDER_GATEWAY / MYST_VPN_ORDER_COUNTRY"
-      echo "to auto-create a funding order on next start. Available gateways:"
-      myst_cli orders gateways 2>/dev/null | sed 's/^/  /' || true
-    fi
-
-    # Optionally block until balance is funded before attempting to connect.
-    if [ "${MYST_VPN_WAIT_FOR_FUNDS:-false}" = "true" ]; then
-      echo "MYST_VPN_WAIT_FOR_FUNDS=true - polling every 30s until balance > 0..."
-      while true; do
-        sleep 30
-        BALANCE="$(myst_cli identities get "$ID" 2>/dev/null \
-          | strip_ansi \
-          | grep -i 'Balance:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1 || true)"
-        echo "Funding check: current balance is ${BALANCE:-0} MYST"
-        case "${BALANCE:-0}" in
-          ''|0|0.0|0.00|0.000|0.0000|0.00000|0.000000) ;;
-          *) echo "Balance is now ${BALANCE} MYST. Proceeding."; break ;;
-        esac
-      done
-    fi
+if [ "${REG_FINAL_STATUS}" != "registered" ]; then
+  echo "WARNING: Registration status is ${REG_FINAL_STATUS}; explicit signup repair is required."
 fi
 
 connection_is_up() {

@@ -39,25 +39,19 @@
 #   ../docker-data/myst-data/keystore/
 #
 # Back up this directory to preserve your identity and any funded balance.
-# On first start the container creates a new identity automatically if none
-# exists in that directory.
+# Identity creation, registration, and payment orders are explicit host-side
+# operations (`make vpn-signup-*`); ordinary container startup never mutates
+# signup/payment state.
 #
 # ── Startup sequence ──────────────────────────────────────────────────────────
 # 1. Start the Myst daemon (TequilAPI on 127.0.0.1:4050).
 # 2. Wait for TequilAPI to become reachable.
-# 3. Create a new identity if none exists in the keystore.
-# 4. Unlock the first identity found.
-# 5. Register the identity on-chain if not already registered
-#    (Mysterium sponsors gas fees — no ETH required from you).
-#    During this phase Myst may log warnings like:
-#      "Could not get consumer channel"
-#      "no contract code at given address"
-#    These are expected on first run before the consumer channel contract
-#    exists, and stop after registration / funding completes.
-# 6. Check balance; if zero, show/create a payment order and optionally
-#    block until funded (see MYST_VPN_WAIT_FOR_FUNDS).
-# 7. Attempt a VPN connection (if MYST_AUTO_CONNECT=true).
-# 8. Keep the daemon in the foreground; kill-switch remains active.
+# 3. In setup-only mode, wait for explicit host-side commands indefinitely.
+# 4. In integrated mode, read/unlock the existing identity without creating,
+#    registering, or funding anything.
+# 5. Attempt a VPN connection only for an existing registered identity when
+#    MYST_AUTO_CONNECT=true.
+# 6. Keep the daemon in the foreground; kill-switch remains active.
 #
 # ── Docker Compose operations ────────────────────────────────────────────────
 # Initialize / first start:
@@ -109,27 +103,11 @@
 #                            Fail-closed behavior remains for non-LAN traffic.
 #                            Default: "false"
 #
-# Registration
-#   MYST_REFERRAL_TOKEN      Optional referral or affiliate token passed to
-#                            `myst account register`. Default: ""
-#   MYST_REGISTRATION_TIMEOUT
-#                            Optional max seconds to wait for on-chain
-#                            registration confirmation.
-#                            Set to "0" (default) to wait indefinitely,
-#                            which is recommended because confirmation time
-#                            varies with blockchain/network conditions.
-#   MYST_REGISTRATION_RETRY_INTERVAL
-#                            Retry interval (seconds) for re-submitting
-#                            `myst account register` while status remains
-#                            unregistered/unknown. Default: "60"
-#
 # Funding / Order placement
-#   The container uses `myst cli orders create` to place a crypto payment
-#   order through a supported gateway. The gateway list is NOT hardcoded in
-#   Myst CLI; it is returned at runtime by TequilAPI via `orders gateways`.
-#   CoinGate is a known supported example, but it should be treated as an
-#   example rather than the only guaranteed option. All four vars must be set
-#   to trigger automatic order creation when balance is 0.
+#   `make vpn-signup-orderform` is the only automatic order owner. It validates
+#   the configured values against the live `orders gateways` result and verifies
+#   the exact created order before displaying its HTTPS payment URL. Container
+#   startup never creates or retries an order.
 #
 #   Helper commands:
 #     ./print-order-gateways.sh
@@ -149,15 +127,6 @@
 #   MYST_VPN_ORDER_COUNTRY   2-letter ISO country code used for tax calculation
 #                            (e.g. "US").
 #
-#   On every start with a zero balance the container will also print any
-#   existing pending orders (so you can track a previously placed order) and
-#   list available gateways when order vars are not set.
-#
-#   MYST_VPN_WAIT_FOR_FUNDS  When "true", block the connection attempt and
-#                            poll every 30 s until balance becomes non-zero.
-#                            Useful when you want the container to self-heal
-#                            after a top-up without a restart. Default: "false"
-#
 # ── Capabilities required ─────────────────────────────────────────────────────
 # NET_ADMIN + /dev/net/tun are required for WireGuard tunnel management and
 # the built-in kill-switch (iptables rules inside the container's netns).
@@ -167,7 +136,7 @@ services:
   myst-client:
     image: ${MYST_IMAGE:?MYST_IMAGE must be set}
     container_name: myst-client-vpn
-    restart: unless-stopped
+    restart: "${MYST_RESTART_POLICY:-unless-stopped}"
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -203,6 +172,11 @@ services:
       # references stay valid. See myst/myst-client-entrypoint.sh.
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
       MYST_AUTO_CONNECT: "${MYST_AUTO_CONNECT:-true}"
+      # Standalone signup mode starts only the daemon. Identity, registration,
+      # and funding mutations are owned exclusively by myst-vpn-cli.sh.
+      MYST_SETUP_ONLY: "${MYST_SETUP_ONLY:-false}"
+      # Required when the persisted wallet contains more than one identity.
+      MYST_VPN_IDENTITY: "${MYST_VPN_IDENTITY:-}"
       # Optional WireGuard interface MTU override passed to the daemon.
       MYST_VPN_WIREGUARD_MTU: "${MYST_VPN_WIREGUARD_MTU:-}"
       # Diagnostic override to skip peer route exclusion during P2P setup.
@@ -241,34 +215,6 @@ services:
       # The idle path (MYST_VPN_ENABLED=false) overrides this to "false" at
       # runtime in myst-client-entrypoint.sh for defense-in-depth.
       MYST_FIREWALL_ENABLED: "${MYST_FIREWALL_ENABLED:-true}"
-      # Optional referral/affiliate token used during identity registration.
-      MYST_REFERRAL_TOKEN: ""
-      # Optional max wait (seconds) for registration confirmation.
-      # 0 means no timeout (wait indefinitely until registered).
-      MYST_REGISTRATION_TIMEOUT: "0"
-      # Re-submit registration every N seconds while still unregistered.
-      MYST_REGISTRATION_RETRY_INTERVAL: "10"
-      # Funding / order creation.
-      # Set all four to automatically create a payment order when registration
-      # is not yet registered or balance is 0.
-      # Gateway names/currencies are discovered dynamically from Mysterium via:
-      #   ./print-order-gateways.sh
-      # or:
-      #   docker exec myst-client-vpn myst cli orders gateways
-      # CoinGate is a known example, but not the only possible gateway name.
-      MYST_VPN_ORDER_AMOUNT: "${MYST_VPN_ORDER_AMOUNT:-}"     # Amount of MYST to purchase (e.g. "10")
-      MYST_VPN_ORDER_CURRENCY: "${MYST_VPN_ORDER_CURRENCY:-}"   # Payment currency (e.g. "BTC", "ETH", "USDT")
-      MYST_VPN_ORDER_GATEWAY: "${MYST_VPN_ORDER_GATEWAY:-}"    # Payment gateway name from `orders gateways` (e.g. "coingate")
-      MYST_VPN_ORDER_COUNTRY: "${MYST_VPN_ORDER_COUNTRY:-}"    # 2-letter ISO country code for tax (e.g. "US")
-      # Gateway-specific metadata (e.g. custom_id for coingate, lightning_network=true)
-      # Coingate requires this field; common pattern: custom_id=uniquevalue
-      MYST_VPN_ORDER_GATEWAY_DATA: "${MYST_VPN_ORDER_GATEWAY_DATA:-custom_id=mysterium-onyx}"
-      # Set to "true" to block startup until balance > 0 before attempting to connect.
-      MYST_VPN_WAIT_FOR_FUNDS: "${MYST_VPN_WAIT_FOR_FUNDS:-false}"
-      # When "true", skip the payment order check/creation block in the entrypoint.
-      # Used by `make vpn-signup-blockchain` so the user can transfer $MYST directly
-      # on-chain instead of getting a CoinGate order auto-created.
-      MYST_SKIP_ORDER_CREATION: "${MYST_SKIP_ORDER_CREATION:-false}"
     healthcheck:
       # VPN mode requires Connected plus a usable myst0 IPv4 route. Explicit
       # no-VPN mode instead requires a usable non-myst0 IPv4 default route and

@@ -159,7 +159,7 @@ Both options use the same standalone container and produce the same identity/key
 make vpn-signup-orderform
 ```
 
-This launches a standalone Myst container, creates a new identity, registers it, and creates a CoinGate payment order. The payment URL is displayed in a banner:
+This launches a dedicated non-restarting Myst setup container, creates or selects one exact identity, submits at most one registration request, and creates one verified CoinGate payment order. The container can remain running while you complete payment; it does not retry registration or order creation in the background. The payment URL is displayed in a banner:
 
 ```
 ═══════════════════════════════════════════════════════════
@@ -167,7 +167,7 @@ PAYMENT URL: https://coingate.com/pay/invoice/abc123...
 ═══════════════════════════════════════════════════════════
 ```
 
-The default order is for 100 $MYST (currently ~$20 USD), payable via CoinGate in several major cryptocurrencies. An email is required by the payment gateway. You can customize the order amount, currency, and gateway via `MYST_VPN_ORDER_*` variables in `.env.wrapper`.
+The default order is for 100 $MYST, payable via CoinGate in several major cryptocurrencies. An email is required by the payment gateway. You can customize the order amount, currency, and gateway via `MYST_VPN_ORDER_*` variables in `.env.wrapper`. The command validates those values against Myst's current gateway list and will not silently choose another gateway or currency.
 
 **Step 2: Pay at the URL**
 
@@ -179,7 +179,7 @@ Open the payment URL in a browser and complete the cryptocurrency payment.
 make vpn-orderstatus
 ```
 
-This shows your identity, balance, registration status, and all orders with their payment status. For unpaid orders, the payment URL is displayed again. Repeat until your balance is non-zero. For a quick balance check:
+This refreshes and shows your identity balance, registration status, and all orders. A payment URL is displayed only for `initial` or `new` orders. A `paid` order with a zero balance is reported as settlement pending and never causes another order to be created. Repeat until your balance is non-zero. For a quick refreshed balance check:
 
 ```bash
 make vpn-balance
@@ -195,10 +195,12 @@ This automatically stops the standalone signup container (your wallet data is pr
 
 **Notes:**
 
-- If the payment order expires before you pay, just run `make vpn-signup-orderform` again. It reuses your existing identity and creates a new order.
+- If the payment order fails or expires before you pay, run `make vpn-signup-orderform` again explicitly. It reuses your selected identity and creates a replacement only after an authoritative order/balance check.
+- If more than one identity exists, set `MYST_VPN_IDENTITY` in `.env.wrapper`; signup, status checks, and integrated startup all refuse to guess which wallet to use.
+- Run `make vpn-signup-stop` if you want to stop the standalone setup container without starting the stack.
 - The container build process may take some time to build all components on first run. Makefile dependency checks are used by `make up-lite` (or `make up-full`) to build images on first run, but not after the images exist.
 - Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_VPN_PREFERRED_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
-- The payment URL is also printed in the container logs as a fallback: `docker logs myst-client-vpn 2>&1 | grep PAYMENT_URL`
+- Registration or order failures are printed by the command and do not restart the setup container. Ambiguous order results are never retried automatically; run `make vpn-orderstatus` before deciding whether to try again.
 
 #### Option B: Direct $MYST Transfer (Skip the Order Page)
 
@@ -260,7 +262,7 @@ If you hold $MYST on Ethereum, use the [Mysterium bridge](https://help.mystnodes
 make vpn-balance
 ```
 
-The node polls the on-chain channel balance and will reflect the transfer once the Polygon block confirms. If the balance does not update, run `make vpn-orderstatus` to trigger a resync, or restart the container with `make vpn-signup-blockchain` (which reuses your existing identity).
+The node polls the on-chain channel balance and will reflect the transfer once the Polygon block confirms. Both `make vpn-balance` and `make vpn-orderstatus` explicitly refresh the balance. If it remains zero, leave the setup container running and try the read-only status command again later; do not submit another transfer merely because settlement is delayed.
 
 ## Onyx UI Configuration
 

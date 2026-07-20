@@ -545,6 +545,75 @@ unready, and exact startup/no-VPN non-arming behavior. Reconfirm that the
 health command has no container-engine socket and remains the only periodic
 readiness owner.
 
+### Pinned Myst signup and payment CLI contracts
+
+The standalone signup container is a non-restarting, TequilAPI-only service.
+Its entrypoint performs no identity, registration, or order mutation; the
+host-side `myst/vpn_cli.py` helper is the sole workflow owner. The integrated
+entrypoint also performs no signup or financial mutation. Preserve this split
+on every Myst pin change so a long user payment pause, command failure, or
+health failure cannot race a second order or cause restart churn.
+
+The helper deliberately parses pinned human-readable CLI output because the
+CLI does not expose a stable machine-output mode. Audit all of these exact
+contracts against the new binary and update fixtures before accepting a pin:
+
+- The pinned CLI can emit an `[ERROR]` line while returning exit status zero.
+  Every non-create command treats either a nonzero exit or this marker as
+  failure. `orders create` is the sole exception because only its authoritative
+  pre/post order-list postcondition decides whether a remote mutation occurred.
+
+- `identities list` emits one optional `[+]` marker and one `0x` plus 40
+  hexadecimal address per line; embedded addresses in diagnostics are not
+  identities. A successful empty list is distinct from a command failure.
+  Creation must be followed by a second successful listing, and multiple
+  identities require the explicit `MYST_VPN_IDENTITY` selector in both setup
+  commands and integrated startup.
+- `identities get <id>` emits `Registration Status:`, `Channel address:`, and
+  `Balance:` lines. Registration uses the identity-addressed
+  `identities register <id>` command, never `account register`, because the
+  latter acts on Myst's current identity and its upstream command action can
+  print failure while returning success.
+- `identities balance <id>` is the explicit remote refresh. A subsequent
+  `identities get` supplies the authoritative status/channel/balance snapshot;
+  empty or malformed output is never treated as zero.
+- Although CLI usage text says `order`, the pinned dispatcher accepts the
+  `orders get-all|get|create|gateways` form used by the wrapper. `get-all`
+  emits either `No orders found` or `Order ID '<id>' is in state: '<state>'`.
+  The only pinned states are `initial`, `new`, `paid`, and `failed`; unknown
+  states and order IDs outside the pinned conservative character set fail
+  closed. Only `initial`/`new` are payable. `paid` with a refreshed zero
+  balance is settlement-in-progress and must not create another order.
+- `orders gateways` emits repeated `Gateway:`, `Suggested minimum order:`, and
+  `Supported currencies:` lines. The pinned create command rejects amounts
+  less than or equal to the reported minimum, not merely amounts below it.
+  Gateway, currency, finite positive decimal amount, two-letter country, and
+  gateway `key=value` data are validated before mutation, including bounded
+  gateway/key character sets, nonempty values, and rejection of control
+  characters; the first returned gateway is never selected implicitly.
+- Several pinned `orders create` validation branches log an error and return
+  exit status zero. Conversely, a remote order may be committed even if the
+  client loses its response. Therefore exit status is never the creation
+  postcondition: diff the successful pre/post `get-all` results, require exactly
+  one newly observed order, require any reported ID to equal it, retrieve that
+  exact order, and never retry an ambiguous result automatically.
+- `orders get` emits one `Data:` JSON value. Extract a single URL only from the
+  recognized `payment_url`, `pay_url`, `payment_link`, `redirect_url`,
+  `checkout_url`, or `url` keys, including nested objects/lists. Require
+  credential-free HTTPS with a hostname and no control characters. Do not
+  restore the old arbitrary-URL grep fallback, echo complete gateway payloads,
+  or display URLs for paid or failed orders.
+- Direct transfer output depends on a distinct 40-hex `Channel address` and
+  the pinned Polygon chain/token assumptions. Reconfirm chain ID 137, the MYST
+  token address, active-Hermes channel derivation, and the warning not to fund
+  the identity address.
+
+Run `tests/test_myst_vpn_cli.py` plus the pinned image command-contract checks.
+Exercise read-only identity, balance refresh, gateway, order-list, and exact
+order-detail commands on both engines. Creating a real payment order remains
+an explicit external financial mutation; use an upstream sandbox if one is
+available rather than adding it to unattended validation.
+
 ## Minimum deterministic validation
 
 ```sh

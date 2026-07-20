@@ -135,6 +135,18 @@ signup project from the integrated `onyx` Compose project. They stop the
 former before stack startup but preserve an already-running integrated Myst
 container and its routing namespace.
 
+The standalone project uses `MYST_SETUP_ONLY=true` and `restart: "no"`. Its
+entrypoint starts TequilAPI and waits without creating identities, registering,
+or placing orders. The host helper is the single mutation owner, validates the
+exact identity and live gateway configuration, verifies registration/order
+postconditions, and never automatically retries an ambiguous financial
+result. `MYST_VPN_IDENTITY` is required for both setup and integrated startup
+when the wallet contains multiple identities. Setup health checks only local
+TequilAPI and bypasses the recovery
+supervisor, so hours or days spent completing payment neither arm PID-1
+termination nor create restart churn. `make vpn-signup-stop` explicitly stops
+the setup service. Integrated Myst startup performs no signup/order mutation.
+
 With `MYST_VPN_ENABLED=true`, health reads only Myst's loopback
 `/connection` status plus the local `myst0` address and route. It requires a
 single top-level `Connected` status and verifies that a reserved public test
@@ -147,9 +159,10 @@ complete readiness success. A later first failure records monotonic uptime;
 every success clears it; and continuous failure for at least 60 seconds changes
 the armed marker to a one-shot signaled state and sends `SIGTERM` to container
 PID 1. The entrypoint stops and reaps the daemon and route-reconciliation child
-before exiting, and `restart: unless-stopped` then restarts Myst. Startup
-registration, funding, provider selection, and an initial tunnel failure remain
-visibly unready without restart churn. Explicit no-VPN mode never arms recovery.
+before exiting, and `restart: unless-stopped` then restarts Myst. Missing or
+incomplete registration/funding, provider selection, and an initial tunnel
+failure remain visibly unready without restart churn. Explicit no-VPN and
+standalone setup modes never arm recovery.
 
 The one-minute steady cadence means automatic restart normally begins between
 roughly one and two minutes after a disconnect. Docker and Podman use the same

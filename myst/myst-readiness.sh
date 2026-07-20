@@ -1,6 +1,20 @@
 #!/bin/sh
 set -eu
 
+case "${MYST_SETUP_ONLY:-false}" in
+  true)
+    # Signup/payment mode intentionally has no tunnel.  Its only service
+    # boundary is the local API used by the explicit host-side workflow.
+    wget -Y off -q -T 5 -O /dev/null http://127.0.0.1:4050/connection
+    exit 0
+    ;;
+  false) ;;
+  *)
+    echo "Myst readiness failed: MYST_SETUP_ONLY must be true or false" >&2
+    exit 1
+    ;;
+esac
+
 case "${MYST_VPN_ENABLED:-true}" in
   true|false) ;;
   *)

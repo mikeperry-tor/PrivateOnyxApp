@@ -129,13 +129,15 @@ markers and does not inspect chats, tables, index names, or document contents.
 Both engines must be down before switching because shared storage does not make
 concurrent database or index writers safe.
 
-Before either `make up-*` recipe reaches Compose, an atomic marker under
-`docker-data/host-services` claims the shared database/index data for Docker or
-Podman. Repeated starts by the same engine are allowed; the other engine fails
+Before either `make up-*` or Myst signup recipe reaches Compose, an atomic marker
+under `docker-data/host-services` claims the shared database/index/wallet data
+for Docker or Podman. Repeated starts by the same engine are allowed; the other engine fails
 closed until the owner's matching `make down-*` completes successfully. Inspect
 the marker with `make shared-data-engine-status`. On the first claim, the guard
 queries every installed Docker/Podman command (including `CONTAINER_BIN`) for
-running Onyx PostgreSQL or OpenSearch writers. A writer owned by the other
+running Onyx PostgreSQL/OpenSearch writers and any integrated or standalone
+`myst-client-vpn`. Same-engine claims repeat this inspection so an out-of-band
+other-engine Myst daemon cannot be hidden by an existing marker. A writer owned by the other
 engine, or an installed engine that cannot be inspected, stops startup before
 the marker is created. The one narrow exception is an unselected Podman command
 whose default machine positively reports the `stopped` state; its expected API
@@ -157,6 +159,14 @@ The two stack-start targets are `.NOTPARALLEL` Make targets. Their ownership
 claim, shared-data preparation, host-side services, and Compose launch therefore
 cannot become peer jobs under `make -j`; a rejected claim stops the serial
 prerequisite chain before any shared-data or host-process mutation.
+
+Standalone signup uses the fixed `private-onyx-myst-signup` Compose project,
+`MYST_SETUP_ONLY=true`, and `restart: "no"` on both engines. The preflight
+rejects an integrated or wrong-mode same-name container rather than executing
+financial commands in it. `make vpn-signup-stop` releases the selected-engine
+claim after stopping that exact project; `make up-*` instead adopts the same
+claim, stops the standalone project, and starts integrated Myst with the
+preserved wallet bind.
 
 PostgreSQL requires three linked settings:
 

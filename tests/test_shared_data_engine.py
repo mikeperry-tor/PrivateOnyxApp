@@ -10,6 +10,19 @@ from podman import shared_data_engine
 
 
 class SharedDataEngineTests(unittest.TestCase):
+    def test_running_standalone_myst_is_a_shared_data_writer(self) -> None:
+        responses = (
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="myst-client-vpn\n", stderr=""
+            ),
+        )
+        with patch.object(shared_data_engine.subprocess, "run", side_effect=responses):
+            self.assertEqual(
+                shared_data_engine._running_shared_writers("docker"),
+                {"myst-client"},
+            )
+
     def test_claim_is_idempotent_for_same_engine_and_blocks_other(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / "owner"
@@ -17,7 +30,10 @@ class SharedDataEngineTests(unittest.TestCase):
                 shared_data_engine.claim(marker, "docker", inspect_commands=()),
                 "docker",
             )
-            self.assertEqual(shared_data_engine.claim(marker, "docker"), "docker")
+            self.assertEqual(
+                shared_data_engine.claim(marker, "docker", inspect_commands=()),
+                "docker",
+            )
             with self.assertRaisesRegex(
                 shared_data_engine.GuardError, "claimed by docker"
             ):

@@ -200,6 +200,10 @@ are not duplicate enforcement.
 - Myst reconciliation and recovery ownership: `myst/myst-client-entrypoint.sh`,
   `myst/route-reconciliation.sh`, `myst/myst-readiness.sh`, effective Compose
   health configuration, and the Myst readiness/reconciliation tests.
+- Myst signup/payment ownership: the non-restarting setup mode,
+  `myst/vpn_cli.py`, `myst/signup_guard.py`, and their deterministic
+  identity/order/failure/long-pause tests. The integrated entrypoint performs
+  no signup or order mutation.
 - Podman shared-state and host-document controls: Podman Compose overlays,
   `podman/shared_data_engine.py`, `podman/startup_health.py`, the shared host
   manager, and their deterministic tests.

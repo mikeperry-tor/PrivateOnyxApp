@@ -218,6 +218,15 @@ check_state() {
   validate_regular_file "${readiness_script}" "readiness script"
   [ -r "${readiness_script}" ] || fail "readiness script is unreadable"
 
+  # Standalone signup/payment mode may remain active for hours or days. Its
+  # local readiness remains visible, but a failure must never terminate PID 1
+  # or turn an upstream signup/order failure into container restart behavior.
+  case "${MYST_SETUP_ONLY:-false}" in
+    true) exec /bin/sh "${readiness_script}" ;;
+    false) ;;
+    *) exec /bin/sh "${readiness_script}" ;;
+  esac
+
   # Explicit no-VPN and invalid selector values never create or mutate VPN
   # recovery state. The pure readiness predicate remains authoritative.
   case "${MYST_VPN_ENABLED:-true}" in

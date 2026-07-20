@@ -199,5 +199,33 @@ class MystNoVpnReadinessTests(unittest.TestCase):
         self.assertIn("unexpected myst0 interface", result.stderr)
 
 
+class MystSetupReadinessTests(unittest.TestCase):
+    def test_setup_mode_checks_only_local_tequilapi(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            invoked = Path(temp_dir) / "invoked"
+            fake_wget = Path(temp_dir) / "wget"
+            fake_wget.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >\"$INVOKED\"\n"
+                "[ \"$*\" = '-Y off -q -T 5 -O /dev/null http://127.0.0.1:4050/connection' ]\n",
+                encoding="utf-8",
+            )
+            fake_wget.chmod(fake_wget.stat().st_mode | stat.S_IXUSR)
+            result = subprocess.run(
+                ["/bin/sh", str(SCRIPT)],
+                env={
+                    "MYST_SETUP_ONLY": "true",
+                    "MYST_VPN_ENABLED": "true",
+                    "INVOKED": str(invoked),
+                    "PATH": f"{temp_dir}:/usr/bin:/bin",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("127.0.0.1:4050/connection", invoked.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

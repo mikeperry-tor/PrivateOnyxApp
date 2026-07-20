@@ -204,7 +204,14 @@ SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
 MYST_COMPOSE_FILE := myst/docker-compose.yaml
 MYST_VPN_CLI := myst/myst-vpn-cli.sh
 MYST_CONTAINER_NAME := myst-client-vpn
+MYST_SIGNUP_PROJECT := private-onyx-myst-signup
 MYST_DATA_DIR := docker-data/myst-data
+MYST_VPN_ORDER_AMOUNT ?= $(call env_value,MYST_VPN_ORDER_AMOUNT)
+MYST_VPN_ORDER_CURRENCY ?= $(call env_value,MYST_VPN_ORDER_CURRENCY)
+MYST_VPN_ORDER_GATEWAY ?= $(call env_value,MYST_VPN_ORDER_GATEWAY)
+MYST_VPN_ORDER_COUNTRY ?= $(call env_value,MYST_VPN_ORDER_COUNTRY)
+MYST_VPN_ORDER_GATEWAY_DATA ?= $(call env_value,MYST_VPN_ORDER_GATEWAY_DATA)
+MYST_VPN_IDENTITY ?= $(call env_value,MYST_VPN_IDENTITY)
 EMBEDSERV_DIR := embedserv
 HOST_PROCESS_MANAGER := $(EMBEDSERV_DIR)/host_process_manager.py
 EMBEDSERV_REQUIREMENTS_IN := $(EMBEDSERV_DIR)/requirements.in
@@ -237,7 +244,7 @@ ifeq ($(PODMAN_SELECTED),true)
 FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start
 endif
 
-.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -266,6 +273,7 @@ help:
 	@echo "VPN signup & payment:"
 	@echo "  make vpn-signup-orderform  # Start standalone Myst container, create identity + CoinGate order, show payment URL"
 	@echo "  make vpn-signup-blockchain # Start standalone Myst container, create identity, show channel address for direct MYST transfer"
+	@echo "  make vpn-signup-stop       # Stop the standalone Myst signup container"
 	@echo "  make vpn-orderstatus       # Show balance, order status, and payment URL"
 	@echo "  make vpn-balance           # Quick balance check"
 	@echo ""
@@ -848,53 +856,59 @@ embedserv-cleanup-recorded-child:
 # Start standalone Myst container for initial signup/payment, then run the
 # signup helper which creates an identity, registers it, and creates a
 # payment order. The payment URL is printed to stdout.
-# MYST_AUTO_CONNECT and MYST_VPN_WAIT_FOR_FUNDS are disabled during signup.
+# Setup mode starts only the local daemon; the host helper owns each explicit
+# identity, registration, and payment operation.
 vpn-signup-orderform: myst-image-ready
 	@set -eu; \
-	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
-		echo "Myst container '$(MYST_CONTAINER_NAME)' is already running."; \
-	else \
-		echo "Starting standalone Myst signup container..."; \
-		mkdir -p $(MYST_DATA_DIR); \
-		MYST_AUTO_CONNECT=false MYST_VPN_WAIT_FOR_FUNDS=false \
-			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) up -d; \
-		echo "Waiting for container to initialize..."; \
-		sleep 3; \
-	fi
+	python3 myst/signup_guard.py --container-bin "$(CONTAINER_BIN)" --container-name "$(MYST_CONTAINER_NAME)" --allowed-project "$(MYST_SIGNUP_PROJECT)"; \
+	$(MAKE) --no-print-directory claim-shared-data-engine; \
+	echo "Starting standalone Myst signup container..."; \
+	mkdir -p $(MYST_DATA_DIR); \
+	MYST_SETUP_ONLY=true MYST_AUTO_CONNECT=false MYST_RESTART_POLICY=no \
+		COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose -p $(MYST_SIGNUP_PROJECT) $(COMPOSE_ENV_FILES) up -d
 	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
+		MYST_VPN_IDENTITY="$(MYST_VPN_IDENTITY)" \
+		MYST_VPN_ORDER_AMOUNT="$(MYST_VPN_ORDER_AMOUNT)" \
+		MYST_VPN_ORDER_CURRENCY="$(MYST_VPN_ORDER_CURRENCY)" \
+		MYST_VPN_ORDER_GATEWAY="$(MYST_VPN_ORDER_GATEWAY)" \
+		MYST_VPN_ORDER_COUNTRY="$(MYST_VPN_ORDER_COUNTRY)" \
+		MYST_VPN_ORDER_GATEWAY_DATA="$(MYST_VPN_ORDER_GATEWAY_DATA)" \
 		$(MYST_VPN_CLI) signup
 
 # Start standalone Myst container for initial signup, then run the blockchain
 # helper which creates an identity, registers it, and prints the consumer
 # channel address for direct on-chain $MYST transfer (Polygon). No payment
 # order is created.
-# MYST_AUTO_CONNECT and MYST_VPN_WAIT_FOR_FUNDS are disabled during signup.
-# MYST_SKIP_ORDER_CREATION prevents the entrypoint from auto-creating a
-# CoinGate order.
+# Setup mode starts only the local daemon; the host helper owns each explicit
+# identity and registration operation. This target never creates an order.
 vpn-signup-blockchain: myst-image-ready
 	@set -eu; \
-	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
-		echo "Myst container '$(MYST_CONTAINER_NAME)' is already running."; \
-	else \
-		echo "Starting standalone Myst signup container..."; \
-		mkdir -p $(MYST_DATA_DIR); \
-		MYST_AUTO_CONNECT=false MYST_VPN_WAIT_FOR_FUNDS=false MYST_SKIP_ORDER_CREATION=true \
-			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) up -d; \
-		echo "Waiting for container to initialize..."; \
-		sleep 3; \
-	fi
+	python3 myst/signup_guard.py --container-bin "$(CONTAINER_BIN)" --container-name "$(MYST_CONTAINER_NAME)" --allowed-project "$(MYST_SIGNUP_PROJECT)"; \
+	$(MAKE) --no-print-directory claim-shared-data-engine; \
+	echo "Starting standalone Myst signup container..."; \
+	mkdir -p $(MYST_DATA_DIR); \
+	MYST_SETUP_ONLY=true MYST_AUTO_CONNECT=false MYST_RESTART_POLICY=no \
+		COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose -p $(MYST_SIGNUP_PROJECT) $(COMPOSE_ENV_FILES) up -d
 	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
+		MYST_VPN_IDENTITY="$(MYST_VPN_IDENTITY)" \
 		$(MYST_VPN_CLI) blockchain
+
+vpn-signup-stop:
+	@python3 myst/signup_guard.py --container-bin "$(CONTAINER_BIN)" --container-name "$(MYST_CONTAINER_NAME)" --allowed-project "$(MYST_SIGNUP_PROJECT)" --require-existing
+	@COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose -p $(MYST_SIGNUP_PROJECT) $(COMPOSE_ENV_FILES) down --remove-orphans
+	@$(MAKE) --no-print-directory release-shared-data-engine
 
 # Show identity, balance, registration status, all orders, and payment URLs
 # for any unpaid orders. Works against whichever myst container is running.
 vpn-orderstatus:
 	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
+		MYST_VPN_IDENTITY="$(MYST_VPN_IDENTITY)" \
 		$(MYST_VPN_CLI) orderstatus
 
 # Quick balance check. Works against whichever myst container is running.
 vpn-balance:
 	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
+		MYST_VPN_IDENTITY="$(MYST_VPN_IDENTITY)" \
 		$(MYST_VPN_CLI) balance
 
 # Prerequisite for up-lite/up-full: stop signup container if running and
@@ -902,21 +916,19 @@ vpn-balance:
 # instruct the user to run 'make vpn-signup-orderform' or 'make vpn-signup-blockchain' first.
 ensure-myst-funded:
 	@set -eu; \
+	myst_kind="$$(python3 myst/signup_guard.py --container-bin "$(CONTAINER_BIN)" --container-name "$(MYST_CONTAINER_NAME)" --allowed-project "$(MYST_SIGNUP_PROJECT)" --classify)"; \
+	case "$$myst_kind" in \
+		integrated) echo "Integrated Onyx Myst container exists; preserving its routing namespace." ;; \
+		setup) \
+			echo "Stopping standalone Myst signup container (wallet data is preserved)..."; \
+			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose -p $(MYST_SIGNUP_PROJECT) $(COMPOSE_ENV_FILES) down --remove-orphans \
+			;; \
+		absent) ;; \
+		*) echo "ERROR: Unexpected Myst container classification: $$myst_kind" >&2; exit 1 ;; \
+	esac; \
 	if [ "$(MYST_VPN_ENABLED)" = "false" ]; then \
 		echo "MYST_VPN_ENABLED=false — skipping Myst keystore/funding check."; \
 		exit 0; \
-	fi; \
-	if "$(CONTAINER_BIN)" inspect -f '{{.State.Running}}' $(MYST_CONTAINER_NAME) 2>/dev/null | grep -q true; then \
-		myst_project=""; \
-		if myst_project="$$($(CONTAINER_BIN) inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' $(MYST_CONTAINER_NAME) 2>/dev/null)"; then :; fi; \
-		if [ "$$myst_project" = "onyx" ]; then \
-			echo "Integrated Onyx Myst container is already running; preserving its routing namespace."; \
-		else \
-			echo "Stopping standalone Myst signup container (wallet data is preserved)..."; \
-			COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) down --remove-orphans 2>/dev/null || \
-				"$(CONTAINER_BIN)" stop $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
-			"$(CONTAINER_BIN)" rm -f $(MYST_CONTAINER_NAME) 2>/dev/null || true; \
-		fi; \
 	fi; \
 	if [ ! -d "$(MYST_DATA_DIR)/keystore" ] || [ -z "$$(ls -A $(MYST_DATA_DIR)/keystore 2>/dev/null)" ]; then \
 		echo ""; \

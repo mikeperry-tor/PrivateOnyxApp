@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -10,6 +12,74 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MystLifecycleMakefileTests(unittest.TestCase):
+    def test_signup_targets_use_single_owner_nonrestarting_mode(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        for target in ("vpn-signup-orderform:", "vpn-signup-blockchain:"):
+            recipe = makefile.split(target, 1)[1].split("\n\n", 1)[0]
+            self.assertIn("myst/signup_guard.py", recipe)
+            self.assertIn("claim-shared-data-engine", recipe)
+            self.assertIn("MYST_SETUP_ONLY=true", recipe)
+            self.assertIn("MYST_RESTART_POLICY=no", recipe)
+            self.assertIn("-p $(MYST_SIGNUP_PROJECT)", recipe)
+            self.assertNotIn("sleep 3", recipe)
+        order_recipe = makefile.split("vpn-signup-orderform:", 1)[1].split("\n\n", 1)[0]
+        for variable in (
+            "MYST_VPN_ORDER_AMOUNT",
+            "MYST_VPN_ORDER_CURRENCY",
+            "MYST_VPN_ORDER_GATEWAY",
+            "MYST_VPN_ORDER_COUNTRY",
+            "MYST_VPN_ORDER_GATEWAY_DATA",
+        ):
+            self.assertIn(f'{variable}="$({variable})"', order_recipe)
+
+        funded_recipe = makefile.split("ensure-myst-funded:", 1)[1].split("\n# ", 1)[0]
+        self.assertIn("--classify", funded_recipe)
+        self.assertIn("-p $(MYST_SIGNUP_PROJECT)", funded_recipe)
+        self.assertNotIn("rm -f $(MYST_CONTAINER_NAME)", funded_recipe)
+
+    def test_integrated_entrypoint_performs_no_signup_or_order_mutation(self) -> None:
+        entrypoint = (ROOT / "myst/myst-client-entrypoint.sh").read_text(encoding="utf-8")
+        self.assertNotIn("identities new", entrypoint)
+        self.assertNotIn("account register", entrypoint)
+        self.assertNotIn("orders create", entrypoint)
+        self.assertIn("MYST_VPN_IDENTITY", entrypoint)
+        self.assertIn("Multiple Myst identities exist", entrypoint)
+        self.assertIn("explicit signup repair is required", entrypoint)
+
+    def test_signup_compose_model_has_no_restart_and_explicit_setup_mode(self) -> None:
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                "private-onyx-myst-signup",
+                "--env-file",
+                "stack.versions.env",
+                "--env-file",
+                "/dev/null",
+                "-f",
+                "myst/docker-compose.yaml",
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=ROOT,
+            env={
+                "PATH": os.environ["PATH"],
+                "MYST_SETUP_ONLY": "true",
+                "MYST_AUTO_CONNECT": "false",
+                "MYST_RESTART_POLICY": "no",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        myst = json.loads(result.stdout)["services"]["myst-client"]
+        self.assertEqual(myst["restart"], "no")
+        self.assertEqual(myst["environment"]["MYST_SETUP_ONLY"], "true")
+        self.assertEqual(myst["environment"]["MYST_AUTO_CONNECT"], "false")
+
     def test_podman_build_context_excludes_private_and_large_local_state(self) -> None:
         ignored = {
             line.strip()
@@ -35,10 +105,11 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_stack_start_preserves_integrated_myst_container(self) -> None:
         makefile = (ROOT / "Makefile").read_text()
-        self.assertIn('com.docker.compose.project', makefile)
-        self.assertIn('if [ "$$myst_project" = "onyx" ]', makefile)
+        guard = (ROOT / "myst/signup_guard.py").read_text()
+        self.assertIn('project == "onyx" and not setup_only', guard)
+        self.assertIn('--classify', makefile)
         self.assertIn(
-            "Integrated Onyx Myst container is already running; preserving its routing namespace.",
+            "Integrated Onyx Myst container exists; preserving its routing namespace.",
             makefile,
         )
 

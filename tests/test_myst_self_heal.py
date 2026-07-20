@@ -71,6 +71,7 @@ class MystSelfHealTests(unittest.TestCase):
         target_pid: int = 999999,
         *,
         vpn_enabled: str = "true",
+        setup_only: str = "false",
         state: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -78,6 +79,7 @@ class MystSelfHealTests(unittest.TestCase):
             env={
                 **os.environ,
                 "MYST_VPN_ENABLED": vpn_enabled,
+                "MYST_SETUP_ONLY": setup_only,
                 "READINESS_RESULT": result,
                 "FAKE_API_BODY": "secret-provider secret-identity secret-location",
             },
@@ -214,6 +216,17 @@ class MystSelfHealTests(unittest.TestCase):
             completed = self._run(result, target.pid, vpn_enabled="false")
             self.assertEqual(completed.returncode, 0 if result == "success" else 1)
         self.assertIsNone(target.poll())
+        self.assertFalse(self.state.exists())
+
+    def test_setup_mode_never_creates_state_or_signals_even_after_long_failure(self) -> None:
+        target = self._target()
+        for second in (0, 60, 3600, 86400):
+            self._set_clock(second)
+            completed = self._run(
+                "failure", target.pid, setup_only="true"
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIsNone(target.poll())
         self.assertFalse(self.state.exists())
 
     def test_malformed_timestamp_is_replaced_without_signal(self) -> None:
