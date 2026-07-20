@@ -8,6 +8,7 @@
 /embedserv/models/
 /embedserv/serve.log
 /embedserv/serve.pid
+/embedserv/child.pid
 /logs/
 /myst/docker-data/
 /myst/myst

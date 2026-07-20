@@ -42,7 +42,8 @@ rootless `ping_group_range` OCI runtime error; a complete clean down/up cleared
 the transient without weakening user namespaces or container hardening.
 
 **Validation state: deterministic and pinned-image validation passes.**
-`make check` passed 237 tests (with five image-only skips), and
+The current `make check` passed 255 tests (with five image-only skips), and the
+earlier full pinned-image run
 `make check-upgrade` passed the pinned-image contracts and five image-backed
 parser tests. Live Docker checks covered startup/readiness, worker and Beat
 behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
@@ -72,9 +73,9 @@ diagnostics. A real API-to-SearXNG-gateway query returned ten results. Pinned
 image validation and all five image-only parser tests passed.
 The later full-mode bot-option rename also passed a current isolated,
 network-disabled background contract against the pinned Onyx image in Podman.
-The aggregate Podman `make check-upgrade` could not start because the
-socket-only code-interpreter image is intentionally absent from the Podman
-store; deterministic validation completed before that image preflight.
+The aggregate Podman `make check-upgrade` now skips the unsupported
+socket-dependent code-interpreter image contract while retaining the Onyx and
+SearXNG image contracts; Docker continues to require all three images.
 
 The corrected Myst live run wrote the initial fixed-host route, learned four
 distinct broker addresses as DNS rotated, corrected the tunnel MTU once, and
@@ -84,8 +85,7 @@ and fixed an initial matcher error caused by Linux rendering host routes
 without the `/32` suffix; deterministic coverage now mirrors that canonical
 output.
 Podman was then cleanly restarted against the initialized Docker bind data:
-PostgreSQL exposed the existing application state (including 194 chat sessions,
-1,326 chat messages, 15 connectors, three LLM providers, and six personas),
+PostgreSQL exposed the expected non-empty application state and configuration,
 OpenSearch recovered 71 active primary shards, all 29 expected services became
 healthy, and the WebUI returned HTTP 200. A subsequent full down/up cycle
 validated the zero-copy host document relay and restored the same shared
@@ -1183,6 +1183,59 @@ multi-document ingestion, concurrent search, restart/recovery, TLS/auth, GC,
 OOM/circuit-breaker, and read-after-index freshness tests. Keep the same
 workload and latency/error budgets used for the 1 GiB baseline; failure means
 the candidate is rejected, not that the workload is weakened.
+
+The 2026-07-20 live inventory makes the next experiments more specific. The
+OpenSearch 3.6.0 process loaded 27 plugins, detected and allocated all 16 Docker
+processors, and exposed large processor-scaled pools even though this is one
+local node. After startup and diagnostic traffic it used about 2.0 GiB RSS and
+roughly 120--150 threads with no container memory limit. The fixed 1 GiB heap
+had about 160 MiB live after collection, no old-generation collections, and
+13 G1 evacuation workers; non-heap use was about 260 MiB. These idle-oriented
+figures support experiments but do not prove that 512 MiB can survive bulk PDF
+indexing or concurrent hybrid search.
+
+The cluster had 72 active primary shards and six intentionally unassignable
+Onyx replicas on its single node. Most non-Onyx primaries were tiny daily
+Security audit or Query Insights indices. Security auditing currently retains
+failure/TLS-related events in internal daily indices, logs request bodies,
+resolves indices, and has no ISM retention policy. Query Insights enables top-N
+monitoring by default, stores query source in a local daily index, and retains
+seven days; source inspection found no Onyx caller of its APIs. The official
+[audit configuration](https://docs.opensearch.org/latest/security/audit-logs/index/)
+and [top-N query settings](https://docs.opensearch.org/latest/observing-your-data/query-insights/top-n-queries/)
+make both behaviors configurable without removing Security/TLS or the vector
+search plugins.
+
+Gate the next OpenSearch experiments independently, in this order:
+
+1. Disable all three unused Query Insights top-N metrics and confirm no new
+   `top_queries-*` index appears after its normal export boundary. Do not delete
+   existing indices as part of the configuration experiment.
+2. Retain useful Security failure/TLS events, but disable request-body capture
+   and test a monthly rather than daily internal audit-index pattern. This
+   preserves local security evidence while avoiding a permanent shard for each
+   low-event day. Retention or deletion of historical audit evidence remains a
+   separate operator policy decision.
+3. Set Onyx's supported `OPENSEARCH_INDEX_NUM_REPLICAS=0` for this explicit
+   single-node deployment and update existing Onyx indices through a separately
+   validated migration. This should remove permanent yellow health and replica
+   bookkeeping; it is not expected to save primary-index storage.
+4. Test the supported static `node.processors` setting at four before tuning
+   individual pools. It should reduce fixed OpenSearch pools and JVM GC worker
+   counts while keeping a visible queue/rejection boundary. Measure ingestion
+   and hybrid-search throughput, queueing, rejection, latency, RSS, threads, and
+   CPU against the 16-processor baseline.
+5. Only then test 512 MiB heap, a cgroup cap, and a derived image that removes
+   dependency-closed, confirmed-unused plugins. The current process has about
+   5.4 GiB reported as locked virtual memory under unlimited memlock, so any
+   cgroup or `bootstrap.memory_lock` experiment must also measure mapped KNN
+   index residency, swap behavior, latency, and OOM failure rather than relying
+   on heap size alone.
+
+The current one-second default refresh interval is not the first target. Node
+stats showed only 156 refreshes during roughly 22 minutes because inactive
+shards were not refreshing continuously. Revisit it under an active indexing
+workload after the shard-producing audit and Query Insights paths are handled.
 
 ### Kombu Redis blocking-pop timeout
 

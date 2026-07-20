@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import http.server
+import ipaddress
 import json
 import os
 import shlex
@@ -25,6 +26,7 @@ OUTER_TIMEOUT_SECONDS = 30.0
 DEFAULT_IDLE_SECONDS = 600.0
 DEFAULT_STARTUP_SECONDS = 20.0
 CHILD_STOP_GRACE_SECONDS = 15.0
+MAX_ACTIVE_CONNECTIONS = 16
 
 
 class Lifecycle:
@@ -287,7 +289,19 @@ def cleanup_recorded_child(command: list[str], child_pid_file: Path) -> bool:
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     server: "ProxyServer"
 
+    def _reject_non_loopback_client(self) -> bool:
+        try:
+            allowed = ipaddress.ip_address(self.client_address[0]).is_loopback
+        except ValueError:
+            allowed = False
+        if allowed:
+            return False
+        self.send_error(403, "Host-local access only")
+        return True
+
     def do_POST(self) -> None:  # noqa: N802
+        if self._reject_non_loopback_client():
+            return
         if self.path != REQUEST_PATH:
             self.send_error(404)
             return
@@ -350,6 +364,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.server.lifecycle.end_request()
 
     def do_GET(self) -> None:  # noqa: N802
+        if self._reject_non_loopback_client():
+            return
         self.send_error(404)
 
     def log_message(self, format: str, *args: object) -> None:
@@ -359,9 +375,38 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 class ProxyServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], lifecycle: Lifecycle) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        lifecycle: Lifecycle,
+        *,
+        max_active_connections: int = MAX_ACTIVE_CONNECTIONS,
+    ) -> None:
+        if max_active_connections <= 0:
+            raise ValueError("max_active_connections must be positive")
         self.lifecycle = lifecycle
+        self._request_slots = threading.BoundedSemaphore(max_active_connections)
         super().__init__(address, ProxyHandler)
+
+    def process_request(
+        self, request: socket.socket, client_address: tuple[str, int]
+    ) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(
+        self, request: socket.socket, client_address: tuple[str, int]
+    ) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 def main() -> None:

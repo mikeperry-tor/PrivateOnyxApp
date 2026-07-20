@@ -3,14 +3,45 @@ from __future__ import annotations
 import io
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from onyx.doc_drop_webserver import DocDropRequestHandler, _path_is_confined
+from onyx.doc_drop_webserver import (
+    BoundedThreadingHTTPServer,
+    DocDropRequestHandler,
+    MAX_ACTIVE_CONNECTIONS,
+    _path_is_confined,
+)
 
 
 class DocDropWebserverTests(unittest.TestCase):
+    def test_host_listener_has_a_bounded_thread_budget(self) -> None:
+        self.assertEqual(MAX_ACTIVE_CONNECTIONS, 32)
+        server = BoundedThreadingHTTPServer.__new__(BoundedThreadingHTTPServer)
+        server._request_slots = threading.BoundedSemaphore(1)
+        server.shutdown_request = Mock()
+        request = Mock()
+        with patch(
+            "onyx.doc_drop_webserver.ThreadingHTTPServer.process_request"
+        ) as start_thread:
+            server.process_request(request, ("127.0.0.1", 1))
+            server.process_request(request, ("127.0.0.1", 2))
+        start_thread.assert_called_once()
+        server.shutdown_request.assert_called_once_with(request)
+
+    def test_host_listener_releases_slot_after_thread_completion(self) -> None:
+        server = BoundedThreadingHTTPServer.__new__(BoundedThreadingHTTPServer)
+        server._request_slots = threading.BoundedSemaphore(1)
+        self.assertTrue(server._request_slots.acquire(blocking=False))
+        with patch(
+            "onyx.doc_drop_webserver.ThreadingHTTPServer.process_request_thread"
+        ) as handle_request:
+            server.process_request_thread(Mock(), ("127.0.0.1", 1))
+        handle_request.assert_called_once()
+        self.assertTrue(server._request_slots.acquire(blocking=False))
+
     def test_health_is_local_and_request_logging_is_silent(self) -> None:
         handler = object.__new__(DocDropRequestHandler)
         handler.path = "/_health?probe=1"

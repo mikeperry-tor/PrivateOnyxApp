@@ -306,7 +306,10 @@ has no document mounts. Its only additional network is a dedicated
 non-internal host uplink, and its fixed command connects only
 `host.containers.internal:18091`. Podman's userspace gateway reaches the
 macOS listener as a loopback peer; the server rejects non-loopback peers before
-serving any URL. This restriction is enabled only by the host process's
+serving any URL and caps active connection threads. The wildcard bind required
+by the gateway is therefore not an unauthenticated LAN document endpoint:
+direct non-loopback clients receive HTTP 403 before path handling. This
+restriction is enabled only by the host process's
 `--loopback-peers-only` flag; Docker's internal document server does not use
 it. Application containers do not join that uplink. The existing
 `doc-drop-route-gateway` and exact host final-hop policy remain authoritative
@@ -371,7 +374,11 @@ The primary Podman-specific tests are:
 
 Run `make check` after every Podman script, Makefile, or overlay change. For
 image/source pin or runtime-patch work, follow the repository's ordinary
-`make check-upgrade` rules as well. `make health-inventory` renders the actual
+`make check-upgrade` rules as well. Under Podman, `make test-images` and
+`make check-upgrade` skip the unsupported socket-dependent code-interpreter
+image contract; Docker continues to require and validate that image. The
+pinned Onyx and derived SearXNG image contracts remain mandatory on both
+engines. `make health-inventory` renders the actual
 Makefile-selected engine, private environment, optional overlays, and active
 profiles for lite and full mode and totals their steady checks per hour. It
 does not replace native live inspection.

@@ -117,11 +117,57 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
         self.assertEqual(self.module.OUTER_TIMEOUT_SECONDS, 30.0)
         self.assertEqual(self.module.DEFAULT_IDLE_SECONDS, 600.0)
         self.assertEqual(self.module.CHILD_STOP_GRACE_SECONDS, 15.0)
+        self.assertEqual(self.module.MAX_ACTIVE_CONNECTIONS, 16)
         self.assertLess(self.module.MAX_REQUEST_BYTES, self.module.MAX_RESPONSE_BYTES)
         source = MODULE_PATH.read_text(encoding="utf-8")
         self.assertIn('ProxyServer(("0.0.0.0", args.listen_port)', source)
         self.assertIn('"--host", "127.0.0.1"', source)
         self.assertIn('self.headers.get("Transfer-Encoding")', source)
+
+    def test_non_loopback_peer_is_rejected_before_model_work(self) -> None:
+        handler = self.module.ProxyHandler.__new__(self.module.ProxyHandler)
+        handler.client_address = ("192.0.2.10", 12345)
+        handler.path = self.module.REQUEST_PATH
+        handler.send_error = MagicMock()
+        handler.server = MagicMock()
+        handler.rfile = MagicMock()
+        handler.do_POST()
+        handler.send_error.assert_called_once_with(403, "Host-local access only")
+        handler.server.lifecycle.begin_request.assert_not_called()
+        handler.rfile.read.assert_not_called()
+
+    def test_loopback_peer_reaches_narrow_get_surface(self) -> None:
+        handler = self.module.ProxyHandler.__new__(self.module.ProxyHandler)
+        handler.client_address = ("127.0.0.1", 12345)
+        handler.send_error = MagicMock()
+        handler.do_GET()
+        handler.send_error.assert_called_once_with(404)
+
+    def test_connection_limit_rejects_before_starting_another_thread(self) -> None:
+        server = self.module.ProxyServer.__new__(self.module.ProxyServer)
+        server._request_slots = threading.BoundedSemaphore(1)
+        server.shutdown_request = MagicMock()
+        request = MagicMock()
+        with patch.object(
+            self.module.http.server.ThreadingHTTPServer,
+            "process_request",
+        ) as start_thread:
+            server.process_request(request, ("127.0.0.1", 1))
+            server.process_request(request, ("127.0.0.1", 2))
+        start_thread.assert_called_once()
+        server.shutdown_request.assert_called_once_with(request)
+
+    def test_connection_slot_is_released_after_thread_completion(self) -> None:
+        server = self.module.ProxyServer.__new__(self.module.ProxyServer)
+        server._request_slots = threading.BoundedSemaphore(1)
+        self.assertTrue(server._request_slots.acquire(blocking=False))
+        with patch.object(
+            self.module.http.server.ThreadingHTTPServer,
+            "process_request_thread",
+        ) as handle_request:
+            server.process_request_thread(MagicMock(), ("127.0.0.1", 1))
+        handle_request.assert_called_once()
+        self.assertTrue(server._request_slots.acquire(blocking=False))
 
     def test_occupied_child_port_fails_before_launch(self) -> None:
         launches = []

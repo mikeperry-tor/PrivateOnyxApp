@@ -5,8 +5,13 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 container_bin=${CONTAINER_BIN:-docker}
 onyx_backend_image=${ONYX_BACKEND_IMAGE:?ONYX_BACKEND_IMAGE is required}
-code_interpreter_image=${CODE_INTERPRETER_IMAGE:?CODE_INTERPRETER_IMAGE is required}
+code_interpreter_image=${CODE_INTERPRETER_IMAGE:-}
 searxng_wrapper_image=${SEARXNG_WRAPPER_IMAGE:?SEARXNG_WRAPPER_IMAGE is required}
+
+case "${container_bin##*/}" in
+    *podman*) validate_code_interpreter=false ;;
+    *) validate_code_interpreter=true ;;
+esac
 
 require_image() {
     image=$1
@@ -19,7 +24,13 @@ require_image() {
 }
 
 require_image "$onyx_backend_image" "Run 'make onyx-build' before 'make test-images'."
-require_image "$code_interpreter_image" "Run 'make onyx-build' before 'make test-images'."
+if [ "$validate_code_interpreter" = true ]; then
+    [ -n "$code_interpreter_image" ] || {
+        echo "ERROR: CODE_INTERPRETER_IMAGE is required for Docker validation" >&2
+        exit 1
+    }
+    require_image "$code_interpreter_image" "Run 'make onyx-build' before 'make test-images'."
+fi
 require_image "$searxng_wrapper_image" "Run 'make searxng-build' before 'make test-images'."
 
 echo "Validating API patch contracts in $onyx_backend_image"
@@ -93,18 +104,22 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     "$onyx_backend_image" \
     -c "import importlib.util, os, sys; s=importlib.util.spec_from_file_location('background_patch_validation', '/background/sitecustomize.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); from datetime import timedelta; from onyx.background.celery.apps.beat import DynamicTenantScheduler; from onyx.background.celery.apps import app_base; from onyx.background.celery.tasks import beat_schedule as b; effective={t['name']: t for t in b.get_tasks_to_schedule()}; sleepy={'check-for-user-file-processing','check-for-user-file-project-sync','check-for-user-file-delete','check-for-indexing','check-for-connector-deletion','check-for-vespa-sync','check-for-pruning'}; assert all(effective[n]['schedule'] == timedelta(minutes=5) for n in sleepy); removed={'monitor-celery-queues','monitor-background-processes','monitor-process-memory','celery-beat-heartbeat','cleanup-idle-sandboxes','dispatch-due-scheduled-tasks','cleanup-stuck-scheduled-runs'}; assert not removed.intersection(effective); assert DynamicTenantScheduler.RELOAD_INTERVAL == 300; assert app_base.get_bootsteps() == []; assert not any(name.startswith('onyx.background.celery.apps.monitoring') or name.startswith('onyx.background.celery.tasks.monitoring') for name in sys.modules); e=importlib.util.spec_from_file_location('background_entrypoint_validation','/wrapper-background-entrypoint.py'); em=importlib.util.module_from_spec(e); e.loader.exec_module(em); cfg=em.derive_config(); workers=[x for x in cfg.sections() if x.startswith('program:celery_worker_')]; assert len(workers) == 6; assert all(cfg.get(x,'command').count('--without-heartbeat') == 1 and cfg.get(x,'command').count('--without-gossip') == 1 for x in workers); assert not cfg.has_section('program:celery_worker_monitoring'); assert not cfg.has_section('program:celery_worker_scheduled_tasks'); assert not cfg.has_section('program:slack_bot'); assert not cfg.has_section('program:discord_bot'); os.environ['WRAPPER_PATCH_STRICT']='true'; os.environ['ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED']='true'; m._apply_web_connector_http_freshness_patch(); assert m._INDEXING_SKIP_PATCHED; print('PINNED_BACKGROUND_CONTRACTS_OK')"
 
-echo "Validating executor command contract in $code_interpreter_image"
-"$container_bin" run --rm \
-    --network none \
-    --entrypoint python \
-    -e PYTHONPATH=/patch \
-    -e WRAPPER_PATCH_STRICT=true \
-    -e ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true \
-    -e PYTHON_EXECUTOR_DOCKER_NETWORK=onyx-code-interpreter-executor \
-    -e ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL=http://executor-egress-bridge:3128 \
-    -v "$repo_root/onyx/patches/sitecustomize_code_interpreter:/patch:ro" \
-    "$code_interpreter_image" \
-    -c "from app.services.executor_docker import DockerExecutor; assert getattr(DockerExecutor._build_run_command, '_private_onyx_executor_proxy_patch', False); print('PINNED_EXECUTOR_PATCH_CONTRACT_OK')"
+if [ "$validate_code_interpreter" = true ]; then
+    echo "Validating executor command contract in $code_interpreter_image"
+    "$container_bin" run --rm \
+        --network none \
+        --entrypoint python \
+        -e PYTHONPATH=/patch \
+        -e WRAPPER_PATCH_STRICT=true \
+        -e ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true \
+        -e PYTHON_EXECUTOR_DOCKER_NETWORK=onyx-code-interpreter-executor \
+        -e ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL=http://executor-egress-bridge:3128 \
+        -v "$repo_root/onyx/patches/sitecustomize_code_interpreter:/patch:ro" \
+        "$code_interpreter_image" \
+        -c "from app.services.executor_docker import DockerExecutor; assert getattr(DockerExecutor._build_run_command, '_private_onyx_executor_proxy_patch', False); print('PINNED_EXECUTOR_PATCH_CONTRACT_OK')"
+else
+    echo "Skipping code-interpreter image contract: the supported Podman model omits this Docker-socket service."
+fi
 
 echo "Validating SearXNG runtime patches in $searxng_wrapper_image"
 "$container_bin" run --rm \

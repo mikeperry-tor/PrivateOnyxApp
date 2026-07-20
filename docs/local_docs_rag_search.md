@@ -379,6 +379,14 @@ requests share one startup, and a request is forwarded exactly once: a child
 crash is returned as an error instead of replaying an embedding batch. Cold
 startup and forwarding share the shim's 30-second outer deadline.
 
+Docker Desktop's host gateway requires the lifecycle proxy to listen on the
+host wildcard address, but gateway connections arrive at the macOS listener as
+loopback peers. The proxy rejects every non-loopback socket peer before reading
+the request body or starting the model, and caps active connection threads.
+This is a narrow trust boundary in Docker Desktop's userspace gateway, analogous
+to the Podman host document relay; it is not application-layer client
+authentication. Direct LAN clients receive HTTP 403.
+
 Before every child launch, the proxy requires the loopback child port to be
 unoccupied. It records the child PID atomically, validates a stale record
 against the complete expected MLX command before signaling it, and verifies

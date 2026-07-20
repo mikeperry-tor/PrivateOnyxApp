@@ -15,7 +15,13 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             if line.strip() and not line.startswith("#")
         }
         self.assertTrue(
-            {".env.wrapper", "docker-data", "doc-drop", "embedserv/models"}
+            {
+                ".env.wrapper",
+                "docker-data",
+                "doc-drop",
+                "embedserv/models",
+                "embedserv/*.pid",
+            }
             <= ignored
         )
         self.assertTrue({"onyx/onyx_data", "reference_repos", ".git"} <= ignored)

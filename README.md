@@ -457,7 +457,7 @@ the wrapper-managed proxy and its identity-validated child.
 MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
 the download libraries when the host requires a build/download proxy.
 
-The stack uses use `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs, especially under concurrency load and batched embeddings). LM Studio's embedding support is non-existent.
+The stack uses `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs, especially under concurrency load and batched embeddings). LM Studio's embedding support is non-existent.
 
 ### Optional: Using Teep for Embeddings
 
@@ -542,7 +542,6 @@ The following endpoints are exposed to your docker host:
 - teep health check: `http://localhost:8337/health`
 - teep prometheus metrics: `http://localhost:8337/metrics`
 - Full-mode local document display: [`http://localhost:8091`](http://localhost:8091)
-- Wrapper-managed MLX embedding lifecycle proxy (when installed): `http://127.0.0.1:3210`
 
 ## Privacy of this stack
 

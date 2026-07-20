@@ -35,7 +35,8 @@ At a high level:
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
 - Full mode validates embedding readiness in a staged one-shot gate before a
   fresh API/background tier, uses an on-demand host MLX lifecycle proxy for the
-  bundled backend with strict child PID, port, and served-model ownership, and
+  bundled backend with loopback-peer enforcement, bounded connection threads,
+  strict child PID, port, and served-model ownership, and
   applies the documented low-idle background/storage
   policy. Exact background control processes stay outside the application
   `sitecustomize` bootstrap; Beat, workers, and indexing children remain

@@ -36,6 +36,11 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertIn("PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("tests.test_searxng_obscura_engines", IMAGE_SCRIPT)
 
+    def test_podman_image_validation_skips_unsupported_executor(self) -> None:
+        self.assertIn('*podman*) validate_code_interpreter=false', IMAGE_SCRIPT)
+        self.assertIn('if [ "$validate_code_interpreter" = true ]', IMAGE_SCRIPT)
+        self.assertIn("supported Podman model omits", IMAGE_SCRIPT)
+
     def test_upgrade_flow_is_documented_for_agents_and_maintainers(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text()
         upgrade_notes = (ROOT / "docs" / "onyx_patches_upgrade.md").read_text()

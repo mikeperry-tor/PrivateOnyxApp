@@ -6,6 +6,7 @@ import io
 import ipaddress
 import os
 import sys
+import threading
 import urllib.parse
 from functools import partial
 from http import HTTPStatus
@@ -18,6 +19,7 @@ ALWAYS_HIDDEN_NAMES = {
     "__pycache__",
 }
 HEALTH_PATH = "/_health"
+MAX_ACTIVE_CONNECTIONS = 32
 
 
 def _is_hidden_name(name: str) -> bool:
@@ -180,6 +182,38 @@ class DocDropRequestHandler(SimpleHTTPRequestHandler):
         del format, args
 
 
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(
+        self,
+        server_address,
+        request_handler_class,
+        *,
+        max_active_connections: int = MAX_ACTIVE_CONNECTIONS,
+    ) -> None:
+        if max_active_connections <= 0:
+            raise ValueError("max_active_connections must be positive")
+        self._request_slots = threading.BoundedSemaphore(max_active_connections)
+        super().__init__(server_address, request_handler_class)
+
+    def process_request(self, request, client_address) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Serve a read-only document drop")
     parser.add_argument("port", nargs="?", type=int, default=8091)
@@ -192,7 +226,7 @@ def main() -> None:
     if not os.path.isdir(document_root):
         parser.error(f"document directory does not exist: {args.directory}")
     handler_class = partial(DocDropRequestHandler, directory=document_root)
-    server = ThreadingHTTPServer((args.bind, args.port), handler_class)
+    server = BoundedThreadingHTTPServer((args.bind, args.port), handler_class)
     server.loopback_peers_only = args.loopback_peers_only
     try:
         print(f"Serving doc-drop on {args.bind}:{args.port}", flush=True)

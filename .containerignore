@@ -9,6 +9,7 @@ docker-data
 doc-drop
 embedserv/models
 embedserv/*.log
+embedserv/*.pid
 logs
 onyx/onyx_data
 plans

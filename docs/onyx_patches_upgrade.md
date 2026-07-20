@@ -395,6 +395,11 @@ interpreter image, and the SearXNG runtime/parser checks inside the derived
 image. Any source, signature, model, prompt, or command shape mismatch is an
 upgrade blocker, not a reason to weaken validation.
 
+The executor image contract is Docker-only because the socket-dependent code
+interpreter is not supported or stored under Podman. With
+`CONTAINER_BIN=podman`, image validation explicitly skips that one contract;
+the Onyx and SearXNG contracts remain required.
+
 Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
 background services unless the wrapper deliberately adds and documents a
 Craft backend. Re-audit the exact schedule names, tasks, and original cadences:
