@@ -133,21 +133,33 @@ Onyx applications never join it.
 Repeated `make up-lite`/`make up-full` calls distinguish the standalone Myst
 signup project from the integrated `onyx` Compose project. They stop the
 former before stack startup but preserve an already-running integrated Myst
-container; restarting Myst alone can leave a half-open `myst0` interface and
-split default routes in the long-lived holder namespace. Recover such a state
-with the matching full `make down-*` then `make up-*` cycle.
+container and its routing namespace.
 
 With `MYST_VPN_ENABLED=true`, health reads only Myst's loopback
 `/connection` status plus the local `myst0` address and route. It requires a
 single top-level `Connected` status and verifies that a reserved public test
 address routes through `myst0` with that interface's source address. The check
 does not perform public DNS or HTTP traffic and does not log the API response,
-which can contain provider or identity details. VPN-only autoheal checks once
-per minute and may restart Myst after a failing local data-plane check. This
-lower cadence can leave a failed route visible for nearly a minute before
-recovery begins. Request-time final-hop DNS and destination validation remain
-authoritative and fail closed throughout that interval; there is no periodic
-upstream-proxy probe or system-route fallback while VPN mode is selected.
+which can contain provider or identity details. A socket-free supervisor wraps
+that same predicate at the existing one-minute steady cadence. It clears its
+private process-lifetime state at entrypoint start and arms only after the first
+complete readiness success. A later first failure records monotonic uptime;
+every success clears it; and continuous failure for at least 60 seconds changes
+the armed marker to a one-shot signaled state and sends `SIGTERM` to container
+PID 1. The entrypoint stops and reaps the daemon and route-reconciliation child
+before exiting, and `restart: unless-stopped` then restarts Myst. Startup
+registration, funding, provider selection, and an initial tunnel failure remain
+visibly unready without restart churn. Explicit no-VPN mode never arms recovery.
+
+The one-minute steady cadence means automatic restart normally begins between
+roughly one and two minutes after a disconnect. Docker and Podman use the same
+health command and no container-engine socket. Repeated qualification on both
+engines showed graceful cleanup removing the old `myst0` and split routes,
+one-attempt reconnection in the unchanged holder namespace, and no successful
+application-path requests during the unready window. Request-time final-hop DNS
+and destination validation remain authoritative and fail closed throughout;
+there is no periodic public probe, upstream-proxy probe, or system-route
+fallback while VPN mode is selected.
 
 The separate reconciliation loop retains its 20-second repair and hostname-DNS
 refresh bound. Each pass compares the exact exemption target's gateway and
@@ -162,9 +174,10 @@ event-driven replacement remains deferred.
 
 With `MYST_VPN_ENABLED=false`, the Myst container idles as namespace owner,
 requires no wallet, and readiness requires that no stale `myst0` remains plus
-a usable IPv4 default route. The explicit no-VPN compose model omits autoheal
-and its Docker socket. Switching a live namespace from VPN to no-VPN requires
-tearing down the old stack so a stale interface cannot survive.
+a usable IPv4 default route. The health supervisor delegates that predicate
+without creating recovery state or signaling PID 1. Switching a live namespace
+from VPN to no-VPN requires tearing down the old stack so a stale interface
+cannot survive.
 
 Configured upstream failures, VPN disconnects, proxy DNS failures, rejected
 destinations, and broken bridges all fail closed. Policy-rejected destinations
@@ -210,13 +223,11 @@ so a service that remains in Podman's startup state fails stack launch instead
 of blocking indefinitely.
 
 Rootless Podman on macOS cannot reliably expose the Docker-compatible socket to
-stack containers, so its overlays omit code interpreter and VPN autoheal. The
-Makefile also omits the executor network overlay under Podman even when a shared
-environment leaves its option enabled; no unused executor bridge or health loop
-is created.
-Request routing still fails closed when Myst is unhealthy, but automatic Myst
-restart is unavailable; use `podman restart myst-client-vpn` or restart the
-matching stack after diagnosing the local readiness failure. The Podman layer
+stack containers, so its overlays omit code interpreter. Myst recovery does
+not require that socket and is identical on both engines. The Makefile also
+omits the executor network overlay under Podman even when a shared environment
+leaves its option enabled; no unused executor bridge or health loop is created.
+Request routing remains fail closed when Myst is unhealthy. The Podman layer
 also replaces Docker's unsupported tmpfs `uid`/`gid` options on the optional
 Tailscale frontend gateway with Podman's user-owned `U` mount option; the
 gateway continues to run as uid/gid 101 with its other hardening unchanged.

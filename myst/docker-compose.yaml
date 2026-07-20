@@ -192,6 +192,7 @@ services:
       - ./myst-client-entrypoint.sh:/usr/local/bin/myst-client-entrypoint.sh:ro
       - ./route-reconciliation.sh:/usr/local/bin/myst-route-reconciliation.sh:ro
       - ./myst-readiness.sh:/usr/local/bin/myst-readiness.sh:ro
+      - ./myst-healthcheck.sh:/usr/local/bin/myst-healthcheck.sh:ro
     environment:
       # Master switch for the Mysterium VPN. When "false", the entrypoint
       # starts the daemon in idle mode: no kill-switch is armed, no connect
@@ -271,7 +272,7 @@ services:
       # VPN mode requires Connected plus a usable myst0 IPv4 route. Explicit
       # no-VPN mode instead requires a usable non-myst0 IPv4 default route and
       # no stale myst0; it must not assume Docker assigned that route to eth0.
-      test: ["CMD", "/bin/sh", "/usr/local/bin/myst-readiness.sh"]
+      test: ["CMD", "/bin/sh", "/usr/local/bin/myst-healthcheck.sh", "check", "1", "/run/myst-healthcheck", "/usr/local/bin/myst-readiness.sh", "/proc/uptime", "60"]
       interval: 1m
       start_interval: 5s
       timeout: 10s

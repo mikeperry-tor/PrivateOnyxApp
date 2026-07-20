@@ -122,9 +122,7 @@ Most likely variables you want to change:
     switching engines; it never falls back to Docker. An installed but stopped
     Podman machine does not block Docker startup. Never run both engines against
     the shared data at once.
-  - On rootless Podman, code interpreter and Docker-socket autoheal
-    are unavailable. Routing remains fail-closed, but a failed Myst connection
-    requires `podman restart myst-client-vpn` or a stack restart.
+  - On rootless Podman, the Docker-socket code interpreter remains unavailable.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **VPN and Proxy Use**:

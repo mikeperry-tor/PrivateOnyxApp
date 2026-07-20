@@ -8,6 +8,9 @@
 > [Request handling](../../request_handling.md),
 > [VPN routing and restricted egress](../../vpn_routing_and_proxies.md), and
 > [Internal network security](../../internal_network_security.md).
+> Autoheal references below describe the historical baseline and are
+> superseded by the socket-free Myst health supervisor documented in
+> [VPN routing and restricted egress](../../vpn_routing_and_proxies.md).
 
 ### Implementation note
 

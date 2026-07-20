@@ -46,12 +46,14 @@ class ImmutableComponentPinTests(unittest.TestCase):
         self.assertEqual(fallback.group(1), self.value("TEEP_REF"))
 
     def test_mutable_support_tags_are_not_allowed(self) -> None:
-        for name in ("TAILSCALE_IMAGE", "AUTOHEAL_IMAGE"):
+        for name in ("TAILSCALE_IMAGE",):
             image = self.value(name)
             self.assertRegex(image, r"@sha256:[0-9a-f]{64}$")
             self.assertNotIn(":latest", image)
             self.assertNotIn(":stable", image)
         self.assertNotIn("tailscale/tailscale:stable", self.makefile)
+        self.assertNotIn("AUTOHEAL_IMAGE", self.manifest)
+        self.assertNotIn("willfarrell/autoheal", self.manifest)
 
     def test_minio_release_records_its_image_source_revision(self) -> None:
         self.assertRegex(

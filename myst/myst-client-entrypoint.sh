@@ -5,6 +5,7 @@ OS_DIR_DATA="/var/lib/mysterium-node"
 OS_DIR_RUN="/var/run/mysterium-node"
 OS_DIR_CONFIG="/etc/mysterium-node"
 MYST="myst --config-dir=${OS_DIR_DATA} --script-dir=${OS_DIR_CONFIG} --data-dir=${OS_DIR_DATA} --runtime-dir=${OS_DIR_RUN}"
+MYST_HEALTH_STATE_DIR="/run/myst-healthcheck"
 
 myst_cli() {
   $MYST cli --agreed-terms-and-conditions "$@"
@@ -85,6 +86,36 @@ if [ "${ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS:-false}" = "true" ]; then
   echo "Configured integration LAN endpoints enabled: added LAN route exemptions"
 fi
 
+# A restart reuses the container writable layer. Clear only the two exact
+# process-lifetime health state files before either VPN mode starts.
+/bin/sh /usr/local/bin/myst-healthcheck.sh reset "${MYST_HEALTH_STATE_DIR}"
+
+svc_pid=""
+route_fix_pid=""
+
+stop_children() {
+  trap - INT TERM
+  if [ -n "${route_fix_pid}" ]; then
+    kill "${route_fix_pid}" 2>/dev/null || true
+  fi
+  if [ -n "${svc_pid}" ]; then
+    kill "${svc_pid}" 2>/dev/null || true
+  fi
+  if [ -n "${route_fix_pid}" ]; then
+    wait "${route_fix_pid}" 2>/dev/null || true
+  fi
+  if [ -n "${svc_pid}" ]; then
+    wait "${svc_pid}" 2>/dev/null || true
+  fi
+}
+
+handle_shutdown() {
+  stop_children
+  exit 0
+}
+
+trap handle_shutdown INT TERM
+
 # ── Optional VPN bypass ────────────────────────────────────────────────────
 # When MYST_VPN_ENABLED=false, start the daemon in idle mode: no kill-switch
 # is armed, no connect attempt is made, and no identity/registration/funding
@@ -102,9 +133,11 @@ if [ "${MYST_VPN_ENABLED:-true}" = "false" ]; then
   set -- "$@" daemon
   /usr/local/bin/docker-entrypoint.sh "$@" &
   svc_pid="$!"
-  trap 'kill "$svc_pid" 2>/dev/null || true; wait "$svc_pid" 2>/dev/null || true' INT TERM
+  set +e
   wait "$svc_pid"
-  exit 0
+  svc_status="$?"
+  set -e
+  exit "${svc_status}"
 fi
 
 # Myst wireguard DNS manager invokes <script-dir>/update-resolv-conf on Unix.
@@ -150,14 +183,6 @@ svc_pid="$!"
   done
 ) &
 route_fix_pid="$!"
-
-cleanup() {
-  kill "$route_fix_pid" 2>/dev/null || true
-  kill "$svc_pid" 2>/dev/null || true
-  wait "$route_fix_pid" 2>/dev/null || true
-  wait "$svc_pid" 2>/dev/null || true
-}
-trap cleanup INT TERM
 
 echo "Waiting for TequilAPI to be reachable..."
 # Wait for TequilAPI to be reachable (myst CLI uses TequilAPI on 127.0.0.1:4050).
@@ -712,4 +737,9 @@ if [ "${MYST_AUTO_CONNECT:-true}" = "true" ] && [ -n "$ID" ]; then
 fi
 
 # Keep service in foreground; Myst kill-switch stays enabled unless explicitly disabled.
+set +e
 wait "$svc_pid"
+svc_status="$?"
+set -e
+stop_children
+exit "${svc_status}"

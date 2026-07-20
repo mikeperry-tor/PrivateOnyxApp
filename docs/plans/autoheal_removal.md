@@ -15,9 +15,8 @@ listed below, without relying on earlier discussion.
 
 ## Status and scope
 
-Status: planning complete; implementation has not started. The Myst-only
-restart design is conditional on the blocking shared-namespace qualification
-in Phase 0. Do not implement PID-1 self-termination before that gate passes.
+Status: implemented. The blocking shared-namespace qualification passed under
+Docker and Podman, so the common socket-free PID-1 recovery design was selected.
 
 Update this file in place while executing the work. Do not retain superseded
 design alternatives merely for history; the final plan should describe the
@@ -121,10 +120,8 @@ Keep `myst-readiness.sh` as the pure, side-effect-free readiness predicate. Add
 a small stdlib/shell-only wrapper, tentatively
 `myst/myst-healthcheck.sh`, as the single Compose health command.
 
-The PID-1 termination behavior below is the preferred design only if Phase 0
-proves repeated Myst-only restart reliable and fail-closed. If that gate fails,
-follow the fallback decision in Phase 0 rather than implementing this state
-machine unchanged.
+The PID-1 termination behavior below is the implemented common Docker/Podman
+contract.
 
 The wrapper must implement this state machine:
 
@@ -295,54 +292,10 @@ Repeat the same qualification under Podman before claiming engine parity. A
 Docker pass does not prove Podman because signal delivery, restart policy,
 health scheduling, and shared-namespace implementation can differ.
 
-#### Decision if the gate fails
-
-Do not paper over failure with blind deletion of `myst0`, broad route flushes,
-iptables resets, extra provider retries, or repeated container restarts. Those
-can either remove another process's state or briefly expose the direct bridge
-route.
-
-Use this decision order:
-
-1. Diagnose graceful shutdown first. Verify the shell forwards `SIGTERM`, the
-   pinned Myst daemon runs its supported shutdown/connection cleanup, and the
-   wrapper waits for actual completion. A bounded cleanup improvement is
-   acceptable only if failure remains visible and does not fall through to an
-   unclean restart.
-2. If supported `myst connection down` is considered before daemon shutdown,
-   prove that its cleanup finishes and that the namespace remains fail-closed
-   for the entire disconnected interval. Never assume the kill switch remains.
-3. Add a pre-start validator that detects stale `myst0`, split routes, UAPI,
-   or firewall state and stops before provider selection. Detection is
-   valuable even when automatic cleanup is unsafe; it prevents another opaque
-   full-provider sweep. Because `restart: unless-stopped` would turn a plain
-   preflight exit into another restart loop, the failure path must remain
-   alive-but-unready with one clear diagnostic (or use another explicitly
-   proven non-looping mechanism) until the operator performs the documented
-   full-stack recovery.
-4. Only implement narrow stale-state cleanup if every artifact has exact
-   ownership criteria, deterministic tests, and a separately maintained
-   fail-closed guard covering the cleanup/reconnect window. Broad namespace or
-   firewall cleanup is out of scope.
-5. If reliable fail-closed Myst-only restart still cannot be proven, remove
-   autoheal without replacement restart enforcement. Keep ordinary health
-   visibility, document that recovery requires the matching full
-   `make down-*` then `make up-*`, and retain the visible startup/runtime
-   failure. This is the default safe fallback.
-
-An in-process reconnect controller may be evaluated as a separate design
-because it lets the existing daemon clean up state it owns, but do not add it
-casually. It must serialize with startup/provider selection, reuse one
-connection-attempt owner, preserve the kill switch, bound retries, and avoid a
-second polling loop. If it cannot satisfy those properties more simply than
-the fallback, defer it.
-
 ### Phase 1: deterministic Myst health supervisor
 
-Proceed with this phase only after the Phase 0 restart gate passes. Add
-`myst/myst-healthcheck.sh` and focused tests before removing autoheal. If Phase
-0 selects the no-automatic-restart fallback, keep `myst-readiness.sh` as the
-direct health command and omit the supervisor/state files entirely.
+Phase 0 passed. `myst/myst-healthcheck.sh` and its focused tests were added
+before removing autoheal.
 
 The script should:
 
@@ -391,7 +344,7 @@ test runner or host PID 1.
 
 ### Phase 2: Compose integration and autoheal deletion
 
-If Phase 0 passes, in `myst/docker-compose.yaml`:
+In `myst/docker-compose.yaml`:
 
 - mount the new health wrapper read-only;
 - change the health command from direct `myst-readiness.sh` execution to the
@@ -400,12 +353,6 @@ If Phase 0 passes, in `myst/docker-compose.yaml`:
   ten-second timeout, two retries, and 420-second startup period unless live
   evidence requires a separately reviewed change; and
 - preserve `restart: unless-stopped`.
-
-If Phase 0 selects the safe fallback, leave the direct
-`myst-readiness.sh` health command and its existing cadence intact. Do not
-mount or invoke an unused health supervisor. `restart: unless-stopped` still
-handles an ordinary daemon process exit, but documentation must not promise
-that a Myst-only restart recovers a stale shared namespace.
 
 In `docker-compose.yaml`, remove the `autoheal: "true"` label from
 `myst-client`. Do not add a replacement label, socket, privileged helper,
@@ -443,10 +390,8 @@ Update `tests/test_onyx_network_isolation.py`:
   autoheal overlay;
 - assert every effective model has no `autoheal` service and Myst has no
   `autoheal` label;
-- after a passing Phase 0, assert the effective Myst health command is the new
-  wrapper with production PID/state arguments; under the fallback, assert it
-  remains the pure readiness script and that no self-heal wrapper/state
-  contract exists;
+- assert the effective Myst health command is the new wrapper with production
+  PID/state arguments;
 - assert `myst-client` retains `restart: unless-stopped`;
 - retain the exact one-minute regular health cadence and startup-health
   contract;
@@ -478,28 +423,22 @@ migration documentation until implementation is complete.
 
 Update all active documentation in the same change:
 
-- `README.md`: remove the Docker/Podman autoheal difference. State that both
-  engines have the same behavior without a container-engine socket. Promise
-  automatic post-readiness recovery only if both engines pass Phase 0;
-  otherwise document visible failure and matching full-stack restart.
+- `README.md`: remove the Docker/Podman autoheal difference and state that both
+  engines have the same qualified behavior without a container-engine socket.
 - `AGENTS.md`: remove `docker-compose.vpn-autoheal.yml` and the Podman VPN
-  overlay from key locations. Document the selected recovery invariant and,
-  only when Phase 0 passes, identify the new wrapper alongside
-  `myst-readiness.sh`.
+  overlay from key locations. Document the selected recovery invariant and
+  identify the new wrapper alongside `myst-readiness.sh`.
 - `docs/vpn_routing_and_proxies.md`: replace the autoheal lifecycle text with
-  the selected result: either the exact qualified state machine and recovery
-  window, or the visible-failure/full-stack-restart fallback. In both cases
-  document unchanged fail-closed routing and Docker/Podman parity.
+  the exact qualified state machine and recovery window, unchanged fail-closed
+  routing, and Docker/Podman parity.
 - `docs/podman_suport.md`: remove the Podman VPN overlay and socket limitation
-  section for autoheal. Document the qualified common recovery behavior, or
-  the common manual full-stack recovery fallback. Keep code interpreter's
-  distinct socket limitation.
+  section for autoheal. Document the qualified common recovery behavior and
+  keep code interpreter's distinct socket limitation.
 - `docs/onyx_patches_upgrade.md`: remove autoheal from immutable support-pin
   validation and add the selected Myst lifecycle, shared-namespace preflight,
   and fault checks to the Myst upgrade checklist.
 - `docs/resource_minimization.md`: update the current Myst health/recovery
-  control and its regression checks to match the selected qualified recovery
-  or visible-failure fallback.
+  control and its regression checks to match the qualified recovery.
 - `docs/internal_network_security.md`: update only if its socket-authority or
   residual-risk inventory changes after inspection.
 
@@ -532,7 +471,7 @@ matrix without reading or printing private values:
 
 | Engine | Mode | VPN | Required result |
 | --- | --- | --- | --- |
-| Docker | lite | enabled | qualified wrapper recovery, or direct health fallback; no autoheal/socket |
+| Docker | lite | enabled | qualified wrapper recovery; no autoheal/socket |
 | Docker | full | enabled | same selected contract; full services unchanged |
 | Docker | lite | disabled | no self-recovery arming; direct-route readiness |
 | Docker | full | disabled | same; full services unchanged |
@@ -582,14 +521,11 @@ Required runtime-disconnect fault:
    example the Myst CLI `connection down`) without stopping `netns-holder`.
 2. Confirm requests fail closed during the outage—no system-route or direct
    fallback.
-3. Under the qualified wrapper design, confirm one failure does not immediately
+3. Confirm one failure does not immediately
    restart Myst, continuous failure for at least 60 seconds causes the clear
    diagnostic and qualified graceful restart path, and Myst reconnects without
    provider sweep while `netns-holder` remains unchanged.
-4. Under the fallback, confirm Myst remains visibly unhealthy and does not
-   enter an automatic restart/provider loop. Then use the documented matching
-   full `make down-*`/`make up-*` recovery and confirm service restoration.
-5. Re-run a representative routed request after the selected recovery path.
+4. Re-run a representative routed request after recovery.
 
 Required startup-visibility checks should use safe disposable configuration or
 a dedicated fault harness, not the user's funded identity/state:
@@ -621,8 +557,8 @@ When a usable supported Podman machine is available:
 3. Inspect `.Config.StartupHealthCheck` and `.Config.Healthcheck` separately;
    both must contain the selected command with the intended startup and regular
    cadences.
-4. Repeat the runtime-disconnect test and confirm either the already-qualified
-   graceful restart path or the visible fallback, without any API/socket helper.
+4. Repeat the runtime-disconnect test and confirm the qualified graceful
+   restart path without any API/socket helper.
 5. Confirm `netns-holder`, policy proxies, and (in full mode) the Podman host
    document server retain their expected identity and behavior.
 6. Validate explicit no-VPN mode does not arm or self-terminate.
@@ -640,16 +576,14 @@ The work is complete only when all of the following are true:
   pin, Makefile selectors, and Podman suppression path are gone.
 - No new container-engine socket, privileged service, network, capability, or
   public dependency replaces them.
-- One periodic local readiness predicate supplies health visibility; if
-  automatic enforcement qualifies, it consumes that same result and adds no
+- One periodic local readiness predicate supplies health visibility and the
+  qualified automatic enforcement consumes that same result without a
   duplicate polling daemon.
 - The shared-namespace restart gate is recorded with repeatable evidence. A
   known-bad Myst-only restart is not reintroduced under a different trigger.
 - Under automatic recovery, startup remains visibly unready until the VPN has
   proved ready once, and a later failure is continuous for at least 60 seconds
   before the qualified graceful path begins.
-- Under fallback recovery, a sustained failure remains visibly unhealthy and
-  requires the documented full-stack teardown/restart.
 - Docker and Podman use the same selected recovery contract and preserve the
   stable `netns-holder` namespace during normal operation.
 - Explicit no-VPN mode never arms VPN recovery.
@@ -670,26 +604,46 @@ Removing autoheal eliminates one always-running container, its process and
 periodic Docker API polling, the mounted Docker control socket, one external
 image/pin, and the Docker/Podman feature mismatch. It does not remove Myst's
 one-minute regular healthcheck because that check remains the user-visible
-readiness predicate and, only under the qualified design, the recovery trigger.
+readiness predicate and recovery trigger.
 
 Initial live-but-unready VPN setup does not self-restart. It remains visible
-until corrected or explicitly restarted. If Phase 0 qualifies Myst-only
-restart, a later sustained failure uses that exact tested graceful path. If it
-does not, runtime failure also remains visible until the operator recreates the
-matching stack and its namespace. In either result, request-time policy must
-continue rejecting traffic rather than bypassing the VPN.
+until corrected or explicitly restarted. A later sustained failure uses the
+qualified graceful path. Request-time policy continues rejecting traffic
+rather than bypassing the VPN throughout cleanup and reconnection.
 
 ## Handoff record
 
-At implementation handoff, report:
+Implemented on 2026-07-20 with the qualified automatic-recovery branch:
 
-- files added, deleted, and materially changed;
-- the exact state-machine timing used;
-- Phase 0 namespace snapshots/results and the selected recovery branch;
-- deterministic test totals and skipped tests;
-- effective Docker and Podman model results;
-- live Docker fault-injection/recovery observations;
-- live Podman observations or the precise reason they were unavailable;
-- final running stack mode and health; and
-- any remaining `autoheal`, Docker-socket, or obsolete-documentation matches
-  with an explanation for each.
+- The supervisor uses the existing five-second startup and one-minute steady
+  engine probes. It arms after the first readiness success and requires 60
+  seconds of continuous monotonic failure before one graceful PID-1 signal.
+- Docker Phase 0 graceful cycles recovered in 54, 42, and 44 seconds; the
+  supported-disconnect cycle recovered in 38 seconds. Each used one provider
+  attempt and retained the holder container and network-namespace inode.
+- Podman application-path graceful cycles recovered in 58, 52, and 51 seconds;
+  the supported-disconnect cycle recovered in 60 seconds. Each used one
+  provider attempt and retained the holder container and namespace inode.
+- During sampled unready windows, `myst0` and its split routes were absent and
+  no fresh request through the fixed application bridge/final-hop path
+  succeeded. Direct diagnostics issued from a trusted co-resident routing
+  process are outside that bridge boundary, as documented for the namespace.
+- The final engine-driven supervisor faults recorded the first failure at 38
+  seconds and recovered at 137 seconds under Docker, and recorded at 33 seconds
+  and recovered at 134 seconds under Podman. No outage request succeeded.
+  Docker's health history exposed the one-shot diagnostic; Podman's history
+  reset it on restart, while the restart timing/count and deterministic
+  one-shot test proved the same path.
+- All eight Docker/Podman, lite/full, VPN/no-VPN models rendered the exact
+  supervisor command and cadence without autoheal. Podman's native startup
+  health contained the same command at five seconds. Live explicit no-VPN
+  checks on both engines stayed healthy without either recovery state file.
+- `make check` passed 304 tests with five expected SearXNG image-only skips.
+  `make health-inventory` passed for all eight model rows. No image/runtime
+  patch contract changed, so `make test-images` was not required by this plan.
+- The final running state is the healthy Docker full VPN stack. It has no
+  autoheal container; its sole Docker-socket mount remains the intentionally
+  unrelated code-interpreter service.
+- Remaining autoheal terms are confined to this implementation plan, negative
+  regression tests, and implemented-plan passages explicitly marked as
+  historical/superseded. Untracked top-level `plans/` material was not edited.

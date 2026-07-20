@@ -122,6 +122,13 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[0]
         self.assertIn("ifneq ($(PODMAN_SELECTED),true)", selection)
 
+    def test_podman_has_no_vpn_socket_suppression_overlay(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertNotIn("PODMAN_VPN_OVERRIDE_FILE", makefile)
+        self.assertNotIn("PODMAN_VPN_COMPOSE_SUFFIX", makefile)
+        self.assertNotIn("VPN_AUTOHEAL", makefile)
+        self.assertFalse((ROOT / "docker-compose.podman-vpn.yml").exists())
+
     def test_embedding_proxy_uses_absolute_identity_and_child_record(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         start = makefile.split("embedserv-start-if-installed:", 1)[1].split(

@@ -29,8 +29,8 @@ fallbacks, retries, migrations, or weaker ownership checks.
 ### Container health and startup
 
 - Retained local health checks poll every five seconds during startup and every
-  ten minutes in steady state. Myst remains once per minute because Docker
-  autoheal consumes that result.
+  ten minutes in steady state. Myst remains once per minute because its same
+  local result also triggers qualified post-readiness recovery.
 - Fixed gateways and publishers validate their complete local boundary. The
   corresponding origin health check is disabled when it would only repeat the
   same path.
@@ -157,8 +157,12 @@ are not duplicate enforcement.
 - A successful connection performs one immediate reconciliation. The background
   loop is the single ongoing owner; status polling and provider-selection
   branches do not repeat the same operations.
-- Docker's VPN-only autoheal still consumes Myst's one-minute local health result.
-  Podman omits socket-based autoheal and requires explicit restart today.
+- Docker and Podman use the same socket-free Myst health supervisor. It stays
+  unarmed until the first complete VPN readiness success in the current
+  container lifetime, resets its monotonic failure window on every success,
+  and requests one graceful PID-1 restart only after 60 seconds of continuous
+  later failure. Explicit no-VPN mode and initial connection failures never arm
+  recovery. The engine healthcheck remains the only periodic readiness owner.
 
 ### Podman shared state and host documents
 
@@ -265,6 +269,10 @@ For affected lifecycle changes, validate both engines where supported:
    child; verify the documented aggregate health or recovery owner responds.
 8. Confirm no direct-network, host-port, proxy, or shared-data-engine bypass was
    introduced.
+9. For Myst, verify initial failure remains unarmed, a transient failure clears
+   its timestamp, sustained post-readiness failure waits at least 60 seconds,
+   and Docker/Podman both preserve the holder namespace and fail-closed bridges
+   across the graceful restart.
 
 ## Resource-safety guardrails
 

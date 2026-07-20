@@ -81,9 +81,7 @@ The Makefile assembles the ordinary base/mode/optional layers first and adds
 the engine-specific layers when `CONTAINER_BIN` resolves to Podman:
 
 - `docker-compose.podman.yml` applies to lite and full modes;
-- `docker-compose.podman-full.yml` applies only to full mode; and
-- `docker-compose.podman-vpn.yml` applies when the VPN/autoheal layer is
-  otherwise selected.
+- `docker-compose.podman-full.yml` applies only to full mode.
 
 Keep Docker and Podman behavior separated in those override files. Preserve
 Compose `${VAR:?message}` checks and the Makefile-generated ephemeral secret
@@ -195,18 +193,16 @@ memory-lock request merely to silence the warning; re-evaluate the limit,
 guest swap state, mapped-index residency, and failure behavior when changing
 the Podman machine or OpenSearch resource policy.
 
-### VPN override and socket limitations
+### VPN recovery and socket limitations
 
-`docker-compose.podman-vpn.yml` puts `autoheal` behind the inactive
-`requires-docker-socket` profile. Rootless Podman on macOS cannot provide the
-container-visible Docker socket semantics expected by the stock autoheal
-image. Routing remains fail-closed, but automatic Myst restart is unavailable.
-Diagnose the readiness failure, then use `podman restart myst-client-vpn` or
-restart the matching stack.
-
-Do not expose a broader or privileged Podman socket merely to restore these
-features. A future replacement must be designed and validated as a distinct
-Podman control path with appropriately narrow authority.
+Myst uses the same in-container health supervisor under Podman and Docker. It
+has no engine socket, sidecar, added capability, or Podman-specific overlay.
+Only a VPN that became ready once in the current container lifetime is armed;
+60 seconds of continuous later readiness failure requests graceful PID-1
+termination, after which `restart: unless-stopped` restarts Myst in the stable
+holder namespace. Initial and explicit no-VPN failures remain visible without
+self-restart. The Docker-socket limitation therefore applies only to the
+unrelated legacy code interpreter.
 
 ## Startup-health translation
 
@@ -461,9 +457,10 @@ direct inspection; do not mix Docker engine results into the evidence.
 6. Validate the shared Docker binds. Confirm the core Podman overlays,
    PostgreSQL direct entrypoint, `keep-id` mappings, initialization checks,
    mount-root xattr preflight, clean shutdown, and engine exclusivity.
-7. Verify socket-only code interpreter and autoheal remain absent. If a future
-   feature needs control-plane access, review its authority rather than
-   exposing the rootless socket broadly.
+7. Verify socket-only code interpreter remains absent and Myst recovery has no
+   socket mount or engine-specific overlay. If a future feature needs
+   control-plane access, review its authority rather than exposing the rootless
+   socket broadly.
 8. Exercise local WebUI, document server, embedding readiness, MinIO/OpenSearch,
    SearXNG, and route/fail-closed behavior in proportion to the changed feature.
 9. Recheck after a VM/Desktop restart when the change depends on mounts,

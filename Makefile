@@ -5,8 +5,6 @@ FULL_OVERRIDE_FILE := docker-compose.full.yml
 LITE_OVERRIDE_FILE := docker-compose.lite.yml
 PODMAN_OVERRIDE_FILE := docker-compose.podman.yml
 PODMAN_FULL_OVERRIDE_FILE := docker-compose.podman-full.yml
-PODMAN_VPN_OVERRIDE_FILE := docker-compose.podman-vpn.yml
-VPN_AUTOHEAL_OVERRIDE_FILE := docker-compose.vpn-autoheal.yml
 
 env_value = $(strip $(shell for f in "$(ENV_FILE)" "$(VERSION_FILE)"; do [ -f "$$f" ] || continue; sed -n 's/^$(1)=//p' "$$f" | head -1 | sed 's/^"//; s/"$$//'; done | head -1))
 COMPOSE_ENV_FILES = --env-file "$(VERSION_FILE)" --env-file "$(ENV_FILE)"
@@ -81,22 +79,9 @@ endif
 
 PODMAN_COMPOSE_SUFFIX :=
 PODMAN_FULL_COMPOSE_SUFFIX :=
-PODMAN_VPN_COMPOSE_SUFFIX :=
 ifneq ($(findstring podman,$(CONTAINER_BIN)),)
 PODMAN_COMPOSE_SUFFIX :=:$(PODMAN_OVERRIDE_FILE)
 PODMAN_FULL_COMPOSE_SUFFIX :=:$(PODMAN_FULL_OVERRIDE_FILE)
-endif
-
-# Autoheal has Docker-socket authority and is useful only for recovering the
-# VPN client. Keep it structurally absent from explicit no-VPN stacks.
-VPN_AUTOHEAL_SUFFIX :=:$(VPN_AUTOHEAL_OVERRIDE_FILE)
-ifneq ($(filter false,$(MYST_VPN_ENABLED)),)
-VPN_AUTOHEAL_SUFFIX :=
-endif
-ifneq ($(findstring podman,$(CONTAINER_BIN)),)
-ifneq ($(strip $(VPN_AUTOHEAL_SUFFIX)),)
-PODMAN_VPN_COMPOSE_SUFFIX :=:$(PODMAN_VPN_OVERRIDE_FILE)
-endif
 endif
 
 # Conditional routing overrides for teep and tailscale.
@@ -241,8 +226,8 @@ SEARXNG_REQUIREMENTS_IN := searxng/requirements.in
 SEARXNG_REQUIREMENTS := searxng/requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
 # Lite mode has no wrapper-owned host services. Full mode always reconciles the
 # optional bundled MLX service, but selects the host document server only for

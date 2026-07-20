@@ -158,24 +158,17 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertNotIn("VALKEY_IMAGE", (ROOT / "stack.versions.env").read_text())
         self.assertFalse((ROOT / "searxng" / "engines" / "_crw.py").exists())
 
-    def test_makefile_selects_autoheal_only_for_vpn_models(self) -> None:
-        vpn_files = _make_compose_files(vpn_enabled=True)
-        self.assertIn("docker-compose.vpn-autoheal.yml", vpn_files)
-
-        no_vpn_files = _make_compose_files(vpn_enabled=False)
-        self.assertNotIn("docker-compose.vpn-autoheal.yml", no_vpn_files)
-
-        podman_vpn_files = _make_compose_files(
-            vpn_enabled=True, container_bin="podman"
-        )
-        self.assertIn("docker-compose.vpn-autoheal.yml", podman_vpn_files)
-        self.assertIn("docker-compose.podman-vpn.yml", podman_vpn_files)
-
-        podman_no_vpn_files = _make_compose_files(
-            vpn_enabled=False, container_bin="podman"
-        )
-        self.assertNotIn("docker-compose.vpn-autoheal.yml", podman_no_vpn_files)
-        self.assertNotIn("docker-compose.podman-vpn.yml", podman_no_vpn_files)
+    def test_makefile_never_selects_removed_autoheal_overlays(self) -> None:
+        for container_bin in ("docker", "podman"):
+            for vpn_enabled in (False, True):
+                with self.subTest(
+                    container_bin=container_bin, vpn_enabled=vpn_enabled
+                ):
+                    files = _make_compose_files(
+                        vpn_enabled=vpn_enabled, container_bin=container_bin
+                    )
+                    self.assertNotIn("docker-compose.vpn-autoheal.yml", files)
+                    self.assertNotIn("docker-compose.podman-vpn.yml", files)
 
     def test_makefile_selects_every_optional_network_layer(self) -> None:
         default_files = _make_compose_files(vpn_enabled=True)
@@ -279,25 +272,87 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertNotIn("PODMAN_SHARE_DOCKER_POSTGRES", makefile)
         self.assertNotIn("PODMAN_SHARE_DOCKER_OPENSEARCH", makefile)
 
-    def test_autoheal_is_present_only_in_vpn_models(self) -> None:
+    def test_myst_uses_common_socket_free_health_supervisor(self) -> None:
+        expected_health = [
+            "CMD",
+            "/bin/sh",
+            "/usr/local/bin/myst-healthcheck.sh",
+            "check",
+            "1",
+            "/run/myst-healthcheck",
+            "/usr/local/bin/myst-readiness.sh",
+            "/proc/uptime",
+            "60",
+        ]
         for mode in ("lite", "full"):
-            no_vpn_model = _compose_model(mode)
-            self.assertNotIn("autoheal", no_vpn_model["services"])
+            for engine in ("docker", "podman"):
+                extras = ["docker-compose.podman.yml"] if engine == "podman" else []
+                if engine == "podman" and mode == "full":
+                    extras.append("docker-compose.podman-full.yml")
+                for vpn_enabled in (False, True):
+                    with self.subTest(
+                        mode=mode, engine=engine, vpn_enabled=vpn_enabled
+                    ):
+                        model = _compose_model(
+                            mode,
+                            *extras,
+                            env_overrides={
+                                "MYST_VPN_ENABLED": (
+                                    "true" if vpn_enabled else "false"
+                                )
+                            },
+                        )
+                        self.assertNotIn("autoheal", model["services"])
+                        myst = model["services"]["myst-client"]
+                        self.assertEqual(myst["restart"], "unless-stopped")
+                        self.assertEqual(
+                            myst["network_mode"], "service:netns-holder"
+                        )
+                        self.assertEqual(myst["healthcheck"]["test"], expected_health)
+                        self.assertNotIn("autoheal", myst.get("labels", {}))
+                        self.assertEqual(
+                            myst["environment"]["MYST_VPN_ENABLED"],
+                            "true" if vpn_enabled else "false",
+                        )
+                        sockets = [
+                            volume["source"]
+                            for service in model["services"].values()
+                            for volume in service.get("volumes", [])
+                            if isinstance(volume, dict)
+                            and volume.get("source") == "/var/run/docker.sock"
+                        ]
+                        if engine == "podman":
+                            self.assertEqual(sockets, [])
+                        else:
+                            self.assertLessEqual(len(sockets), 1)
 
-            vpn_model = _compose_model(mode, "docker-compose.vpn-autoheal.yml")
-            autoheal = vpn_model["services"]["autoheal"]
-            self.assertEqual(autoheal["network_mode"], "none")
-            self.assertEqual(
-                autoheal["volumes"][0]["source"], "/var/run/docker.sock"
+    def test_removed_autoheal_contract_stays_absent_from_active_configuration(self) -> None:
+        self.assertFalse((ROOT / "docker-compose.vpn-autoheal.yml").exists())
+        self.assertFalse((ROOT / "docker-compose.podman-vpn.yml").exists())
+        active = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                ROOT / "Makefile",
+                ROOT / "stack.versions.env",
+                ROOT / "docker-compose.yaml",
+                ROOT / "docker-compose.full.yml",
+                ROOT / "docker-compose.lite.yml",
+                ROOT / "docker-compose.podman.yml",
+                ROOT / "docker-compose.podman-full.yml",
             )
-            self.assertIn("myst-client", autoheal["depends_on"])
-            self.assertEqual(autoheal["environment"]["AUTOHEAL_INTERVAL"], "60")
-            self.assertTrue(autoheal["healthcheck"]["disable"])
+        )
+        for forbidden in (
+            "AUTOHEAL_IMAGE",
+            "willfarrell/autoheal",
+            'autoheal: "true"',
+            "docker-compose.vpn-autoheal.yml",
+            "docker-compose.podman-vpn.yml",
+        ):
+            self.assertNotIn(forbidden, active)
 
     def test_sleepy_health_inventory_and_aggregate_ownership(self) -> None:
         model = _compose_model(
             "full",
-            "docker-compose.vpn-autoheal.yml",
             "docker-compose.code-interpreter-network.yml",
             "docker-compose.teep-vpn.yml",
             profiles=("tailscale",),
@@ -310,7 +365,6 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             "web_server",
             "cache",
             "opensearch",
-            "autoheal",
         }
         absent = {
             "onyx-public-egress-proxy",

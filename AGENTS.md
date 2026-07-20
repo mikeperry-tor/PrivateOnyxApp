@@ -117,6 +117,11 @@ depend on application-level proxy settings or caller discipline alone.
   exemption routes are silent no-ops; writes and success logs occur only for
   missing or drifted target/gateway/device state. One immediate post-connect
   pass is followed by a single background reconciliation owner.
+- `myst/myst-readiness.sh` remains the pure local readiness predicate. The
+  socket-free `myst/myst-healthcheck.sh` wrapper arms only after the first VPN
+  readiness success in each container lifetime and requests one graceful PID-1
+  restart after 60 seconds of continuous later failure. Docker and Podman use
+  the same contract; startup and explicit no-VPN mode never arm recovery.
 - Optional Onyx telemetry, third-party analytics/tracing, cloud billing,
   CAPTCHA, and automatic remote configuration/data-list fetches are explicitly
   disabled in Compose. Release-note polling and local administrative analytics
@@ -148,9 +153,9 @@ Those bullets are only a map. Read the docs above before changing any runtime ne
     mode overlays.
   - `docker-compose.code-interpreter-network.yml` - optional executor-only
     internal network and proxy bridge.
-  - `docker-compose.*-vpn.yml`, `docker-compose.vpn-autoheal.yml`,
-    `docker-compose.proxy.yml`, and Podman overrides - optional routing, proxy,
-    recovery, and container-engine layers selected by the Makefile.
+  - `docker-compose.*-vpn.yml`, `docker-compose.proxy.yml`, and Podman
+    overrides - optional routing, proxy, and container-engine layers selected
+    by the Makefile.
 - Routing and component implementations:
   - `browser/obscura_client/` - shared direct-CDP client used by Onyx and
     SearXNG.

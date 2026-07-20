@@ -528,14 +528,22 @@ request workers retain all strict patch diagnostics. Treat any other Python
 `-c` command as an application process unless its role is separately audited
 and tested.
 
-For support and source pins, require immutable Tailscale/autoheal digests,
-exact Myst and Teep Git revisions in both image labels and build arguments, and
+For support and source pins, require an immutable Tailscale digest, exact Myst
+and Teep Git revisions in both image labels and build arguments, and
 the MinIO source revision associated with its release image. Run
 `make health-inventory`, inspect effective startup/steady intervals, and verify
 Docker Engine 25+/Compose 2.20.2+ preserve `start_interval`. For Podman, verify
 the wrapper's native `StartupHealthCheck` translation against the exact
 effective Compose health set and inspect the separate one- or ten-minute
 regular cadence; Compose rendering alone is not sufficient.
+
+For a Myst source, entrypoint, or health-supervisor change, exercise three
+graceful PID-1 restarts and a supported runtime disconnect on both Docker and
+Podman. Require old interface/route cleanup, one-attempt recovery in the
+unchanged holder namespace, no successful application-path request while
+unready, and exact startup/no-VPN non-arming behavior. Reconfirm that the
+health command has no container-engine socket and remains the only periodic
+readiness owner.
 
 ## Minimum deterministic validation
 

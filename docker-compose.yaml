@@ -58,8 +58,6 @@ services:
     extends:
       file: ./myst/docker-compose.yaml
       service: myst-client
-    labels:
-      autoheal: "true"
     # Join the stable namespace owned by netns-holder.
     network_mode: "service:netns-holder"
     # Keep myst-client internal-only. Host port publishing is handled by
@@ -458,7 +456,7 @@ services:
       STRIPE_PUBLISHABLE_KEY: ""
     extra_hosts: !reset []
     # Full-mode shim + tokenizer bootstrap can exceed upstream healthcheck grace.
-    # Give API startup enough time so autoheal does not recycle it mid-init.
+    # Give API startup enough time for full-mode shim and tokenizer initialization.
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 10m

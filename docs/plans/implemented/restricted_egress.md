@@ -8,7 +8,9 @@
 > describe the earlier milestone, not the current runtime. The later
 > simplification also removed the unused SearXNG Valkey, bypassed Onyx
 > model-server services, fake CRW credential, and duplicate browser and
-> executor final-hop proxy processes. References below remain historical only.
+> executor final-hop proxy processes. Autoheal references are likewise
+> superseded by the socket-free Myst supervisor in the normative VPN guide.
+> References below remain historical only.
 
 > **Status: implemented (2026-07-13).** The normative runtime documentation is
 > now [VPN routing and restricted egress](../../vpn_routing_and_proxies.md),
@@ -85,7 +87,7 @@ this file when any of these pins or their equivalent local overrides change.
 | Obscura | `OBSCURA_IMAGE=h4ckf0r0day/obscura:0.1.10` | Owns browser rendering, proxy behavior, private-target blocking, and CDP browser egress. |
 | Teep | `TEEP_REF=6413fe0547b449e67f7296986fe8b8ffbc9bbcd2` | Out of scope for restricted egress unless provider routing or namespace placement changes. |
 | Mysterium | `MYST_IMAGE=local/private-onyx-myst:20260713` | Owns the shared routing namespace, VPN connection, data-plane readiness, and kill-switch behavior behind final-hop policy. |
-| Network/support images | `NETNS_HOLDER_IMAGE=alpine:3.20`, `PYTHON_SLIM_IMAGE=python:3.12-slim-bookworm`, `PYTHON_ALPINE_IMAGE=python:3.12-alpine`, `CDP_SHIM_IMAGE=local/private-onyx-cdp-shim:20260713`, `SOCAT_IMAGE=alpine/socat:1.8.0.3`, `TAILSCALE_IMAGE=tailscale/tailscale:stable`, `AUTOHEAL_IMAGE=willfarrell/autoheal:latest` | Shape namespace ownership, prebuilt offline-runtime dependencies, bridge/proxy implementation choices, host diagnostic bridges, optional Tailscale routing, and health behavior. |
+| Network/support images | `NETNS_HOLDER_IMAGE=alpine:3.20`, `PYTHON_SLIM_IMAGE=python:3.12-slim-bookworm`, `PYTHON_ALPINE_IMAGE=python:3.12-alpine`, `CDP_SHIM_IMAGE=local/private-onyx-cdp-shim:20260713`, `SOCAT_IMAGE=alpine/socat:1.8.0.3`, `TAILSCALE_IMAGE=tailscale/tailscale:stable` | Shape namespace ownership, prebuilt offline-runtime dependencies, bridge/proxy implementation choices, host diagnostic bridges, optional Tailscale routing, and health behavior. |
 | Full-mode data/search support | `MINIO_IMAGE=minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1`, `VALKEY_IMAGE=docker.io/valkey/valkey:9-alpine` | Relevant when validating full-mode data services, SearXNG cache reachability, or local document RAG placement. |
 
 ## Non-Goals

@@ -14,8 +14,9 @@
 > [Direct Obscura request handling](obscura_direct.md), implemented on
 > 2026-07-15.
 > That later migration removed CRW and the CDP shim. References below to those
-> components describe the prerequisite's historical implementation state, not
-> the current runtime topology.
+> components and autoheal describe the prerequisite's historical implementation
+> state, not the current runtime topology. Myst now uses the socket-free common
+> recovery contract in [VPN routing and restricted egress](../vpn_routing_and_proxies.md).
 
 ## Decision
 
@@ -173,8 +174,9 @@ Final-hop readiness validates configuration and the selected DNS/upstream
 substrate without opening an arbitrary user target. Bridge health traverses
 the bridge and expects the proxy to deny a fixed forbidden target. Stopping a
 bridge, matching proxy, Myst, or configured upstream disables only that route.
-There is no cross-class or direct fallback. Only Myst is autohealed in VPN
-models; explicit no-VPN models omit autoheal and its Docker socket. Core Onyx
+There is no cross-class or direct fallback. The historical model used autoheal;
+the current socket-free Myst supervisor is documented in the normative VPN
+guide linked above. Core Onyx
 startup does not wait for optional browsing health; the affected feature fails
 closed when invoked. Full mode still waits for its required embedding shim and
 upstream route.
