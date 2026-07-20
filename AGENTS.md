@@ -19,6 +19,10 @@ Before changing a subsystem, read the matching document below, then inspect the 
 - `docs/onyx_patch_info.md` - why local runtime patches exist.
 - `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/Obscura/Teep upgrade checklist and patch validation, for use when image/source pins or runtime Python locks are updated.
 - `docs/local_docs_rag_search.md` - full-mode local document RAG, local doc serving, PDF freshness, embedding shim, and diagnostics.
+- `docs/resource_minimization.md` - implemented low-idle health cadence,
+  background work, model lifecycle, search, and storage resource policy plus
+  regression checks. Read it before changing periodic work, worker topology,
+  health checks, MLX lifecycle, or resource settings.
 - `docs/podman_suport.md` - Podman/macOS Compose overlays, startup-health
   translation, shared-storage ownership, bind-mount workarounds, known regressions, and
   the compatibility checklist. Read it before adding or validating any feature
@@ -43,10 +47,11 @@ At a high level:
   served-model ownership, visible unbounded cold-start readiness while the
   child remains alive, a five-minute proxy-to-child blocked-socket timeout,
   single-attempt shim forwarding, and
-  applies the documented low-idle background/storage
-  policy. OpenSearch uses static single-node settings: a 512 MiB heap, four
-  configured processors, monthly body-free audit initialization, disabled
-  Query Insights top-N collection, and zero replicas for new Onyx indices.
+  applies the low-idle background/storage policy documented in
+  `docs/resource_minimization.md`. OpenSearch uses static single-node settings:
+  a 512 MiB heap, four configured processors, monthly body-free audit
+  initialization, disabled Query Insights top-N collection, and zero replicas
+  for new Onyx indices.
   There is no runtime OpenSearch migration or administrative sidecar. Exact
   background control processes stay outside the application
   `sitecustomize` bootstrap; Beat, workers, and indexing children remain

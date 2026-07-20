@@ -40,7 +40,7 @@ Read these files completely before editing:
 - `docs/internal_network_security.md`
 - `docs/podman_suport.md`
 - `docs/onyx_patches_upgrade.md`
-- `docs/plans/power_saving.md`
+- `docs/resource_minimization.md`
 - `Makefile`
 - `docker-compose.yaml`
 - `docker-compose.vpn-autoheal.yml`
@@ -497,9 +497,9 @@ Update all active documentation in the same change:
 - `docs/onyx_patches_upgrade.md`: remove autoheal from immutable support-pin
   validation and add the selected Myst lifecycle, shared-namespace preflight,
   and fault checks to the Myst upgrade checklist.
-- `docs/plans/power_saving.md`: replace current/deferred autoheal text with the
-  selected qualified recovery or visible-failure fallback. Remove the deferred
-  item; do not preserve obsolete specifications as a historical appendix.
+- `docs/resource_minimization.md`: update the current Myst health/recovery
+  control and its regression checks to match the selected qualified recovery
+  or visible-failure fallback.
 - `docs/internal_network_security.md`: update only if its socket-authority or
   residual-risk inventory changes after inspection.
 
@@ -660,9 +660,9 @@ The work is complete only when all of the following are true:
 - `make check` and `make health-inventory` pass.
 - Live Docker recovery passes; live Podman recovery passes when a usable Podman
   runtime is available, or the omission is reported precisely.
-- README, AGENTS.md, active subsystem docs, upgrade guidance, power-saving
-  plan, and conflicting present-tense implemented-plan text match the final
-  behavior.
+- README, AGENTS.md, active subsystem docs, upgrade guidance, resource
+  minimization policy, and conflicting present-tense implemented-plan text
+  match the final behavior.
 
 ## Expected resource and operational consequences
 

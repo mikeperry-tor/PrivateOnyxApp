@@ -1,16 +1,19 @@
-# Power and resource-efficiency plan
+# Resource minimization
 
-## Status
+## Purpose
 
-The low-idle implementation is complete. Deterministic validation and pinned
-image validation are required before release; repeat the live workload and
-fault matrix after changes to lifecycle, routing, container health, Onyx pins,
-or the bundled MLX server.
+This document describes the stack's implemented power and resource
+minimization policy. It is the regression authority for health cadence,
+background work, optional model lifecycle, search providers, storage settings,
+and other low-idle behavior. Read it before changing those areas, and keep it
+aligned with the implementation and deterministic contracts.
 
-This document records the current contract and remaining validation work. It
-does not preserve superseded designs or intermediate measurements.
+The objective is not minimum resource use at any cost. The stack must retain
+visible startup, request correctness, privacy routing, indexing recovery, and
+explicit operator control. Resource-saving changes must not introduce hidden
+fallbacks, retries, migrations, or weaker ownership checks.
 
-## Goals
+## Design principles
 
 - Keep an idle private stack quiet enough for an always-on workstation.
 - Preserve visible, fail-closed startup rather than hiding a wedged dependency.
@@ -21,7 +24,7 @@ does not preserve superseded designs or intermediate measurements.
 - Prefer component configuration and aggregate boundary checks over periodic
   work, runtime administration, or copied upstream implementations.
 
-## Current contract
+## Implemented controls
 
 ### Container health and startup
 
@@ -162,6 +165,9 @@ are not duplicate enforcement.
 - A persistent engine marker prevents Docker and Podman from concurrently
   writing shared PostgreSQL, OpenSearch, MinIO, Redis, or file-system state.
   Live engine inspection separately protects first-use or unclaimed state.
+  An unselected Podman API failure is skipped only when its default machine
+  positively reports that it is stopped; ambiguous inspection failures still
+  fail closed.
 - Full-mode embedding startup remains two-stage so a failed readiness request
   cannot replace a working API/background tier.
 - Podman serves the configured document source from a wrapper-owned host process
@@ -170,9 +176,37 @@ are not duplicate enforcement.
   non-loopback peers before HTTP parsing, and bounds connections. The shared
   host manager handles only its generic lifecycle and ownership record.
 
-## Validation requirements
+## Implementation map
 
-### Deterministic
+- Health cadence and aggregation: `docker-compose.yaml`, mode/engine overlays,
+  `Makefile`, `podman/startup_health.py`, and `tests/health_inventory.py`.
+- MLX lifecycle and host-process ownership:
+  `embedserv/idle_embedding_proxy.py`,
+  `embedserv/host_process_manager.py`, `onyx/local_embedding_shim.py`, and
+  their focused tests.
+- Background schedules, workers, and Beat liveness:
+  `onyx/background_entrypoint.py`, `onyx/beat_liveness_watchdog.py`,
+  `onyx/patches/sitecustomize_background/`, and
+  `tests/validate_pinned_background.py`.
+- Search-engine and bootstrap reduction: `searxng/core-config/settings.yml`,
+  `searxng/patches/`, custom engines under `searxng/engines/`, and the
+  SearXNG bootstrap/parser/scheduling tests.
+- OpenSearch, MinIO, and full-mode storage settings: `docker-compose.full.yml`,
+  `docker-compose.yaml`, and the OpenSearch runtime validation suite.
+- Myst reconciliation and recovery ownership: `myst/myst-client-entrypoint.sh`,
+  `myst/route-reconciliation.sh`, `myst/myst-readiness.sh`, effective Compose
+  health configuration, and the Myst readiness/reconciliation tests.
+- Podman shared-state and host-document controls: Podman Compose overlays,
+  `podman/shared_data_engine.py`, `podman/startup_health.py`, the shared host
+  manager, and their deterministic tests.
+
+When one of these controls changes, update this document and its focused tests
+in the same change. Remove obsolete enforcement rather than retaining two
+independent owners for the same periodic work or lifecycle decision.
+
+## Regression protection
+
+### Deterministic contracts
 
 Run:
 
@@ -196,7 +230,7 @@ The suite must cover:
 - SearXNG exact engine/plugin configuration and all custom parsers;
 - OpenSearch configuration and validation helpers.
 
-### Pinned images
+### Pinned-image contracts
 
 Run:
 
@@ -213,7 +247,7 @@ images; never pull or substitute an image from the validation target.
 Run `make check-upgrade` after an image/source pin, dependency lock, or runtime
 patch change. OpenSearch's disposable-image workload remains part of that gate.
 
-### Live Docker and Podman
+### Lifecycle and integration changes
 
 For affected lifecycle changes, validate both engines where supported:
 
@@ -232,41 +266,7 @@ For affected lifecycle changes, validate both engines where supported:
 8. Confirm no direct-network, host-port, proxy, or shared-data-engine bypass was
    introduced.
 
-## Remaining measurement gate
-
-Before claiming a new quantitative power target, capture comparable Docker and
-Podman samples after at least ten idle minutes:
-
-- host CPU wakeups and package-energy trend;
-- container CPU, PSS/RSS, process and thread counts;
-- health-check executions per hour from the effective model;
-- Redis command rate and Celery queue/event activity;
-- OpenSearch heap/non-heap and background task activity;
-- network and DNS activity by service;
-- MLX proxy-only memory after idle child unload.
-
-Then run representative search, `open_url`, local-PDF indexing, re-indexing,
-`internal_search`, and concurrent embedding workloads. Compare completion,
-latency, failure visibility, and recovery—not only idle resource use.
-
-## Deferred work
-
-- Replace Docker socket autoheal with Myst self-termination plus restart policy
-  only after disconnect, transient reconnect, registration, funding, and
-  provider-selection fault injection proves the lifecycle safe.
-- Consider event-driven Myst route reconciliation only if it preserves DNS
-  refresh and is simpler than the current bounded, change-only loop.
-- Re-evaluate worker consolidation only with evidence that Onyx queue isolation,
-  cancellation, redelivery, memory isolation, and long-running indexing remain
-  correct. The present six-worker split is intentional.
-- Re-evaluate the ten-minute MLX idle interval from measured reload energy,
-  latency, and typical request spacing. Do not add a model-load deadline merely
-  to make startup terminate sooner.
-- Remove wrapper patches when pinned upstream releases expose equivalent explicit
-  configuration. Until then, keep them narrow, startup-validated, and covered
-  by pinned-image tests.
-
-## Explicit non-goals
+## Resource-safety guardrails
 
 - No hidden retries, fallback embeddings, empty-result substitutes, or direct
   egress paths.
