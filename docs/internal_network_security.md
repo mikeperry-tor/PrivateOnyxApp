@@ -45,9 +45,11 @@ hop so the connection uses the same approved answer.
 
 For wrapper-resolved routes, the final-hop proxy denies loopback, link-local,
 metadata, Docker/Podman internal names, multicast, unspecified, reserved,
-private, mixed-answer, and rebinding destinations. Redirects and browser
-subresources pass through the same policy. Internal service names use Docker
-DNS, but public target names never need to.
+private, and mixed-answer destinations. It prevents DNS rebinding from
+bypassing this policy by validating every resolution and pinning the approved
+addresses used for the connection. Redirects and browser subresources pass
+through the same policy. Internal service names use Docker DNS, but public
+target names never need to.
 
 A remote-DNS upstream proxy is an explicit exception to address observation:
 the wrapper can validate the public-looking hostname but cannot see or pin the
