@@ -1,0 +1,27 @@
+# Local configuration and private data used by the stack
+/.env.wrapper
+/doc-drop/
+/docker-data/
+/onyx/onyx_data/
+
+# Generated runtime state and downloaded assets
+/embedserv/models/
+/embedserv/serve.log
+/embedserv/serve.pid
+/logs/
+/myst/docker-data/
+/myst/myst
+/reference_repos/
+
+# Python environments and bytecode
+.venv/
+__pycache__/
+*.py[cod]
+
+# Editor and operating-system files
+.DS_Store
+*.swp
+/.vscode/
+
+# Local working notes and scratch files
+/TODO
