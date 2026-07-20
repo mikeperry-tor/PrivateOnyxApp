@@ -469,8 +469,18 @@ startup stops before creating a new API/background tier.
 
 Full mode trades some background responsiveness for lower idle CPU and memory:
 
-- OpenSearch uses a fixed 1 GiB initial/maximum JVM heap and disables the
-  performance-analyzer agent.
+- OpenSearch uses a fixed 512 MiB initial/maximum JVM heap, sizes its
+  processor-derived pools from `node.processors=4`, and disables the
+  performance-analyzer agent. The processor setting does not impose a CPU
+  quota or change the JVM's GC-worker view by itself.
+- OpenSearch stores retained failure/TLS audit events in monthly rather than
+  daily indices and omits request bodies. It keeps audit categories,
+  Security/TLS, and existing historical audit indices unchanged.
+- The unused Query Insights latency/CPU/memory top-N collectors are disabled,
+  so they do not retain query source or create new `top_queries-*` indices.
+- Onyx indices use zero replicas because this wrapper intentionally deploys
+  one OpenSearch data node; an unassigned replica was not an additional data
+  copy. This is an index-creation default; there is no existing-index migration.
 - MinIO uses `MINIO_SCANNER_SPEED=slowest`; object healing, lifecycle cleanup,
   and scanner-driven maintenance can therefore take longer. Its retained
   healthcheck uses the common slow steady cadence.
@@ -484,6 +494,15 @@ Full mode trades some background responsiveness for lower idle CPU and memory:
 - Full-mode Slack and Discord bot processes are disabled by default. Enable
   only the needed process with `ONYX_AGENT_SLACK_BOT` or
   `ONYX_AGENT_DISCORD_BOT`; these settings have no effect in lite mode.
+
+All OpenSearch resource and low-idle values are startup configuration. The
+tracked `onyx/opensearch/audit.yml` is the clean-volume Security audit seed;
+the remaining values are Compose environment settings on the OpenSearch or
+Onyx application services. There is no administrative sidecar, runtime API
+mutation, or existing-volume migration. Persistent cluster settings take
+precedence over startup values, and an already initialized Security index
+retains its stored audit configuration; this private stack intentionally
+defines only the clean/current-volume contract.
 
 The retained worker pool is explicitly bounded: primary 2, light 4, heavy 2,
 doc-processing 2, user-file-processing 1, and document-fetching 1. Beat writes

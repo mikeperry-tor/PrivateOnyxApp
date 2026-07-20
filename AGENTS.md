@@ -38,7 +38,11 @@ At a high level:
   bundled backend with loopback-peer enforcement, bounded connection threads,
   strict child PID, port, and served-model ownership, and
   applies the documented low-idle background/storage
-  policy. Exact background control processes stay outside the application
+  policy. OpenSearch uses static single-node settings: a 512 MiB heap, four
+  configured processors, monthly body-free audit initialization, disabled
+  Query Insights top-N collection, and zero replicas for new Onyx indices.
+  There is no runtime OpenSearch migration or administrative sidecar. Exact
+  background control processes stay outside the application
   `sitecustomize` bootstrap; Beat, workers, and indexing children remain
   strictly patched. Full-mode bot workers are explicit default-off options
   selected by `ONYX_AGENT_SLACK_BOT` and `ONYX_AGENT_DISCORD_BOT`; lite mode

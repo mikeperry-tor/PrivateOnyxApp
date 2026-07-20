@@ -6,8 +6,9 @@
 This includes the pinned component baseline, sleepy/local health and recovery
 checks, aggregate gateway checks, staged embedding readiness, idle MLX unload
 and cold reload, reduced Celery/Beat scheduling and worker overhead, removal of
-disabled monitoring/Craft/bot activity, the 1 GiB OpenSearch heap with
-Performance Analyzer disabled, MinIO's `slowest` scanner profile, and a strict
+disabled monitoring/Craft/bot activity, the 512 MiB OpenSearch heap with four
+configured processors and Performance Analyzer disabled, MinIO's `slowest`
+scanner profile, and a strict
 Podman-native startup-health layer. Tests and the user-facing and upgrade
 documentation cover these changes.
 
@@ -117,8 +118,8 @@ because foreground/background work and Docker sampling noise were not isolated.
 **Deferred state: intentionally not implemented.** Every item under
 [Deferred until after the measurement gate](#deferred-until-after-the-measurement-gate)
 remains deferred: event-driven Myst route/MTU ownership beyond the implemented
-change-only write path; OpenSearch plugin,
-audit, refresh, and lower-memory experiments; the Kombu Redis blocking-pop
+change-only write path; OpenSearch plugin-removal, refresh, and cgroup-limit
+experiments; the Kombu Redis blocking-pop
 timeout patch; API metrics and connection-pool sizing; worker consolidation;
 and supervisor log-relay or enabled-bot micro-tuning. These require comparable
 before/after measurements and separate evidence-driven changes.
@@ -147,8 +148,13 @@ After startup, in an idle default stack:
   file heartbeat, but only once every 5 minutes.
 - Disabled features have neither scheduled jobs nor dedicated idle workers.
 - OpenSearch is no longer provisioned with an unconditional 2 GiB heap and
-  does not start the supported Performance Analyzer agent CLI. Its plugin,
-  Security/TLS, audit, refresh, and index behavior otherwise stays unchanged.
+  uses a fixed 512 MiB heap plus `node.processors=4`; it does not start the
+  supported Performance Analyzer agent CLI. Query Insights
+  top-N collection is disabled, Security auditing omits request bodies and
+  rolls over monthly, and Onyx indices have no unassignable replica on the
+  wrapper's single node. Existing historical audit and Query Insights indices
+  remain untouched. The plugin set, useful Security/TLS events, refresh
+  behavior, and primary-index data stay unchanged.
 - MinIO keeps its supported scanner/healing behavior, but uses the supported
   `slowest` scanner profile instead of beginning a new background scan cycle
   every minute.
@@ -288,9 +294,10 @@ The pre-measurement scope is limited to:
   unconsumed leaf checks;
 - staged one-shot embedding readiness and the narrow wrapper-owned MLX idle
   lifecycle proxy;
-- OpenSearch heap reduction to 1 GiB and the supported Performance Analyzer
-  disable flag, without changing the plugin set, Security configuration,
-  refresh interval, or container memory limit;
+- OpenSearch's fixed 512 MiB heap, `node.processors=4`, supported Performance
+  Analyzer disable flag, and static audit/Query Insights/single-node replica
+  defaults, without changing the plugin set, refresh interval, or container
+  memory limit;
 - MinIO's supported `slowest` scanner profile;
 - exact five-minute Onyx work discovery, removal of the self-hosted monitoring
   and disabled-Craft schedules/workers, the lightweight Beat watchdog, removal
@@ -305,7 +312,7 @@ Initial-bundle release matrix:
 | Ordinary/aggregate health | Startup probe 5s; steady health 10m; 1 retry; bounded existing timeout; local start period 30–120s, API 240s. | `compose up --wait` fails on a missing origin/proxy path; rendered dependencies remain acyclic; real requests fail closed immediately; no health-triggered public traffic. |
 | One-shot embedding startup | Exactly one `/ready` call with no retry; shim upstream request remains bounded at 30s; `/health` is inference-free. | Fresh API/background creation waits for success; repeated failure neither recreates nor stops running services; lite mode never calls it. |
 | MLX idle lifecycle | 10m idle measured after request completion; cold start plus inference stays inside the unchanged 30s shim deadline; proposed child termination grace 15s. | Single child for concurrent cold calls; no ambiguous POST replay; active batches never unload; memory is released; custom/manual upstream ownership and repeated up/down remain correct. |
-| OpenSearch | Fixed 1 GiB heap; no new container timeout or memory limit. | Full fresh/existing-volume ingestion, KNN/hybrid/search/reindex/restart workload passes without OOM, circuit-breaker, corruption, stuck recovery, or material tail-latency regression; all non-PA configuration is effectively unchanged. |
+| OpenSearch | Fixed 512 MiB heap; `node.processors=4`; no new container timeout or memory limit; static monthly body-free audit, disabled Query Insights top-N, and zero replicas for new Onyx indices. | Full clean/current-volume ingestion, KNN/hybrid/search/reindex/restart workload passes without OOM, circuit-breaker, corruption, stuck recovery, queue rejection, or material tail-latency regression. |
 | MinIO scanner | Supported `slowest` profile; nominal scan cycle 30m; existing readiness timeout/startup semantics retained. | Object CRUD, multipart cleanup, lifecycle/healing, chat files, document ingestion, and restart pass; no object loss/corruption or unbounded cleanup delay. |
 | Beat discovery and housekeeping | Discovery/reload 5m; functional housekeeping 10m or existing longer cadence; newly eligible document/connector begins within 5m. | Exact pinned schedule names/cadences; no disabled task materializes; active indexing, deletion, and cleanup complete correctly. |
 | Beat watchdog | Beat file touch and watcher check 5m; stale/startup grace 20m; expected restart 20–25m after last good reload. | Started with `python -S`; stdlib/file-only watcher; no application bootstrap, Redis, or Onyx imports; hung Beat restarts once; healthy/busy workers cannot cause a false Beat restart. |
@@ -728,38 +735,38 @@ PIDs; MinIO was roughly 230 MiB. These figures are not acceptance thresholds:
 repeat cgroup memory, CPU, wakeup, disk-I/O, thread, and process measurements
 over a controlled idle window before and after each phase.
 
-### OpenSearch heap and supported agent disable
+### OpenSearch static resource settings and supported agent disable
 
 The generated deployment fixes `OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g`. The
-running JVM confirms that 2 GiB heap. Its logs also show Performance Analyzer
-startup that falls back to disabled after doing agent work. The initial bundle
-changes only two supported wrapper settings:
+running JVM confirmed that 2 GiB heap. Its logs also showed Performance Analyzer
+startup that fell back to disabled after doing agent work. The final static
+policy uses supported wrapper settings only:
 
 1. Override the generated heap in tracked wrapper Compose with
-   `-Xms1g -Xmx1g`. Do not test or adopt 512 MiB in this phase, even though the
-   official [OpenSearch Docker
-   example](https://docs.opensearch.org/latest/install-and-configure/install-opensearch/docker/)
-   uses it. Do not add a cgroup memory limit: JVM heap is not the process's
-   complete native/direct/file-cache budget.
-2. Set `DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI=true` using the supported
+   `-Xms512m -Xmx512m`. Do not add a cgroup memory limit: JVM heap is not the
+   process's complete native/direct/file-cache budget.
+2. Set `node.processors=4` to reduce processor-scaled OpenSearch pools. This is
+   not a CPU quota and does not change the JVM's GC-worker view by itself.
+3. Set `DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI=true` using the supported
    setting so the bundled agent does not start merely to disable itself. Do
-   not remove the plugin or alter any other plugin, audit, Security/TLS, index,
-   refresh, shard, or scheduler configuration before the measurement gate.
+   not remove the plugin or alter the plugin set, Security/TLS transport,
+   refresh interval, or scheduler configuration.
    The authoritative behavior is documented in the [OpenSearch Performance
    Analyzer
    documentation](https://docs.opensearch.org/latest/monitoring-your-cluster/pa/index/).
 
-The 1 GiB heap is accepted only if fresh and existing-volume startup,
+The 512 MiB heap and four-processor setting are accepted only if clean and
+current-volume startup,
 create/index/search/delete, KNN vector search, hybrid normalization pipelines,
 multi-document PDF ingestion, connector reindex, restart recovery, and the
 Security/TLS client path all pass. Run the largest representative ingestion
 and simultaneous search workload long enough to force normal old-generation
 behavior; record heap occupancy, GC pause/time, native/direct memory, cgroup
 peak, latency, rejected requests, circuit breakers, and OOM/restart events.
-No OOM, corruption, stuck recovery, material tail-latency regression, or
-inability to complete the workload is acceptable. If 1 GiB fails, select the
-smallest larger fixed heap that passes rather than weakening the workload or
-changing more OpenSearch controls at once.
+No OOM, corruption, stuck recovery, sustained queue rejection, material
+tail-latency regression, or inability to complete the workload is acceptable.
+If 512 MiB fails, select the smallest larger fixed heap that passes rather than
+weakening the workload or changing more OpenSearch controls at once.
 
 ### MinIO scanner cadence
 
@@ -1163,7 +1170,7 @@ failure; and uninterrupted route-class isolation. The event repair bound must
 be measured and no slower than the current 20-second reconciliation bound;
 hostname refresh needs an explicit bounded interval and DNS-failure policy.
 
-### OpenSearch plugin, audit, refresh, and lower-memory experiments
+### OpenSearch low-risk controls and remaining experiments
 
 The pinned image loads scheduler-heavy plugins and the observed logs include
 five-/15-minute and hourly work. Do not build a derived image or alter the
@@ -1173,15 +1180,15 @@ Onyx mappings/APIs, and startup logs. `opensearch-knn`,
 `opensearch-neural-search`, their dependencies, and the current Security/TLS
 path are known capability boundaries.
 
-Separately gated candidates are removal of confirmed-unused top-level plugins,
-supported disabling of unused Security audit events, a 512 MiB heap, a cgroup
-limit, and a longer refresh interval. Never remove Security/TLS as a power
+Remaining separately gated candidates are removal of confirmed-unused
+top-level plugins, a cgroup limit, and a longer refresh interval. Never remove
+Security/TLS as a power
 shortcut or install/remove plugins at runtime. A derived image, if justified,
 must pin its base digest/plugin set and hash every build input. Each candidate
-requires fresh and existing-volume startup, KNN/hybrid/index/delete/reindex,
+requires clean and current-volume startup, KNN/hybrid/index/delete/reindex,
 multi-document ingestion, concurrent search, restart/recovery, TLS/auth, GC,
 OOM/circuit-breaker, and read-after-index freshness tests. Keep the same
-workload and latency/error budgets used for the 1 GiB baseline; failure means
+workload and latency/error budgets used for the 512 MiB baseline; failure means
 the candidate is rejected, not that the workload is weakened.
 
 The 2026-07-20 live inventory makes the next experiments more specific. The
@@ -1206,31 +1213,23 @@ and [top-N query settings](https://docs.opensearch.org/latest/observing-your-dat
 make both behaviors configurable without removing Security/TLS or the vector
 search plugins.
 
-Gate the next OpenSearch experiments independently, in this order:
+The follow-up uses static configuration only. All three Query Insights top-N
+settings are false at node startup. The tracked clean-volume `audit.yml`
+retains Security failure/TLS categories but disables request-body capture, and
+the node uses monthly audit indices. API and background processes set Onyx's
+supported `OPENSEARCH_INDEX_NUM_REPLICAS=0` for newly created indices. The
+OpenSearch JVM uses a fixed 512 MiB heap and sizes processor-derived pools from
+`node.processors=4`. There is no administrative sidecar, runtime API mutation,
+or existing-index migration. Existing historical audit and Query Insights
+indices are intentionally not deleted.
 
-1. Disable all three unused Query Insights top-N metrics and confirm no new
-   `top_queries-*` index appears after its normal export boundary. Do not delete
-   existing indices as part of the configuration experiment.
-2. Retain useful Security failure/TLS events, but disable request-body capture
-   and test a monthly rather than daily internal audit-index pattern. This
-   preserves local security evidence while avoiding a permanent shard for each
-   low-event day. Retention or deletion of historical audit evidence remains a
-   separate operator policy decision.
-3. Set Onyx's supported `OPENSEARCH_INDEX_NUM_REPLICAS=0` for this explicit
-   single-node deployment and update existing Onyx indices through a separately
-   validated migration. This should remove permanent yellow health and replica
-   bookkeeping; it is not expected to save primary-index storage.
-4. Test the supported static `node.processors` setting at four before tuning
-   individual pools. It should reduce fixed OpenSearch pools and JVM GC worker
-   counts while keeping a visible queue/rejection boundary. Measure ingestion
-   and hybrid-search throughput, queueing, rejection, latency, RSS, threads, and
-   CPU against the 16-processor baseline.
-5. Only then test 512 MiB heap, a cgroup cap, and a derived image that removes
-   dependency-closed, confirmed-unused plugins. The current process has about
-   5.4 GiB reported as locked virtual memory under unlimited memlock, so any
-   cgroup or `bootstrap.memory_lock` experiment must also measure mapped KNN
-   index residency, swap behavior, latency, and OOM failure rather than relying
-   on heap size alone.
+Gate any remaining OpenSearch experiments independently. A cgroup cap or a
+derived image that removes dependency-closed, confirmed-unused plugins needs
+separate validation. The observed process had about 5.4 GiB reported as locked
+virtual memory under unlimited memlock, so any cgroup or
+`bootstrap.memory_lock` experiment must also measure mapped KNN index
+residency, swap behavior, latency, and OOM failure rather than relying on heap
+size alone.
 
 The current one-second default refresh interval is not the first target. Node
 stats showed only 156 refreshes during roughly 22 minutes because inactive
@@ -1327,7 +1326,8 @@ Approximate steady-state changes:
 | Supervisor Celery workers | 8 | 6 |
 | Unpatched background control processes | none | entrypoint and watchdog use `python -S`; exact supervisor argv skips the background bootstrap |
 | SearXNG multiprocessing resource tracker | imported the complete SearXNG patch bootstrap | exact resource-tracker command skips application patches |
-| OpenSearch JVM heap | fixed 2 GiB | 1 GiB if the full workload passes; otherwise smallest larger passing value |
+| OpenSearch JVM heap | fixed 2 GiB | fixed 512 MiB; smallest larger passing value if the full workload fails |
+| OpenSearch processor setting | detected all 16 Docker processors | `node.processors=4`; no CPU quota or JVM GC-worker change implied |
 | OpenSearch plugin schedulers | five-/15-minute and hourly activity observed | plugin set unchanged; disable only the Performance Analyzer agent CLI |
 | MinIO scanner cycle | 1m default | 30m supported `slowest` profile |
 
@@ -1470,10 +1470,10 @@ Add or extend deterministic coverage before live validation:
   slow steady interval. Merely accepting/rendering `start_interval` is not a
   pass; the Podman contract test must inspect `StartupHealthCheck` and the
   ordinary 10-minute or Myst one-minute interval separately.
-- Add effective-Compose and live OpenSearch tests for the 1 GiB heap and
-  disabled Performance Analyzer agent CLI. Assert the exact plugin list,
-  Security/TLS settings, refresh/index settings, and image remain unchanged;
-  run the fresh/existing-volume KNN/hybrid/ingestion/restart workload and the
+- Add effective-Compose and live OpenSearch tests for the 512 MiB heap,
+  `node.processors=4`, and disabled Performance Analyzer agent CLI. Assert the
+  exact plugin list, Security/TLS settings, refresh/index settings, and image;
+  run the clean/current-volume KNN/hybrid/ingestion/restart workload and the
   GC/native/cgroup stability observation described above.
 - Add MinIO effective-Compose and live object-flow tests for
   `MINIO_SCANNER_SPEED=slowest`, retained readiness, lifecycle/healing
@@ -1577,6 +1577,12 @@ Implement and validate in dependency-safe phases:
 9. Complete all cross-referenced behavior and upgrade documentation, then run
    deterministic, pinned-image, upgrade, and live validation. Capture the
    controlled post-change measurement before considering any deferred item.
+10. Apply the static single-node OpenSearch policy: use a fixed 512 MiB heap
+    and `node.processors=4`, disable all Query Insights top-N metrics, seed
+    clean Security configuration without audit request bodies, use monthly
+    audit indices, and set new Onyx indices to zero replicas. Preserve useful
+    audit categories and historical indices. Add no runtime migration,
+    administrative sidecar, or existing-index rewrite.
 
 Validation should prove:
 

@@ -277,6 +277,57 @@ Tailscale, Podman, and optional executor modes that changed. Verify:
 - full local RAG, embedding, configured inference, Teep, hardened publishers,
   and optional Tailscale behavior remain intact.
 
+## OpenSearch single-node policy audit
+
+Re-audit the static single-node policy whenever the pinned OpenSearch image or
+Onyx source changes. There is no runtime migration or administrative sidecar.
+Confirm all of the following before accepting an upgrade:
+
+- the effective OpenSearch service retains
+  `OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m`, `node.processors=4`, and
+  `DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI=true`. Verify the live JVM heap and
+  OpenSearch allocated-processor count rather than relying only on Compose;
+- the entrypoint still passes lowercase dotted environment names as `-E`
+  settings and accepts all three static
+  `search.insights.top_queries.{latency,cpu,memory}.enabled=false` values.
+  Recheck upgraded Onyx for any Query Insights consumer and confirm no new
+  `top_queries-*` index appears after the normal export boundary;
+- `plugins.security.audit.config.index='security-auditlog-'YYYY.MM` remains in
+  the effective process arguments and produces a monthly index. OpenSearch 3.6
+  omits this plugin setting from its settings APIs, so validate behavior;
+- the pinned image's
+  `/usr/share/opensearch/config/opensearch-security/audit.yml` schema still
+  matches tracked `onyx/opensearch/audit.yml` except for the intentional
+  `log_request_body: false` value. Confirm the normal entrypoint accepts the
+  read-only bind and uses it when initializing a clean Security index. Preserve
+  failure/TLS categories, sensitive-header exclusion, and compliance defaults;
+- Onyx still consumes `OPENSEARCH_INDEX_NUM_REPLICAS`, and API plus
+  background/indexing paths both receive `0`. This affects newly created
+  indices only; the wrapper intentionally contains no existing-index migration;
+- neither API nor background gains an admin certificate, OpenSearch password,
+  Security API mutation, or new network authority; and
+- no configuration run deletes historical `security-auditlog-*` or
+  `top_queries-*` indices. Retention is a separate operator decision.
+
+The static policy is a clean/current-volume contract. Persistent cluster
+settings override startup settings, and an initialized Security index retains
+its stored audit configuration. This private wrapper deliberately does not
+repair arbitrary older or externally modified state.
+
+Validate a clean volume plus the current populated volume under Docker and
+Podman. On a clean volume, generate a harmless failed-authentication request
+with a recognizable body and confirm the monthly audit record contains useful
+failure evidence but no request body. Confirm newly created Onyx indices have
+zero replicas, the cluster is green, all three Query Insights collectors remain
+disabled, and no Query Insights daily index is created. Exercise doc-drop Web
+Connector indexing/reindexing and `internal_search` concurrently while
+recording heap occupancy, GC pauses, circuit breakers, thread-pool queues and
+rejections, latency, and container RSS. Also test KNN/hybrid search,
+restart/recovery, and TLS/auth. Treat audit schema/path changes, rejected dotted
+settings, Onyx replica-setting drift, OOM, circuit-breaker failures, sustained
+queue rejection, or material indexing/search regression as blocking upgrade
+issues.
+
 ## Privacy and WebUI CSP audit
 
 Re-audit every privacy setting against the new Onyx source rather than carrying

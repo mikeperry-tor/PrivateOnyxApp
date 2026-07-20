@@ -462,6 +462,10 @@ Other retained behavior has its own focused tests and upgrade checks:
   fake-nomic v23-to-v1 tokenizer-only alias that preserves Onyx feature gates;
 - bundled host embedding lifecycle ownership, non-loopback peer rejection, and
   bounded connection threads;
+- static single-node OpenSearch policy: 512 MiB fixed heap,
+  `node.processors=4`, disabled Performance Analyzer and Query Insights top-N
+  collection, monthly body-free audit initialization, and zero replicas for
+  newly created Onyx indices, without a runtime migration service;
 - host publisher, Tailscale, MinIO, authentication, and Teep integration.
 
 The wrapper explicitly disables Onyx Craft because it provides the legacy

@@ -98,12 +98,28 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         full = _compose_model("full")
         self.assertEqual(
             set(full["services"]["api_server"].get("depends_on", {})),
-            {"cache", "local-embedding-shim", "minio", "opensearch", "relational_db"},
+            {
+                "cache",
+                "local-embedding-shim",
+                "minio",
+                "opensearch",
+                "relational_db",
+            },
         )
         self.assertEqual(
             set(full["services"]["background"].get("depends_on", {})),
-            {"cache", "local-embedding-shim", "opensearch", "relational_db"},
+            {
+                "cache",
+                "local-embedding-shim",
+                "opensearch",
+                "relational_db",
+            },
         )
+        for service_name in ("api_server", "background"):
+            self.assertEqual(
+                full["services"][service_name]["depends_on"]["opensearch"]["condition"],
+                "service_started",
+            )
         optional = {
             "crw",
             "searxng-core",
@@ -323,11 +339,44 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
     def test_full_storage_and_background_power_defaults(self) -> None:
         services = _compose_model("full")["services"]
         opensearch = services["opensearch"]
-        self.assertEqual(opensearch["environment"]["OPENSEARCH_JAVA_OPTS"], "-Xms1g -Xmx1g")
+        self.assertEqual(
+            opensearch["environment"]["OPENSEARCH_JAVA_OPTS"],
+            "-Xms512m -Xmx512m",
+        )
+        self.assertEqual(opensearch["environment"]["node.processors"], "4")
         self.assertEqual(
             opensearch["environment"]["DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI"],
             "true",
         )
+        self.assertEqual(
+            opensearch["environment"]["plugins.security.audit.config.index"],
+            "'security-auditlog-'YYYY.MM",
+        )
+        for metric in ("latency", "cpu", "memory"):
+            self.assertEqual(
+                opensearch["environment"][
+                    f"search.insights.top_queries.{metric}.enabled"
+                ],
+                "false",
+            )
+        audit_mount = next(
+            volume
+            for volume in opensearch["volumes"]
+            if volume["target"]
+            == "/usr/share/opensearch/config/opensearch-security/audit.yml"
+        )
+        self.assertTrue(audit_mount["read_only"])
+        audit_source = (ROOT / "onyx/opensearch/audit.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("log_request_body: false", audit_source)
+        self.assertNotIn("log_request_body: true", audit_source)
+        self.assertNotIn("opensearch-configure", services)
+        for service_name in ("api_server", "background"):
+            self.assertEqual(
+                services[service_name]["environment"]["OPENSEARCH_INDEX_NUM_REPLICAS"],
+                "0",
+            )
         self.assertEqual(services["minio"]["environment"]["MINIO_SCANNER_SPEED"], "slowest")
         background = services["background"]
         self.assertEqual(background["environment"]["PROMETHEUS_METRICS_ENABLED"], "false")

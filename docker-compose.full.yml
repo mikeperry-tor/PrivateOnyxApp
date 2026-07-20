@@ -79,6 +79,9 @@ services:
       ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS: "doc-drop-web"
       ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL: "http://doc-drop-web:8091/"
       ONYX_WEB_CONNECTOR_DISPLAY_BASE_URL: "http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/"
+      # This wrapper always deploys one OpenSearch data node. A configured
+      # replica cannot be assigned and provides no additional data copy.
+      OPENSEARCH_INDEX_NUM_REPLICAS: "0"
       CODE_INTERPRETER_BASE_URL: "http://code-interpreter:8000"
       # Route connector downloads and other environment-aware background HTTP
       # clients through the fixed public-only application bridge.
@@ -130,10 +133,18 @@ services:
       service: opensearch
     volumes: !override
       - ./docker-data/opensearch:/usr/share/opensearch/data
+      - ./onyx/opensearch/audit.yml:/usr/share/opensearch/config/opensearch-security/audit.yml:ro
     networks: [onyx-data]
     environment:
-      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      node.processors: "4"
       DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI: "true"
+      # Retain failure/TLS audit evidence without creating a primary shard for
+      # every low-event day. Existing daily indices are intentionally retained.
+      plugins.security.audit.config.index: "'security-auditlog-'YYYY.MM"
+      search.insights.top_queries.latency.enabled: "false"
+      search.insights.top_queries.cpu.enabled: "false"
+      search.insights.top_queries.memory.enabled: "false"
     healthcheck: {disable: true}
 
   cache:
@@ -245,6 +256,8 @@ services:
       MODEL_SERVER_PORT: "9101"
       INDEXING_MODEL_SERVER_HOST: "local-embedding-shim"
       INDEXING_MODEL_SERVER_PORT: "9101"
+      # Match the background/index-creation path for this single-node stack.
+      OPENSEARCH_INDEX_NUM_REPLICAS: "0"
       WRAPPER_PATCH_STRICT: "true"
     depends_on: !override
       cache:

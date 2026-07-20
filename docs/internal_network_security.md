@@ -86,6 +86,12 @@ create an unbounded thread set. These controls trust the container engine's
 userspace gateway to present relay traffic as loopback; they do not authenticate
 individual application callers behind that gateway.
 
+Full mode performs no runtime OpenSearch administration. The monthly audit
+pattern and Query Insights controls are static node settings, the tracked
+body-free `audit.yml` seeds clean Security configuration, and Onyx receives a
+zero-replica index-creation default. No administrative certificate, password,
+or additional OpenSearch network authority is granted to another service.
+
 By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` means the LLM-controlled
 stock crawler does not inherit that Admin private-network allowance. Its
 requests adapter and scoped Playwright validation accept public URL shapes

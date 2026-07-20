@@ -163,6 +163,9 @@ removes only that mount-root Podman override before Compose create. It leaves
 Docker's attribute and valid per-file Podman runtime attributes intact.
 
 OpenSearch uses `keep-id:uid=1000,gid=1000` and its ordinary image entrypoint.
+The tracked read-only `audit.yml` bind and all resource/Query Insights settings
+are applied directly to that service; there is no administrative sidecar or
+successful-exit dependency to translate under Podman.
 The tested image can create and reuse its normal per-file Podman attributes;
 do not recursively delete them. `prepare-podman-opensearch-data` requires its
 initialized `nodes` directory before a full-mode create.
