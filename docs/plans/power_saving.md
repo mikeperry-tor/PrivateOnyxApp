@@ -169,7 +169,8 @@ because foreground/background work and Docker sampling noise were not isolated.
 remains deferred: event-driven Myst route/MTU ownership beyond the implemented
 change-only write path; OpenSearch plugin-removal, refresh, and cgroup-limit
 experiments; the Kombu Redis blocking-pop
-timeout patch; API metrics and connection-pool sizing; worker consolidation;
+timeout patch; API metrics and connection-pool sizing; worker consolidation
+(currently rejected as too invasive for its measured one-process benefit);
 and supervisor log-relay or enabled-bot micro-tuning. These require comparable
 before/after measurements and separate evidence-driven changes.
 
@@ -1321,18 +1322,58 @@ pool-wait/timeout regression or exhausted database is acceptable.
 
 ### Worker consolidation
 
-The six retained functional Celery workers import substantial Python runtimes,
-but merging light, heavy, and user-file queues can cause missing task
-registration, head-of-line blocking, and changed acknowledgement/failure
-isolation. Consider consolidation only if post-change proportional-set-size
-measurement still makes those duplicate runtimes a major cost.
+**Current decision: do not implement.** A 2026-07-20 live PSS snapshot measured
+the six functional workers at approximately 307 MiB primary, 227 MiB light,
+218 MiB heavy, 217 MiB document-processing, 215 MiB document-fetching, and
+214 MiB user-file-processing, or about 1.4 GiB in total. RSS is not used for
+this comparison because it double-counts shared mappings. The least-invasive
+credible consolidation would merge only light and heavy, retiring one roughly
+218 MiB process. The combined process would still import both task-module sets,
+so its net saving would be lower than that gross figure. Heartbeat, gossip,
+standalone metrics, and file-liveness traffic are already removed, which also
+makes the likely idle CPU/power saving smaller than the memory saving. This
+does not meet the plan's normal 500 MiB PSS promotion threshold and does not
+currently justify a new local Celery application plus its upgrade surface.
 
-Before promotion, derive the exact union of task modules and compare queue
-routing, `acks_late`, prefetch, time limits, pool type, signals/init hooks,
-memory limits, cancellation, and failure isolation. Task-registry/routing
-contracts plus simultaneous chat, deletion, user-file, connector, heavy work,
-and worker-kill/redelivery must pass. Publish-to-start and completion latency
-for each class must stay within the six-worker baseline; otherwise retain six.
+If later controlled measurements overturn that decision, prototype only a
+light-plus-heavy worker first. Keep primary, document-fetching,
+document-processing, and user-file-processing separate. Primary owns singleton
+startup cleanup and lock/cancellation behavior. The two indexing workers are
+separate producer/consumer stages with indexing-specific progress, batch,
+cleanup, and failure hooks. User-file processing retains one user-facing slot
+that maintenance, pruning, permission-sync, or CSV work cannot occupy.
+
+The scoped prototype would require a wrapper-owned Celery application based on
+the pinned light application, explicit registration of the exact union of
+light and heavy task modules, and one worker consuming the union of both queue
+lists. Start with concurrency 6, preserving the existing 4+2 capacity so that
+consolidation is not mixed with a concurrency reduction. Preserve the light
+worker's Vespa HTTP-pool initialization and define one explicit SQL application
+identity/pool budget. The derived Supervisor configuration would replace the
+light command, remove the heavy program and log input, and strictly require
+five functional workers. Pinned-image validation must fail on drift in either
+upstream application's task modules, queues, configuration, signals, or
+initialization hooks. More aggressive consolidation would require a genuinely
+new composite application and is out of scope.
+
+The principal risks and gates for even that narrow prototype are:
+
+| Risk | Required validation |
+|---|---|
+| Missing task registration or an unconsumed queue | Compare the combined registry with the exact union of both pinned registries; enumerate every routed queue and compare it with live `active_queues`; publish representative work for every task family. |
+| Heavy work causes head-of-line blocking or removes light-task capacity | Saturate all combined slots with pruning, permission-sync, external-group-sync, hierarchy, CSV, or sandbox work, then enqueue metadata sync, deletion, permission upsert, and cleanup tasks. Compare publish-to-start and completion latency with the separate-worker baseline. |
+| A worker failure now interrupts both classes | Kill the combined worker during each task family; require bounded Supervisor restart, `acks_late` redelivery, idempotent completion, intact locks/task sets, and no lost or corrupt coordination state. The larger shared failure domain cannot be tested away and must be explicitly accepted. |
+| Combined initialization or pool sizing changes database/Vespa behavior | Exercise simultaneous connector indexing, pruning, deletion, permission sync, and ordinary chat/search while recording PostgreSQL connections and pool waits, Redis connections, Vespa/OpenSearch HTTP failures, thread count, and task latency; repeat across database, Redis, and background restarts. |
+| Cancellation, revocation, or shutdown regresses | Revoke active tasks and perform graceful and forced background restarts with queued and running work; verify bounded shutdown, redelivery, lock cleanup, and final task state. |
+| The patch saves little or no real resource | Repeat matched PSS/private-memory, thread, Redis-command, wakeup, container-CPU, and host-package-power windows. Reject the prototype unless the benefit clears the existing promotion gate without latency or reliability regression. |
+
+Normal `internal_search()` is served by the API/OpenSearch path and would not
+directly use this worker. The doc-drop Web Connector primarily depends on the
+separate document-fetching and document-processing workers, which this narrow
+prototype would preserve. Single-user operation lowers average contention but
+does not prevent scheduled deletion, pruning, permissions, cleanup, and
+indexing work from overlapping, so the saturation and fault gates remain
+required.
 
 ### Supervisor log relay and enabled-bot micro-tuning
 
