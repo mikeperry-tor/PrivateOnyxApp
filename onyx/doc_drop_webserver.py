@@ -29,6 +29,31 @@ def _path_contains_hidden_name(path: str) -> bool:
     return any(_is_hidden_name(part) for part in normalized.split(os.sep))
 
 
+def _path_is_confined(path: str, directory: str) -> bool:
+    """Reject paths that escape the document root or traverse a symlink."""
+    lexical_root = os.path.abspath(directory)
+    root = os.path.realpath(lexical_root)
+    candidate = os.path.abspath(path)
+    try:
+        relative = os.path.relpath(candidate, lexical_root)
+    except ValueError:
+        return False
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return False
+
+    current = root
+    for part in relative.split(os.sep):
+        if part in ("", os.curdir):
+            continue
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            return False
+    try:
+        return os.path.commonpath((root, os.path.realpath(candidate))) == root
+    except ValueError:
+        return False
+
+
 class DocDropRequestHandler(SimpleHTTPRequestHandler):
     """Static file handler that converts unreadable files into HTTP errors."""
 
@@ -73,7 +98,9 @@ class DocDropRequestHandler(SimpleHTTPRequestHandler):
 
     def send_head(self):  # noqa: ANN201
         path = self.translate_path(self.path)
-        if _path_contains_hidden_name(path):
+        if not _path_is_confined(
+            path, self.directory
+        ) or _path_contains_hidden_name(path):
             self.send_error(HTTPStatus.NOT_FOUND, "File not found")
             return None
 
@@ -88,7 +115,12 @@ class DocDropRequestHandler(SimpleHTTPRequestHandler):
 
     def list_directory(self, path):  # noqa: ANN201
         try:
-            entries = [name for name in os.listdir(path) if not _is_hidden_name(name)]
+            entries = [
+                name
+                for name in os.listdir(path)
+                if not _is_hidden_name(name)
+                and not os.path.islink(os.path.join(path, name))
+            ]
         except PermissionError:
             self.send_error(HTTPStatus.FORBIDDEN, "No permission to list directory")
             return None
@@ -123,8 +155,6 @@ class DocDropRequestHandler(SimpleHTTPRequestHandler):
             if os.path.isdir(fullname):
                 displayname = name + "/"
                 linkname = name + "/"
-            if os.path.islink(fullname):
-                displayname = name + "@"
             lines.append(
                 '<li><a href="%s">%s</a></li>'
                 % (
@@ -158,7 +188,10 @@ def main() -> None:
     parser.add_argument("--loopback-peers-only", action="store_true")
     args = parser.parse_args()
 
-    handler_class = partial(DocDropRequestHandler, directory=args.directory)
+    document_root = os.path.realpath(args.directory)
+    if not os.path.isdir(document_root):
+        parser.error(f"document directory does not exist: {args.directory}")
+    handler_class = partial(DocDropRequestHandler, directory=document_root)
     server = ThreadingHTTPServer((args.bind, args.port), handler_class)
     server.loopback_peers_only = args.loopback_peers_only
     try:

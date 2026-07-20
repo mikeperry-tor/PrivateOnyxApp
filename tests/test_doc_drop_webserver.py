@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import io
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
-from onyx.doc_drop_webserver import DocDropRequestHandler
+from onyx.doc_drop_webserver import DocDropRequestHandler, _path_is_confined
 
 
 class DocDropWebserverTests(unittest.TestCase):
@@ -47,6 +50,32 @@ class DocDropWebserverTests(unittest.TestCase):
         handler.send_error = Mock()
         self.assertFalse(handler._reject_non_loopback_client())
         handler.send_error.assert_not_called()
+
+    def test_document_path_rejects_symlinks_inside_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target.txt"
+            target.write_text("private", encoding="utf-8")
+            link = root / "link.txt"
+            os.symlink(target, link)
+            self.assertFalse(_path_is_confined(str(link), directory))
+
+    def test_document_path_rejects_symlink_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with tempfile.TemporaryDirectory() as outside:
+                root = Path(directory)
+                link = root / "outside"
+                os.symlink(outside, link)
+                self.assertFalse(
+                    _path_is_confined(str(link / "secret.txt"), directory)
+                )
+
+    def test_document_path_allows_regular_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            nested = Path(directory) / "papers" / "paper.pdf"
+            nested.parent.mkdir()
+            nested.write_bytes(b"pdf")
+            self.assertTrue(_path_is_confined(str(nested), directory))
 
 
 if __name__ == "__main__":

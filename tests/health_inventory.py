@@ -12,15 +12,6 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SECRETS = {
-    "SEARXNG_WRAPPER_IMAGE": "local/private-onyx-searxng:inventory",
-    "SEARXNG_SECRET": "inventory",
-    "USER_AUTH_SECRET": "inventory",
-    "MINIO_ROOT_USER": "inventory",
-    "MINIO_ROOT_PASSWORD": "inventory",
-    "S3_AWS_ACCESS_KEY_ID": "inventory",
-    "S3_AWS_SECRET_ACCESS_KEY": "inventory",
-}
 
 
 def duration_seconds(value: str) -> float:
@@ -31,26 +22,32 @@ def duration_seconds(value: str) -> float:
     return sum(float(number) * units[unit] for number, unit in parts)
 
 
-def inventory(mode: str) -> list[dict[str, object]]:
-    command = [
-        "docker", "compose",
-        "--env-file", "stack.versions.env",
-        "--env-file", ".env.wrapper.example",
-        "-f", "docker-compose.yaml",
-        "-f", f"docker-compose.{mode}.yml",
-        "config", "--no-env-resolution", "--format", "json",
-    ]
+def inventory(
+    mode: str, container_bin: str, env_files: list[str]
+) -> list[dict[str, object]]:
+    command = [container_bin, "compose"]
+    for env_file in env_files:
+        command.extend(("--env-file", env_file))
+    command.extend(("config", "--format", "json"))
     result = subprocess.run(
         command,
         cwd=ROOT,
-        env={**os.environ, **SECRETS},
+        env=os.environ,
         check=True,
         capture_output=True,
         text=True,
     )
     model = json.loads(result.stdout)
+    active_profiles = {
+        profile.strip()
+        for profile in os.environ.get("COMPOSE_PROFILES", "").split(",")
+        if profile.strip()
+    }
     rows = []
     for name, service in sorted(model["services"].items()):
+        profiles = set(service.get("profiles") or ())
+        if profiles and not profiles.intersection(active_profiles):
+            continue
         health = service.get("healthcheck")
         if not health or health.get("disable"):
             continue
@@ -73,5 +70,16 @@ def inventory(mode: str) -> list[dict[str, object]]:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("lite", "full"))
+    parser.add_argument("--container-bin", required=True)
+    parser.add_argument("--env-file", action="append", default=[])
     args = parser.parse_args()
-    print(json.dumps(inventory(args.mode), indent=2, sort_keys=True))
+    rows = inventory(args.mode, args.container_bin, args.env_file)
+    report = {
+        "mode": args.mode,
+        "retained_healthchecks": len(rows),
+        "steady_checks_per_hour": sum(
+            float(row["checks_per_hour"]) for row in rows
+        ),
+        "services": rows,
+    }
+    print(json.dumps(report, indent=2, sort_keys=True))

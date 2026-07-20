@@ -179,7 +179,9 @@ make health-inventory
 
 The inventory renders effective lite and full Compose models and reports each
 retained check's command, startup cadence, steady cadence, and approximate
-steady checks per hour. Retained checks use fast `start_interval` polling only
+steady checks per hour. It uses the engine, environment, optional overlays, and
+profiles selected by the Makefile rather than a fixed base model. Retained
+checks use fast `start_interval` polling only
 during their bounded startup period and a ten-minute steady cadence, except
 Myst's one-minute recovery check. Origin services whose sole readiness value is
 already represented by a fixed gateway or publisher have their duplicate check
@@ -200,13 +202,14 @@ matching stack after diagnosing the local readiness failure. The Podman layer
 also replaces Docker's unsupported tmpfs `uid`/`gid` options on the optional
 Tailscale frontend gateway with Podman's user-owned `U` mount option; the
 gateway continues to run as uid/gid 101 with its other hardening unchanged.
-PostgreSQL and OpenSearch use Podman-native named volumes because macOS
-virtiofs presents their Docker-oriented host binds with ownership those images
-cannot safely change. The existing `docker-data/postgres` and
-`docker-data/opensearch` directories remain untouched; storage is not
-automatically synchronized when switching engines. Podman API and background
-startup also wait for PostgreSQL's native startup health check so database
-migrations cannot race volume initialization.
+PostgreSQL and OpenSearch use the same initialized `docker-data/postgres` and
+`docker-data/opensearch` binds under Docker and Podman. Guarded Podman `keep-id`
+mappings plus a narrow PostgreSQL mount-root preflight preserve their expected
+ownership. An atomic wrapper marker prevents the two engines from starting
+against those shared writers concurrently and is released only after the
+owning engine's matching stack is down. Podman API and background startup also
+wait for PostgreSQL's native startup health check so database migrations cannot
+race initialization.
 
 The Podman volume suffixes solve different Linux-side problems. `:z`/`:Z`
 relabel a source for SELinux sharing/isolation and do not change ownership or

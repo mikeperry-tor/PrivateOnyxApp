@@ -35,6 +35,17 @@ def _container(
     )
 
 
+def _expected(service: str = "api_server") -> dict[str, dict]:
+    return {
+        service: {
+            "test": ["CMD", "true"],
+            "interval": "1m" if service == "myst-client" else "10m",
+            "timeout": "5s",
+            "retries": 1,
+        }
+    }
+
+
 class PodmanStartupHealthTests(unittest.TestCase):
     @patch.object(startup_health, "_run")
     def test_prepare_shared_postgres_removes_only_mount_root_override(
@@ -152,10 +163,11 @@ class PodmanStartupHealthTests(unittest.TestCase):
                 startup_health._verify_startup(_container(startup=candidate))
 
     @patch.object(startup_health, "_load_containers")
+    @patch.object(startup_health, "_load_expected_health", return_value=_expected())
     @patch.object(startup_health, "_run")
     @patch.object(startup_health, "check_capability", return_value="5.8.1")
     def test_configure_copies_regular_command_before_start(
-        self, _capability, run, load_containers
+        self, _capability, run, _expected_health, load_containers
     ) -> None:
         before = _container()
         after = _container(
@@ -175,13 +187,34 @@ class PodmanStartupHealthTests(unittest.TestCase):
         self.assertIn("--health-startup-retries=0", command)
 
     @patch.object(startup_health, "_load_containers")
+    @patch.object(startup_health, "_load_expected_health", return_value=_expected())
     @patch.object(startup_health, "check_capability", return_value="5.8.1")
     def test_running_container_without_native_startup_health_fails_closed(
-        self, _capability, load_containers
+        self, _capability, _expected_health, load_containers
     ) -> None:
         load_containers.return_value = [_container(state="running")]
         with self.assertRaisesRegex(startup_health.ContractError, "is absent"):
             startup_health.configure_project("podman", "onyx")
+
+    def test_missing_compose_health_check_fails_closed(self) -> None:
+        container = _container()
+        container = startup_health.ContainerHealth(
+            container.container_id,
+            container.service,
+            container.state,
+            None,
+            None,
+        )
+        with self.assertRaisesRegex(startup_health.ContractError, "missing: api_server"):
+            startup_health._verify_expected_health_set([container], _expected())
+
+    def test_regular_health_is_compared_to_effective_compose(self) -> None:
+        expected = _expected()["api_server"]
+        startup_health._verify_regular(_container(), expected)
+        drifted = dict(expected)
+        drifted["retries"] = 2
+        with self.assertRaisesRegex(startup_health.ContractError, "Retries"):
+            startup_health._verify_regular(_container(), drifted)
 
 
 if __name__ == "__main__":

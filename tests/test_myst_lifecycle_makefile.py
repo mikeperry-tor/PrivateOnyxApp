@@ -70,15 +70,19 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_podman_create_configure_start_sequence_is_explicit(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        lite_start = makefile.split(
-            "up-lite: ensure-onyx-config", 1
-        )[1].split("\n\n", 1)[0]
+        lite_definition = next(
+            line for line in makefile.splitlines()
+            if line.startswith("up-lite: claim-shared-data-engine")
+        )
+        lite_start = makefile.split(lite_definition, 1)[1].split("\n\n", 1)[0]
         self.assertLess(lite_start.index(" compose "), lite_start.index("startup_health.py configure"))
         self.assertLess(lite_start.index("startup_health.py configure"), lite_start.index("up -d --wait"))
 
-        full_start = makefile.split(
-            "up-full: ensure-onyx-config", 1
-        )[1].split("\n\n", 1)[0]
+        full_definition = next(
+            line for line in makefile.splitlines()
+            if line.startswith("up-full: claim-shared-data-engine")
+        )
+        full_start = makefile.split(full_definition, 1)[1].split("\n\n", 1)[0]
         self.assertEqual(full_start.count("startup_health.py configure"), 2)
         self.assertIn("create local-embedding-shim", full_start)
         self.assertLess(
@@ -91,7 +95,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         full_prerequisites = next(
             line
             for line in makefile.splitlines()
-            if line.startswith("up-full: ensure-onyx-config")
+            if line.startswith("up-full: claim-shared-data-engine")
         )
         self.assertIn("podman-doc-server-start", full_prerequisites)
         start_target = makefile.split("podman-doc-server-start:", 1)[1].split(
@@ -112,18 +116,31 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         lite_prerequisites = next(
             line
             for line in makefile.splitlines()
-            if line.startswith("up-lite: ensure-onyx-config")
+            if line.startswith("up-lite: claim-shared-data-engine")
         )
         full_prerequisites = next(
             line
             for line in makefile.splitlines()
-            if line.startswith("up-full: ensure-onyx-config")
+            if line.startswith("up-full: claim-shared-data-engine")
         )
         self.assertIn("prepare-podman-postgres-data", lite_prerequisites)
         self.assertIn("prepare-podman-postgres-data", full_prerequisites)
         self.assertIn("prepare-podman-opensearch-data", full_prerequisites)
         self.assertNotIn("prepare-podman-opensearch-data", lite_prerequisites)
         self.assertNotIn("PODMAN_SHARE_DOCKER_", makefile)
+
+    def test_shared_data_engine_claim_wraps_stack_lifecycle(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        for target in ("up-lite:", "up-full:"):
+            definitions = [
+                line for line in makefile.splitlines() if line.startswith(target)
+            ]
+            self.assertTrue(
+                any("claim-shared-data-engine" in line for line in definitions)
+            )
+        for target in ("down-lite:", "down-full:"):
+            recipe = makefile.split(target, 1)[1].split("\n\n", 1)[0]
+            self.assertIn("release-shared-data-engine", recipe)
 
     def test_podman_excludes_socket_only_code_interpreter_and_pulls_directly(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

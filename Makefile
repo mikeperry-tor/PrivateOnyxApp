@@ -57,6 +57,8 @@ ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
 endif
 PODMAN_SELECTED := $(if $(findstring podman,$(notdir $(CONTAINER_BIN))),true,false)
+SHARED_DATA_ENGINE := $(if $(filter true,$(PODMAN_SELECTED)),podman,docker)
+SHARED_DATA_ENGINE_MARKER := docker-data/host-services/shared-data-engine
 ifeq ($(strip $(DOCKER_SOCK_PATH)),)
 ifneq ($(findstring podman,$(CONTAINER_BIN)),)
 DOCKER_SOCK_PATH := $(strip $(shell "$(CONTAINER_BIN)" machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | head -1))
@@ -231,7 +233,7 @@ UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(VPN_AUTOHEAL_SUFFIX)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_VPN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
 
-.PHONY: help test check test-images check-upgrade health-inventory up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images check-upgrade health-inventory shared-data-engine-status claim-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started vpn-signup-orderform vpn-signup-blockchain vpn-orderstatus vpn-balance ensure-myst-funded
 
 help:
 	@echo "Targets:"
@@ -240,6 +242,7 @@ help:
 	@echo "  make test-images  # Validate patches against already-built pinned images"
 	@echo "  make check-upgrade # Run check plus pinned-image validation after an upgrade"
 	@echo "  make health-inventory # Print effective lite/full health cadence inventory"
+	@echo "  make shared-data-engine-status # Show the Docker/Podman shared-data owner"
 	@echo "  make up-lite      # Start wrapper + Onyx lite"
 	@echo "  make up-full      # Start wrapper + Onyx full and an installed default MLX server"
 	@echo "  make down-lite    # Stop wrapper + Onyx lite"
@@ -286,8 +289,17 @@ check: test
 	git diff --check
 
 health-inventory:
-	@python3 tests/health_inventory.py lite
-	@python3 tests/health_inventory.py full
+	@COMPOSE_FILE=$(LITE_FILES) python3 tests/health_inventory.py lite --container-bin "$(CONTAINER_BIN)" $(ONYX_COMPOSE_ENV_FILES)
+	@COMPOSE_FILE=$(FULL_FILES) python3 tests/health_inventory.py full --container-bin "$(CONTAINER_BIN)" $(ONYX_COMPOSE_ENV_FILES)
+
+shared-data-engine-status:
+	@python3 podman/shared_data_engine.py status --marker "$(SHARED_DATA_ENGINE_MARKER)"
+
+claim-shared-data-engine:
+	@python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
+
+release-shared-data-engine:
+	@python3 podman/shared_data_engine.py release --engine "$(SHARED_DATA_ENGINE)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
 
 test-images:
 	@CONTAINER_BIN="$(CONTAINER_BIN)" \
@@ -473,25 +485,25 @@ ifeq ($(PODMAN_SELECTED),true)
 	@python3 podman/startup_health.py prepare-shared-data --opensearch docker-data/opensearch
 endif
 
-up-lite: ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
+up-lite: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
-	@python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx
+	@COMPOSE_FILE=$(LITE_FILES) python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
-up-full: ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
+up-full: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready embedserv-start-if-installed
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
-	@python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx
+	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait local-embedding-shim
 	@$(MAKE) --no-print-directory embedding-ready-once
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
-	@python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx
+	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait
 
@@ -581,11 +593,13 @@ upgrade-onyx:
 
 down-lite:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
+	@$(MAKE) --no-print-directory release-shared-data-engine
 
 down-full:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
 	@"$${MAKE:-make}" podman-doc-server-stop-if-started
 	@"$${MAKE:-make}" embedserv-stop-if-started
+	@$(MAKE) --no-print-directory release-shared-data-engine
 
 ps-lite:
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) ps

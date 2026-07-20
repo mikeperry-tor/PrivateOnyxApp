@@ -20,7 +20,7 @@ Before changing a subsystem, read the matching document below, then inspect the 
 - `docs/onyx_patches_upgrade.md` - Onyx/code-interpreter/SearXNG/Obscura/Teep upgrade checklist and patch validation, for use when image/source pins or runtime Python locks are updated.
 - `docs/local_docs_rag_search.md` - full-mode local document RAG, local doc serving, PDF freshness, embedding shim, and diagnostics.
 - `docs/podman_suport.md` - Podman/macOS Compose overlays, startup-health
-  translation, native storage, bind-mount workarounds, known regressions, and
+  translation, shared-storage ownership, bind-mount workarounds, known regressions, and
   the compatibility checklist. Read it before adding or validating any feature
   that changes Compose, mounts, container lifecycle, health checks, or
   socket-dependent behavior under Podman.
@@ -167,8 +167,9 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   validates `/ready` once before creating a new API/background tier;
   `make down-full` stops only that identity-validated proxy and child group.
   Custom upstreams and manually launched servers are not touched.
-- `make health-inventory` - render effective lite/full healthcheck commands,
-  startup/steady cadences, and approximate steady checks per hour.
+- `make health-inventory` - render the Makefile-selected engine/environment and
+  optional overlays for lite/full healthcheck commands, startup/steady
+  cadences, and approximate steady checks per hour.
 - `make down-lite` / `make down-full` - stop the matching stack.
 - `make ps-lite` / `make ps-full` - inspect containers.
 - `make logs-lite` / `make logs-full` - follow logs.

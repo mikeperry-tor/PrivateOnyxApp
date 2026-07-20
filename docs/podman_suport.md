@@ -127,6 +127,16 @@ markers and does not inspect chats, tables, index names, or document contents.
 Both engines must be down before switching because shared storage does not make
 concurrent database or index writers safe.
 
+Before either `make up-*` recipe reaches Compose, an atomic marker under
+`docker-data/host-services` claims the shared database/index data for Docker or
+Podman. Repeated starts by the same engine are allowed; the other engine fails
+closed until the owner's matching `make down-*` completes successfully. Inspect
+the marker with `make shared-data-engine-status`. A failed start deliberately
+retains its claim for a safe retry. After upgrading an already-running checkout,
+run its matching `make up-*` once to seed the marker before switching engines.
+If a machine failure leaves a stale claim, verify both engines have no Onyx
+containers before removing the marker manually.
+
 PostgreSQL requires three linked settings:
 
 - `userns_mode: keep-id:uid=70,gid=70` maps the Podman machine user to the
@@ -172,9 +182,11 @@ Compose model is therefore necessary but not sufficient evidence.
 - `check` validates that the selected binary is Podman, inspects the Linux
   server version, probes the image store, checks the Compose provider, and
   verifies the required native `podman update` flags.
-- `configure` discovers containers by Compose project label, validates each
-  retained regular check, installs an exact native startup check on stopped
-  containers, and reinspects the complete project.
+- `configure` renders the Makefile-selected effective Compose model, discovers
+  all created containers by Compose project label, requires the complete
+  retained-health set to match, validates each command, timeout, retry count,
+  start period, and regular cadence, installs an exact native startup check on
+  stopped containers, and reinspects the complete project.
 - `prepare-shared-data` validates an initialized Docker database/index path
   and performs the narrow PostgreSQL mount-root xattr cleanup described above.
 
@@ -284,6 +296,19 @@ it. Application containers do not join that uplink. The existing
 `doc-drop-route-gateway` and exact host final-hop policy remain authoritative
 for Web Connector access.
 
+The host server resolves its configured document root once, rejects every
+request that escapes it, and neither lists nor follows symbolic links. Point
+`ONYX_RAG_DOC_SOURCE_DIR` at the real collection directory instead of using a
+symlink. This keeps a symlink placed in the document tree from exposing other
+host files through the relay.
+
+The request-time check is not an OS sandbox against another trusted local
+process deliberately replacing path components in the narrow interval before
+the standard-library handler opens a file. Treat the configured document tree
+as trusted local input. A future stronger boundary would require descriptor-
+relative traversal and serving on every supported macOS filesystem; that work
+is deferred and should retain the current listing and Web Connector behavior.
+
 `make down-full` first removes the Compose graph and then calls
 `podman-doc-server-stop-if-started`. The stop path validates command identity,
 sends SIGTERM only to the recorded wrapper-owned server, waits for bounded
@@ -310,8 +335,11 @@ than assuming Docker Desktop's address or interface.
 The primary Podman-specific tests are:
 
 - `tests/test_podman_startup_health.py`: binary refusal, capability and image
-  store gates, regular/startup cadence contracts, stopped-container update,
-  running-container fail-closed behavior, and shared-data preflight.
+  store gates, exact effective-model health-set and field contracts,
+  stopped-container update, running-container fail-closed behavior, and
+  shared-data preflight.
+- `tests/test_shared_data_engine.py`: same-engine claim reuse, cross-engine
+  exclusion, matching release, and corrupt-marker failure.
 - `tests/test_myst_lifecycle_makefile.py`: capability prerequisites,
   create/configure/start ordering, host document-server PID lifecycle, direct
   Onyx image pulls, and exclusion of the upstream installer/socket-only
@@ -320,15 +348,17 @@ The primary Podman-specific tests are:
   optional VPN behavior, tmpfs options, unconditional shared Docker
   PostgreSQL/OpenSearch storage, database health dependencies, and the fixed
   hardened host document relay.
-- `tests/test_doc_drop_webserver.py`: the non-indexed host readiness endpoint.
+- `tests/test_doc_drop_webserver.py`: the non-indexed host readiness endpoint
+  and document-root/symlink confinement.
 - `tests/test_myst_readiness.py`: interface/route parsing that must remain
   valid with Podman's network layout.
 
 Run `make check` after every Podman script, Makefile, or overlay change. For
 image/source pin or runtime-patch work, follow the repository's ordinary
-`make check-upgrade` rules as well. `make health-inventory` validates the
-effective lite/full health models, but it does not replace native live
-inspection.
+`make check-upgrade` rules as well. `make health-inventory` renders the actual
+Makefile-selected engine, private environment, optional overlays, and active
+profiles for lite and full mode and totals their steady checks per hour. It
+does not replace native live inspection.
 
 ## Live compatibility checklist
 

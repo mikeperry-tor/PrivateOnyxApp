@@ -30,7 +30,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
-- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, and keeping optional Slack/Discord bot processes off unless enabled. This considerably lowers idle CPU, memory, and disk activity, and conserves power/battery for laptop deployments.
+- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, and keeping optional Slack/Discord bot processes off unless enabled. The resulting health and scheduler cadence is substantially lower; controlled before/after power and resource measurements remain future work.
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
 
@@ -62,7 +62,7 @@ The Docker Compose files in this stack relies on the following components:
   probes the image store so a broken post-restart guest fails early.
 - Internet access for image builds and provider APIs
 - `make`
-- `uv` for unit tests and MLX embedding server installation.
+- `uv` for MLX embedding server installation and dependency-lock upgrades.
 
 ## Running the Stack
 
@@ -75,6 +75,12 @@ under `./docker-data`. For the configured RAG sourceâ€”`./doc-drop` by defaultâ€
 Podman uses a wrapper-managed host-local server rather than copying the
 directory into its VM. This also supports external mounts that virtiofs cannot
 re-export reliably.
+
+The wrapper records which engine owns the shared database/index data before
+starting Compose and refuses a start through the other engine until the
+matching `make down-*` succeeds. Use `make shared-data-engine-status` to inspect
+the claim. After updating an already-running installation, rerun its matching
+`make up-*` once before switching engines so the claim is initialized.
 
 ### Lite Mode
 
@@ -136,7 +142,8 @@ Most likely variables you want to change:
     are unavailable. Routing remains fail-closed, but a failed Myst connection
     requires `podman restart myst-client-vpn` or a stack restart.
   - PostgreSQL and OpenSearch reuse Docker's initialized bind data through
-    guarded Podman user mappings. Never run both engines against it at once.
+    guarded Podman user mappings and a wrapper-managed engine claim. Never run
+    both engines against it at once.
   - In full mode, `make up-full` starts a PID-tracked read-only document server
     on the Mac for `ONYX_RAG_DOC_SOURCE_DIR` (`./doc-drop` by default); a
     hardened fixed relay keeps the internal `doc-drop-web:8091` origin
@@ -573,6 +580,8 @@ The following endpoints are exposed to your docker host:
 - teep OpenAI API base: `http://localhost:8337/v1`
 - teep health check: `http://localhost:8337/health`
 - teep prometheus metrics: `http://localhost:8337/metrics`
+- Full-mode local document display: [`http://localhost:8091`](http://localhost:8091)
+- Wrapper-managed MLX embedding lifecycle proxy (when installed): `http://127.0.0.1:3210`
 
 ## Privacy of this stack
 

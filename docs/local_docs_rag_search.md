@@ -52,6 +52,9 @@ boundary.
    is PID tracked and identity validated by the Makefile. This applies equally
    to the default directory and another configured local directory; it also
    permits external mounts such as WebDAV when virtiofs cannot re-export them.
+   The Podman host server resolves the configured root and rejects symbolic
+   links rather than following them; configure the real collection directory
+   and use ordinary files/directories below it.
 2. In Docker mode, `doc-drop-web` serves its read-only bind directly. In Podman
    mode, a capability-free fixed `socat` relay forwards only the internal
    origin to the host-local document server. It has no source bind or

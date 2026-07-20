@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Sequence
 
 
@@ -37,7 +38,7 @@ class ContainerHealth:
     container_id: str
     service: str
     state: str
-    regular: dict[str, Any]
+    regular: dict[str, Any] | None
     startup: dict[str, Any] | None
 
 
@@ -171,33 +172,115 @@ def _load_containers(container_bin: str, project: str) -> list[ContainerHealth]:
     result: list[ContainerHealth] = []
     for item in inspected:
         labels = item.get("Config", {}).get("Labels") or {}
-        regular = item.get("Config", {}).get("Healthcheck")
-        if not _health_enabled(regular):
-            continue
         service = labels.get("com.docker.compose.service")
         if not service:
             raise ContractError(
-                f"health-checked container {item.get('Id', '<unknown>')} has no Compose service label"
+                f"container {item.get('Id', '<unknown>')} has no Compose service label"
             )
+        regular = item.get("Config", {}).get("Healthcheck")
         result.append(
             ContainerHealth(
                 container_id=item["Id"],
                 service=service,
                 state=item.get("State", {}).get("Status", "unknown"),
-                regular=regular,
+                regular=regular if _health_enabled(regular) else None,
                 startup=item.get("Config", {}).get("StartupHealthCheck"),
             )
         )
-    if not result:
-        raise ContractError(f"project {project!r} has no enabled health checks")
     return result
+
+
+def _duration_ns(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    units = {
+        "h": Decimal(3_600_000_000_000),
+        "m": Decimal(60_000_000_000),
+        "s": Decimal(1_000_000_000),
+        "ms": Decimal(1_000_000),
+        "us": Decimal(1_000),
+        "ns": Decimal(1),
+    }
+    text = str(value)
+    parts = re.findall(r"([0-9]+(?:[.][0-9]+)?)(h|ms|us|ns|m|s)", text)
+    if not parts or "".join(number + unit for number, unit in parts) != text:
+        raise ContractError(f"unsupported Compose duration: {value!r}")
+    return int(sum(Decimal(number) * units[unit] for number, unit in parts))
+
+
+def _load_expected_health(
+    container_bin: str, env_files: Sequence[str]
+) -> dict[str, dict[str, Any]]:
+    command = [container_bin, "compose"]
+    for env_file in env_files:
+        command.extend(("--env-file", env_file))
+    command.extend(("config", "--format", "json"))
+    try:
+        model = json.loads(_run(command).stdout)
+    except (json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+        raise ContractError(f"could not render the effective Compose model: {exc}") from exc
+
+    active_profiles = {
+        profile.strip()
+        for profile in os.environ.get("COMPOSE_PROFILES", "").split(",")
+        if profile.strip()
+    }
+    expected: dict[str, dict[str, Any]] = {}
+    for service, config in model.get("services", {}).items():
+        profiles = set(config.get("profiles") or ())
+        if profiles and not profiles.intersection(active_profiles):
+            continue
+        health = config.get("healthcheck")
+        if not isinstance(health, dict) or health.get("disable"):
+            continue
+        test = health.get("test")
+        if not isinstance(test, list) or not test or test[0] == "NONE":
+            continue
+        expected[service] = health
+    return expected
+
+
+def _verify_expected_health_set(
+    containers: Sequence[ContainerHealth], expected: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    created_services = {container.service for container in containers}
+    relevant = {
+        service: health
+        for service, health in expected.items()
+        if service in created_services
+    }
+    actual = {
+        container.service for container in containers if container.regular is not None
+    }
+    if actual != set(relevant):
+        missing = sorted(set(relevant) - actual)
+        unexpected = sorted(actual - set(relevant))
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected: " + ", ".join(unexpected))
+        raise ContractError(
+            "container health-check set differs from effective Compose ("
+            + "; ".join(details)
+            + ")"
+        )
+    if not relevant:
+        raise ContractError("created Compose containers have no enabled health checks")
+    return relevant
 
 
 def _expected_regular_interval(service: str) -> int:
     return MYST_INTERVAL_NS if service == "myst-client" else ORDINARY_INTERVAL_NS
 
 
-def _verify_regular(container: ContainerHealth) -> None:
+def _verify_regular(
+    container: ContainerHealth, expected_health: dict[str, Any] | None = None
+) -> None:
+    if container.regular is None:
+        raise ContractError(f"{container.service}: regular health check is absent")
     interval = container.regular.get("Interval")
     expected = _expected_regular_interval(container.service)
     if interval != expected:
@@ -207,9 +290,26 @@ def _verify_regular(container: ContainerHealth) -> None:
     timeout = container.regular.get("Timeout")
     if not isinstance(timeout, int) or timeout <= 0:
         raise ContractError(f"{container.service}: regular health timeout is invalid")
+    if expected_health is not None:
+        comparisons = {
+            "Test": expected_health.get("test"),
+            "Interval": _duration_ns(expected_health.get("interval")),
+            "Timeout": _duration_ns(expected_health.get("timeout")),
+            "StartPeriod": _duration_ns(expected_health.get("start_period")),
+            "Retries": int(expected_health.get("retries", 0)),
+        }
+        for field, expected_value in comparisons.items():
+            actual_value = container.regular.get(field, 0)
+            if actual_value != expected_value:
+                raise ContractError(
+                    f"{container.service}: regular health {field} is "
+                    f"{actual_value!r}, expected {expected_value!r} from Compose"
+                )
 
 
 def _verify_startup(container: ContainerHealth) -> None:
+    if container.regular is None:
+        raise ContractError(f"{container.service}: regular health check is absent")
     startup = container.startup
     if not isinstance(startup, dict):
         raise ContractError(f"{container.service}: native startup health check is absent")
@@ -227,12 +327,18 @@ def _verify_startup(container: ContainerHealth) -> None:
         )
 
 
-def configure_project(container_bin: str, project: str) -> int:
+def configure_project(
+    container_bin: str, project: str, env_files: Sequence[str] = ()
+) -> int:
     server_version = check_capability(container_bin)
+    expected = _load_expected_health(container_bin, env_files)
     containers = _load_containers(container_bin, project)
+    relevant = _verify_expected_health_set(containers, expected)
     configured = 0
     for container in containers:
-        _verify_regular(container)
+        if container.service not in relevant:
+            continue
+        _verify_regular(container, relevant[container.service])
         if container.state == "running":
             _verify_startup(container)
             continue
@@ -255,14 +361,17 @@ def configure_project(container_bin: str, project: str) -> int:
         configured += 1
 
     verified = _load_containers(container_bin, project)
+    relevant = _verify_expected_health_set(verified, expected)
     for container in verified:
-        _verify_regular(container)
+        if container.service not in relevant:
+            continue
+        _verify_regular(container, relevant[container.service])
         _verify_startup(container)
     print(
         f"Podman {server_version}: verified native startup health for "
-        f"{len(verified)} service(s); configured {configured} stopped container(s)."
+        f"{len(relevant)} service(s); configured {configured} stopped container(s)."
     )
-    return len(verified)
+    return len(relevant)
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -272,6 +381,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--container-bin", default="podman")
     parser.add_argument("--project", default="onyx")
+    parser.add_argument("--env-file", action="append", default=[])
     parser.add_argument("--postgres")
     parser.add_argument("--opensearch")
     return parser.parse_args(argv)
@@ -289,7 +399,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print("Prepared shared Docker data for Podman: " + ", ".join(prepared))
         else:
-            configure_project(args.container_bin, args.project)
+            configure_project(args.container_bin, args.project, args.env_file)
     except (ContractError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

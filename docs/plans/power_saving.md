@@ -12,14 +12,14 @@ Podman-native startup-health layer. Tests and the user-facing and upgrade
 documentation cover these changes.
 
 **Validation state: deterministic and pinned-image validation passes.**
-`make check` passed 220 tests (with five image-only skips), and
+`make check` passed 230 tests (with five image-only skips), and
 `make check-upgrade` passed the pinned-image contracts and five image-backed
 parser tests. Live Docker checks covered startup/readiness, worker and Beat
 behavior, OpenSearch, MinIO CRUD, SearXNG search, aggregate Obscura recovery,
 and MLX cold load, shared concurrent startup, and 10-minute idle unload. Live
 rootless Podman 5.8.1 checks covered lite and full startup, all native startup
-health contracts, exact host-route preservation, PostgreSQL/OpenSearch native
-volumes, MinIO CRUD, embedding readiness, WebUI, and a ten-result SearXNG
+health contracts, exact host-route preservation, shared PostgreSQL/OpenSearch
+binds, MinIO CRUD, embedding readiness, WebUI, and a ten-result SearXNG
 search. A clean-machine Podman full start directly pulled the required Onyx
 images without invoking the Docker-oriented upstream bootstrap, started all 29
 expected containers without code interpreter or socket autoheal. Podman full
@@ -46,11 +46,21 @@ after restart. PostgreSQL retained the native five-second startup check and
 working mappings are now unconditional parts of the two core Podman overlays;
 there are no database-specific Compose layers, native-volume branch, or
 storage opt-out flags.
-The long controlled before/after measurement windows and the remaining
-destructive or workload-specific fault/performance gates have not yet been
-run. A complete `make upgrade` dependency refresh was also not completed
+The long controlled before/after power/resource measurement windows and the
+remaining destructive or workload-specific fault/performance gates have not
+yet been run. Fault injection is intentionally deferred until after health
+frequency and resource-consumption evidence is collected. A complete
+`make upgrade` dependency refresh was also not completed
 because PyPI access timed out; no dependency-lock input changed, and the exact
 Myst and Teep images were built and validated separately.
+
+A non-controlled Docker full-stack snapshot on 2026-07-20 showed 16 retained
+health checks: Myst contributes 60 local checks/hour and the other 15 checks
+contribute six each, for 150 steady checks/hour. The corresponding lite model
+had 13 retained checks and 132/hour under the selected optional overlays. One
+stack-wide sample reported about 5.2 GiB container memory and 7.4% aggregate
+container CPU; this is operational context, not a before/after power result,
+because foreground/background work and Docker sampling noise were not isolated.
 
 **Deferred state: intentionally not implemented.** Every item under
 [Deferred until after the measurement gate](#deferred-until-after-the-measurement-gate)
