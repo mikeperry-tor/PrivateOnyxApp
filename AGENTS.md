@@ -216,8 +216,10 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   Custom upstreams and manually launched servers are not touched.
 - The first Docker/Podman shared-data ownership claim inspects installed engine
   commands for running Onyx PostgreSQL/OpenSearch writers and fails closed on
-  conflicting writers or an inspection failure. `make adopt-shared-data-engine`
-  is only for an absent marker after the operator verifies both engines are down.
+  conflicting writers or an inspection failure, except that an unselected
+  Podman command is skipped when its default machine positively reports that it
+  is stopped. `make adopt-shared-data-engine` is only for an absent marker after
+  the operator verifies both engines are down.
 - `make health-inventory` - render the Makefile-selected engine/environment and
   optional overlays for lite/full healthcheck commands, startup/steady
   cadences, and approximate steady checks per hour.

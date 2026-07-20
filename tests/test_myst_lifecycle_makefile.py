@@ -177,6 +177,36 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertNotIn("stage-podman-full-docs", makefile)
         self.assertNotIn("PODMAN_RAG_DOC_VOLUME", makefile)
 
+    def test_evaluated_host_process_selection_matches_engine(self) -> None:
+        selections: dict[str, str] = {}
+        for engine in ("docker", "podman"):
+            result = subprocess.run(
+                [
+                    "make",
+                    "-np",
+                    "help",
+                    f"CONTAINER_BIN={engine}",
+                    "ENV_FILE=/dev/null",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            line = next(
+                line
+                for line in result.stdout.splitlines()
+                if line.startswith("FULL_MODE_HOST_PROCESS_TARGETS :=")
+            )
+            selections[engine] = line.split(":=", 1)[1].strip()
+
+        self.assertEqual(selections["docker"], "embedserv-start-if-installed")
+        self.assertEqual(
+            selections["podman"],
+            "embedserv-start-if-installed podman-doc-server-start",
+        )
+
     def test_lite_and_custom_embedding_skip_unused_host_manager(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         lite_prerequisites = next(

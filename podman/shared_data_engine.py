@@ -71,6 +71,21 @@ def _running_shared_writers(command: str) -> set[str]:
     return SHARED_WRITER_SERVICES.intersection(inspected.stdout.splitlines())
 
 
+def _podman_machine_is_stopped(command: str) -> bool:
+    inspected = subprocess.run(
+        [command, "machine", "inspect", "--format", "{{.State}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    states = {
+        line.strip().lower()
+        for line in inspected.stdout.splitlines()
+        if line.strip()
+    }
+    return inspected.returncode == 0 and states == {"stopped"}
+
+
 def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
     checked: set[tuple[str, str]] = set()
     for command in commands:
@@ -82,7 +97,17 @@ def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
         if identity in checked or not _available_command(command):
             continue
         checked.add(identity)
-        writers = _running_shared_writers(command)
+        try:
+            writers = _running_shared_writers(command)
+        except GuardError:
+            if (
+                command_engine != engine
+                and command_engine == "podman"
+                and _podman_machine_is_stopped(command)
+            ):
+                print(f"Skipping stopped unselected Podman machine ({command}).")
+                continue
+            raise
         if writers and command_engine != engine:
             names = ", ".join(sorted(writers))
             raise GuardError(

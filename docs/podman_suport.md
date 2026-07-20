@@ -139,12 +139,17 @@ the marker with `make shared-data-engine-status`. On the first claim, the guard
 queries every installed Docker/Podman command (including `CONTAINER_BIN`) for
 running Onyx PostgreSQL or OpenSearch writers. A writer owned by the other
 engine, or an installed engine that cannot be inspected, stops startup before
-the marker is created. This closes the upgrade window in which a running
-pre-marker Docker stack could otherwise be claimed by Podman.
+the marker is created. The one narrow exception is an unselected Podman command
+whose default machine positively reports the `stopped` state; its expected API
+connection failure cannot conceal a running Podman writer and does not block a
+Docker start. This closes the upgrade window in which a running pre-marker
+Docker stack could otherwise be claimed by Podman without requiring an unused
+Podman VM to run alongside Docker Desktop.
 
 A failed start deliberately retains its claim for a safe retry. If both engines
-are verifiably down but an unavailable engine command prevents first-use
-inspection, `make adopt-shared-data-engine` is the explicit operator override;
+are verifiably down but an unavailable engine command other than a positively
+stopped unselected Podman machine prevents first-use inspection,
+`make adopt-shared-data-engine` is the explicit operator override;
 it seeds the absent marker for the selected `CONTAINER_BIN` without inspection.
 Do not use it to bypass a reported writer. If a machine failure leaves a stale
 claim, verify both engines have no Onyx containers before removing the marker

@@ -119,7 +119,9 @@ Most likely variables you want to change:
 - Container engine selection:
   - Keep `CONTAINER_BIN=docker` for Docker Desktop, or set it to `podman` for a
     running Podman machine. Podman mode requires a clean `make down-*` when
-    switching engines; it never falls back to Docker. Never run both engines against it at once.
+    switching engines; it never falls back to Docker. An installed but stopped
+    Podman machine does not block Docker startup. Never run both engines against
+    the shared data at once.
   - On rootless Podman, code interpreter and Docker-socket autoheal
     are unavailable. Routing remains fail-closed, but a failed Myst connection
     requires `podman restart myst-client-vpn` or a stack restart.
