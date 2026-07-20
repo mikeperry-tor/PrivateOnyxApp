@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import signal
 import stat
 import subprocess
 import tempfile
@@ -19,6 +18,23 @@ class MystSelfHealTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.state = self.root / "state"
+        self.process_root = self.root / "proc"
+        self.process_root.mkdir()
+        self.launcher = self.root / "with-process-identity.sh"
+        self.launcher.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            "process_root=$1\n"
+            "shift\n"
+            "mkdir -p \"${process_root}/$$\"\n"
+            "fields=S\n"
+            "i=1\n"
+            "while [ \"${i}\" -le 18 ]; do fields=\"${fields} 0\"; i=$((i + 1)); done\n"
+            "printf '%s (health-test) %s %s\\n' \"$$\" \"${fields}\" \"$$\" > \"${process_root}/$$/stat\"\n"
+            "exec \"$@\"\n",
+            encoding="utf-8",
+        )
+        self.launcher.chmod(self.launcher.stat().st_mode | stat.S_IXUSR)
         self.clock = self.root / "uptime"
         self.clock.write_text("0.00 100.00\n", encoding="utf-8")
         self.readiness = self.root / "readiness.sh"
@@ -58,16 +74,7 @@ class MystSelfHealTests(unittest.TestCase):
         state: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [
-                "/bin/sh",
-                str(SCRIPT),
-                "check",
-                str(target_pid),
-                str(state or self.state),
-                str(self.readiness),
-                str(self.clock),
-                "60",
-            ],
+            self._check_command(target_pid, state=state),
             env={
                 **os.environ,
                 "MYST_VPN_ENABLED": vpn_enabled,
@@ -81,10 +88,43 @@ class MystSelfHealTests(unittest.TestCase):
 
     def _reset(self) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["/bin/sh", str(SCRIPT), "reset", str(self.state)],
+            [
+                str(self.launcher),
+                str(self.process_root),
+                "/bin/sh",
+                str(SCRIPT),
+                "reset",
+                str(self.state),
+                str(self.process_root),
+            ],
             text=True,
             capture_output=True,
             check=False,
+        )
+
+    def _check_command(
+        self, target_pid: int, *, state: Path | None = None
+    ) -> list[str]:
+        return [
+            str(self.launcher),
+            str(self.process_root),
+            "/bin/sh",
+            str(SCRIPT),
+            "check",
+            str(target_pid),
+            str(state or self.state),
+            str(self.readiness),
+            str(self.clock),
+            "60",
+            str(self.process_root),
+        ]
+
+    def _write_process_identity(self, pid: int, start: int) -> None:
+        process = self.process_root / str(pid)
+        process.mkdir(exist_ok=True)
+        fields = ["S", *("0" for _ in range(18)), str(start)]
+        (process / "stat").write_text(
+            f"{pid} (test process) {' '.join(fields)}\n", encoding="utf-8"
         )
 
     def _set_clock(self, seconds: int) -> None:
@@ -188,6 +228,35 @@ class MystSelfHealTests(unittest.TestCase):
         self.assertEqual((self.state / "first-failure-uptime").read_text(), "100\n")
         self.assertIsNone(target.poll())
 
+    def test_future_timestamp_is_replaced_without_signal(self) -> None:
+        target = self._target()
+        self._arm(target.pid)
+        (self.state / "first-failure-uptime").write_text("200\n")
+        self._set_clock(100)
+        result = self._run("failure", target.pid)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid failure timestamp was reset", result.stderr)
+        self.assertEqual((self.state / "first-failure-uptime").read_text(), "100\n")
+        self.assertIsNone(target.poll())
+
+    def test_malformed_uptime_fails_without_signaling(self) -> None:
+        target = self._target()
+        self._arm(target.pid)
+        self.clock.write_text("not-uptime\n", encoding="utf-8")
+        result = self._run("failure", target.pid)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("monotonic uptime source is malformed", result.stderr)
+        self.assertIsNone(target.poll())
+
+    def test_malformed_armed_state_fails_without_signaling(self) -> None:
+        target = self._target()
+        self.state.mkdir()
+        (self.state / "armed").write_text("unexpected\n", encoding="utf-8")
+        result = self._run("failure", target.pid)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("armed state is malformed", result.stderr)
+        self.assertIsNone(target.poll())
+
     def test_unsafe_state_types_fail_without_signaling(self) -> None:
         target = self._target()
         self.state.mkdir()
@@ -197,6 +266,27 @@ class MystSelfHealTests(unittest.TestCase):
         result = self._run("failure", target.pid)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unsafe file type", result.stderr)
+        self.assertIsNone(target.poll())
+
+    def test_nonregular_failure_state_fails_without_signaling(self) -> None:
+        target = self._target()
+        self.state.mkdir()
+        (self.state / "armed").write_text("armed\n", encoding="utf-8")
+        (self.state / "first-failure-uptime").mkdir()
+        result = self._run("failure", target.pid)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failure timestamp has an unsafe file type", result.stderr)
+        self.assertIsNone(target.poll())
+
+    def test_symlink_state_directory_fails_without_signaling(self) -> None:
+        target = self._target()
+        outside = self.root / "outside-state"
+        outside.mkdir()
+        state = self.root / "linked-state"
+        state.symlink_to(outside, target_is_directory=True)
+        result = self._run("failure", target.pid, state=state)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("state directory has an unsafe file type", result.stderr)
         self.assertIsNone(target.poll())
 
     def test_missing_armed_state_is_safe_and_clears_regular_timestamp(self) -> None:
@@ -212,16 +302,7 @@ class MystSelfHealTests(unittest.TestCase):
         self._set_clock(0)
         self._run("failure", target.pid)
         self._set_clock(60)
-        command = [
-            "/bin/sh",
-            str(SCRIPT),
-            "check",
-            str(target.pid),
-            str(self.state),
-            str(self.readiness),
-            str(self.clock),
-            "60",
-        ]
+        command = self._check_command(target.pid)
         env = {**os.environ, "MYST_VPN_ENABLED": "true", "READINESS_RESULT": "failure"}
         checks = [
             subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -230,6 +311,97 @@ class MystSelfHealTests(unittest.TestCase):
         diagnostics = "".join(check.communicate(timeout=5)[1] for check in checks)
         target.wait(timeout=2)
         self.assertEqual(diagnostics.count("requesting graceful container restart"), 1)
+
+    def test_reused_pid_stale_lock_is_reclaimed_immediately(self) -> None:
+        unrelated = self._target()
+        self._write_process_identity(unrelated.pid, 222)
+        lock = self.state / ".lock"
+        lock.mkdir(parents=True)
+        (lock / "owner").write_text(f"{unrelated.pid}:111\n", encoding="utf-8")
+        started = time.monotonic()
+        result = self._run("success")
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(elapsed, 2)
+        self.assertIsNone(unrelated.poll())
+        self.assertFalse(lock.exists())
+
+    def test_interrupted_empty_lock_is_reclaimed_without_overlap(self) -> None:
+        lock = self.state / ".lock"
+        lock.mkdir(parents=True)
+        started = time.monotonic()
+        result = self._run("success")
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreaterEqual(elapsed, 0.8)
+        self.assertLess(elapsed, 5)
+        self.assertFalse(lock.exists())
+
+    def test_failed_signal_rearms_for_a_later_attempt(self) -> None:
+        self._arm()
+        self._set_clock(0)
+        self._run("failure")
+        self._set_clock(60)
+        result = self._run("failure")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not signal target PID", result.stderr)
+        self.assertEqual((self.state / "armed").read_text(), "armed\n")
+        retry = self._run("failure")
+        self.assertIn("requesting graceful container restart", retry.stderr)
+
+    def test_entrypoint_shutdown_helper_terminates_and_reaps_both_children(self) -> None:
+        helper = ROOT / "myst/child-process-control.sh"
+        service_marker = self.root / "service-stopped"
+        route_marker = self.root / "route-stopped"
+        ready = self.root / "supervisor-ready"
+        child = self.root / "controlled-child.sh"
+        child.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            "marker=$1\n"
+            "trap 'printf stopped > \"${marker}\"; exit 0' INT TERM\n"
+            "printf ready > \"${marker}.ready\"\n"
+            "while true; do sleep 1; done\n",
+            encoding="utf-8",
+        )
+        child.chmod(child.stat().st_mode | stat.S_IXUSR)
+        harness = self.root / "shutdown-harness.sh"
+        harness.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            ". \"$1\"\n"
+            "\"$2\" \"$3\" & svc_pid=$!\n"
+            "\"$2\" \"$4\" & route_fix_pid=$!\n"
+            "install_shutdown_handler\n"
+            "while [ ! -f \"$3.ready\" ] || [ ! -f \"$4.ready\" ]; do sleep 0.02; done\n"
+            "printf '%s %s\\n' \"${svc_pid}\" \"${route_fix_pid}\" > \"$5\"\n"
+            "wait \"${svc_pid}\"\n",
+            encoding="utf-8",
+        )
+        harness.chmod(harness.stat().st_mode | stat.S_IXUSR)
+        supervisor = subprocess.Popen(
+            [
+                str(harness),
+                str(helper),
+                str(child),
+                str(service_marker),
+                str(route_marker),
+                str(ready),
+            ]
+        )
+        self.children.append(supervisor)
+        deadline = time.monotonic() + 3
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(ready.exists(), "shutdown harness did not become ready")
+        child_pids = [int(value) for value in ready.read_text().split()]
+        supervisor.terminate()
+        self.assertEqual(supervisor.wait(timeout=3), 0)
+        self.assertTrue(service_marker.exists())
+        self.assertTrue(route_marker.exists())
+        for pid in child_pids:
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
 
 
 if __name__ == "__main__":

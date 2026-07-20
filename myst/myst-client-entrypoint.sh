@@ -88,33 +88,10 @@ fi
 
 # A restart reuses the container writable layer. Clear only the two exact
 # process-lifetime health state files before either VPN mode starts.
-/bin/sh /usr/local/bin/myst-healthcheck.sh reset "${MYST_HEALTH_STATE_DIR}"
+/bin/sh /usr/local/bin/myst-healthcheck.sh reset "${MYST_HEALTH_STATE_DIR}" /proc
 
-svc_pid=""
-route_fix_pid=""
-
-stop_children() {
-  trap - INT TERM
-  if [ -n "${route_fix_pid}" ]; then
-    kill "${route_fix_pid}" 2>/dev/null || true
-  fi
-  if [ -n "${svc_pid}" ]; then
-    kill "${svc_pid}" 2>/dev/null || true
-  fi
-  if [ -n "${route_fix_pid}" ]; then
-    wait "${route_fix_pid}" 2>/dev/null || true
-  fi
-  if [ -n "${svc_pid}" ]; then
-    wait "${svc_pid}" 2>/dev/null || true
-  fi
-}
-
-handle_shutdown() {
-  stop_children
-  exit 0
-}
-
-trap handle_shutdown INT TERM
+. /usr/local/bin/myst-child-process-control.sh
+install_shutdown_handler
 
 # ── Optional VPN bypass ────────────────────────────────────────────────────
 # When MYST_VPN_ENABLED=false, start the daemon in idle mode: no kill-switch

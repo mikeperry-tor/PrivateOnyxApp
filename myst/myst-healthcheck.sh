@@ -28,18 +28,75 @@ prepare_state_dir() {
   chmod 700 "${state_dir}" || fail "could not secure state directory"
 }
 
+load_process_start() {
+  _process_pid="$1"
+  case "${_process_pid}" in
+    ''|*[!0-9]*) fail "process identity PID is malformed" ;;
+  esac
+  _stat_file="${process_root}/${_process_pid}/stat"
+  validate_regular_file "${_stat_file}" "process identity source"
+  if [ ! -e "${_stat_file}" ]; then
+    return 1
+  fi
+  [ -r "${_stat_file}" ] || fail "process identity source is unreadable"
+  _stat_line=""
+  IFS= read -r _stat_line < "${_stat_file}" || true
+  case "${_stat_line}" in
+    *') '*) _stat_fields="${_stat_line##*) }" ;;
+    *) fail "process identity source is malformed" ;;
+  esac
+  set -f
+  set -- ${_stat_fields}
+  set +f
+  [ "$#" -ge 20 ] || fail "process identity source is malformed"
+  shift 19
+  process_start="$1"
+  case "${process_start}" in
+    ''|*[!0-9]*) fail "process identity source is malformed" ;;
+  esac
+}
+
 release_lock() {
   trap - EXIT HUP INT TERM
-  if [ -n "${lock_dir:-}" ] && [ -d "${lock_dir}" ] && [ ! -L "${lock_dir}" ]; then
-    rm -f "${lock_dir}/owner"
-    rmdir "${lock_dir}" 2>/dev/null || true
+  if [ "${lock_acquired:-false}" = "true" ] \
+    && [ -n "${lock_dir:-}" ] \
+    && [ -d "${lock_dir}" ] \
+    && [ ! -L "${lock_dir}" ]; then
+    _release_owner=""
+    if [ -f "${lock_dir}/owner" ] && [ ! -L "${lock_dir}/owner" ]; then
+      IFS= read -r _release_owner < "${lock_dir}/owner" || true
+    fi
+    if [ "${_release_owner}" = "${lock_owner:-}" ]; then
+      rm -f "${lock_dir}/owner"
+      rmdir "${lock_dir}" 2>/dev/null || true
+    fi
+  fi
+  if [ -n "${claim_file:-}" ] && [ -f "${claim_file}" ] && [ ! -L "${claim_file}" ]; then
+    rm -f "${claim_file}"
   fi
 }
 
 acquire_lock() {
   lock_dir="${state_dir}/${LOCK_NAME}"
+  lock_acquired=false
+  claim_file="${state_dir}/.lock-owner.$$"
+  validate_regular_file "${claim_file}" "state lock claim"
+  printf '%s\n' "${lock_owner}" > "${claim_file}" || fail "could not create state lock claim"
+  chmod 600 "${claim_file}" || fail "could not secure state lock claim"
+  trap release_lock EXIT HUP INT TERM
   _attempt=0
-  while ! mkdir -m 700 "${lock_dir}" 2>/dev/null; do
+  while true; do
+    if mkdir -m 700 "${lock_dir}" 2>/dev/null; then
+      # The hard-link creation is the atomic ownership decision. If an empty
+      # abandoned directory was reclaimed and recreated while a former creator
+      # was paused, only one claimant can publish the fixed owner name.
+      if ln "${claim_file}" "${lock_dir}/owner" 2>/dev/null; then
+        lock_acquired=true
+        return 0
+      fi
+      rmdir "${lock_dir}" 2>/dev/null || true
+    fi
+
     if [ -L "${lock_dir}" ] || [ ! -d "${lock_dir}" ]; then
       fail "state lock has an unsafe file type"
     fi
@@ -53,22 +110,38 @@ acquire_lock() {
     if [ -f "${_owner_file}" ]; then
       IFS= read -r _owner < "${_owner_file}" || true
     fi
-    case "${_owner}" in
-      ''|*[!0-9]*) _owner_live=true ;;
-      *)
-        if kill -0 "${_owner}" 2>/dev/null; then
-          _owner_live=true
-        else
-          _owner_live=false
-        fi
-        ;;
-    esac
+    if [ -z "${_owner}" ]; then
+      _owner_live=true
+    else
+      case "${_owner}" in
+        *:*)
+          _owner_pid="${_owner%%:*}"
+          _owner_start="${_owner#*:}"
+          case "${_owner_pid}" in
+            ''|*[!0-9]*) fail "state lock owner is malformed" ;;
+          esac
+          case "${_owner_start}" in
+            ''|*[!0-9]*) fail "state lock owner is malformed" ;;
+          esac
+          if kill -0 "${_owner_pid}" 2>/dev/null \
+            && load_process_start "${_owner_pid}" \
+            && [ "${process_start}" = "${_owner_start}" ]; then
+            _owner_live=true
+          else
+            _owner_live=false
+          fi
+          ;;
+        *) fail "state lock owner is malformed" ;;
+      esac
+    fi
 
     # An empty owner is possible only in the tiny interval between mkdir and
     # the owner write. After one second it is safe to reclaim as a crashed
     # acquisition. A recorded dead owner is reclaimable immediately.
     if [ "${_owner_live}" = "false" ] || { [ -z "${_owner}" ] && [ "${_attempt}" -ge 20 ]; }; then
-      rm -f "${_owner_file}"
+      if [ "${_owner_live}" = "false" ]; then
+        rm -f "${_owner_file}"
+      fi
       rmdir "${lock_dir}" 2>/dev/null || true
       _attempt=0
       continue
@@ -78,12 +151,6 @@ acquire_lock() {
     [ "${_attempt}" -lt 180 ] || fail "timed out waiting for state lock"
     sleep 0.05
   done
-
-  printf '%s\n' "$$" > "${lock_dir}/owner" || {
-    rmdir "${lock_dir}" 2>/dev/null || true
-    fail "could not record state lock owner"
-  }
-  trap release_lock EXIT HUP INT TERM
 }
 
 atomic_write() {
@@ -118,7 +185,13 @@ read_uptime() {
 
 reset_state() {
   state_dir="$1"
+  process_root="$2"
   prepare_state_dir
+  if [ -L "${process_root}" ] || [ ! -d "${process_root}" ]; then
+    fail "process identity root has an unsafe file type"
+  fi
+  load_process_start "$$" || fail "current process identity is unavailable"
+  lock_owner="$$:${process_start}"
   acquire_lock
   armed_file="${state_dir}/${ARMED_NAME}"
   failure_file="${state_dir}/${FAILURE_NAME}"
@@ -133,6 +206,7 @@ check_state() {
   readiness_script="$3"
   uptime_file="$4"
   grace_seconds="$5"
+  process_root="$6"
 
   case "${target_pid}" in
     ''|*[!0-9]*) fail "target PID must be a positive integer" ;;
@@ -158,6 +232,11 @@ check_state() {
   set -e
 
   prepare_state_dir
+  if [ -L "${process_root}" ] || [ ! -d "${process_root}" ]; then
+    fail "process identity root has an unsafe file type"
+  fi
+  load_process_start "$$" || fail "current process identity is unavailable"
+  lock_owner="$$:${process_start}"
   acquire_lock
   armed_file="${state_dir}/${ARMED_NAME}"
   failure_file="${state_dir}/${FAILURE_NAME}"
@@ -218,6 +297,7 @@ check_state() {
   echo "Myst readiness failed continuously for ${grace_seconds}s; requesting graceful container restart" >&2
   if ! kill -TERM "${target_pid}"; then
     echo "Myst health supervisor failed: could not signal target PID" >&2
+    atomic_write "${armed_file}" "armed"
   fi
   exit "${readiness_status}"
 }
@@ -226,12 +306,12 @@ umask 077
 action="${1:-}"
 case "${action}" in
   reset)
-    [ "$#" -eq 2 ] || fail "usage: reset STATE_DIR"
-    reset_state "$2"
+    [ "$#" -eq 3 ] || fail "usage: reset STATE_DIR PROCESS_ROOT"
+    reset_state "$2" "$3"
     ;;
   check)
-    [ "$#" -eq 6 ] || fail "usage: check TARGET_PID STATE_DIR READINESS_SCRIPT UPTIME_FILE GRACE_SECONDS"
-    check_state "$2" "$3" "$4" "$5" "$6"
+    [ "$#" -eq 7 ] || fail "usage: check TARGET_PID STATE_DIR READINESS_SCRIPT UPTIME_FILE GRACE_SECONDS PROCESS_ROOT"
+    check_state "$2" "$3" "$4" "$5" "$6" "$7"
     ;;
   *) fail "expected reset or check action" ;;
 esac

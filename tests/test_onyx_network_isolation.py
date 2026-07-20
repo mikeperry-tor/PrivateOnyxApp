@@ -283,6 +283,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             "/usr/local/bin/myst-readiness.sh",
             "/proc/uptime",
             "60",
+            "/proc",
         ]
         for mode in ("lite", "full"):
             for engine in ("docker", "podman"):
@@ -309,6 +310,14 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                             myst["network_mode"], "service:netns-holder"
                         )
                         self.assertEqual(myst["healthcheck"]["test"], expected_health)
+                        self.assertIn(
+                            "/usr/local/bin/myst-child-process-control.sh",
+                            {
+                                volume["target"]
+                                for volume in myst.get("volumes", [])
+                                if isinstance(volume, dict)
+                            },
+                        )
                         self.assertNotIn("autoheal", myst.get("labels", {}))
                         self.assertEqual(
                             myst["environment"]["MYST_VPN_ENABLED"],

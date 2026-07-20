@@ -307,7 +307,9 @@ The script should:
 - use exact file paths and reject unexpected state-file types/symlinks;
 - make state transitions safe if an engine ever overlaps startup and regular
   probes, without adding a persistent lock process or a stale-lock failure
-  mode;
+  mode; lock ownership must bind both PID and `/proc/<pid>/stat` start time so
+  PID reuse cannot preserve an abandoned lock, and an atomic claim must resolve
+  empty-directory acquisition races;
 - clear state through an explicit `reset` action called by the entrypoint;
 - never persist state in `docker-data` or another bind mount;
 - signal the explicit target PID only after the armed/grace checks; and
@@ -315,10 +317,11 @@ The script should:
   restart window never reports a false healthy result.
 
 Update `myst/myst-client-entrypoint.sh` to reset the state before either the
-VPN or no-VPN branch begins. Make its `INT`/`TERM` handling unambiguous: disable
-recursive traps, terminate the exact route-reconciliation and daemon children,
-wait for both, and exit. Preserve all registration, funding, provider
-selection, connect retry, MTU, route-exemption, and no-VPN behavior.
+VPN or no-VPN branch begins. Keep its sourceable child-process control helper
+narrow and make `INT`/`TERM` handling unambiguous: disable recursive traps,
+terminate the exact route-reconciliation and daemon children, wait for both,
+and exit. Preserve all registration, funding, provider selection, connect
+retry, MTU, route-exemption, and no-VPN behavior.
 
 Add deterministic tests, preferably in a new `tests/test_myst_self_heal.py`,
 covering:
@@ -336,8 +339,12 @@ covering:
 - no-VPN success/failure never arms or signals;
 - malformed, missing, non-regular, and symlink state files fail safely as
   specified;
+- abandoned empty locks and stale locks whose PID was reused are reclaimed
+  without overlapping ownership;
+- failure to signal the target re-arms recovery for a later attempt;
 - readiness diagnostics do not expose a supplied mock API body; and
-- signal/cleanup behavior leaves no test child process behind.
+- the production child-process control helper terminates and reaps both test
+  children without leaving either process behind.
 
 Use temporary directories and disposable `sleep` processes. Never signal the
 test runner or host PID 1.
@@ -423,8 +430,6 @@ migration documentation until implementation is complete.
 
 Update all active documentation in the same change:
 
-- `README.md`: remove the Docker/Podman autoheal difference and state that both
-  engines have the same qualified behavior without a container-engine socket.
 - `AGENTS.md`: remove `docker-compose.vpn-autoheal.yml` and the Podman VPN
   overlay from key locations. Document the selected recovery invariant and
   identify the new wrapper alongside `myst-readiness.sh`.
@@ -594,7 +599,7 @@ The work is complete only when all of the following are true:
 - `make check` and `make health-inventory` pass.
 - Live Docker recovery passes; live Podman recovery passes when a usable Podman
   runtime is available, or the omission is reported precisely.
-- README, AGENTS.md, active subsystem docs, upgrade guidance, resource
+- AGENTS.md, active subsystem docs, upgrade guidance, resource
   minimization policy, and conflicting present-tense implemented-plan text
   match the final behavior.
 
@@ -638,7 +643,7 @@ Implemented on 2026-07-20 with the qualified automatic-recovery branch:
   supervisor command and cadence without autoheal. Podman's native startup
   health contained the same command at five seconds. Live explicit no-VPN
   checks on both engines stayed healthy without either recovery state file.
-- `make check` passed 304 tests with five expected SearXNG image-only skips.
+- `make check` passed 313 tests with five expected SearXNG image-only skips.
   `make health-inventory` passed for all eight model rows. No image/runtime
   patch contract changed, so `make test-images` was not required by this plan.
 - The final running state is the healthy Docker full VPN stack. It has no
