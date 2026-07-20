@@ -30,7 +30,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
-- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled. Stable Myst routes are validated without repeated route writes or success logs. Controlled before/after power and resource measurements remain future work.
+- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled.
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
 
@@ -54,13 +54,7 @@ The Docker Compose files in this stack relies on the following components:
 
 ## Prerequisites
 
-- Docker Engine 25.0 or later with Docker Compose 2.20.2 or later; or a
-  rootless Podman 5.8.1 or later server with a Compose provider 2.20.2 or
-  later. The Podman path installs and verifies Podman's separate native
-  startup health checks before starting any created service. The currently
-  verified macOS guest is the official 5.8.1 machine-os image; startup also
-  probes the image store so a broken post-restart guest fails early.
-- Internet access for image builds and provider APIs
+- Docker Engine 25.0+ or rootless Podman 5.8.1+, with a Compose provider 2.20.2 or later.
 - `make`
 - `uv` for MLX embedding server installation and dependency-lock upgrades.
 
@@ -69,18 +63,6 @@ The Docker Compose files in this stack relies on the following components:
 The stack comes in two flavors: lite and full. This specifies the mode of the Onyx app. Lite mode provides Chat, Web, and Research only. Full mode also provides RAG, external app connectors, and groupware. Lite mode uses significantly less RAM (~1GB vs ~10GB).
 
 It is possible to switch between full and lite modes between restarts.
-
-Docker and Podman persist PostgreSQL and OpenSearch in the same bind mounts
-under `./docker-data`. For the configured RAG source—`./doc-drop` by default—
-Podman uses a wrapper-managed host-local server rather than copying the
-directory into its VM. This also supports external mounts that virtiofs cannot
-re-export reliably.
-
-The wrapper records which engine owns the shared database/index data before
-starting Compose and refuses a start through the other engine until the
-matching `make down-*` succeeds. Use `make shared-data-engine-status` to inspect
-the claim. After updating an already-running installation, rerun its matching
-`make up-*` once before switching engines so the claim is initialized.
 
 ### Lite Mode
 
@@ -137,19 +119,10 @@ Most likely variables you want to change:
 - Container engine selection:
   - Keep `CONTAINER_BIN=docker` for Docker Desktop, or set it to `podman` for a
     running Podman machine. Podman mode requires a clean `make down-*` when
-    switching engines; it never falls back to Docker.
-  - On rootless Podman for macOS, code interpreter and Docker-socket autoheal
+    switching engines; it never falls back to Docker. Never run both engines against it at once.
+  - On rootless Podman, code interpreter and Docker-socket autoheal
     are unavailable. Routing remains fail-closed, but a failed Myst connection
     requires `podman restart myst-client-vpn` or a stack restart.
-  - PostgreSQL and OpenSearch reuse Docker's initialized bind data through
-    guarded Podman user mappings and a wrapper-managed engine claim. Never run
-    both engines against it at once.
-  - In full mode, `make up-full` starts a PID-tracked read-only document server
-    on the Mac for `ONYX_RAG_DOC_SOURCE_DIR` (`./doc-drop` by default); a
-    hardened fixed relay keeps the internal `doc-drop-web:8091` origin
-    unchanged. `make down-full` stops only that identity-validated
-    wrapper-owned process. No document collection is copied into the Podman
-    VM. External mounts, including WebDAV mounts, use the same path.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **VPN and Proxy Use**:
@@ -481,17 +454,6 @@ delay and still uses the shim's unchanged 30-second deadline. You can run
 `make embedserv-serve` directly in the foreground. `make down-full` stops only
 the wrapper-managed proxy and its identity-validated child; manual and custom
 upstreams are untouched.
-
-`make up-full` first starts the embedding shim and its routing dependencies,
-then calls `/ready` exactly once before creating a fresh API/background tier.
-Failure returns nonzero with that subset left running for diagnosis and no
-automatic retry. On a repeated start, already-running API/background services
-are neither stopped nor recreated by a failed validation.
-
-Full mode favors low idle activity: connector discovery can take up to about
-five minutes, and Slack and Discord bot processes are disabled by default.
-Enable only a bot you use with `ONYX_SLACK_BOT_ENABLED=true` or
-`ONYX_DISCORD_BOT_ENABLED=true` in `.env.wrapper`.
 
 MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
 the download libraries when the host requires a build/download proxy.
