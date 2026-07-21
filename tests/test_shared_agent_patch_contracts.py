@@ -172,10 +172,19 @@ def _code_description_modules(
     prompts = _package("onyx.prompts")
     tool_prompts = ModuleType("onyx.prompts.tool_prompts")
     tool_prompts.PYTHON_TOOL_GUIDANCE = (
-        "Internet access for this session is disabled. Do not make external web "
-        "requests or API calls as they will fail."
+        "Files written to the current directory will be returned with a `file_link`. "
+        "Use this to give the user a way to download the file OR to display "
+        "generated images. Internet access for this session is disabled. Do not "
+        "make external web requests or API calls as they will fail."
     )
     prompts.tool_prompts = tool_prompts
+    chat_prompts = ModuleType("onyx.prompts.chat_prompts")
+    chat_prompts.FILE_REMINDER = (
+        "Your code execution generated file(s) with download links.\n"
+        "If you reference or share these files, use the exact markdown format "
+        "[filename](file_link) with the file_link from the execution result."
+    )
+    prompts.chat_prompts = chat_prompts
     coding_agent_package = _package("onyx.coding_agent")
     mock_tools = ModuleType("onyx.coding_agent.mock_tools")
     mock_tools.BASH_TOOL_DESCRIPTION = {
@@ -209,6 +218,7 @@ def _code_description_modules(
             "onyx.tools.tool_implementations.bash.bash_tool": bash_tool,
             "onyx.prompts": prompts,
             "onyx.prompts.tool_prompts": tool_prompts,
+            "onyx.prompts.chat_prompts": chat_prompts,
             "onyx.coding_agent": coding_agent_package,
             "onyx.coding_agent.mock_tools": mock_tools,
             "onyx.prompts.coding_agent": prompt_coding_package,
@@ -217,12 +227,51 @@ def _code_description_modules(
         PythonTool,
         BashTool,
         tool_prompts,
+        chat_prompts,
         mock_tools,
         ca_prompts,
     )
 
 
 class SharedAgentPatchContractTests(unittest.TestCase):
+    def test_python_file_link_prompts_are_patched_without_network(self) -> None:
+        wrapper = _load_wrapper()
+        modules, _, _, tool_prompts, chat_prompts, _, _ = (
+            _code_description_modules()
+        )
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            wrapper.apply_python_file_link_prompt_patches()
+
+        for prompt in (tool_prompts.PYTHON_TOOL_GUIDANCE, chat_prompts.FILE_REMINDER):
+            self.assertIn("exact ordinary Markdown link", prompt)
+            self.assertIn("never use Markdown image syntax", prompt)
+            self.assertIn("never construct or hard-code a file URL", prompt)
+
+    def test_python_file_link_prompt_drift_fails_strict(self) -> None:
+        wrapper = _load_wrapper()
+        modules, _, _, tool_prompts, _, _, _ = _code_description_modules()
+        tool_prompts.PYTHON_TOOL_GUIDANCE = "Upstream changed this guidance."
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(RuntimeError, "did not match"):
+                wrapper.apply_python_file_link_prompt_patches()
+
+    def test_python_file_reminder_drift_fails_strict(self) -> None:
+        wrapper = _load_wrapper()
+        modules, _, _, _, chat_prompts, _, _ = _code_description_modules()
+        chat_prompts.FILE_REMINDER = "Upstream changed this reminder."
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(RuntimeError, "did not match"):
+                wrapper.apply_python_file_link_prompt_patches()
+
     def test_agent_forced_tool_choices_are_narrowly_changed_to_auto(self) -> None:
         wrapper = _load_wrapper()
         onyx = _package("onyx")
@@ -276,7 +325,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
 
     def test_code_interpreter_descriptions_match_restricted_network(self) -> None:
         wrapper = _load_wrapper()
-        modules, PythonTool, BashTool, tool_prompts, mock_tools, ca_prompts = (
+        modules, PythonTool, BashTool, tool_prompts, _, mock_tools, ca_prompts = (
             _code_description_modules()
         )
         env = {
@@ -285,6 +334,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         }
 
         with patch.dict(os.environ, env, clear=True), patch.dict(sys.modules, modules):
+            wrapper.apply_python_file_link_prompt_patches()
             wrapper.apply_code_interpreter_network_description_patches()
 
         descriptions = (
@@ -299,6 +349,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             all("restricted HTTP/HTTPS proxy" in text for text in descriptions)
         )
         self.assertTrue(all("no network access" not in text for text in descriptions))
+        self.assertIn("never use Markdown image syntax", tool_prompts.PYTHON_TOOL_GUIDANCE)
 
     def test_code_interpreter_description_drift_fails_strict(self) -> None:
         wrapper = _load_wrapper()

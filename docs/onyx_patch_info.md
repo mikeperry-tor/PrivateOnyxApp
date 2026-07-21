@@ -304,12 +304,15 @@ browser-side exfiltration. A future rebuilt WebUI should implement a real
 per-response nonce in the Onyx/Next source and remove `'unsafe-inline'` only
 after login, React streaming, and lazy chunk loading pass in a real browser.
 
-Code-interpreter output does not need a `localhost` CSP exception. The pinned
-prompt tells the model to emit `[filename](file_link)`. For an image filename,
-the WebUI extracts the ID from the `/api/chat/file/` path and renders a new
-relative `/api/chat/file/{id}` URL, even if the original backend link used the
-default absolute `http://localhost:3000` origin. Custom prompts should retain
-that ordinary-link form and should not emit a hard-coded Markdown image URL.
+Code-interpreter output does not need a `localhost` CSP exception. An
+unconditional strict API patch reinforces the pinned prompt's requirement to
+emit the ordinary-link form `[filename](file_link)`, even for images, and
+explicitly prohibits Markdown image syntax and constructed file URLs. For an
+image filename, the WebUI extracts the ID from the `/api/chat/file/` path and
+renders a new relative `/api/chat/file/{id}` URL, even if the original backend
+link used the default absolute `http://localhost:3000` origin. Custom prompts
+should retain that ordinary-link form and should not emit a hard-coded Markdown
+image URL.
 
 The pinned Python tool renderer has an unsafe error fallback: if highlight.js
 throws, it passes raw model-emitted Python text to `dangerouslySetInnerHTML`.
@@ -446,7 +449,9 @@ The API-side capability patch uses exact upstream text replacements for the
 Python tool, Bash tool, coding-agent mock tool, Python guidance, and both
 coding-agent prompts. It tells the model about restricted proxy-only access
 without claiming direct sockets, private targets, or direct search-engine URLs
-are reachable. `tests/test_code_interpreter_executor_env.py` exercises the
+are reachable. The separate file-link prompt patch is unconditional because
+artifact rendering is independent of executor networking.
+`tests/test_code_interpreter_executor_env.py` exercises the
 actual command wrapper, malformed output, configuration, and upstream drift;
 `tests/test_shared_agent_patch_contracts.py` covers every capability string and
 strict text drift. The command contract is additionally installed against the

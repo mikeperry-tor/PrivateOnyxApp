@@ -48,7 +48,7 @@ echo "Validating API patch contracts in $onyx_backend_image"
     -e ONYX_OPEN_URL_MAX_TOTAL_CHARS=16000 \
     -v "$repo_root/onyx/patches/shared:/wrapper:ro" \
     "$onyx_backend_image" \
-    -c "import wrapper_env_patches as w; w.apply_llm_max_tokens_override_patch(); w.apply_open_url_char_limit_patches(); w.apply_internal_search_context_patches(); w.apply_native_reasoning_detection_override_patch(); w.apply_vllm_glm_auto_tool_choice_patch(); w.apply_deep_research_chat_agent_tools_patch(); w.apply_reasoning_content_preservation_patch(); w.apply_coding_agent_final_answer_fallback_patch(); w.apply_preserve_tool_results_patch(); print('PINNED_API_PATCH_CONTRACTS_OK')"
+    -c "import wrapper_env_patches as w; w.apply_llm_max_tokens_override_patch(); w.apply_open_url_char_limit_patches(); w.apply_internal_search_context_patches(); w.apply_native_reasoning_detection_override_patch(); w.apply_python_file_link_prompt_patches(); w.apply_vllm_glm_auto_tool_choice_patch(); w.apply_deep_research_chat_agent_tools_patch(); w.apply_reasoning_content_preservation_patch(); w.apply_coding_agent_final_answer_fallback_patch(); w.apply_preserve_tool_results_patch(); print('PINNED_API_PATCH_CONTRACTS_OK')"
 
 echo "Validating stock open_url crawler patch in $onyx_backend_image"
 "$container_bin" run --rm \

@@ -406,7 +406,9 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
   outbound browser request and must fail/fall back visibly;
 - a code-interpreter image emitted as `[filename](file_link)` must render from
   the relative `/api/chat/file/{id}` endpoint even when `file_link` contains a
-  different configured `WEB_DOMAIN` origin;
+  different configured `WEB_DOMAIN` origin; confirm the strict prompt patch
+  still rejects drift in both the ordinary-link instruction and its explicit
+  prohibition on `![filename](file_link)` and constructed file URLs;
 - uploaded/local/background images, a `blob:` image preview, and an embedded
   `data:` DOCX image must still render;
 - login, chat hydration/streaming, same-origin fetches, voice HTTP/WebSockets,

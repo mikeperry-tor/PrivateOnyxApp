@@ -3257,6 +3257,64 @@ def _is_code_interpreter_network_enabled() -> bool:
     )
 
 
+def apply_python_file_link_prompt_patches() -> None:
+    """Require the Markdown link form that the WebUI safely rewrites.
+
+    The code-interpreter result currently uses ``WEB_DOMAIN`` when constructing
+    ``file_link`` values. An ordinary Markdown link whose label is an image
+    filename is recognized by the WebUI, reduced to its file ID, and rendered
+    from a relative same-origin URL. Markdown image syntax bypasses that
+    component and leaves the browser to load the absolute URL directly, which
+    is both incorrect for remote frontends and intentionally rejected by the
+    wrapper CSP.
+    """
+    link_instruction = (
+        "Always reference a generated file using the exact ordinary Markdown "
+        "link `[filename](file_link)`, copying `file_link` exactly from the "
+        "execution result. Even for an image, never use Markdown image syntax "
+        "(`![filename](file_link)`) and never construct or hard-code a file URL."
+    )
+
+    try:
+        from onyx.prompts import tool_prompts
+
+        tool_prompts.PYTHON_TOOL_GUIDANCE = _replace_or_warn(
+            owner_name="PYTHON_TOOL_GUIDANCE file-link instruction",
+            current=tool_prompts.PYTHON_TOOL_GUIDANCE,
+            old=(
+                "Use this to give the user a way to download the file OR to "
+                "display generated images."
+            ),
+            new=(
+                "Use this to give the user a way to download the file or display "
+                "a generated image. " + link_instruction
+            ),
+        )
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed to patch PYTHON_TOOL_GUIDANCE file links: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+
+    try:
+        from onyx.prompts import chat_prompts
+
+        chat_prompts.FILE_REMINDER = _replace_or_warn(
+            owner_name="FILE_REMINDER file-link instruction",
+            current=chat_prompts.FILE_REMINDER,
+            old=(
+                "If you reference or share these files, use the exact markdown "
+                "format [filename](file_link) with the file_link from the "
+                "execution result."
+            ),
+            new=link_instruction,
+        )
+    except Exception as e:  # pragma: no cover
+        print(f"sitecustomize: failed to patch FILE_REMINDER: {e}", flush=True)
+        _raise_if_strict()
+
+
 _RESTRICTED_NETWORK_TEXT = (
     "Network access is available through a restricted HTTP/HTTPS proxy. "
     "Direct socket access to the internet and direct access to stack-internal "

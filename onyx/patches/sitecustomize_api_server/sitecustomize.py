@@ -27,6 +27,7 @@ def _install() -> None:
     from wrapper_env_patches import apply_open_url_char_limit_patches
     from wrapper_env_patches import apply_playwright_helper_proxy_patch
     from wrapper_env_patches import apply_preserve_tool_results_patch
+    from wrapper_env_patches import apply_python_file_link_prompt_patches
     from wrapper_env_patches import apply_reasoning_content_preservation_patch
     from wrapper_env_patches import apply_reasoning_mode_trace_patch
     from wrapper_env_patches import apply_vllm_glm_auto_tool_choice_patch
@@ -48,6 +49,7 @@ def _install() -> None:
     apply_playwright_helper_proxy_patch()
     apply_internal_search_context_patches()
     apply_native_reasoning_detection_override_patch()
+    apply_python_file_link_prompt_patches()
     apply_code_interpreter_network_description_patches()
     apply_vllm_glm_auto_tool_choice_patch()
     apply_reasoning_mode_trace_patch()
