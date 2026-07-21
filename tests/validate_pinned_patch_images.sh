@@ -6,6 +6,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 container_bin=${CONTAINER_BIN:-docker}
 onyx_backend_image=${ONYX_BACKEND_IMAGE:?ONYX_BACKEND_IMAGE is required}
 code_interpreter_image=${CODE_INTERPRETER_IMAGE:-}
+python_executor_image=${PYTHON_EXECUTOR_IMAGE:-}
 searxng_wrapper_image=${SEARXNG_WRAPPER_IMAGE:?SEARXNG_WRAPPER_IMAGE is required}
 
 case "${container_bin##*/}" in
@@ -30,6 +31,11 @@ if [ "$validate_code_interpreter" = true ]; then
         exit 1
     }
     require_image "$code_interpreter_image" "Run 'make onyx-build' before 'make test-images'."
+    [ -n "$python_executor_image" ] || {
+        echo "ERROR: PYTHON_EXECUTOR_IMAGE is required for Docker validation" >&2
+        exit 1
+    }
+    require_image "$python_executor_image" "Run 'make executor-build' before 'make test-images'."
 fi
 require_image "$searxng_wrapper_image" "Run 'make searxng-build' before 'make test-images'."
 
@@ -48,7 +54,7 @@ echo "Validating API patch contracts in $onyx_backend_image"
     -e ONYX_OPEN_URL_MAX_TOTAL_CHARS=16000 \
     -v "$repo_root/onyx/patches/shared:/wrapper:ro" \
     "$onyx_backend_image" \
-    -c "import wrapper_env_patches as w; w.apply_llm_max_tokens_override_patch(); w.apply_open_url_char_limit_patches(); w.apply_internal_search_context_patches(); w.apply_native_reasoning_detection_override_patch(); w.apply_python_file_link_prompt_patches(); w.apply_vllm_glm_auto_tool_choice_patch(); w.apply_deep_research_chat_agent_tools_patch(); w.apply_reasoning_content_preservation_patch(); w.apply_coding_agent_final_answer_fallback_patch(); w.apply_preserve_tool_results_patch(); print('PINNED_API_PATCH_CONTRACTS_OK')"
+    -c "import wrapper_env_patches as w; w.apply_llm_max_tokens_override_patch(); w.apply_open_url_char_limit_patches(); w.apply_internal_search_context_patches(); w.apply_native_reasoning_detection_override_patch(); w.apply_python_file_link_prompt_patches(); w.apply_python_package_capability_patches(); w.apply_vllm_glm_auto_tool_choice_patch(); w.apply_deep_research_chat_agent_tools_patch(); w.apply_reasoning_content_preservation_patch(); w.apply_coding_agent_final_answer_fallback_patch(); w.apply_preserve_tool_results_patch(); print('PINNED_API_PATCH_CONTRACTS_OK')"
 
 echo "Validating stock open_url crawler patch in $onyx_backend_image"
 "$container_bin" run --rm \
@@ -106,6 +112,13 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     /validation/validate_pinned_background.py
 
 if [ "$validate_code_interpreter" = true ]; then
+    echo "Validating SymPy in $python_executor_image"
+    "$container_bin" run --rm \
+        --network none \
+        --entrypoint python \
+        "$python_executor_image" \
+        -c "import sympy; x = sympy.symbols('x'); assert sympy.__version__ == '1.14.0'; assert sympy.solve(x**2 - 4, x) == [-2, 2]; print('PINNED_EXECUTOR_SYMPY_OK')"
+
     echo "Validating executor command contract in $code_interpreter_image"
     "$container_bin" run --rm \
         --network none \

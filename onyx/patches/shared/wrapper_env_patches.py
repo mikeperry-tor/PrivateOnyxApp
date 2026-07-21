@@ -3315,6 +3315,58 @@ def apply_python_file_link_prompt_patches() -> None:
         _raise_if_strict()
 
 
+_PYTHON_PACKAGE_LIST = (
+    "numpy, pandas, scipy, sympy, matplotlib, seaborn, scikit-learn, "
+    "scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, "
+    "python-docx, python-pptx, fpdf2, pydantic, Pillow"
+)
+
+
+def apply_python_package_capability_patches() -> None:
+    """Advertise the executor's wrapper-maintained pre-installed package set."""
+    package_sentence = f"Pre-installed packages include ({_PYTHON_PACKAGE_LIST})."
+
+    try:
+        from onyx.tools.tool_implementations.python.python_tool import PythonTool
+
+        PythonTool.DESCRIPTION = _replace_or_warn(
+            owner_name="PythonTool.DESCRIPTION package capabilities",
+            current=PythonTool.DESCRIPTION,
+            old="Execute Python code in an isolated sandbox environment.",
+            new=(
+                "Execute Python code in an isolated sandbox environment. "
+                + package_sentence
+            ),
+        )
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed to patch PythonTool.DESCRIPTION packages: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+
+    try:
+        from onyx.prompts import tool_prompts
+
+        tool_prompts.PYTHON_TOOL_GUIDANCE = _replace_or_warn(
+            owner_name="PYTHON_TOOL_GUIDANCE package capabilities",
+            current=tool_prompts.PYTHON_TOOL_GUIDANCE,
+            old=(
+                "Use `openpyxl` to read and write Excel files. You have access "
+                "to libraries like numpy, pandas, scipy, matplotlib, and PIL."
+            ),
+            new=(
+                "Use `openpyxl` to read and write Excel files. " + package_sentence
+            ),
+        )
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed to patch PYTHON_TOOL_GUIDANCE packages: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+
+
 _RESTRICTED_NETWORK_TEXT = (
     "Network access is available through a restricted HTTP/HTTPS proxy. "
     "Direct socket access to the internet and direct access to stack-internal "
@@ -3348,25 +3400,21 @@ def apply_code_interpreter_network_description_patches() -> None:
         return
 
     # ── PythonTool description ──────────────────────────────────────────
-    # Upstream: "Execute Python code in an isolated sandbox environment."
-    # We replace "isolated sandbox environment" with VPN access info, the pip
-    # restriction, the package list, and a code-agent recommendation. Using
-    # .replace() preserves any future upstream additions to the description.
+    # The unconditional package patch has already extended the upstream
+    # description. Replace only its sandbox phrase with the network and pip
+    # capability text so the package list retains one owner.
     try:
         from onyx.tools.tool_implementations.python.python_tool import PythonTool
 
         PythonTool.DESCRIPTION = _replace_or_warn(
             owner_name="PythonTool.DESCRIPTION",
             current=PythonTool.DESCRIPTION,
-            old="Execute Python code in an isolated sandbox environment.",
+            old="isolated sandbox environment.",
             new=(
-                "Execute Python code in a sandbox environment. "
+                "sandbox environment. "
                 + _RESTRICTED_NETWORK_TEXT
                 + " pip package installation is NOT "
-                "supported — only the pre-installed scientific stack is available "
-                "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, "
-                "scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, "
-                "python-docx, python-pptx, fpdf2, pydantic). For tasks requiring "
+                "supported. For tasks requiring "
                 "additional packages or complex multi-step workflows, invoke the "
                 "code agent instead."
             ),
@@ -3379,9 +3427,9 @@ def apply_code_interpreter_network_description_patches() -> None:
     # This is the per-tool guidance injected into the system prompt. Upstream
     # it says "Internet access for this session is disabled. Do not make
     # external web requests or API calls as they will fail." — we replace that
-    # with VPN access info, the pip restriction, the package list, and a
-    # recommendation to use the code agent for involved tasks. Patched at the
-    # module level before prompt_utils.py imports it by name.
+    # with VPN access info, the pip restriction, and a recommendation to use
+    # the code agent for involved tasks. The unconditional package patch owns
+    # the package list. Patched before prompt_utils.py imports it by name.
     try:
         from onyx.prompts import tool_prompts
 
@@ -3391,8 +3439,7 @@ def apply_code_interpreter_network_description_patches() -> None:
             old="Internet access for this session is disabled. Do not make external web requests or API calls as they will fail.",
             new=(
                 _RESTRICTED_NETWORK_TEXT + " "
-                "pip package installation is NOT supported; only the pre-installed scientific stack is available "
-                "(numpy, pandas, scipy, matplotlib, seaborn, scikit-learn, scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, python-docx, python-pptx, fpdf2, pydantic). "
+                "pip package installation is NOT supported. "
                 "For tasks requiring additional packages or complex multi-step workflows, invoke the code agent instead."
             ),
         )

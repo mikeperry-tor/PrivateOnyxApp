@@ -545,6 +545,10 @@ services:
     environment:
       PORT: "8000"
       CODE_INTERPRETER_BASE_URL: "http://code-interpreter:8000"
+      # Python runs in short-lived executor containers, not in this API image.
+      # Makefile prebuilds this exact wrapper image so startup never falls back
+      # to upstream's mutable python-executor-sci:latest reference.
+      PYTHON_EXECUTOR_DOCKER_IMAGE: "${PYTHON_EXECUTOR_IMAGE:?PYTHON_EXECUTOR_IMAGE must be set by the Makefile}"
       # Executor pod resource limits (defaults are tight: 256MB RAM, 5s CPU,
       # 1MB output). Raise them for data analysis / matplotlib workloads.
       MEMORY_LIMIT_MB: "${ONYX_CODE_INTERPRETER_MEMORY_LIMIT_MB:-512}"

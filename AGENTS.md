@@ -192,8 +192,10 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   deployment files for the selected ref and synchronize the generated local
   Onyx environment tags; it does not pull images.
 - `make upgrade-python-deps` - upgrade hashed Python lock files from the committed `requirements.in` inputs.
-- `make onyx-build`, `make searxng-build`, `make myst-build`, and
-  `make teep-build` - image builds.
+- `make onyx-build`, `make executor-build`, `make searxng-build`,
+  `make myst-build`, and `make teep-build` - image builds. The Docker-only
+  executor image is derived from its pinned upstream release plus the hashed
+  `executor/requirements.txt` lock and includes SymPy.
 - `make embedserv-install`, `make embedserv-verify-model`, and `make embedserv-serve` - optional local MLX embedding server flow for the full RAG stack.
 
 `make up-lite` and `make up-full` generate ephemeral local secrets on every start, including SearXNG, Onyx auth, and MinIO credentials. Do not move those secrets (or any other new ephemeral secrets) into `.env.wrapper.example`.
@@ -314,6 +316,10 @@ This stack protects private research, document contents, browsing behavior, infe
 - Runtime patch and component changes:
   - For Onyx patches, confirm strict-mode startup success diagnostics and
     exercise the patched behavior.
+  - For Python executor dependency changes, rebuild the derived executor,
+    verify its exact package version without network access, and exercise a
+    real code-interpreter call. Keep package descriptions aligned with the
+    validated executor contents.
   - For full-mode RAG, test doc-drop crawling, PDF freshness/reindexing,
     embedding-shim health, and `internal_search`.
   - For SearXNG engines, test every affected custom engine with a real query.

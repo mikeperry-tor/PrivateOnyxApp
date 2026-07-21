@@ -175,7 +175,9 @@ def _code_description_modules(
         "Files written to the current directory will be returned with a `file_link`. "
         "Use this to give the user a way to download the file OR to display "
         "generated images. Internet access for this session is disabled. Do not "
-        "make external web requests or API calls as they will fail."
+        "make external web requests or API calls as they will fail. Use `openpyxl` "
+        "to read and write Excel files. You have access to libraries like numpy, "
+        "pandas, scipy, matplotlib, and PIL."
     )
     prompts.tool_prompts = tool_prompts
     chat_prompts = ModuleType("onyx.prompts.chat_prompts")
@@ -234,6 +236,41 @@ def _code_description_modules(
 
 
 class SharedAgentPatchContractTests(unittest.TestCase):
+    def test_python_package_capabilities_are_unconditional(self) -> None:
+        wrapper = _load_wrapper()
+        modules, PythonTool, _, tool_prompts, _, _, _ = _code_description_modules()
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            wrapper.apply_python_package_capability_patches()
+
+        for description in (PythonTool.DESCRIPTION, tool_prompts.PYTHON_TOOL_GUIDANCE):
+            self.assertIn("Pre-installed packages include", description)
+            self.assertIn("sympy", description)
+            self.assertIn("Pillow", description)
+
+    def test_python_package_description_drift_fails_strict(self) -> None:
+        wrapper = _load_wrapper()
+        modules, *_ = _code_description_modules("Upstream changed this description")
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(RuntimeError, "did not match"):
+                wrapper.apply_python_package_capability_patches()
+
+    def test_python_package_guidance_drift_fails_strict(self) -> None:
+        wrapper = _load_wrapper()
+        modules, _, _, tool_prompts, _, _, _ = _code_description_modules()
+        tool_prompts.PYTHON_TOOL_GUIDANCE = "Upstream changed this guidance."
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(RuntimeError, "did not match"):
+                wrapper.apply_python_package_capability_patches()
+
     def test_python_file_link_prompts_are_patched_without_network(self) -> None:
         wrapper = _load_wrapper()
         modules, _, _, tool_prompts, chat_prompts, _, _ = (
@@ -335,6 +372,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
 
         with patch.dict(os.environ, env, clear=True), patch.dict(sys.modules, modules):
             wrapper.apply_python_file_link_prompt_patches()
+            wrapper.apply_python_package_capability_patches()
             wrapper.apply_code_interpreter_network_description_patches()
 
         descriptions = (
@@ -350,6 +388,8 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         )
         self.assertTrue(all("no network access" not in text for text in descriptions))
         self.assertIn("never use Markdown image syntax", tool_prompts.PYTHON_TOOL_GUIDANCE)
+        self.assertIn("sympy", PythonTool.DESCRIPTION)
+        self.assertIn("sympy", tool_prompts.PYTHON_TOOL_GUIDANCE)
 
     def test_code_interpreter_description_drift_fails_strict(self) -> None:
         wrapper = _load_wrapper()

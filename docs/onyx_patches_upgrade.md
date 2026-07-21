@@ -1,6 +1,7 @@
 # Patch and component upgrade checklist
 
-Use this checklist whenever changing Onyx, code-interpreter, SearXNG,
+Use this checklist whenever changing Onyx, code-interpreter, its Python
+executor, SearXNG,
 Obscura, Teep, support-image pins, runtime Python inputs, or source-shape
 patches. `stack.versions.env` is the committed pin source; `reference_repos/`
 contains read-only audit checkouts when present.
@@ -16,7 +17,8 @@ contains read-only audit checkouts when present.
    or a Playwright browser download.
 4. Run `make check-upgrade`. It first runs the complete deterministic suite and
    local static checks, then validates strict patch installation against the
-   exact newly pinned local Onyx, code-interpreter, and derived SearXNG images.
+   exact newly pinned local Onyx, code-interpreter, derived Python executor,
+   and derived SearXNG images.
    It also starts the exact pinned OpenSearch image with an isolated disposable
    engine volume, validates its static/runtime policy plus KNN/hybrid/reindex
    and restart behavior, and removes the exact container and volume afterward.
@@ -468,15 +470,22 @@ its user-visible behavior:
   proxy variables. Malformed argv must fail closed. Verify every API-side tool
   description/prompt matches restricted proxy-only access in enabled mode and
   remains stock in disabled mode.
+- **Executor dependencies:** inspect the pinned upstream executor environment,
+  regenerate the hashed wrapper lock, and confirm the derived tag changes for
+  every Dockerfile or lock change. Run the selected image with networking
+  disabled; verify the exact SymPy version and a symbolic solve. Confirm the
+  unconditional Python tool description and guidance list only packages the
+  executor actually contains. Then exercise a real Python tool call.
 - **Lite `open_url`, helper routes, embedding tokenizer/shim, privacy settings,
   and CSP:** retain their dedicated audits elsewhere in this checklist.
 
 `make check-upgrade` preserves the required order: deterministic checks first,
 then strict installation of the API and PDF freshness patch families inside
 the pinned Onyx backend image, the executor patch inside the pinned code-
-interpreter image, and the SearXNG runtime/parser checks inside the derived
-image. Any source, signature, model, prompt, or command shape mismatch is an
-upgrade blocker, not a reason to weaken validation.
+interpreter image, the SymPy contract inside the derived Python executor, and
+the SearXNG runtime/parser checks inside the derived image. Any source,
+signature, model, prompt, or command shape mismatch is an upgrade blocker, not
+a reason to weaken validation.
 
 The executor image contract is Docker-only because the socket-dependent code
 interpreter is not supported or stored under Podman. With

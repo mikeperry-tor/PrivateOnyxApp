@@ -31,6 +31,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
 - Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled with `ONYX_AGENT_SLACK_BOT` or `ONYX_AGENT_DISCORD_BOT`. Newly eligible connector work, including newly uploaded project/assistant files, can wait up to roughly five minutes for background discovery.
+- Onyx Agent tool descriptions have been patched to describe an additional SymPy package, reinforce correct image link creation, and describe network access in coding environments when it is enabled.
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
 
@@ -542,7 +543,11 @@ dependency set from the generated hashed `searxng/requirements.txt` lock and
 validates the shared Obscura client at image-build time. The Makefile derives
 the local image tag from the upstream SearXNG pin and every embedded Dockerfile,
 lock, shared-client, and engine input, so a source change selects a fresh image;
-the runtime container never downloads packages or a browser. Myst and Teep
+the runtime container never downloads packages or a browser. Docker mode also
+builds a derived, content-addressed Python executor from the pinned upstream
+executor and its hashed dependency lock. It includes SymPy in the advertised
+scientific stack and is prepared before the code-interpreter API starts rather
+than pulled or modified during runtime. Myst and Teep
 builds forward standard
 `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` build arguments when those
 variables are present. Image builds and host-side `embedserv` installation

@@ -55,6 +55,19 @@ class ImmutableComponentPinTests(unittest.TestCase):
         self.assertNotIn("AUTOHEAL_IMAGE", self.manifest)
         self.assertNotIn("willfarrell/autoheal", self.manifest)
 
+        executor_tag = self.value("PYTHON_EXECUTOR_IMAGE_TAG")
+        self.assertRegex(executor_tag, r"^\d+\.\d+\.\d+$")
+        self.assertNotEqual(executor_tag, "latest")
+        self.assertEqual(executor_tag, self.value("CODE_INTERPRETER_IMAGE_TAG"))
+        self.assertRegex(
+            self.value("PYTHON_EXECUTOR_UPSTREAM_IMAGE"),
+            r"^onyxdotapp/python-executor-sci:0\.4\.4@sha256:[0-9a-f]{64}$",
+        )
+        self.assertIn(
+            "PYTHON_EXECUTOR_UPSTREAM_IMAGE ?= $(call env_value,PYTHON_EXECUTOR_UPSTREAM_IMAGE)",
+            self.makefile,
+        )
+
     def test_minio_release_records_its_image_source_revision(self) -> None:
         self.assertRegex(
             self.value("MINIO_IMAGE"),

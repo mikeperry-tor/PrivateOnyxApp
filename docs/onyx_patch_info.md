@@ -437,6 +437,20 @@ equivalent settings at the same preflight/post-format boundaries.
 
 ## Code-interpreter executor networking
 
+Python execution uses a wrapper-derived executor image rather than the
+code-interpreter API image. Its local tag is coupled to the pinned upstream
+`python-executor-sci` release, `executor/Dockerfile`, and the generated hashed
+`executor/requirements.txt` lock. The derived image adds SymPy 1.14.0 and its
+locked `mpmath` dependency to the existing scientific environment. Docker-mode
+startup builds the exact selected image before the API starts, and Compose sets
+`PYTHON_EXECUTOR_DOCKER_IMAGE` explicitly; the upstream bare reference cannot
+resolve to or pull mutable `latest` during API startup.
+
+An unconditional strict API patch advertises the wrapper-maintained package
+set, including SymPy, in both `PythonTool.DESCRIPTION` and
+`PYTHON_TOOL_GUIDANCE`. This capability text is independent of optional
+executor networking. Source drift in either upstream string stops API startup.
+
 When optional executor networking is enabled, the code-interpreter bootstrap
 validates the exact pinned `DockerExecutor._build_run_command()` signature and
 critical Docker-run source layout before wrapping it. Every generated command
@@ -445,9 +459,9 @@ the eight upper/lower-case proxy variables are inserted immediately after
 `docker run`. An unexpected command now raises instead of appending variables
 at the end as a best-effort fallback.
 
-The API-side capability patch uses exact upstream text replacements for the
-Python tool, Bash tool, coding-agent mock tool, Python guidance, and both
-coding-agent prompts. It tells the model about restricted proxy-only access
+The API-side network capability patch uses exact upstream text replacements
+for the Python tool, Bash tool, coding-agent mock tool, Python guidance, and
+both coding-agent prompts. It tells the model about restricted proxy-only access
 without claiming direct sockets, private targets, or direct search-engine URLs
 are reachable. The separate file-link prompt patch is unconditional because
 artifact rendering is independent of executor networking.

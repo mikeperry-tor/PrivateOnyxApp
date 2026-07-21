@@ -291,6 +291,9 @@ remains separate and unchanged.
 Local component images still use their documented Makefile image targets.
 Never substitute an unpinned image because the Podman store is empty, and do
 not let validation containers pull or use network access implicitly.
+The derived Python executor and its `executor-image-ready` prerequisite remain
+Docker-only because rootless Podman omits the socket-dependent code-interpreter
+service entirely; Podman startup and image validation do not build or store it.
 
 Root-context Podman builds use `.containerignore`. It excludes private bind
 data, the document source, generated Onyx deployment state, local model/cache

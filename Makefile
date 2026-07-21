@@ -190,10 +190,36 @@ $(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=..
 endif
 CODE_INTERPRETER_IMAGE ?= onyxdotapp/code-interpreter:$(CODE_INTERPRETER_IMAGE_TAG)
 export CODE_INTERPRETER_IMAGE_TAG
+PYTHON_EXECUTOR_IMAGE_TAG ?= $(call env_value,PYTHON_EXECUTOR_IMAGE_TAG)
+ifeq ($(strip $(PYTHON_EXECUTOR_IMAGE_TAG)),)
+$(error PYTHON_EXECUTOR_IMAGE_TAG is not set. Add it to $(VERSION_FILE) or override it on the make command line)
+endif
+PYTHON_EXECUTOR_UPSTREAM_IMAGE ?= $(call env_value,PYTHON_EXECUTOR_UPSTREAM_IMAGE)
+ifeq ($(strip $(PYTHON_EXECUTOR_UPSTREAM_IMAGE)),)
+$(error PYTHON_EXECUTOR_UPSTREAM_IMAGE is not set. Add it to $(VERSION_FILE) or override it on the make command line)
+endif
+PYTHON_EXECUTOR_DOCKERFILE ?= executor/Dockerfile
+PYTHON_EXECUTOR_REQUIREMENTS_IN := executor/requirements.in
+PYTHON_EXECUTOR_REQUIREMENTS := executor/requirements.txt
+PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY ?= $(call env_value,PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY)
+ifeq ($(strip $(PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY)),)
+$(error PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY is not set. Add it to $(VERSION_FILE) or override it on the make command line)
+endif
+PYTHON_EXECUTOR_WRAPPER_BUILD_INPUTS := \
+	$(PYTHON_EXECUTOR_DOCKERFILE) \
+	$(PYTHON_EXECUTOR_REQUIREMENTS)
+PYTHON_EXECUTOR_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(sys.argv[1].encode()+b"\0"); [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[2:]]; print(h.hexdigest()[:12])' '$(PYTHON_EXECUTOR_UPSTREAM_IMAGE)' $(PYTHON_EXECUTOR_WRAPPER_BUILD_INPUTS))
+ifeq ($(strip $(PYTHON_EXECUTOR_WRAPPER_SOURCE_HASH)),)
+$(error could not compute the Python executor wrapper source hash)
+endif
+PYTHON_EXECUTOR_IMAGE ?= $(PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY):$(PYTHON_EXECUTOR_IMAGE_TAG)-$(PYTHON_EXECUTOR_WRAPPER_SOURCE_HASH)
+export PYTHON_EXECUTOR_IMAGE
 ifeq ($(PODMAN_SELECTED),true)
 ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
+CODE_INTERPRETER_EXECUTOR_TARGETS :=
 else
 ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
+CODE_INTERPRETER_EXECUTOR_TARGETS := executor-image-ready
 endif
 ONYX_INSTALL_SCRIPT ?= ./install.sh
 ONYX_INSTALL_WRAPPER ?= ./install-with-container-bin.sh
@@ -244,7 +270,7 @@ ifeq ($(PODMAN_SELECTED),true)
 FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start
 endif
 
-.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -330,6 +356,7 @@ test-images:
 	@CONTAINER_BIN="$(CONTAINER_BIN)" \
 		ONYX_BACKEND_IMAGE="$(ONYX_BACKEND_IMAGE)" \
 		CODE_INTERPRETER_IMAGE="$(CODE_INTERPRETER_IMAGE)" \
+		PYTHON_EXECUTOR_IMAGE="$(PYTHON_EXECUTOR_IMAGE)" \
 		SEARXNG_WRAPPER_IMAGE="$(SEARXNG_WRAPPER_IMAGE)" \
 		./tests/validate_pinned_patch_images.sh
 
@@ -379,7 +406,7 @@ check-upgrade:
 	@$(MAKE) --no-print-directory test-images
 	@$(MAKE) --no-print-directory test-opensearch-image
 
-upgrade: upgrade-python-deps myst-build teep-build searxng-build tailscale-image-ready obscura-image-ready upgrade-onyx
+upgrade: upgrade-python-deps myst-build teep-build searxng-build executor-build tailscale-image-ready obscura-image-ready upgrade-onyx
 	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."
 
 upgrade-python-deps:
@@ -389,7 +416,8 @@ upgrade-python-deps:
 		exit 1; \
 	fi; \
 	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(EMBEDSERV_REQUIREMENTS_IN)" -o "$(EMBEDSERV_REQUIREMENTS)"; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(SEARXNG_REQUIREMENTS_IN)" -o "$(SEARXNG_REQUIREMENTS)"
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(SEARXNG_REQUIREMENTS_IN)" -o "$(SEARXNG_REQUIREMENTS)"; \
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(PYTHON_EXECUTOR_REQUIREMENTS_IN)" -o "$(PYTHON_EXECUTOR_REQUIREMENTS)"
 
 tailscale-image-ready:
 	@echo "Pulling Tailscale image: $(TAILSCALE_IMAGE)"; \
@@ -419,6 +447,28 @@ searxng-build:
 		--file "$(SEARXNG_DOCKERFILE)" \
 		--build-arg SEARXNG_UPSTREAM_IMAGE="$(SEARXNG_IMAGE)" \
 		--tag "$(SEARXNG_WRAPPER_IMAGE)" \
+		.
+
+executor-image-ready:
+	@if "$(CONTAINER_BIN)" image inspect "$(PYTHON_EXECUTOR_IMAGE)" >/dev/null 2>&1; then \
+		echo "Python executor wrapper image already present: $(PYTHON_EXECUTOR_IMAGE)"; \
+	else \
+		$(MAKE) executor-build; \
+	fi
+
+executor-build:
+	@echo "Building $(PYTHON_EXECUTOR_IMAGE) using $(PYTHON_EXECUTOR_DOCKERFILE)..."
+	@set -eu; set --; \
+	[ -z "$${HTTP_PROXY:-}" ] || set -- "$$@" --build-arg HTTP_PROXY; \
+	[ -z "$${HTTPS_PROXY:-}" ] || set -- "$$@" --build-arg HTTPS_PROXY; \
+	[ -z "$${NO_PROXY:-}" ] || set -- "$$@" --build-arg NO_PROXY; \
+	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
+	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
+	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
+	"$(CONTAINER_BIN)" build "$$@" \
+		--file "$(PYTHON_EXECUTOR_DOCKERFILE)" \
+		--build-arg PYTHON_EXECUTOR_UPSTREAM_IMAGE="$(PYTHON_EXECUTOR_UPSTREAM_IMAGE)" \
+		--tag "$(PYTHON_EXECUTOR_IMAGE)" \
 		.
 
 up-lite: ONYX_INSTALL_ARGS=--lite
@@ -475,7 +525,7 @@ ifeq ($(PODMAN_SELECTED),true)
 	@python3 podman/startup_health.py prepare-shared-data --opensearch docker-data/opensearch
 endif
 
-up-lite: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
+up-lite: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
 	@COMPOSE_FILE=$(LITE_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
@@ -484,7 +534,7 @@ endif
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
-up-full: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded onyx-image-ready myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
+up-full: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
