@@ -10,9 +10,6 @@
 /embedserv/serve.pid
 /embedserv/child.pid
 /logs/
-/myst/docker-data/
-/myst/myst
-/reference_repos/
 
 # Python environments and bytecode
 .venv/
