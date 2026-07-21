@@ -807,6 +807,21 @@ embedserv-start-if-installed:
 		echo "Embedding shim uses a custom upstream; not starting bundled MLX server: $$embeddings_url"; \
 		exit 0; \
 	fi; \
+	if [ ! -x "$$venv_server" ] || [ ! -d "$$model_dir" ]; then \
+		echo "ERROR: full mode has no usable embedding endpoint."; \
+		echo "The default endpoint uses the bundled MLX server, but it is not installed for model $$model_repo."; \
+		echo "Choose one of these embedding setups:"; \
+		echo "  1. On macOS, run: make embedserv-install"; \
+		echo "  2. Configure Teep in $(ENV_FILE) (recommended non-Mac option):"; \
+		echo '       ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:8337/v1/embeddings"'; \
+		echo '       ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B"'; \
+		echo "     Replace port 8337 if HOST_PORT_TEEP is configured differently."; \
+		echo "  3. Configure a custom OpenAI-compatible /v1/embeddings endpoint with"; \
+		echo "     ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL and ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL"; \
+		echo "     (and ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY when required)."; \
+		echo "See README.md or docs/local_docs_rag_search.md for full embedding setup instructions."; \
+		exit 1; \
+	fi; \
 	echo "Starting bundled MLX embedding lifecycle proxy for $$model_repo (log: $(EMBEDSERV_LOG))"; \
 	exec python3 "$(PWD)/$(HOST_PROCESS_MANAGER)" start \
 		--name "MLX embedding lifecycle proxy" \

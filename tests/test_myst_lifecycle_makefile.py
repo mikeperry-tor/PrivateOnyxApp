@@ -334,6 +334,42 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("custom upstream; not starting bundled MLX server", result.stdout)
 
+    def test_missing_default_embedding_server_reports_setup_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            env_file = temporary / "wrapper.env"
+            env_file.write_text("", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "embedserv-start-if-installed",
+                    f"ENV_FILE={env_file}",
+                    f"EMBEDSERV_VENV={temporary / 'missing-venv'}",
+                    f"EMBEDSERV_MODEL_CACHE={temporary / 'missing-models'}",
+                    "HOST_PROCESS_MANAGER=/must/not/be/executed.py",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("full mode has no usable embedding endpoint", output)
+        self.assertIn("On macOS, run: make embedserv-install", output)
+        self.assertIn(
+            'ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:8337/v1/embeddings"',
+            output,
+        )
+        self.assertIn(
+            'ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B"',
+            output,
+        )
+        self.assertIn("custom OpenAI-compatible /v1/embeddings endpoint", output)
+        self.assertNotIn("required executable is unavailable", output)
+
     def test_host_manager_path_and_inactive_stop_guards_are_explicit(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn(
