@@ -370,6 +370,81 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("custom OpenAI-compatible /v1/embeddings endpoint", output)
         self.assertNotIn("required executable is unavailable", output)
 
+    def test_embedserv_install_finishes_with_model_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            env_file = temporary / "wrapper.env"
+            env_file.write_text("", encoding="utf-8")
+            fake_bin = temporary / "bin"
+            fake_bin.mkdir()
+            fake_uv = fake_bin / "uv"
+            fake_uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_uv.chmod(0o755)
+
+            venv = temporary / "venv"
+            (venv / "bin").mkdir(parents=True)
+            fake_python = venv / "bin" / "python"
+            fake_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_python.chmod(0o755)
+            fake_hf = venv / "bin" / "hf"
+            fake_hf.write_text(
+                "#!/bin/sh\necho model-integrity-verified\n", encoding="utf-8"
+            )
+            fake_hf.chmod(0o755)
+
+            model_cache = temporary / "models"
+            (model_cache / "majentik/harrier-oss-v1-0.6b-MLX-8bit").mkdir(
+                parents=True
+            )
+            relative_venv = os.path.relpath(venv, ROOT)
+            relative_models = os.path.relpath(model_cache, ROOT)
+            result = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "embedserv-install",
+                    f"ENV_FILE={env_file}",
+                    f"EMBEDSERV_VENV={relative_venv}",
+                    f"EMBEDSERV_MODEL_CACHE={relative_models}",
+                    "EMBEDSERV_REQUIREMENTS=/dev/null",
+                    f"EMBEDSERV_DIR={os.path.relpath(temporary / 'embedserv', ROOT)}",
+                ],
+                cwd=ROOT,
+                env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("model-integrity-verified", output)
+        self.assertIn("Model ready and verified", output)
+
+    def test_embedserv_verify_requires_an_existing_installation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            env_file = temporary / "wrapper.env"
+            env_file.write_text("", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "embedserv-verify-model",
+                    f"ENV_FILE={env_file}",
+                    f"EMBEDSERV_VENV={temporary / 'missing-venv'}",
+                    f"EMBEDSERV_MODEL_CACHE={temporary / 'missing-models'}",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("Run 'make embedserv-install' first", output)
+
     def test_host_manager_path_and_inactive_stop_guards_are_explicit(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn(

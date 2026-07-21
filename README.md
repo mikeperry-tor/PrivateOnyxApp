@@ -436,13 +436,15 @@ If you are on a Mac, the makefile has rules that can install
 
 
 ```sh
-# Install mlx-openai-server and mlx-embeddings in ./embedserv using `uv`
+# Install mlx-openai-server and mlx-embeddings, download the model, and verify it
 make embedserv-install
-# Verify the model was downloaded correctly
-make embedserv-verify-model
 # Start full mode; this also launches the installed MLX lifecycle proxy
 make up-full
 ```
+
+To re-run model integrity verification independently later, use
+`make embedserv-verify-model`. It requires an existing installation and tells
+you to run `make embedserv-install` first when the model or verifier is absent.
 
 You can select a different model via `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` in
 `.env.wrapper`, using the huggingface ID of any MLX-packaged embedding model.

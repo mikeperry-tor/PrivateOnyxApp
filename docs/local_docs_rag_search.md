@@ -359,15 +359,21 @@ Model verification uses the pinned Hugging Face verifier's exit status rather
 than matching its human-readable output. Checksum mismatches, missing remote
 files, and failures to obtain the remote manifest remain fatal; warnings for
 local cache/metadata files that are not part of the remote repository do not
-invalidate an otherwise successful verification.
+invalidate an otherwise successful verification. `make embedserv-install`
+always performs this verification after downloading the model. The separate
+`make embedserv-verify-model` target rechecks an existing installation and
+directs the operator to run the install target when its model or verifier is
+absent.
 
 On macOS, the Makefile can install and launch an MLX embedding server:
 
 ```sh
 make embedserv-install
-make embedserv-verify-model
 make embedserv-serve
 ```
+
+Use `make embedserv-verify-model` whenever an independent integrity recheck is
+needed after installation.
 
 Once the selected model is installed, `make up-full` automatically launches a
 small host lifecycle proxy when the shim uses the bundled default URL. It skips
@@ -449,7 +455,8 @@ service implementations retain their narrower peer, child, port, and model
 validation; those are not duplicated by the host manager.
 
 `make embedserv-install` installs from the hashed lock file with
-`--require-hashes`. To upgrade package versions during a stack upgrade, edit
+`--require-hashes`, downloads the selected model, and verifies its integrity
+before reporting it ready. To upgrade package versions during a stack upgrade, edit
 `embedserv/requirements.in` if needed and run `make upgrade-python-deps`.
 This host-side installation and model download occur before stack startup and
 do not depend on Myst readiness. They honor the standard host

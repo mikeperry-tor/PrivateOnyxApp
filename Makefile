@@ -262,8 +262,8 @@ help:
 	@echo "  make logs-full              # Tail full mode logs"
 	@echo ""
 	@echo "Optional Local Mac Embedding Setup (For Full-Mode RAG):"
-	@echo "  make embedserv-install      # Create embedserv venv with uv and download the MLX embedding model"
-	@echo "  make embedserv-verify-model # Verify embedserv/models copy for the selected MLX embedding model"
+	@echo "  make embedserv-install      # Create embedserv venv, download the MLX model, and verify it"
+	@echo "  make embedserv-verify-model # Re-verify an already installed MLX embedding model"
 	@echo ""
 	@echo "VPN setup and payment:"
 	@echo "  make vpn-signup-orderform   # Start standalone Myst container, create identity + CoinGate order, show payment URL"
@@ -721,11 +721,9 @@ embedserv-install:
 	uv pip install --python "$$venv_python" --require-hashes -r "$(EMBEDSERV_REQUIREMENTS)"; \
 	echo "Downloading MLX embedding model: $$model_repo"; \
 	MODEL_REPO="$$model_repo" MODEL_DIR="$$model_dir" "$$venv_python" -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["MODEL_REPO"], local_dir=os.environ["MODEL_DIR"])'; \
-	echo "Model ready at $$model_dir"
+	$(MAKE) --no-print-directory embedserv-verify-model; \
+	echo "Model ready and verified at $$model_dir"
 
-ifeq ($(filter true,$(EMBEDSERV_SKIP_INSTALL)),)
-embedserv-verify-model: embedserv-install
-endif
 embedserv-verify-model:
 	@set -eu; \
 	if [ ! -f "$(ENV_FILE)" ]; then \
@@ -735,13 +733,15 @@ embedserv-verify-model:
 	set -a; . "$(ENV_FILE)"; set +a; \
 	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
-	if [ ! -d "$$model_dir" ]; then \
-		echo "ERROR: model directory missing: $$model_dir"; \
+	verifier="$(PWD)/$(EMBEDSERV_VENV)/bin/hf"; \
+	if [ ! -x "$$verifier" ] || [ ! -d "$$model_dir" ]; then \
+		echo "ERROR: the local embedding model or its verifier is not installed for $$model_repo."; \
+		echo "Run 'make embedserv-install' first; installation downloads and verifies the model."; \
 		exit 1; \
 	fi; \
 	echo "Verifying served model directory: $$model_dir"; \
 	verify_out_file=$$(mktemp); \
-	if "$(PWD)/$(EMBEDSERV_VENV)/bin/hf" cache verify "$$model_repo" \
+	if "$$verifier" cache verify "$$model_repo" \
 		--local-dir "$$model_dir" \
 		--fail-on-missing-files >"$$verify_out_file" 2>&1; then \
 		cat "$$verify_out_file"; \
