@@ -244,7 +244,7 @@ ifeq ($(PODMAN_SELECTED),true)
 FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start
 endif
 
-.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance ensure-myst-funded
+.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -271,6 +271,7 @@ help:
 	@echo "  make vpn-signup-stop        # Stop the standalone Myst signup container"
 	@echo "  make vpn-orderstatus        # Show balance, order status, and payment URL"
 	@echo "  make vpn-balance            # Quick balance check"
+	@echo "  make vpn-connection-info    # Show the active Myst connection and provider"
 	@echo ""
 	@echo "Development and maintenance:"
 	@echo "  make test                      # Run the deterministic Python test suite"
@@ -870,7 +871,7 @@ embedserv-cleanup-recorded-child:
 		--cleanup-recorded-child
 
 # ══════════════════════════════════════════════════════════════════════════════
-# VPN signup, order status, and balance
+# VPN signup, order status, balance, and connection information
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Start standalone Myst container for initial signup/payment, then run the
@@ -930,6 +931,11 @@ vpn-balance:
 	@CONTAINER_BIN="$(CONTAINER_BIN)" CONTAINER_NAME="$(MYST_CONTAINER_NAME)" \
 		MYST_VPN_IDENTITY="$(MYST_VPN_IDENTITY)" \
 		$(MYST_VPN_CLI) balance
+
+# Show the active connection, including the selected provider identity. Works
+# against either the integrated or standalone container when it is running.
+vpn-connection-info:
+	@"$(CONTAINER_BIN)" exec "$(MYST_CONTAINER_NAME)" myst connection info
 
 # Prerequisite for up-lite/up-full: stop signup container if running and
 # verify that a Myst identity (keystore) exists. If no keystore is found,

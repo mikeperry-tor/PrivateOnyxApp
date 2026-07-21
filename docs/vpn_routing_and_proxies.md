@@ -207,12 +207,18 @@ Use Make targets so the correct compose overlays are selected:
 ```sh
 make ps-lite
 make ps-full
+make vpn-connection-info
 docker inspect onyx-api_server-1
 docker inspect onyx-obscura-1
 docker logs onyx-onyx-public-egress-proxy-1 --since 10m
 docker logs myst-client-vpn --since 10m
 make health-inventory
 ```
+
+`make vpn-connection-info` runs `myst connection info` in the running
+`myst-client-vpn` container and prints its connection details, including the
+active provider identity. It works with either the integrated stack or the
+standalone signup container.
 
 The inventory renders effective lite and full Compose models and reports each
 retained check's command, startup cadence, steady cadence, and approximate

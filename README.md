@@ -199,7 +199,7 @@ This automatically stops the standalone signup container (your wallet data is pr
 - If more than one identity exists, set `MYST_VPN_IDENTITY` in `.env.wrapper`; signup, status checks, and integrated startup all refuse to guess which wallet to use.
 - Run `make vpn-signup-stop` if you want to stop the standalone setup container without starting the stack.
 - The container build process may take some time to build all components on first run. Makefile dependency checks are used by `make up-lite` (or `make up-full`) to build images on first run, but not after the images exist.
-- Mysterium residential providers can be flaky. Once you find one that works well, you may want to pin its identity via `MYST_VPN_PREFERRED_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
+- Mysterium residential providers can be flaky. While connected, run `make vpn-connection-info` to display the active provider identity. Once you find one that works well, you may want to pin its identity via `MYST_VPN_PREFERRED_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
 - Registration or order failures are printed by the command and do not restart the setup container. Ambiguous order results are never retried automatically; run `make vpn-orderstatus` before deciding whether to try again.
 
 #### Option B: Direct $MYST Transfer (Skip the Order Page)

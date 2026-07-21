@@ -12,6 +12,32 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MystLifecycleMakefileTests(unittest.TestCase):
+    def test_connection_info_target_executes_myst_in_running_container(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fake_container = Path(directory) / "fake-container"
+            fake_container.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\"\n", encoding="utf-8"
+            )
+            fake_container.chmod(0o755)
+            result = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "vpn-connection-info",
+                    f"CONTAINER_BIN={fake_container}",
+                    "ENV_FILE=/dev/null",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.strip(), "exec myst-client-vpn myst connection info"
+        )
+
     def test_signup_targets_use_single_owner_nonrestarting_mode(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         for target in ("vpn-signup-orderform:", "vpn-signup-blockchain:"):
