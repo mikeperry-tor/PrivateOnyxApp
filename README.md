@@ -32,6 +32,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
 - Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled with `ONYX_AGENT_SLACK_BOT` or `ONYX_AGENT_DISCORD_BOT`. Newly eligible connector work, including newly uploaded project/assistant files, can wait up to roughly five minutes for background discovery.
 - Onyx Agent tool descriptions have been patched to describe an additional SymPy package, reinforce correct image link creation, and describe network access in coding environments when it is enabled.
+- The Onyx installation process and the wider stack lifecycle are adapted to additionally support rootless Podman, including selected-engine image preparation, Compose routing, startup-health handling, and shared-data safeguards without falling back to Docker.
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
 
