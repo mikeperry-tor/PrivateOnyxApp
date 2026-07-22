@@ -12,6 +12,8 @@ To further minimize captchas and reduce tracking, all agent internet traffic can
 
 [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for that device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN.
 
+If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
+
 ## Private Deep Research, RAG, and Code Agent Support
 
 The main reason I created this stack is because none of the private chat providers offer "Deep Research" (aka orchestrated multi-agent multi-round research report generation), and I didn't like going back to non-private chat providers when I needed this functionality.
@@ -24,19 +26,17 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - A restrictive browser Content Security Policy blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's VPN/proxy routing through the user's browser. Additionally, this blocks queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
 - Stock Onyx strips reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality.
 - Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results; this has been patched.
-- Stock Onyx disables `open_url()` whenever its vector database is disabled, which leaves lite mode unable to open and read web pages. This stack keeps crawler-backed web browsing available in lite mode. Full mode may reuse a connector document already indexed under the requested URL during an `open_url()` call; this is exact-ID chat-time retrieval, not URL ingestion or `internal_search`, and remains unavailable in lite mode.
+- Stock Onyx disables `open_url()` whenever its vector database is disabled, which leaves lite mode unable to open and read web pages. This stack keeps crawler-backed web browsing available in lite mode.
 - The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
-- The "Deep Research" mode now also supports longer, bounded research runs and executes all accepted tool calls when a research agent requests several different tools at once, rather than silently dropping some of them.
+- The "Deep Research" mode now also supports much longer research runs, and has been patched to execute all accepted tool calls when a research agent requests several different tools at once, rather than silently dropping some of them like stock Onyx does.
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
-- RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local PDFs, making re-indexing substantially faster than stock Onyx.
-- Onyx's idle background workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled with `ONYX_AGENT_SLACK_BOT` or `ONYX_AGENT_DISCORD_BOT`. Newly eligible connector work, including newly uploaded project/assistant files, can wait up to roughly five minutes for background discovery.
+- RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local files, making re-indexing substantially faster than stock Onyx.
+- Onyx's idle background CPU workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled with `ONYX_AGENT_SLACK_BOT` or `ONYX_AGENT_DISCORD_BOT`.
 - Onyx Agent tool descriptions have been patched to describe an additional SymPy package, reinforce correct image link creation, and describe network access in coding environments when it is enabled.
-- The Onyx installation process and the wider stack lifecycle are adapted to additionally support rootless Podman, including selected-engine image preparation, Compose routing, startup-health handling, and shared-data safeguards without falling back to Docker.
+- The Onyx installation process and the wider stack lifecycle are adapted to additionally support rootless Podman, including selected-engine image preparation, Compose routing, startup-health handling, and shared-data safeguards when switching between Docker and Podman.
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
-
-If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 
 ## Components
 
@@ -119,11 +119,10 @@ Edit `.env.wrapper` as needed, based on the `.env.wrapper.example` template.
 Most likely variables you want to change:
 
 - Container engine selection:
-  - Keep `CONTAINER_BIN=docker` for Docker Desktop, or set it to `podman` for a
-    running Podman machine. Podman mode requires a clean `make down-*` when
-    switching engines; it never falls back to Docker. An installed but stopped
-    Podman machine does not block Docker startup. Never run both engines against
-    the shared data at once.
+  - Keep `CONTAINER_BIN=docker` for Docker, or set it to `podman` for Podman.
+    You must perform a clean `make down-*` when switching engines; this is enforced
+    in the stack's startup code to prevent shared database corruption in the
+    bind-mounted `docker-data` directory. Otherwise, switching engines is safe.
   - On rootless Podman, the Docker-socket code interpreter remains unavailable.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
@@ -132,7 +131,7 @@ Most likely variables you want to change:
   - You may use an upstream proxy with or without the Mysterium VPN enabled (`EGRESS_UPSTREAM_PROXY_URL`).
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
-  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let explicitly configured MCP servers, Web Connectors, embedding servers, and inference providers reach services on your private LAN. MCP and Web Connector access also requires a compatible SSRF setting under **Admin → Security Hardening** that will be set correctly by default, but should not be changed.
+  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let explicitly configured MCP servers, Web Connectors, embedding servers, and LLM inference providers reach services on your private LAN. MCP and Web Connector access also requires a compatible SSRF setting under **Admin → Security Hardening** that will be set correctly by default, but should not be changed.
   - LAN service destinations require an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`; failed, empty, or mixed public/private lookups are rejected.
   - This setting does **not** give agent web search, `open_url()`, browser activity, or generated code access to your host, LAN, private addresses, metadata endpoints, or stack-managed services. Those agent-controlled paths remain public-only (or have no network at all).
   - `host.docker.internal` is available by default to the explicitly configured integrations and model endpoints above, so services running on the Docker host do not require `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. The Onyx agent itself never has access to `host.docker.internal` through any of its default tools.
