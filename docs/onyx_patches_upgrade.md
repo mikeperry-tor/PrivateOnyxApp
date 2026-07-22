@@ -466,10 +466,11 @@ its user-visible behavior:
   non-PDF, non-allowlisted, normal sync, and forced-reindex cases. Only a
   matching unchanged or terminal-unreadable sentinel may skip indexing.
 - **Executor networking:** validate the exact code-interpreter command-builder
-  signature/source, one `docker run`, one network argument, and eight injected
-  proxy variables. Malformed argv must fail closed. Verify every API-side tool
-  description/prompt matches restricted proxy-only access in enabled mode and
-  remains stock in disabled mode.
+  signature/source, one `docker run`, one native network argument, and the
+  native run-argument setting containing exactly eight proxy variables.
+  Malformed configuration or argv must fail validation. Verify every API-side
+  tool description/prompt matches restricted proxy-only access in enabled mode
+  and remains stock in disabled mode.
 - **Executor dependencies:** inspect the pinned upstream executor environment,
   regenerate the hashed wrapper lock, and confirm the derived tag changes for
   every Dockerfile or lock change. Run the selected image with networking

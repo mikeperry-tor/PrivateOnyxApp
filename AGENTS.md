@@ -137,8 +137,8 @@ Those bullets are only a map. Read the docs above before changing any runtime ne
     SearXNG overlay.
   - `myst/` and `teep/` - component build files, entrypoints, and helper flows.
 - Onyx wrapper code:
-  - `onyx/patches/` - runtime `sitecustomize` patches applied inside Onyx and
-    code-interpreter containers.
+  - `onyx/patches/` - runtime `sitecustomize` patches applied inside Onyx
+    application containers. Code-interpreter networking uses native settings.
   - `onyx/nginx/` - tracked browser security headers, including the restrictive
     WebUI CSP mounted independently of generated upstream nginx configuration.
   - `onyx/helper-egress.env` - stack-owned `NO_PROXY` values for trusted Onyx

@@ -3379,7 +3379,7 @@ def apply_code_interpreter_network_description_patches() -> None:
     """Update tool descriptions, system-prompt guidance, and coding-agent
     prompts when executor pods use the restricted egress network.
 
-    By default, Onyx's code-interpreter hardcodes ``--network none`` on every
+    By default, Onyx's code-interpreter selects ``--network none`` on every
     executor pod, so the Python tool, BashTool, and coding-agent bash sessions
     have no network access. The upstream tool descriptions, the
     ``PYTHON_TOOL_GUIDANCE`` system prompt, and the coding-agent system prompts
@@ -3388,9 +3388,10 @@ def apply_code_interpreter_network_description_patches() -> None:
     disabled").
 
     When ``ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`` is set on the api_server
-    container, a companion sitecustomize patch in the code-interpreter
-    container attaches pods to a dedicated internal network and injects its
-    local policy proxy. This function updates the
+    container, the wrapper configures upstream's native Docker network and run-
+    argument settings to attach pods to a dedicated internal network and inject
+    its local policy proxy. The deterministic and pinned-image suites validate
+    that native contract outside the running service. This function updates the
     api_server-side descriptions and prompts so the LLM is told it has network
     access and can use network commands (curl, pip install, etc.) — otherwise
     the LLM would continue to avoid network commands based on the stale

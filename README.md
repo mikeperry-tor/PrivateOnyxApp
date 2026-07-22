@@ -349,7 +349,7 @@ Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The Tailscal
 
 #### Optional: Network Access for the Code-Interpreter
 
-By default, Onyx's code-interpreter (the `onyxdotapp/code-interpreter` image from [onyx-dot-app/python-sandbox](https://github.com/onyx-dot-app/python-sandbox)) hardcodes `--network none` on every executor pod it spawns. This means the Python tool and coding-agent bash sessions have **zero network access** — the LLM-generated code cannot make any outbound requests. This is a security isolation measure baked into the upstream image.
+By default, Onyx's code-interpreter (the `onyxdotapp/code-interpreter` image from [onyx-dot-app/python-sandbox](https://github.com/onyx-dot-app/python-sandbox)) selects Docker's `none` network for every executor pod it spawns. This means the Python tool and coding-agent bash sessions have **zero network access** — the LLM-generated code cannot make any outbound requests. Upstream exposes explicit Docker network and run-argument settings, but leaves networking disabled unless configured.
 
 You can optionally give executor pods restricted proxy-only access by setting:
 

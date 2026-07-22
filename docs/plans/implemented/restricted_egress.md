@@ -304,10 +304,9 @@ Executor-specific preferences:
 
 - `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` remains the user-visible switch that
   enables executor network access.
-- `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL` and
-  `ONYX_AGENT_EXECUTOR_NO_PROXY` are the executor injection inputs when
-  executor networking is enabled. They must describe the restricted bridge
-  endpoint and executor-local bypasses, not trusted stack service bypasses.
+- `PYTHON_EXECUTOR_DOCKER_RUN_ARGS` supplies the exact fixed executor proxy
+  environment when executor networking is enabled. It names the restricted
+  bridge and only executor-local loopback bypasses.
 
 Browser-path preferences that must survive the network split:
 
@@ -491,24 +490,24 @@ runtime patch mechanics and upgrade checks, see
 [Onyx patch information](../../onyx_patch_info.md) and
 [Onyx wrapper patches](../../onyx_patches_upgrade.md).
 
-The code-interpreter `sitecustomize` patch should model three independent
-decisions:
+The code-interpreter native settings model three independent decisions:
 
 1. whether executor network access is enabled;
 2. which Docker network executor pods join;
 3. which proxy variables executor pods receive.
 
-Recommended patch behavior:
+Required behavior:
 
 - if `ONYX_CODE_INTERPRETER_ENABLE_NETWORK` is not `true`, do not change the
-  executor network and do not inject executor proxy variables;
+  executor network or configure executor proxy variables;
 - if enabled, require `PYTHON_EXECUTOR_DOCKER_NETWORK` and reject
   `container:onyx-netns-holder-1`;
-- require `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL`;
-- inject `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and lowercase variants from
-  `ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL`;
-- inject `NO_PROXY` from `ONYX_AGENT_EXECUTOR_NO_PROXY`, defaulting to
-  `127.0.0.1,localhost,::1`;
+- configure `PYTHON_EXECUTOR_DOCKER_RUN_ARGS` with `HTTP_PROXY`, `HTTPS_PROXY`,
+  `ALL_PROXY`, and lowercase variants set to the fixed executor egress bridge;
+- configure both `NO_PROXY` variants as `127.0.0.1,localhost,::1`;
+- validate the native command-builder signature/source and a harmless generated
+  command in deterministic and pinned-image tests without patching the running
+  service;
 - pass `ONYX_AGENT_OUTBOUND_PROXY_URL` only as diagnostic/context if needed,
   never as the executor's direct proxy URL;
 - never propagate trusted-service `NO_PROXY_INTERNAL` into executor pods.
@@ -903,13 +902,13 @@ restricted request path and executor behavior pass the atomic validation gate.
 
 - Use `docker-compose.code-interpreter-network.yml` for executor networking.
 - `ONYX_AGENT_OUTBOUND_PROXY_URL` configures final-hop upstream proxying; it
-  does not trigger executor proxy injection.
+  does not configure executor proxy variables.
 - `ONYX_AGENT_ALLOW_HTTP_URLS` remains the single cleartext target URL
   preference for proxy policy modes and CDP navigation blocking. When false,
   proxy modes also reject `CONNECT` to destination port 80.
 - Preserve the documented policy preference surface; do not silently drop
   `PREFETCH_BLOCK_HOSTS`, `PREFETCH_BLOCK_INTERNAL_HOSTS`,
-  `ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13`, executor proxy injection variables,
+  `ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13`, executor proxy configuration,
   Obscura navigation/cookie variables, SearXNG scheduling, or Onyx SSRF seed
   variables when moving components onto restricted networks.
 - Untrusted executors receive only the dedicated executor `NO_PROXY`, not
@@ -972,8 +971,9 @@ validation plan before deployment.
 3. Add the executor egress bridge to the executor network and the required
    upstream side.
 4. Set `PYTHON_EXECUTOR_DOCKER_NETWORK` to the concrete executor network name.
-5. Keep executor proxy injection in the code-interpreter network overlay only.
-6. Tighten `sitecustomize_code_interpreter` as described above.
+5. Keep native executor proxy run arguments in the code-interpreter network
+   overlay only.
+6. Keep the deterministic and pinned-image native contract validation strict.
 7. Update API-server prompt/tool-description patches.
 
 ### Workstream 3: Obscura CDP And MCP
@@ -1100,7 +1100,7 @@ Static checks:
 
 ```text
 ENV_FILE=/dev/null make help
-python -m py_compile crw/prefetch_blocking_proxy.py onyx/patches/sitecustomize_code_interpreter/sitecustomize.py
+python -m py_compile crw/prefetch_blocking_proxy.py tests/validate_code_interpreter_executor_network.py
 git diff --check
 ```
 

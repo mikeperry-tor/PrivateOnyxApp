@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE = (ROOT / "Makefile").read_text()
 IMAGE_SCRIPT_PATH = ROOT / "tests" / "validate_pinned_patch_images.sh"
 IMAGE_SCRIPT = IMAGE_SCRIPT_PATH.read_text()
+EXECUTOR_NETWORK_VALIDATOR = (
+    ROOT / "tests" / "validate_code_interpreter_executor_network.py"
+).read_text()
 
 
 class ValidationMakefileTests(unittest.TestCase):
@@ -60,6 +63,13 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertIn("PINNED_STOCK_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_EXECUTOR_SYMPY_OK", IMAGE_SCRIPT)
+        self.assertIn(
+            "validate_code_interpreter_executor_network.py", IMAGE_SCRIPT
+        )
+        self.assertIn(
+            "PINNED_EXECUTOR_NATIVE_NETWORK_CONTRACT_OK",
+            EXECUTOR_NETWORK_VALIDATOR,
+        )
         self.assertIn("/validation/validate_pinned_background.py", IMAGE_SCRIPT)
         self.assertNotIn("effective={t['name']", IMAGE_SCRIPT)
         self.assertIn("tests.test_searxng_obscura_engines", IMAGE_SCRIPT)

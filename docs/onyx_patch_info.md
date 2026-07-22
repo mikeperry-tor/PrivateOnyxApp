@@ -11,8 +11,8 @@ the upgrade checklist also requires installation against the pinned images.
 ## Bootstrap ownership
 
 `sitecustomize_api_server` is the only API bootstrap in both lite and full
-modes. `sitecustomize_background` owns full-mode background patches, and
-`sitecustomize_code_interpreter` owns the code-interpreter service patch. The
+modes, and `sitecustomize_background` owns full-mode background patches. The
+code-interpreter service uses native configuration without a runtime patch. The
 neutral `onyx/patches/shared/wrapper_env_patches.py` contains reusable helpers
 but is not executable bootstrap code. Compose imports it explicitly through
 `PYTHONPATH`.
@@ -455,13 +455,14 @@ name. The wrapper does not alias or accept another LLM-facing name. Pinned-image
 validation confirms the class, constant, built-in map, saved-row remapping, and
 prompt all use `run_python` after every wrapper patch is installed.
 
-When optional executor networking is enabled, the code-interpreter bootstrap
-validates the exact pinned `DockerExecutor._build_run_command()` signature and
-critical Docker-run source layout before wrapping it. Every generated command
-must remain a string argv with one `run` subcommand and one network argument;
-the eight upper/lower-case proxy variables are inserted immediately after
-`docker run`. An unexpected command now raises instead of appending variables
-at the end as a best-effort fallback.
+When optional executor networking is enabled, Compose uses upstream's native
+`PYTHON_EXECUTOR_DOCKER_NETWORK` and `PYTHON_EXECUTOR_DOCKER_RUN_ARGS` settings.
+The code-interpreter service has no wrapper runtime patch. Deterministic tests
+parse the configured run arguments and reject extra or mismatched values. Image
+validation inspects the exact pinned `DockerExecutor._build_run_command()`
+signature and critical source layout, constructs a harmless sample command, and
+confirms that it selects the dedicated network and preserves exactly the eight
+upper/lower-case restricted proxy variables.
 
 The API-side network capability patch uses exact upstream text replacements
 for the Python tool, Bash tool, coding-agent mock tool, Python guidance, and
@@ -469,15 +470,14 @@ both coding-agent prompts. It tells the model about restricted proxy-only access
 without claiming direct sockets, private targets, or direct search-engine URLs
 are reachable. The separate file-link prompt patch is unconditional because
 artifact rendering is independent of executor networking.
-`tests/test_code_interpreter_executor_env.py` exercises the
-actual command wrapper, malformed output, configuration, and upstream drift;
+`tests/test_code_interpreter_executor_env.py` exercises the native run-argument
+contract, malformed configuration, generated output, and upstream drift;
 `tests/test_shared_agent_patch_contracts.py` covers every capability string and
-strict text drift. The command contract is additionally installed against the
-pinned code-interpreter image.
+strict text drift. The native command contract is additionally checked inside
+the pinned code-interpreter image without installing a runtime patch.
 
-Remove both halves when code-interpreter natively supports this dedicated
-network/proxy configuration and Onyx derives accurate capability text from it.
-Do not retain only the capability text or only the executor mutation.
+Remove the API-side capability patch when Onyx derives accurate capability text
+from the native executor settings.
 
 ## Other retained wrapper behavior
 

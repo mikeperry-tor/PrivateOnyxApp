@@ -124,14 +124,11 @@ if [ "$validate_code_interpreter" = true ]; then
     "$container_bin" run --rm \
         --network none \
         --entrypoint python \
-        -e PYTHONPATH=/patch \
-        -e WRAPPER_PATCH_STRICT=true \
-        -e ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true \
         -e PYTHON_EXECUTOR_DOCKER_NETWORK=onyx-code-interpreter-executor \
-        -e ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL=http://executor-egress-bridge:3128 \
-        -v "$repo_root/onyx/patches/sitecustomize_code_interpreter:/patch:ro" \
+        -e 'PYTHON_EXECUTOR_DOCKER_RUN_ARGS=--env HTTP_PROXY=http://executor-egress-bridge:3128 --env HTTPS_PROXY=http://executor-egress-bridge:3128 --env ALL_PROXY=http://executor-egress-bridge:3128 --env NO_PROXY=127.0.0.1,localhost,::1 --env http_proxy=http://executor-egress-bridge:3128 --env https_proxy=http://executor-egress-bridge:3128 --env all_proxy=http://executor-egress-bridge:3128 --env no_proxy=127.0.0.1,localhost,::1' \
+        -v "$repo_root/tests/validate_code_interpreter_executor_network.py:/app/validate_code_interpreter_executor_network.py:ro" \
         "$code_interpreter_image" \
-        -c "from app.services.executor_docker import DockerExecutor; assert getattr(DockerExecutor._build_run_command, '_private_onyx_executor_proxy_patch', False); print('PINNED_EXECUTOR_PATCH_CONTRACT_OK')"
+        /app/validate_code_interpreter_executor_network.py
 else
     echo "Skipping code-interpreter image contract: the supported Podman model omits this Docker-socket service."
 fi

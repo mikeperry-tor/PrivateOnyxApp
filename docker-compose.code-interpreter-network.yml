@@ -39,13 +39,17 @@ services:
     environment:
       ONYX_CODE_INTERPRETER_ENABLE_NETWORK: "true"
       PYTHON_EXECUTOR_DOCKER_NETWORK: "onyx-code-interpreter-executor"
-      ONYX_AGENT_EXECUTOR_HTTP_PROXY_URL: "http://executor-egress-bridge:3128"
-      ONYX_AGENT_EXECUTOR_NO_PROXY: "127.0.0.1,localhost,::1"
-      WRAPPER_PATCH_STRICT: "true"
-      PYTHONPATH: "/app/wrapper-patches:${PYTHONPATH:-}"
+      PYTHON_EXECUTOR_DOCKER_RUN_ARGS: >-
+        --env HTTP_PROXY=http://executor-egress-bridge:3128
+        --env HTTPS_PROXY=http://executor-egress-bridge:3128
+        --env ALL_PROXY=http://executor-egress-bridge:3128
+        --env NO_PROXY=127.0.0.1,localhost,::1
+        --env http_proxy=http://executor-egress-bridge:3128
+        --env https_proxy=http://executor-egress-bridge:3128
+        --env all_proxy=http://executor-egress-bridge:3128
+        --env no_proxy=127.0.0.1,localhost,::1
     volumes: !override
       - ${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock
-      - ./onyx/patches/sitecustomize_code_interpreter:/app/wrapper-patches:ro
     depends_on:
       executor-egress-bridge: {condition: service_healthy}
 

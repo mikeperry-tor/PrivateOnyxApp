@@ -13,6 +13,7 @@ SECRET_ENV = {
     # Production Make invocations export the content-derived image name before
     # Compose interpolation. Direct Compose-model tests supply a inert value.
     "SEARXNG_WRAPPER_IMAGE": "local/private-onyx-searxng:test-model",
+    "PYTHON_EXECUTOR_IMAGE": "local/private-onyx-python-executor:test-model",
     "SEARXNG_SECRET": "test",
     "USER_AUTH_SECRET": "test",
     "MINIO_ROOT_USER": "test",
@@ -639,6 +640,24 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertNotIn("ports", bridge)
         self.assertEqual(
             set(services["code-interpreter"]["networks"]), {"onyx-backend"}
+        )
+        executor_environment = services["code-interpreter"]["environment"]
+        self.assertEqual(
+            executor_environment["PYTHON_EXECUTOR_DOCKER_NETWORK"],
+            "onyx-code-interpreter-executor",
+        )
+        run_args = executor_environment["PYTHON_EXECUTOR_DOCKER_RUN_ARGS"]
+        self.assertEqual(run_args.count("--env "), 8)
+        self.assertNotIn("EGRESS_UPSTREAM_PROXY_URL", run_args)
+        self.assertIn(
+            "HTTP_PROXY=http://executor-egress-bridge:3128", run_args
+        )
+        self.assertNotIn("PYTHONPATH", executor_environment)
+        self.assertNotIn("WRAPPER_PATCH_STARTUP_FATAL", executor_environment)
+        self.assertEqual(len(services["code-interpreter"]["volumes"]), 1)
+        self.assertEqual(
+            services["code-interpreter"]["volumes"][0]["target"],
+            "/var/run/docker.sock",
         )
         self.assertNotIn(
             "EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS",

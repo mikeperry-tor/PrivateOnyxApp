@@ -1073,8 +1073,8 @@ bounded semaphore, and every other API-only wrapper patch. Merge the current
 anonymous lite `onyx/patches/sitecustomize/` bootstrap into this service-named
 layer; retain its Open URL availability behavior only when the existing lite-
 mode condition applies. The full-mode background service continues to use
-`sitecustomize_background`, and code interpreter continues to use
-`sitecustomize_code_interpreter`.
+`sitecustomize_background`; code-interpreter networking uses native settings
+and has no runtime bootstrap.
 
 Turn `sitecustomize_base` into a non-bootstrap shared helper location, renamed
 to a neutral path such as `onyx/patches/shared/`: it may contain reusable patch
