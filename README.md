@@ -200,7 +200,7 @@ This automatically stops the standalone signup container (your wallet data is pr
 - If the payment order fails or expires before you pay, run `make vpn-signup-orderform` again explicitly. It reuses your selected identity and creates a replacement only after an authoritative order/balance check.
 - If more than one identity exists, set `MYST_VPN_IDENTITY` in `.env.wrapper`; signup, status checks, and integrated startup all refuse to guess which wallet to use.
 - Run `make vpn-signup-stop` if you want to stop the standalone setup container without starting the stack.
-- The container build process may take some time to build all components on first run. Makefile dependency checks are used by `make up-lite` (or `make up-full`) to build images on first run, but not after the images exist.
+- Image preparation may take some time on the first start or after an update changes component versions or wrapper build inputs. `make up-lite` and `make up-full` reuse the exact selected images when they are already present.
 - Mysterium residential providers can be flaky. While connected, run `make vpn-connection-info` to display the active provider identity. Once you find one that works well, you may want to pin its identity via `MYST_VPN_PREFERRED_PROVIDER_IDS` in `.env.wrapper`. Multiple providers can be listed, separated by commas.
 - Registration or order failures are printed by the command and do not restart the setup container. Ambiguous order results are never retried automatically; run `make vpn-orderstatus` before deciding whether to try again.
 
@@ -533,29 +533,31 @@ extend to agent browsing or generated code.
 
 ## Upgrading the Stack
 
-This wrapper carries a few local Onyx runtime and install-time patches. For the rationale behind those patches, see [`docs/onyx_patch_info.md`](docs/onyx_patch_info.md).
+After pulling an update to this repository, start the same stack mode normally:
 
-Image tags, source refs, and runtime Python lock files are consolidated in
-[`stack.versions.env`](stack.versions.env) plus the committed `requirements.in`
-/ hashed `requirements.txt` files. `make upgrade` refreshes the Python locks
-through `make upgrade-python-deps` before rebuilding/pulling the stack
-components. The derived SearXNG image installs its complete pinned Python
-dependency set from the generated hashed `searxng/requirements.txt` lock and
-validates the shared Obscura client at image-build time. The Makefile derives
-the local image tag from the upstream SearXNG pin and every embedded Dockerfile,
-lock, shared-client, and engine input, so a source change selects a fresh image;
-the runtime container never downloads packages or a browser. Docker mode also
-builds a derived, content-addressed Python executor from the pinned upstream
-executor and its hashed dependency lock. It includes SymPy in the advertised
-scientific stack and is prepared before the code-interpreter API starts rather
-than pulled or modified during runtime. Myst and Teep
-builds forward standard
-`HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` build arguments when those
-variables are present. Image builds and host-side `embedserv` installation
-happen before stack readiness and therefore use the host/build network, not
-the Mysterium namespace or `EGRESS_UPSTREAM_PROXY_URL`.
+```bash
+git pull
+make up-lite   # or make up-full
+```
 
-When changing these image pins or rebasing onto a new Onyx release, point a code agent at [`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md).
+That is all an end user needs to do. The start command prepares any images
+selected by the updated [`stack.versions.env`](stack.versions.env) or changed
+content-addressed wrapper build inputs, reuses images that already match, and
+recreates affected services. Persistent application data is retained. This
+works with the container engine selected by `CONTAINER_BIN`; Podman mode
+prepares images in Podman's image store and does not fall back to Docker.
+
+Repository updates that change `stack.versions.env` already include the
+required patch review and upgrade validation. You do not need to run
+`make upgrade`, `make check-upgrade`, or ask a code agent to repeat that work
+after `git pull`.
+
+If you edit `stack.versions.env` yourself, the version change is development
+work rather than an ordinary stack update. Instruct a code agent to read
+[`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md), review every
+affected patch and shim, perform the upgrade, and complete the validation
+described there. The maintainers follow that process before committing any
+version-manifest update.
 
 ## Docker Host Endpoints
 
