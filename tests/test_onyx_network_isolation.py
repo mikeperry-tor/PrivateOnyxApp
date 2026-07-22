@@ -232,6 +232,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                     opensearch["userns_mode"], "keep-id:uid=1000,gid=1000"
                 )
                 self.assertEqual(
+                    opensearch["sysctls"]["net.ipv4.ping_group_range"],
+                    "1000 1000",
+                )
+                self.assertEqual(
                     opensearch["volumes"][0]["source"],
                     str(ROOT / "docker-data/opensearch"),
                 )

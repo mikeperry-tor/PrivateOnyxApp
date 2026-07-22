@@ -506,6 +506,14 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_shared_data_engine_claim_wraps_stack_lifecycle(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn(
+            "SHARED_DATA_GUARD_ENV := $(if $(filter true,$(PODMAN_SELECTED)),env -u DOCKER_HOST,)",
+            makefile,
+        )
+        self.assertIn(
+            "@$(SHARED_DATA_GUARD_ENV) python3 podman/shared_data_engine.py claim",
+            makefile,
+        )
         for target in ("up-lite:", "up-full:"):
             definitions = [
                 line for line in makefile.splitlines() if line.startswith(target)

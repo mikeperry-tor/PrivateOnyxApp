@@ -21,6 +21,11 @@ services:
 
   opensearch:
     userns_mode: "keep-id:uid=1000,gid=1000"
+    # Rootless crun applies ping_group_range while creating the keep-id network
+    # namespace. Only the OpenSearch group is mapped, so an inherited range
+    # containing an unmapped group fails namespace creation.
+    sysctls:
+      net.ipv4.ping_group_range: "1000 1000"
     volumes: !override
       - ./docker-data/opensearch:/usr/share/opensearch/data
 

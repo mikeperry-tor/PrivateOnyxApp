@@ -47,8 +47,11 @@ freshly crawled content to the vector index, participate in connector sync, or
 replace the semantic `internal_search` path.
 
 For each tool call in full mode, Onyx first normalizes every requested URL using
-connector-owned rules and checks for an existing document with that exact
-canonical ID. It then runs exact-ID chunk retrieval and a fresh crawler request
+connector-owned rules and checks the ordered canonical-ID candidates returned
+by that connector. This covers sources such as Google Drive where the pasted
+URL can identify a file without identifying which canonical document form was
+indexed. The first indexed candidate wins. Onyx then runs exact-ID chunk
+retrieval and a fresh crawler request
 as failure-tolerant parallel siblings. After both finish, it prefers the
 already-indexed representation for a matched URL and otherwise uses the fresh
 crawl. The crawl therefore still occurs even when an indexed copy is ultimately

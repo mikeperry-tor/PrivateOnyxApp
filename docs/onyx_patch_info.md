@@ -450,6 +450,10 @@ An unconditional strict API patch advertises the wrapper-maintained package
 set, including SymPy, in both `PythonTool.DESCRIPTION` and
 `PYTHON_TOOL_GUIDANCE`. This capability text is independent of optional
 executor networking. Source drift in either upstream string stops API startup.
+The LLM-facing tool name is `run_python`; `Code Interpreter` remains the display
+name. The wrapper does not alias or accept another LLM-facing name. Pinned-image
+validation confirms the class, constant, built-in map, saved-row remapping, and
+prompt all use `run_python` after every wrapper patch is installed.
 
 When optional executor networking is enabled, the code-interpreter bootstrap
 validates the exact pinned `DockerExecutor._build_run_command()` signature and

@@ -57,6 +57,7 @@ endif
 PODMAN_SELECTED := $(if $(findstring podman,$(notdir $(CONTAINER_BIN))),true,false)
 SHARED_DATA_ENGINE := $(if $(filter true,$(PODMAN_SELECTED)),podman,docker)
 SHARED_DATA_ENGINE_MARKER := docker-data/host-services/shared-data-engine
+SHARED_DATA_GUARD_ENV := $(if $(filter true,$(PODMAN_SELECTED)),env -u DOCKER_HOST,)
 ifeq ($(strip $(DOCKER_SOCK_PATH)),)
 ifneq ($(findstring podman,$(CONTAINER_BIN)),)
 DOCKER_SOCK_PATH := $(strip $(shell "$(CONTAINER_BIN)" machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | head -1))
@@ -344,10 +345,10 @@ shared-data-engine-status:
 	@python3 podman/shared_data_engine.py status --marker "$(SHARED_DATA_ENGINE_MARKER)"
 
 claim-shared-data-engine:
-	@python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --container-bin "$(CONTAINER_BIN)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
+	@$(SHARED_DATA_GUARD_ENV) python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --container-bin "$(CONTAINER_BIN)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
 
 adopt-shared-data-engine:
-	@python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --container-bin "$(CONTAINER_BIN)" --marker "$(SHARED_DATA_ENGINE_MARKER)" --adopt-unclaimed
+	@$(SHARED_DATA_GUARD_ENV) python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --container-bin "$(CONTAINER_BIN)" --marker "$(SHARED_DATA_ENGINE_MARKER)" --adopt-unclaimed
 
 release-shared-data-engine:
 	@python3 podman/shared_data_engine.py release --engine "$(SHARED_DATA_ENGINE)" --marker "$(SHARED_DATA_ENGINE_MARKER)"

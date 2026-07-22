@@ -115,7 +115,8 @@ replaced.
 
 - makes `background` wait for PostgreSQL health;
 - always uses the same initialized `docker-data/opensearch` bind as Docker
-  Desktop with the required `keep-id` mapping; and
+  Desktop with the required `keep-id` mapping and a group-1000-only
+  `ping_group_range` that rootless crun can apply inside that mapping; and
 - replaces container-side document serving with a hardened fixed relay to the
   wrapper-managed macOS document server.
 
@@ -126,6 +127,9 @@ PostgreSQL cluster and OpenSearch index in place. This is unconditional: there
 are no additional database overlays, marker-selected storage branches, or
 opt-out flags. The startup preflight requires the expected initialization
 markers and does not inspect chats, tables, index names, or document contents.
+The ownership guard inspects both native engines without the Podman
+`DOCKER_HOST` compatibility override used by the external Compose provider, so
+repeated Podman claims cannot misclassify Podman writers as Docker writers.
 Both engines must be down before switching because shared storage does not make
 concurrent database or index writers safe.
 
@@ -185,6 +189,10 @@ removes only that mount-root Podman override before Compose create. It leaves
 Docker's attribute and valid per-file Podman runtime attributes intact.
 
 OpenSearch uses `keep-id:uid=1000,gid=1000` and its ordinary image entrypoint.
+The Podman-only network namespace sets `net.ipv4.ping_group_range=1000 1000`:
+rootless crun applies this sysctl at container creation, and every group in the
+range must exist in the `keep-id` mapping. The setting grants raw ICMP only to
+the already mapped OpenSearch group and avoids adding an unmapped host group.
 The tracked read-only `audit.yml` bind and all resource/Query Insights settings
 are applied directly to that service; there is no administrative sidecar or
 successful-exit dependency to translate under Podman.

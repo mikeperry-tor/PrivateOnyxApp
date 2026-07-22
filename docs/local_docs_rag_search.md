@@ -39,8 +39,8 @@ Onyx fork:
 - The optional `make embedserv-*` targets install and run a local MLX
   OpenAI-compatible embedding server on the host.
 
-These pieces exist because Onyx v4.2.5 has strong assumptions about where local
-documents and embedding models live. The wrapper keeps the user-facing Onyx
+These pieces adapt Onyx's fixed assumptions about where local documents and
+embedding models live. The wrapper keeps the user-facing Onyx
 configuration simple while preserving those assumptions at the service
 boundary.
 
@@ -120,7 +120,7 @@ without giving the Onyx containers write access to the user's document tree.
 
 ## SSRF And Security Hardening
 
-Onyx v4.2.5 has SSRF protection for URL-fetching paths. Compose seeds:
+Onyx has SSRF protection for URL-fetching paths. Compose seeds:
 
 ```env
 OPEN_URL_VALIDATE_SSRF=true
@@ -166,7 +166,7 @@ the upstream symbols and line references to re-check during an Onyx upgrade are
 in
 [Runtime patch contract audit](onyx_patches_upgrade.md#runtime-patch-contract-audit).
 
-Onyx v4.2.5 intentionally avoids trusting `Last-Modified` for Web PDFs because
+Onyx intentionally avoids trusting `Last-Modified` for Web PDFs because
 public websites often emit unreliable validators. That is sensible for the
 general internet, but wasteful for a local document-drop server where the file
 metadata is trusted and stable.
@@ -195,8 +195,8 @@ Implementation:
   `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
   `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`
 
-Onyx's internal search path is chunk-oriented, not excerpt-oriented. In v4.2.5,
-the `internal_search` tool and the `/search` API serialize the selected
+Onyx's internal search path is chunk-oriented, not excerpt-oriented. The
+`internal_search` tool and the `/search` API serialize the selected
 section's full `content` into the model-facing tool result. Onyx may also merge
 nearby matching chunks and expand a selected section with adjacent chunks before
 formatting the result. That is useful for answer quality, but local document
@@ -294,7 +294,7 @@ agent browsing or generated code access to the embedding endpoint or LAN.
 
 ## Why The Shim Exists
 
-The wrapper needs release-image-compatible local embeddings. Onyx v4.2.5 can
+The wrapper needs release-image-compatible local embeddings. Onyx can
 use self-hosted/custom embedding models, but the practical path is still shaped
 by internal model-server assumptions:
 
@@ -315,7 +315,7 @@ patches map only tokenizer construction for that exact name to the tokenizer
 already bundled as `nomic-ai/nomic-embed-text-v1`; they do not rewrite the
 saved model name or the model name sent to the embedding shim. This avoids an
 attempt to download the nonexistent `v23` tokenizer and preserves the same
-tokenization Onyx previously reached through its fallback.
+the tokenizer contract expected by Onyx's `nomic-ai` feature path.
 
 The shim preserves Onyx's internal contract and moves the OpenAI-compatible
 translation to a small local service that can be updated independently during

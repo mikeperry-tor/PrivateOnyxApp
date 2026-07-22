@@ -133,8 +133,8 @@ passes:
   visible rather than adding public probes or a fallback browser. Re-audit both
   source paths on upgrade.
 
-Playwright Python remains pinned to the version supplied by Onyx (1.58.0 at
-the current baseline) for compatibility auditing and derived-image validation.
+Playwright Python remains pinned to the version supplied by Onyx (1.58.0) for
+compatibility auditing and derived-image validation.
 The current duplicate-session restriction and its removal criteria are tracked
 in the pinned-limitations list above.
 
@@ -384,7 +384,7 @@ environment names forward by resemblance. Confirm:
   remote-config, favicon, font, image, video, CAPTCHA, billing, or CDN clients
   are either required operator-selected functionality or explicitly disabled.
 
-Inspect the pinned WebUI CSP implementation. At the current baseline Onyx emits
+Inspect the pinned WebUI CSP implementation. Onyx emits
 a policy unconditionally from `web/src/proxy.ts`; the documented
 `WEB_STRICT_CSP_ENABLED` environment name has no implementation and must not be
 counted as a defense. Keep the tracked nginx policy as a second CSP header so
@@ -396,7 +396,7 @@ The wrapper's current `script-src 'self' 'unsafe-inline'` is an intentional
 no-rebuild compatibility exception for Next.js bootstrap and React stream
 scripts. Keep `script-src-attr 'none'`; never add `unsafe-eval` or remote script
 origins. Do not replace this with a static self-only or nginx-filtered nonce
-policy based on response text tests alone: at the pinned baseline those variants
+policy based on response text tests alone: the tested variants
 returned HTML but left a real browser blank and unhydrated. A stricter upgrade
 requires a source-level per-response nonce that reaches every rendered stream
 script while keeping same-origin preload and lazy chunks functional. Once that
@@ -475,7 +475,9 @@ its user-visible behavior:
   every Dockerfile or lock change. Run the selected image with networking
   disabled; verify the exact SymPy version and a symbolic solve. Confirm the
   unconditional Python tool description and guidance list only packages the
-  executor actually contains. Then exercise a real Python tool call.
+  executor actually contains. Confirm the LLM-facing tool name, built-in map,
+  saved-row remapping, and prompt use only `run_python`, while the display name
+  remains `Code Interpreter`. Then exercise a real `run_python` tool call.
 - **Lite `open_url`, helper routes, embedding tokenizer/shim, privacy settings,
   and CSP:** retain their dedicated audits elsewhere in this checklist.
 
