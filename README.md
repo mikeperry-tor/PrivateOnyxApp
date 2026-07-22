@@ -533,11 +533,13 @@ extend to agent browsing or generated code.
 
 ## Upgrading the Stack
 
-After pulling an update to this repository, start the same stack mode normally:
+When you pull an update for this repository, ensure the stack is down first, and then
+start the same stack mode normally:
 
 ```bash
+make down-lite   # or make down-full
 git pull
-make up-lite   # or make up-full
+make up-lite     # or make up-full
 ```
 
 That is all an end user needs to do. The start command prepares any images
