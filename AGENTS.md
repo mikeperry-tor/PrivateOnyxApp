@@ -49,9 +49,11 @@ At a high level:
   content validation in the services; see `docs/local_docs_rag_search.md` and
   `docs/podman_suport.md` for selection and shutdown semantics.
 - The recommended local-RAG Admin model name `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only tokenizer construction to the bundled v1 tokenizer.
-- The wrapper uses the legacy code-interpreter service. Its LLM-facing tool name
-  is `run_python`, while its display name remains Code Interpreter. Unsupported
-  Craft sandbox scheduling is explicitly disabled.
+- Ordinary chat uses the standalone code-interpreter service. Its LLM-facing
+  tool name is `run_python`, while its display name remains Code Interpreter.
+  Onyx Craft is a separate OpenCode-based, per-user sandbox environment; this
+  wrapper leaves it disabled because it has no supported Craft sandbox backend
+  or privacy/resource lifecycle policy.
 - Onyx sends LLM requests through the included Teep local inference service.
 - The shared API runtime patches give nested Deep Research agents the tools selected for the current chat Agent and execute complete model-emitted tool batches with bounded concurrency.
 - Onyx `web_search` uses only the wrapper's supported SearXNG engines, which

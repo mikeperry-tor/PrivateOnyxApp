@@ -497,8 +497,13 @@ Other retained behavior has its own focused tests and upgrade checks:
   newly created Onyx indices, without a runtime migration service;
 - host publisher, Tailscale, MinIO, authentication, and Teep integration.
 
-The wrapper explicitly disables Onyx Craft because it provides the legacy
-code-interpreter service, not a Craft Kubernetes or Docker sandbox backend.
+The wrapper explicitly disables Onyx Craft. Ordinary chat uses the standalone
+code-interpreter service for `run_python`; Craft is a separate OpenCode-based,
+per-user environment that requires a Kubernetes or Docker sandbox backend,
+additional egress and credential boundaries, and its own resource lifecycle.
+Those requirements are not implemented by this wrapper. The resource
+consequences of keeping Craft absent are documented in
+`docs/resource_minimization.md`.
 The strict background bootstrap materializes seven connector-discovery
 schedules at five minutes, removes their one-minute templates, removes the
 three Craft cleanup schedules, and removes the queue/process/memory monitoring

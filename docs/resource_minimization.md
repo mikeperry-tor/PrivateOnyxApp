@@ -120,6 +120,26 @@ The supervisor transformation and schedule transformation are both retained:
 one controls consumers/processes and the other controls task production. They
 are not duplicate enforcement.
 
+### Onyx Craft
+
+- Craft remains explicitly disabled with `ENABLE_CRAFT=false`. Ordinary chat's
+  `run_python` tool uses the standalone code-interpreter service; Craft is a
+  separate OpenCode-based environment with persistent per-user sandboxes.
+- Enabling the Docker Craft backend would add an always-running sandbox proxy,
+  Docker-socket access for the API/background/proxy tier, a dedicated scheduled-
+  task worker, periodic dispatch and sandbox-cleanup work, persistent sandbox
+  volumes, and one sandbox container for each active user environment.
+- A Docker Craft sandbox defaults to a one-CPU limit and a 2 GiB memory limit
+  and remains eligible for reuse until the one-hour idle timeout. Limits are not
+  reservations or proof of steady consumption, but multiple retained user
+  sandboxes make Craft's potential CPU, memory, storage, and background-work
+  footprint materially larger than the request-scoped Python executor.
+- Craft is not a supported wrapper option. Enabling it requires a deliberate
+  design and validation of its Docker/Kubernetes sandbox backend, proxy and
+  credential boundary, VPN/egress topology, per-user concurrency and storage,
+  cleanup/failure recovery, Docker and Podman behavior, and explicit resource
+  policy. It must not be enabled by setting the environment flag alone.
+
 ### SearXNG and browser search
 
 - The default search set contains only the five supported custom offline
@@ -192,6 +212,9 @@ are not duplicate enforcement.
   `onyx/background_entrypoint.py`, `onyx/beat_liveness_watchdog.py`,
   `onyx/patches/sitecustomize_background/`, and
   `tests/validate_pinned_background.py`.
+- Craft absence and its removed workers/schedules: `docker-compose.yaml`, the
+  background bootstrap and pinned-image validation, and the Compose/background
+  resource tests.
 - Search-engine and bootstrap reduction: `searxng/core-config/settings.yml`,
   `searxng/patches/`, custom engines under `searxng/engines/`, and the
   SearXNG bootstrap/parser/scheduling tests.

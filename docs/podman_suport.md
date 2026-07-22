@@ -220,7 +220,7 @@ Only a VPN that became ready once in the current container lifetime is armed;
 termination, after which `restart: unless-stopped` restarts Myst in the stable
 holder namespace. Initial and explicit no-VPN failures remain visible without
 self-restart. The Docker-socket limitation therefore applies only to the
-unrelated legacy code interpreter.
+unrelated standalone code-interpreter service used by ordinary chat.
 
 ## Startup-health translation
 

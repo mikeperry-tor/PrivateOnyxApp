@@ -388,8 +388,8 @@ services:
       RECAPTCHA_ENTERPRISE_API_KEY: ""
       RECAPTCHA_SITE_KEY: ""
       RECAPTCHA_HOSTNAME_ALLOWLIST: ""
-      # This wrapper provides the legacy code-interpreter service, not Onyx
-      # Craft's Kubernetes/Docker sandbox backend.
+      # Ordinary chat uses the standalone code-interpreter service. Craft's
+      # persistent per-user sandbox environment is not supported by this wrapper.
       ENABLE_CRAFT: "false"
       # Controls Web connector SSRF-style URL checks.
       OPEN_URL_VALIDATE_SSRF: "true"
