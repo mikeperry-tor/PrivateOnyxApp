@@ -8,9 +8,9 @@ Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0
 
 Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are stable in the default web crawler, but are varied per-navigation in Obscura. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
 
-Agent Internet traffic uses an explicit no-VPN route by default. Operators can optionally enable [Mysterium](https://github.com/mysteriumnetwork/node), configure an upstream proxy, or combine the two to further reduce tracking and captchas. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route and prevents direct-network or DNS fallback.
+Agent Internet traffic uses an explicit no-VPN route by default. Operators can optionally enable [Mysterium](https://github.com/mysteriumnetwork/node), configure an upstream proxy, combine the two, or enable native Tor egress to further reduce tracking and captchas. Native Tor egress is mutually exclusive with an upstream proxy. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route and prevents direct-network or DNS fallback.
 
-[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for that device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN.
+[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for that device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN. It can run concurrently with the native Tor v3 onion service, providing separate Tailscale and onion entry points, but Tailscale's own traffic cannot currently be routed through Tor.
 
 If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 
@@ -46,13 +46,15 @@ The Docker Compose files in this stack relies on the following components:
 
 2. [Teep](https://github.com/13rac1/teep) provides private verified LLM inference via a local OpenAI-compatible proxy on port 8337. Teep supports [multiple private inference providers](https://github.com/13rac1/teep#supported-providers), and verifies attestation, encryption, and remote runtime properties before requests are allowed to proceed.
 
-3. [Mysterium](https://github.com/mysteriumnetwork/node) is an optional WireGuard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. It is disabled by default. Enabling it can reduce captchas and rate limiting by search engines and websites through residential exit addresses. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
+3. [Tor](https://hub.docker.com/r/dockurr/tor) can be optionally used to route agent Internet traffic through native Tor egress, expose the WebUI as a persistent v3 onion service, or provide both roles concurrently.
 
-4. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides all custom search engines, and optionally the built-in Onyx Web Crawler, with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy in the selected Myst/proxy/no-VPN routing namespace. By default, only the built-in crawler instead uses Onyx's stock HTTP fetch and local Chromium fallback through the fixed public Onyx bridge.
+4. [Mysterium](https://github.com/mysteriumnetwork/node) is an optional WireGuard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. It is disabled by default. Enabling it can reduce captchas and rate limiting by search engines and websites through residential exit addresses. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
-5. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. The wrapper-provided Google, Brave, DuckDuckGo, Startpage, and Bing offline engines navigate and parse rendered result pages through Obscura. SearXNG owns round-robin search provider scheduling, retries after unresponsive providers, and suspends providers after visible anti-bot failures or rate limits.
+5. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides all custom search engines, and optionally the built-in Onyx Web Crawler, with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy in the selected Myst/proxy/no-VPN routing namespace. By default, only the built-in crawler instead uses Onyx's stock HTTP fetch and local Chromium fallback through the fixed public Onyx bridge.
 
-6. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to access the Onyx web interface via HTTPS from any web browser, using your assigned ts.net service subdomain name. The TLS key is generated locally in this stack and is signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
+6. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. The wrapper-provided Google, Brave, DuckDuckGo, Startpage, and Bing offline engines navigate and parse rendered result pages through Obscura. SearXNG owns round-robin search provider scheduling, retries after unresponsive providers, and suspends providers after visible anti-bot failures or rate limits.
+
+7. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to access the Onyx web interface via HTTPS from any web browser, using your assigned ts.net service subdomain name. The TLS key is generated locally in this stack and is signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
 
 ## Prerequisites
 
@@ -126,11 +128,13 @@ Most likely variables you want to change:
   - On rootless Podman, the Docker-socket code interpreter remains unavailable.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
-- **VPN and Proxy Use**:
-  - `MYST_VPN_ENABLED=false` is the default and uses the explicit no-VPN final-hop route.
-  - Set `MYST_VPN_ENABLED=true` only if you want the optional Myst VPN, then complete **Optional: Myst VPN Setup** below before starting the stack.
+- **Tor, VPN, and Proxy Use**:
+  - Set `TOR_EGRESS_ENABLED=true` to route public agent Internet traffic through native Tor, and/or set `TOR_ONION_SERVICE_ENABLED=true` to publish the WebUI as a v3 onion service. `TOR_EXIT_COUNTRY` or `TOR_EXIT_NODE_FINGERPRINTS` may optionally constrain clearnet exits.
+  - Set `MYST_VPN_ENABLED=true` to enable the optional Myst VPN, then complete **Optional: Myst VPN Setup** below before starting the stack.
   - You may use an upstream proxy with or without the Mysterium VPN enabled (`EGRESS_UPSTREAM_PROXY_URL`).
-  - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
+  - Native Tor egress cannot currently be combined with `EGRESS_UPSTREAM_PROXY_URL`, but it can run alongside Myst. See [`docs/plans/deferred/https_proxy_after_tor.md`](./docs/plans/deferred/https_proxy_after_tor.md) for a plan to support HTTPS proxies after Tor; [file an issue](https://github.com/mikeperry-tor/PrivateOnyxApp/issues) if you are aware of any Zero Data Retention HTTPS proxy providers.
+  - Tor egress does not currently route Teep provider traffic or Tailscale traffic. Those components use their direct routes by default; use `TEEP_ROUTE_THROUGH_MYST_VPN=true` and/or `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` to route them through Myst while agent egress uses Tor. Onion ingress remains compatible with all of these final-hop choices.
+  - For detailed Tor behavior and the full routing matrix, see [`docs/native_tor_support.md`](docs/native_tor_support.md) and [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
   - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let explicitly configured MCP servers, Web Connectors, embedding servers, and LLM inference providers reach services on your private LAN. MCP and Web Connector access also requires a compatible SSRF setting under **Admin → Security Hardening** that will be set correctly by default, but should not be changed.
   - LAN service destinations require an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`; failed, empty, or mixed public/private lookups are rejected.
@@ -210,13 +214,25 @@ TOR_EXIT_COUNTRY=""
 TOR_EXIT_NODE_FINGERPRINTS=""
 ```
 
-Outbound Tor replaces a configured `EGRESS_UPSTREAM_PROXY_URL` and routes the
-existing public final-hop policy paths through a private Unix SOCKS socket.
-Applications do not receive the socket or a Tor/public network, target DNS is
-owned by Tor, and a stopped Tor daemon or unavailable selected exit fails
-closed. Internal, exact host, and explicitly allowed LAN integration routes
-retain their existing direct exceptions. General outbound `.onion` browsing is
-not a supported feature.
+`TOR_EGRESS_ENABLED=true` routes the existing public final-hop policy paths
+through a private Unix SOCKS socket.  Applications do not receive the socket or
+a Tor/public network, target DNS is owned by Tor, and a stopped Tor daemon or
+unavailable selected exit fails closed. Internal, exact host, and explicitly
+allowed LAN integration routes retain their existing direct exceptions. General
+outbound `.onion` browsing is not a supported feature.
+
+Native Tor egress currently covers agent-controlled and configured-external
+final-hop policy paths only. It does not route Teep provider connections or
+Tailscale traffic, and there are no Teep-through-Tor or Tailscale-through-Tor
+options. Both components use their direct routes by default or may be routed
+through Myst with their component-specific settings.
+
+`TOR_EXIT_COUNTRY` accepts one two-letter country selector.
+`TOR_EXIT_NODE_FINGERPRINTS` accepts up to 16 comma-separated 40-hex relay
+identities; it cannot be combined with the country selector. Both require Tor
+egress. Selection is strict: no matching usable exit means requests fail rather
+than falling back. Country and especially relay pinning can reduce availability
+and anonymity-set diversity.
 
 Onion ingress creates a public v3 service for the WebUI without publishing
 another host port. Anyone who learns the address can reach the Onyx login, so
@@ -230,29 +246,14 @@ make tor-onion-address
 
 The identity is stored under `docker-data/tor/state`; back it up deliberately
 and protect it like a server credential. Do not delete it unless you intend to
-replace the onion address. Docker and Podman share this host state, while the
-outbound socket is transient and engine-local.
+replace the onion address. Copying the onion-service files copies the service
+identity and allows the holder to operate that same onion address. Docker and
+Podman share this host state, while the outbound socket is transient and
+engine-local.
 
-For the onion frontend to be the feature-complete origin, set
-`ONYX_WEB_CANONICAL_ORIGIN="http://<generated-v3-address>.onion"` after the
-first start and restart normally. Localhost, Tailscale, and onion access can
-remain enabled together, but each hostname has separate browser cookies,
-storage, and login sessions. Logout on one hostname does not log out the
-others. OAuth/OIDC/SAML callbacks, email links, voice WebSockets, and similar
-origin-sensitive flows return to or are guaranteed only at the selected
-canonical origin; changing it can require provider callback re-registration.
-The gateways do not add, remove, or translate cookie attributes. In particular,
-with an HTTP canonical origin, the application cookies are not `Secure` even
-when a non-canonical Tailscale frontend is reached over HTTPS.
-
-`TOR_EXIT_COUNTRY` accepts one two-letter country selector.
-`TOR_EXIT_NODE_FINGERPRINTS` accepts up to 16 comma-separated 40-hex relay
-identities; it cannot be combined with the country selector. Both require Tor
-egress. Selection is strict: no matching usable exit means requests fail
-rather than falling back. Country and especially relay pinning can reduce
-availability and anonymity-set diversity. Tor exits are commonly challenged
-or blocked, and Tor does not eliminate traffic-correlation risk. Onion ingress
-does not use the selected clearnet exit.
+Tailscale, onion, and localhost host-side access can be used simultaneously, but
+each hostname has separate browser cookies, storage, and login sessions. Logout
+on one hostname does not log out the others.
 
 ### Optional: Tailscale Funnel
 
@@ -264,6 +265,7 @@ To set this up, in `.env.wrapper`, set `TAILSCALE_FUNNEL_ENABLED=true` and set `
 - By default, the Tailscale service does not route through Mysterium VPN, to avoid linking your Tailscale account to your search activity at the Myst VPN exit server.
 - Tailscale uses the userspace networking mode, so no VPN activity is involved.
 - To route Tailscale through the VPN namespace instead, set `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` in `.env.wrapper`. **Warning:** this links your Tailscale identity to the VPN exit IP.
+- Tailscale Funnel and Tor onion ingress can be enabled concurrently as separate entry points, but Tailscale itself cannot currently be routed through Tor.
 
 Tailscale Funnel prerequisites:
 
@@ -662,7 +664,7 @@ Obscura uses a stable browser vendor/version profile with some per-navigation fi
 
 ### Why not just use Tor by default?
 
-Native Tor egress is available with `TOR_EGRESS_ENABLED=true`; a separately
+Native Tor egress is optionally available with `TOR_EGRESS_ENABLED=true`; a separately
 managed Tor proxy may still be selected through `EGRESS_UPSTREAM_PROXY_URL`,
 but the two settings are mutually exclusive. See
 [`docs/vpn_routing_and_proxies.md`](./docs/vpn_routing_and_proxies.md) and

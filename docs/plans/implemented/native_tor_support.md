@@ -377,8 +377,11 @@ The generated config should explicitly include, as applicable:
   `CookieAuthFile /run/tor-control/control_auth_cookie`, and
   `CookieAuthFileGroupReadable 0`; do not configure a default or operator-known
   control password or any TCP control listener
-- `ClientOnly 1`, `ORPort 0`, `DirPort 0`, `ExtORPort 0`, and a rejecting exit
-  policy; keep every relay and auxiliary network listener explicitly disabled
+- `ClientOnly 1` as the single relay-mode control. The pinned Tor manpage says
+  it prevents relay and directory service even when `ORPort`, `ExtORPort`, or
+  `DirPort` is configured, and `server_mode()` returns false whenever it is
+  set. Do not duplicate it with explicit relay-port zeros, an `ExitPolicy`, or
+  other relay-only settings
 - `ExitNodes` only from the validated selector; do not add obsolete
   `StrictExitNodes` or unrelated `StrictNodes`
 - `HiddenServiceDir /var/lib/tor/onion-service`
@@ -892,8 +895,8 @@ Cover:
 - `ControlPort 0`, the exact private Unix control socket, mandatory cookie
   authentication, private socket/cookie modes, no default password, and
   rejection of unauthenticated control commands;
-- the explicit client-only/no-relay directives and absence of configured
-  auxiliary listeners;
+- the single explicit `ClientOnly 1` relay-mode control and absence of
+  redundant relay-only settings;
 - hidden-service directives only when enabled;
 - `ExitNodes` no-fallback behavior, absence of obsolete strict directives, and
   verified GeoIP paths;

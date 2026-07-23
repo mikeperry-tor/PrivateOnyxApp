@@ -9,13 +9,15 @@ policy containers. Tor's control socket and cookie live in a mode-0700
 Tor-only tmpfs, remain mode 0600, and are not mounted elsewhere. There is no
 TCP SOCKS/control listener or published Tor port.
 
-For onion ingress, Tor joins only `tor-ingress` and forwards virtual port 80 to
-the fixed-address gateway. Tor never joins `onyx-frontend`. The hardened
-gateway alone spans those networks and forwards only to nginx, accepts only a
-syntactically valid v3 onion `Host`, replaces client-supplied forwarding
-headers, preserves that Host, and publishes no host port. Its fixed
-configuration is the destination restriction; bridge attachment is not a
-sandbox after gateway compromise.
+For onion ingress, Tor retains `tor-uplink`, additionally joins `tor-ingress`,
+and forwards virtual port 80 to the fixed-address gateway. Tor encryption
+terminates in the Tor container; traffic from Tor to the gateway and nginx is
+plaintext HTTP on the isolated internal container networks, not TLS. Tor never
+joins `onyx-frontend`. The hardened gateway alone spans `tor-ingress` and
+`onyx-frontend` and forwards only to nginx, accepts only a syntactically valid
+v3 onion `Host`, replaces client-supplied forwarding headers, preserves that
+Host, and publishes no host port. Its fixed configuration is the destination
+restriction; bridge attachment is not a sandbox after gateway compromise.
 
 Localhost, Tailscale, and onion frontends may run together. Authentication,
 CSP, and cookies remain application-owned and are not rewritten at an edge.
