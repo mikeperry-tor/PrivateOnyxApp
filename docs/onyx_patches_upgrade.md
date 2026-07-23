@@ -14,7 +14,7 @@ volume.
 Render all four Tor role models plus engine corrections and retest direct Tor
 egress, unavailable-selector failure, identity persistence, and simultaneous
 localhost/Tailscale/onion authentication and streaming.
-`ONYX_WEB_CANONICAL_ORIGIN` remains one `WEB_DOMAIN`, passed identically to
+`WEBUI_CANONICAL_ORIGIN` remains one `WEB_DOMAIN`, passed identically to
 backend and web server. Do not infer general multi-origin support: voice,
 OAuth/federated callbacks, email links, and similar consumers remain
 canonical-origin features, and gateways must not rewrite cookie attributes.

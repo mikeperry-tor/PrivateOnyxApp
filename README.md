@@ -128,6 +128,15 @@ Most likely variables you want to change:
   - On rootless Podman, the Docker-socket code interpreter remains unavailable.
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
+- **WebUI canonical origin**:
+  - Leave `WEBUI_CANONICAL_ORIGIN=http://localhost:3000` unless Tailscale,
+    onion, or another hostname should be the authoritative WebUI URL.
+  - Onyx uses this one origin for invitation and password-reset links, generated
+    absolute links, identity-provider and MCP OAuth callbacks, origin-checked
+    voice WebSockets, and the `Secure` attribute on authentication and CSRF
+    cookies. Other enabled hostnames can still provide ordinary login, API, and
+    chat with separate browser sessions, subject to the scheme limitation
+    described in [`docs/native_tor_support.md`](docs/native_tor_support.md).
 - **Tor, VPN, and Proxy Use**:
   - Set `TOR_EGRESS_ENABLED=true` to route public agent Internet traffic through native Tor, and/or set `TOR_ONION_SERVICE_ENABLED=true` to publish the WebUI as a v3 onion service. `TOR_EXIT_COUNTRY` or `TOR_EXIT_NODE_FINGERPRINTS` may optionally constrain clearnet exits.
   - Set `MYST_VPN_ENABLED=true` to enable the optional Myst VPN, then complete **Optional: Myst VPN Setup** below before starting the stack.

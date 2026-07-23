@@ -23,7 +23,7 @@ def settings(**overrides: str) -> dict[str, str]:
         "TOR_EXIT_COUNTRY": "",
         "TOR_EXIT_NODE_FINGERPRINTS": "",
         "EGRESS_UPSTREAM_PROXY_URL": "",
-        "ONYX_WEB_CANONICAL_ORIGIN": "http://localhost:3000",
+        "WEBUI_CANONICAL_ORIGIN": "http://localhost:3000",
     }
     names = {
         "egress": "TOR_EGRESS_ENABLED",
@@ -31,7 +31,7 @@ def settings(**overrides: str) -> dict[str, str]:
         "country": "TOR_EXIT_COUNTRY",
         "fingerprints": "TOR_EXIT_NODE_FINGERPRINTS",
         "upstream_proxy": "EGRESS_UPSTREAM_PROXY_URL",
-        "canonical_origin": "ONYX_WEB_CANONICAL_ORIGIN",
+        "canonical_origin": "WEBUI_CANONICAL_ORIGIN",
     }
     values.update({names[name]: value for name, value in overrides.items()})
     return values
@@ -321,7 +321,7 @@ class TorConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             settings_file = Path(temporary) / "wrapper.env"
             settings_file.write_text(
-                "ONYX_WEB_CANONICAL_ORIGIN=https://example.com extra\n",
+                "WEBUI_CANONICAL_ORIGIN=https://example.com extra\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(tor_config.ConfigError, "one shell-style"):

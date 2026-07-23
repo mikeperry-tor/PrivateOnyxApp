@@ -113,7 +113,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             "lite",
             "docker-compose.tor.yml",
             "docker-compose.tor-onion.yml",
-            env_overrides={"ONYX_WEB_CANONICAL_ORIGIN": origin},
+            env_overrides={"WEBUI_CANONICAL_ORIGIN": origin},
         )
         self.assertEqual(
             model["services"]["api_server"]["environment"]["WEB_DOMAIN"], origin

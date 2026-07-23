@@ -84,7 +84,8 @@ proxy settings or caller discipline alone.
   final-hop routing and/or v3 onion ingress. Only the two policy proxies receive
   the read-only SOCKS volume; only the fixed onion gateway spans its ingress
   network and `onyx-frontend`. Applications receive neither Tor authority.
-  `WEB_DOMAIN` remains one explicit canonical origin.
+  `WEBUI_CANONICAL_ORIGIN` remains one explicit canonical origin, passed to
+  Onyx internally as `WEB_DOMAIN`.
 - Onyx applications use internal-only networks. Generic helpers use a fixed
   public bridge, while configured integrations, inference, and embeddings use
   separate route-class bridges. Direct sockets have no external route, and

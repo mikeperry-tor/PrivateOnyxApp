@@ -25,7 +25,7 @@ SETTING_DEFAULTS = {
     "TOR_EXIT_COUNTRY": "",
     "TOR_EXIT_NODE_FINGERPRINTS": "",
     "EGRESS_UPSTREAM_PROXY_URL": "",
-    "ONYX_WEB_CANONICAL_ORIGIN": "http://localhost:3000",
+    "WEBUI_CANONICAL_ORIGIN": "http://localhost:3000",
 }
 
 
@@ -86,31 +86,31 @@ def parse_bool(name: str, value: str) -> bool:
 
 def validate_origin(value: str) -> str:
     if not value or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        raise ConfigError("ONYX_WEB_CANONICAL_ORIGIN must be one nonempty origin")
+        raise ConfigError("WEBUI_CANONICAL_ORIGIN must be one nonempty origin")
     if "," in value:
-        raise ConfigError("ONYX_WEB_CANONICAL_ORIGIN must not be a list")
+        raise ConfigError("WEBUI_CANONICAL_ORIGIN must not be a list")
     try:
         parsed = urlsplit(value)
         port = parsed.port
     except ValueError as exc:
-        raise ConfigError(f"ONYX_WEB_CANONICAL_ORIGIN is invalid: {exc}") from exc
+        raise ConfigError(f"WEBUI_CANONICAL_ORIGIN is invalid: {exc}") from exc
     if parsed.scheme not in {"http", "https"}:
-        raise ConfigError("ONYX_WEB_CANONICAL_ORIGIN must use http or https")
+        raise ConfigError("WEBUI_CANONICAL_ORIGIN must use http or https")
     if not parsed.hostname or parsed.username is not None or parsed.password is not None:
-        raise ConfigError("ONYX_WEB_CANONICAL_ORIGIN must have a host and no userinfo")
+        raise ConfigError("WEBUI_CANONICAL_ORIGIN must have a host and no userinfo")
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
         raise ConfigError(
-            "ONYX_WEB_CANONICAL_ORIGIN must not contain a non-root path, query, or fragment"
+            "WEBUI_CANONICAL_ORIGIN must not contain a non-root path, query, or fragment"
         )
     if port is not None and not 0 < port <= 65535:
-        raise ConfigError("ONYX_WEB_CANONICAL_ORIGIN has an invalid port")
+        raise ConfigError("WEBUI_CANONICAL_ORIGIN has an invalid port")
     host = parsed.hostname
     if "*" in host or host.startswith(".") or host.endswith("."):
-        raise ConfigError("ONYX_WEB_CANONICAL_ORIGIN has an invalid host")
+        raise ConfigError("WEBUI_CANONICAL_ORIGIN has an invalid host")
     try:
         ascii_host = host.encode("idna").decode("ascii")
     except UnicodeError as exc:
-        raise ConfigError("ONYX_WEB_CANONICAL_ORIGIN host is not valid IDNA") from exc
+        raise ConfigError("WEBUI_CANONICAL_ORIGIN host is not valid IDNA") from exc
     try:
         ipaddress.ip_address(ascii_host)
     except ValueError:
@@ -119,7 +119,7 @@ def validate_origin(value: str) -> str:
             or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label)
             for label in ascii_host.split(".")
         ):
-            raise ConfigError("ONYX_WEB_CANONICAL_ORIGIN host is not valid IDNA")
+            raise ConfigError("WEBUI_CANONICAL_ORIGIN host is not valid IDNA")
     return value
 
 
@@ -162,7 +162,7 @@ def validate_settings(
     onion = parse_bool(
         "TOR_ONION_SERVICE_ENABLED", values["TOR_ONION_SERVICE_ENABLED"]
     )
-    validate_origin(values["ONYX_WEB_CANONICAL_ORIGIN"])
+    validate_origin(values["WEBUI_CANONICAL_ORIGIN"])
     country = normalize_country(values["TOR_EXIT_COUNTRY"])
     fingerprints = normalize_fingerprints(values["TOR_EXIT_NODE_FINGERPRINTS"])
     if (country or fingerprints) and not egress:

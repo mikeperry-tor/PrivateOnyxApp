@@ -161,12 +161,24 @@ Common failure boundaries are:
 
 ## Canonical origin and browser sessions
 
-`ONYX_WEB_CANONICAL_ORIGIN` supplies one explicit `WEB_DOMAIN` to the backend
+`WEBUI_CANONICAL_ORIGIN` supplies one explicit `WEB_DOMAIN` to the backend
 and web server. Localhost, Tailscale, and onion ingress may coexist, but each
 hostname has separate browser cookies, storage, login, and logout state.
-OAuth/federated callbacks, email and Build links, voice WebSockets, and other
-absolute-origin behavior are guaranteed only at the selected canonical origin.
-The gateways do not rewrite application cookie attributes.
+Onyx builds invitation, verification, and password-reset links, OAuth/OIDC/SAML
+login callbacks, connector and MCP OAuth callbacks, Build and other absolute
+links, and origin-checked voice WebSockets from this value. The gateways do not
+rewrite those URLs or application cookie attributes.
+
+The canonical scheme selects cookie security globally rather than per ingress.
+An HTTPS canonical origin makes authentication and CSRF cookies `Secure`, so an
+HTTP secondary origin may be unable to establish or return its login cookie. An
+HTTP canonical origin permits login on both HTTP onion and HTTPS Tailscale
+origins, but the Tailscale session cookie lacks the `Secure` attribute. A
+non-canonical origin also cannot use voice WebSockets because Onyx compares the
+browser's `Origin` header with the canonical origin. Ordinary relative API and
+chat requests can still work from either hostname. Absolute links opened from
+a secondary hostname lead to the canonical hostname and therefore its separate
+browser session.
 
 For a feature-complete onion frontend, obtain the generated address, set an
 HTTP onion canonical origin, and restart normally. Changing the canonical

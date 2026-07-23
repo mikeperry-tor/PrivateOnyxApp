@@ -22,10 +22,12 @@ restriction; bridge attachment is not a sandbox after gateway compromise.
 Localhost, Tailscale, and onion frontends may run together. Authentication,
 CSP, and cookies remain application-owned and are not rewritten at an edge.
 Browser state and host-only cookies are separate per hostname, so each needs
-its own login and logout is independent. `WEB_DOMAIN` remains one canonical
-origin. OAuth/federated callbacks, generated links, voice WebSockets, and
-other origin-sensitive behavior are guaranteed only there. With an HTTP
-canonical origin, unchanged cookies are not `Secure` on a non-canonical HTTPS
+its own login and logout is independent. `WEBUI_CANONICAL_ORIGIN` maps to one
+internal `WEB_DOMAIN`. OAuth/federated callbacks, generated links, voice
+WebSockets, and other origin-sensitive behavior are guaranteed only there.
+Its scheme chooses cookie security globally: an HTTPS canonical origin can
+prevent login cookies from working over a secondary HTTP origin, while an HTTP
+canonical origin leaves cookies without `Secure` even on a secondary HTTPS
 Tailscale visit. Onion ingress is public to anyone who learns the address and
 does not compensate for weak credentials.
 

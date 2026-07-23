@@ -65,7 +65,7 @@ ifneq ($(filter command line environment,$(origin TOR_EXIT_NODE_FINGERPRINTS)),)
 override TOR_EXIT_NODE_FINGERPRINTS := $(value TOR_EXIT_NODE_FINGERPRINTS)
 export TOR_EXIT_NODE_FINGERPRINTS
 endif
-ONYX_WEB_CANONICAL_ORIGIN ?= $(call wrapper_setting,ONYX_WEB_CANONICAL_ORIGIN)
+WEBUI_CANONICAL_ORIGIN ?= $(call wrapper_setting,WEBUI_CANONICAL_ORIGIN)
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -89,7 +89,7 @@ ifeq ($(PODMAN_SELECTED),true)
 export DOCKER_HOST := unix://$(DOCKER_SOCK_PATH)
 endif
 export TEEP_IMAGE
-export ONYX_WEB_CANONICAL_ORIGIN
+export WEBUI_CANONICAL_ORIGIN
 
 ifneq ($(filter true,$(TAILSCALE_FUNNEL_ENABLED)),)
 export COMPOSE_PROFILES := tailscale
