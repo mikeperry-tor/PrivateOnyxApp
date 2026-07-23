@@ -475,6 +475,9 @@ The primary Podman-specific tests are:
   optional VPN behavior, tmpfs options, unconditional shared Docker
   PostgreSQL/OpenSearch storage, database health dependencies, and the fixed
   hardened host document relay.
+- `tests/validate_tor_image.py`: the selected Tor image, one fresh engine-local
+  SOCKS volume, keep-id/tmpfs modes, explicit state bind, authenticated private
+  control path, and unprivileged read-only policy-container socket access.
 - `tests/test_doc_drop_webserver.py`: the non-indexed host readiness endpoint
   and document-root/symlink confinement.
 - `tests/test_myst_readiness.py`: interface/route parsing that must remain

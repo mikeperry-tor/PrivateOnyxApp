@@ -182,9 +182,9 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   build target first.
 - `make test-opensearch-image` - validate the pinned OpenSearch image in an
   isolated disposable environment.
-- `make check-upgrade` - run `make check`, `make test-images`, and
-  `make test-opensearch-image`. Run this after `make upgrade` and before the
-  practical live validation matrix.
+- `make check-upgrade` - run `make check`, `make test-images`,
+  `make test-tor-image`, and `make test-opensearch-image`. Run this after
+  `make upgrade` and before the practical live validation matrix.
 - `make integration-opensearch`, `make integration-opensearch-restart`, and
   `make integration-opensearch-onyx` - validate the running full-stack
   OpenSearch volume, restart recovery, and pinned Onyx integration.

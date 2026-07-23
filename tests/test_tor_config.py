@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -29,6 +31,129 @@ def settings(**overrides: str) -> argparse.Namespace:
 
 
 class TorConfigTests(unittest.TestCase):
+    def run_onion_address_target(
+        self,
+        *,
+        onion_enabled: str = "true",
+        running: str = "true",
+        address: str = "authoritative-tor-value",
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings_file = root / "wrapper.env"
+            settings_file.write_text("", encoding="utf-8")
+            engine = root / "fake-engine"
+            engine.write_text(
+                "#!/bin/sh\n"
+                "set -eu\n"
+                'case "$1" in\n'
+                "  compose) printf '%s\\n' fake-tor-container ;;\n"
+                '  inspect) printf "%s\\n" "${FAKE_TOR_RUNNING}" ;;\n'
+                '  exec) printf "%s" "${FAKE_TOR_ADDRESS}" ;;\n'
+                "  *) exit 64 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            engine.chmod(0o755)
+            environment = dict(os.environ)
+            environment.update(
+                {
+                    "TOR_EGRESS_ENABLED": "false",
+                    "TOR_ONION_SERVICE_ENABLED": onion_enabled,
+                    "FAKE_TOR_RUNNING": running,
+                    "FAKE_TOR_ADDRESS": address,
+                }
+            )
+            return subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "tor-onion-address",
+                    f"ENV_FILE={settings_file}",
+                    f"CONTAINER_BIN={engine}",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+
+    def test_onion_address_target_uses_selected_engine_and_tor_value(self) -> None:
+        completed = self.run_onion_address_target()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            completed.stdout.strip(), "Onion address: authoritative-tor-value"
+        )
+
+    def test_onion_address_target_fails_safely(self) -> None:
+        for options in (
+            {"onion_enabled": "false"},
+            {"running": "false"},
+            {"address": ""},
+            {"address": "first\nsecond"},
+        ):
+            with self.subTest(options=options):
+                completed = self.run_onion_address_target(**options)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertNotIn("Onion address:", completed.stdout)
+
+    def test_settings_file_preserves_optional_dollar_fingerprint(self) -> None:
+        fingerprint = "$" + "a" * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            settings_file = Path(temporary) / "wrapper.env"
+            settings_file.write_text(
+                "TOR_EGRESS_ENABLED=true\n"
+                "TOR_ONION_SERVICE_ENABLED=false\n"
+                f'TOR_EXIT_NODE_FINGERPRINTS="{fingerprint}"\n',
+                encoding="utf-8",
+            )
+            values = tor_config.settings_from_file_and_environment(settings_file)
+            self.assertEqual(values["TOR_EXIT_NODE_FINGERPRINTS"], fingerprint)
+
+            environment = dict(os.environ)
+            for name in tor_config.SETTING_DEFAULTS:
+                environment.pop(name, None)
+            completed = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "tor-preflight",
+                    f"ENV_FILE={settings_file}",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_command_line_environment_preserves_optional_dollar_fingerprint(
+        self,
+    ) -> None:
+        fingerprint = "$" + "B" * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            settings_file = Path(temporary) / "wrapper.env"
+            settings_file.write_text("", encoding="utf-8")
+            environment = dict(os.environ)
+            for name in tor_config.SETTING_DEFAULTS:
+                environment.pop(name, None)
+            completed = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "tor-preflight",
+                    f"ENV_FILE={settings_file}",
+                    "TOR_EGRESS_ENABLED=true",
+                    "TOR_ONION_SERVICE_ENABLED=false",
+                    f"TOR_EXIT_NODE_FINGERPRINTS={fingerprint}",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_role_matrix_and_listener_contract(self) -> None:
         for egress, onion in ((True, False), (False, True), (True, True)):
             with self.subTest(egress=egress, onion=onion):

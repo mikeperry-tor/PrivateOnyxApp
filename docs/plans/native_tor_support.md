@@ -1222,7 +1222,7 @@ deferred Tor-over-Myst or multi-origin work.
   identity use host binds; only Tor writes the runtime volume, only the two
   policy proxies mount it read-only, and only Tor receives the private control
   tmpfs.
-- Deterministic validation: `make check` passed 367 tests; focused renderer,
+- Deterministic validation: `make check` passed 372 tests; focused renderer,
   effective-model, immutable-pin, frontend, and final-hop proxy suites passed.
   Docker and Podman focused image checks passed. Docker full mode became
   healthy with both Tor roles and passed `integration-opensearch` and

@@ -37,7 +37,10 @@ contains read-only audit checkouts when present.
 4. Run `make check-upgrade`. It first runs the complete deterministic suite and
    local static checks, then validates strict patch installation against the
    exact newly pinned local Onyx, code-interpreter, derived Python executor,
-   and derived SearXNG images.
+   and derived SearXNG images. It also validates the selected local Tor wrapper
+   image, a fresh runtime socket volume, the state-bind override, private
+   cookie-authenticated control path, and an unprivileged read-only policy
+   consumer without pulling or rebuilding either Tor image.
    It also starts the exact pinned OpenSearch image with an isolated disposable
    engine volume, validates its static/runtime policy plus KNN/hybrid/reindex
    and restart behavior, and removes the exact container and volume afterward.

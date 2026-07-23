@@ -295,7 +295,8 @@ and Web Connector freshness drift. Continue to require the selected local
 images; never pull or substitute an image from the validation target.
 
 Run `make check-upgrade` after an image/source pin, dependency lock, or runtime
-patch change. OpenSearch's disposable-image workload remains part of that gate.
+patch change. The Tor runtime-volume/control contract and OpenSearch's
+disposable-image workload remain part of that gate.
 
 ### Lifecycle and integration changes
 

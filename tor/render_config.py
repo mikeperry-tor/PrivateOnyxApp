@@ -17,6 +17,44 @@ class ConfigError(ValueError):
     pass
 
 
+SETTING_DEFAULTS = {
+    "TOR_EGRESS_ENABLED": "false",
+    "TOR_ONION_SERVICE_ENABLED": "false",
+    "TOR_EXIT_COUNTRY": "",
+    "TOR_EXIT_NODE_FINGERPRINTS": "",
+    "EGRESS_UPSTREAM_PROXY_URL": "",
+    "ONYX_WEB_CANONICAL_ORIGIN": "http://localhost:3000",
+}
+
+
+def read_wrapper_settings(path: Path) -> dict[str, str]:
+    """Read only the fixed settings used by the Tor host preflight."""
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return values
+    for line in lines:
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name not in SETTING_DEFAULTS or name in values:
+            continue
+        if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        values[name] = value
+    return values
+
+
+def settings_from_file_and_environment(path: Path) -> dict[str, str]:
+    """Apply Make's CLI/environment-over-file precedence without a shell."""
+    values = SETTING_DEFAULTS | read_wrapper_settings(path)
+    for name in SETTING_DEFAULTS:
+        if name in os.environ:
+            values[name] = os.environ[name]
+    return values
+
+
 def parse_bool(name: str, value: str) -> bool:
     if value not in {"true", "false"}:
         raise ConfigError(f"{name} must be exactly 'true' or 'false'")
@@ -180,19 +218,54 @@ def atomic_write(path: Path, content: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("validate", "render"))
-    parser.add_argument("--egress", required=True)
-    parser.add_argument("--onion", required=True)
-    parser.add_argument("--country", default="")
-    parser.add_argument("--fingerprints", default="")
-    parser.add_argument("--upstream-proxy", default="")
-    parser.add_argument("--canonical-origin", required=True)
+    parser.add_argument("--settings-file")
+    parser.add_argument("--egress")
+    parser.add_argument("--onion")
+    parser.add_argument("--country")
+    parser.add_argument("--fingerprints")
+    parser.add_argument("--upstream-proxy")
+    parser.add_argument("--canonical-origin")
     parser.add_argument("--output")
     return parser
+
+
+def resolve_settings(args: argparse.Namespace) -> None:
+    if args.settings_file:
+        values = settings_from_file_and_environment(Path(args.settings_file))
+        selected = {
+            "egress": values["TOR_EGRESS_ENABLED"],
+            "onion": values["TOR_ONION_SERVICE_ENABLED"],
+            "country": values["TOR_EXIT_COUNTRY"],
+            "fingerprints": values["TOR_EXIT_NODE_FINGERPRINTS"],
+            "upstream_proxy": values["EGRESS_UPSTREAM_PROXY_URL"],
+            "canonical_origin": values["ONYX_WEB_CANONICAL_ORIGIN"],
+        }
+        for name, value in selected.items():
+            if getattr(args, name) is not None:
+                raise ConfigError(
+                    f"--settings-file cannot be combined with --{name.replace('_', '-')}"
+                )
+            setattr(args, name, value)
+        return
+
+    missing = [
+        name
+        for name in ("egress", "onion", "canonical_origin")
+        if getattr(args, name) is None
+    ]
+    if missing:
+        raise ConfigError(
+            "explicit settings require --egress, --onion, and --canonical-origin"
+        )
+    for name in ("country", "fingerprints", "upstream_proxy"):
+        if getattr(args, name) is None:
+            setattr(args, name, "")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        resolve_settings(args)
         egress, onion, country, fingerprints = validate_settings(args)
         if args.action == "render":
             if not args.output:

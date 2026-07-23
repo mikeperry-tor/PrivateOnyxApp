@@ -15,7 +15,8 @@ private destinations, malformed HTTP framing, and disallowed cleartext URLs.
    intentionally required.
 
 2. **For HTTPS URLs, and explicitly allowed plain HTTP URLs**: forwards the
-   request to the target, through ``EGRESS_UPSTREAM_PROXY_URL`` if set.
+   request to the target, through ``EGRESS_UPSTREAM_PROXY_URL`` or the
+   stack-owned native-Tor Unix SOCKS endpoint when selected.
 
 Before any CONNECT tunnel or HTTP forwarding, the proxy rejects loopback,
 private/RFC1918, link-local, multicast, reserved, and other non-global IP
@@ -25,23 +26,25 @@ single-label Docker-style hostnames. When
 ``EGRESS_UPSTREAM_PROXY_URL`` is empty, DNS names are resolved directly
 through the Mysterium provider resolver when VPN routing is enabled, or through
 system DNS only in explicit no-VPN mode; all returned addresses are classified.
-When an upstream proxy is set, target DNS resolution is skipped for HTTP,
-HTTPS, ``socks5``, and ``socks5h`` so the target hostname is sent only through
-the proxy protocol. The host route consults system/Docker DNS for arbitrary
-targets only when explicit no-VPN mode is selected. With RFC1918 access
+When any remote-DNS upstream is set, target DNS resolution is skipped so the
+target hostname is sent only through the proxy protocol. The host route
+consults system/Docker DNS for arbitrary targets only when explicit no-VPN mode
+is selected. With RFC1918 access
 enabled, VPN mode additionally permits classification of names ending in
 ``.local``, ``.internal``, or ``.home.arpa``.
 Failed or empty lookups for those operator-local names fail closed instead of
 falling through to Myst DNS or an external upstream proxy. Non-empty all-global
 answers return to the selected public final hop; mixed answers fail.
 
-When ``EGRESS_UPSTREAM_PROXY_URL`` is set (e.g., Tor SOCKS proxy), the proxy
-routes its own upstream requests through that proxy. Restricted components
-reach policy instances only through their local bridges. In VPN mode, public
-proxy names use provider DNS and public proxy addresses follow the Myst route.
-Exact ``host.docker.internal`` uses its narrow route; an RFC1918 IPv4 literal
-receives only an exact proxy-endpoint route; and operator-local proxy names use
-system DNS only with ``ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true``.
+When ``EGRESS_UPSTREAM_PROXY_URL`` is set, the proxy resolves and classifies
+that configured TCP endpoint before connecting. Native Tor instead opens only
+the fixed ``/run/tor-egress/socks`` Unix socket and shares the same SOCKS5
+state machine. Restricted components reach policy instances only through their
+local bridges. In VPN mode, public proxy names use provider DNS and public
+proxy addresses follow the Myst route. Exact ``host.docker.internal`` uses its
+narrow route; an RFC1918 IPv4 literal receives only an exact proxy-endpoint
+route; and operator-local proxy names use system DNS only with
+``ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true``.
 
 Architecture::
 
@@ -51,8 +54,9 @@ Architecture::
                                    ├─ Other HTTP URL → 403 unless explicitly allowed
                                    ├─ Other HTTPS URL → CONNECT tunnel
                                    │
-                                   └── upstream ──> EGRESS_UPSTREAM_PROXY_URL (Tor/VPN)
-                                                    (if set)
+                                   └── upstream ──> configured TCP proxy or
+                                                    native-Tor Unix SOCKS
+                                                    (if selected)
 
 Restricted callers reach a fixed bridge into the applicable route-class
 listener. They always see an ordinary local HTTP proxy, regardless of the

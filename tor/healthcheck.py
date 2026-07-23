@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import socket
 import sys
 from pathlib import Path
@@ -15,6 +16,11 @@ MAX_TOTAL = 16384
 
 class HealthError(RuntimeError):
     pass
+
+
+BOOTSTRAP_PROGRESS_RE = re.compile(
+    rb"^250-status/bootstrap-phase=NOTICE BOOTSTRAP PROGRESS=([0-9]{1,3})(?: |$)"
+)
 
 
 def read_reply(connection: socket.socket) -> list[bytes]:
@@ -45,7 +51,22 @@ def command(connection: socket.socket, value: bytes) -> list[bytes]:
     return reply
 
 
-def check() -> None:
+def parse_bootstrap_progress(reply: list[bytes]) -> int:
+    matches = [
+        match.group(1)
+        for line in reply
+        if (match := BOOTSTRAP_PROGRESS_RE.match(line)) is not None
+    ]
+    if len(matches) != 1:
+        raise HealthError("control bootstrap reply has invalid progress")
+    progress = int(matches[0])
+    if not 0 <= progress <= 100:
+        raise HealthError("control bootstrap progress is out of range")
+    return progress
+
+
+def bootstrap_progress() -> int:
+    """Authenticate with Tor's private cookie and return bounded progress."""
     cookie = Path(COOKIE_PATH).read_bytes()
     if len(cookie) != 32:
         raise HealthError("invalid control cookie")
@@ -54,8 +75,11 @@ def check() -> None:
         connection.connect(SOCKET_PATH)
         command(connection, b"AUTHENTICATE " + cookie.hex().encode("ascii"))
         reply = command(connection, b"GETINFO status/bootstrap-phase")
-    fields = b" ".join(reply)
-    if b"status/bootstrap-phase=NOTICE BOOTSTRAP PROGRESS=100 " not in fields:
+    return parse_bootstrap_progress(reply)
+
+
+def check() -> None:
+    if bootstrap_progress() != 100:
         raise HealthError("Tor bootstrap is incomplete")
 
 

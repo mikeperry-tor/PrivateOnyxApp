@@ -191,13 +191,13 @@ The stock Onyx Web Crawler appears to be blocked less often than Obscura v0.1.10
 
 SearXNG always uses Obscura; `ONYX_AGENT_USE_OBSCURA_BROWSER` independently selects the built-in crawler transport.
 
-In either case, Docker Compose network-namespace routing restricts egress to the selected final hop: the default no-VPN route, the optional Myst VPN, an upstream proxy, or Myst plus that proxy. This is the case for all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
+In either case, Docker Compose network-namespace routing restricts egress to the selected final hop: the default no-VPN route, the optional Myst VPN, an upstream proxy, Myst plus that proxy, or native Tor. This is the case for all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
 
 Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Search, is supported. Connections to these services use the selected no-VPN/VPN/upstream-proxy route, but these external providers perform their accesses from their own IP address space. None of these providers offer ZDR policies to consumer end users, so your API key and account on these services will be associated with your usage activity, and this data will be stored, trained on, and/or sold by these providers.
 
 ## Optional Configurations
 
-The following sections detail optional feature configuration, including remote access via Tailscale Funnel, an outbound proxy, Myst VPN, and RAG document search.
+The following sections detail optional feature configuration, including native Tor, remote access via Tailscale Funnel, an outbound proxy, Myst VPN, and RAG document search.
 
 ### Optional: Native Tor
 
@@ -640,8 +640,8 @@ strong as Tor and may not be as strong as
 However, the [network security](./docs/internal_network_security.md) of this
 stack is robust, and [restricted selected-route egress](docs/vpn_routing_and_proxies.md)
 is enforced with Docker Compose network namespaces, service isolation, and
-least-privilege capability configuration in no-VPN, VPN, and upstream-proxy
-modes.
+least-privilege capability configuration in no-VPN, VPN, upstream-proxy, and
+native-Tor modes.
 
 The network restrictions are designed to contain agent-controlled activity:
 web search, `open_url()`, browser requests, and optionally network-enabled

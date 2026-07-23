@@ -58,7 +58,12 @@ EGRESS_UPSTREAM_PROXY_URL ?= $(call env_value,EGRESS_UPSTREAM_PROXY_URL)
 TOR_EGRESS_ENABLED ?= $(or $(call env_value,TOR_EGRESS_ENABLED),false)
 TOR_ONION_SERVICE_ENABLED ?= $(or $(call env_value,TOR_ONION_SERVICE_ENABLED),false)
 TOR_EXIT_COUNTRY ?= $(call env_value,TOR_EXIT_COUNTRY)
-TOR_EXIT_NODE_FINGERPRINTS ?= $(call env_value,TOR_EXIT_NODE_FINGERPRINTS)
+ifneq ($(filter command line environment,$(origin TOR_EXIT_NODE_FINGERPRINTS)),)
+override TOR_EXIT_NODE_FINGERPRINTS := $(value TOR_EXIT_NODE_FINGERPRINTS)
+export TOR_EXIT_NODE_FINGERPRINTS
+else
+TOR_EXIT_NODE_FINGERPRINTS := $(call env_value,TOR_EXIT_NODE_FINGERPRINTS)
+endif
 ONYX_WEB_CANONICAL_ORIGIN ?= $(or $(call env_value,ONYX_WEB_CANONICAL_ORIGIN),http://localhost:3000)
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
@@ -358,7 +363,7 @@ help:
 	@echo "  make check                     # Run deterministic tests and local static checks"
 	@echo "  make test-images               # Validate patches against already-built pinned images"
 	@echo "  make test-tor-image            # Validate the selected local Tor wrapper image"
-	@echo "  make check-upgrade             # Run check plus pinned-image and disposable OpenSearch validation"
+	@echo "  make check-upgrade             # Run check plus Onyx/Tor image and disposable OpenSearch validation"
 	@echo "  make health-inventory          # Print effective lite/full health cadence inventory"
 	@echo "  make adopt-shared-data-engine  # Repair Docker vs Podman data-dir owner based on CONTAINER_BIN env value"
 	@echo "  make upgrade                   # Upgrade Python locks, pull changed image tags, rebuild containers, run Onyx deployment"
@@ -428,7 +433,8 @@ test-tor-image:
 	fi
 	@python3 tests/validate_tor_image.py \
 		--engine "$(CONTAINER_BIN)" \
-		--image "$(TOR_IMAGE)"
+		--image "$(TOR_IMAGE)" \
+		--base-image "$(TOR_BASE_IMAGE)"
 
 test-opensearch-image:
 	@set -eu; \
@@ -474,6 +480,7 @@ integration-opensearch-onyx:
 check-upgrade:
 	@$(MAKE) --no-print-directory check
 	@$(MAKE) --no-print-directory test-images
+	@$(MAKE) --no-print-directory test-tor-image
 	@$(MAKE) --no-print-directory test-opensearch-image
 
 upgrade: upgrade-python-deps myst-build teep-build searxng-build executor-build tor-build tailscale-image-ready obscura-image-ready upgrade-onyx
@@ -499,12 +506,7 @@ obscura-image-ready:
 
 tor-preflight:
 	@python3 tor/render_config.py validate \
-		--egress "$(TOR_EGRESS_ENABLED)" \
-		--onion "$(TOR_ONION_SERVICE_ENABLED)" \
-		--country "$(TOR_EXIT_COUNTRY)" \
-		--fingerprints "$(TOR_EXIT_NODE_FINGERPRINTS)" \
-		--upstream-proxy "$(EGRESS_UPSTREAM_PROXY_URL)" \
-		--canonical-origin "$(ONYX_WEB_CANONICAL_ORIGIN)"
+		--settings-file "$(ENV_FILE)"
 
 tor-image-ready:
 	@if [ "$(TOR_EGRESS_ENABLED)" != "true" ] && [ "$(TOR_ONION_SERVICE_ENABLED)" != "true" ]; then exit 0; fi; \
@@ -528,12 +530,7 @@ tor-config-ready:
 	mkdir -p docker-data/tor/config docker-data/tor/state; \
 	chmod 0700 docker-data/tor/state; \
 	python3 tor/render_config.py render \
-		--egress "$(TOR_EGRESS_ENABLED)" \
-		--onion "$(TOR_ONION_SERVICE_ENABLED)" \
-		--country "$(TOR_EXIT_COUNTRY)" \
-		--fingerprints "$(TOR_EXIT_NODE_FINGERPRINTS)" \
-		--upstream-proxy "$(EGRESS_UPSTREAM_PROXY_URL)" \
-		--canonical-origin "$(ONYX_WEB_CANONICAL_ORIGIN)" \
+		--settings-file "$(ENV_FILE)" \
 		--output docker-data/tor/config/torrc
 
 searxng-image-ready:
