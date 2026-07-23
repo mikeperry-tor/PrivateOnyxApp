@@ -195,13 +195,23 @@ claim after stopping that exact project; `make up-*` instead adopts the same
 claim, stops the standalone project, and starts integrated Myst with the
 preserved wallet bind.
 
-PostgreSQL requires three linked settings:
+PostgreSQL requires four linked settings:
 
 - `userns_mode: keep-id:uid=70,gid=70` maps the Podman machine user to the
   Alpine image's PostgreSQL account;
+- `net.ipv4.ping_group_range=70 70` keeps rootless crun's namespace sysctl
+  inside that mapped group, without granting another group raw ICMP;
 - `user: "70:70"` starts the database with that account; and
 - `entrypoint: ["postgres"]` bypasses the stock image entrypoint only for the
   already-initialized shared cluster.
+
+The external Compose provider can submit independent `keep-id` container
+creates concurrently through Podman's compatibility API. On macOS, that can
+leave one container with only its requested one-ID mapping and make its
+`devpts` mount fail. Podman startup therefore creates PostgreSQL, full-mode
+OpenSearch, and optional Tor containers serially before creating the remaining
+graph. Keep these targeted `up --no-start --no-deps` operations ordered
+whenever another Podman-only service needs a distinct `keep-id` mapping.
 
 The entrypoint bypass is essential. Its unconditional `chmod 0700` on
 `PGDATA` makes macOS virtiofs create a root-owned

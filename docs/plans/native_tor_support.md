@@ -1222,12 +1222,13 @@ deferred Tor-over-Myst or multi-origin work.
   identity use host binds; only Tor writes the runtime volume, only the two
   policy proxies mount it read-only, and only Tor receives the private control
   tmpfs.
-- Deterministic validation: `make check` passed 366 tests; focused renderer,
+- Deterministic validation: `make check` passed 367 tests; focused renderer,
   effective-model, immutable-pin, frontend, and final-hop proxy suites passed.
   Docker and Podman focused image checks passed. Docker full mode became
   healthy with both Tor roles and passed `integration-opensearch` and
-  `integration-opensearch-onyx`; a real SearXNG query returned results through
-  the Tor-routed browser path.
+  `integration-opensearch-onyx`; after the Podman engine restart, combined
+  Podman full mode also became healthy and passed both integrations. A real
+  SearXNG query returned results through the Tor-routed browser path.
 - Live ingress: combined lite mode passed on Docker 29.6.1/29.6.1 and Podman
   client 5.8.5/server 5.8.1 with Tailscale enabled and Myst disabled.
   Independent localhost, Tailscale, and onion registrations/logins, `/api/me`,
@@ -1237,23 +1238,25 @@ deferred Tor-over-Myst or multi-origin work.
 - Live egress/failure evidence: both engines reported Tor for an ordinary HTTPS
   request through the public final-hop proxy. Stopping Tor caused requests to
   fail with no fallback and recovery followed Tor health. A strict available
-  `us` selector completed an ordinary request. The syntactically valid unknown
-  `zz` selector logged as unrecognized and held the final-hop tier behind Tor
+  `us` selector and a privately captured fixed exit fingerprint each completed
+  an ordinary request on Podman. The syntactically valid unknown `zz` country
+  and an unavailable all-zero fingerprint held the final-hop tier behind Tor
   startup health with no unrestricted route. Control health advertised
   cookie-only authentication, rejected an unauthenticated query, and returned
   bootstrap completion after cookie authentication.
-- Engine-specific finding: repeated normal Podman down/up passed. An additional
-  optional Podman VM stop/start probe exposed an external Podman/libkrun
-  regression: the 5.8.5 client reported a successful VM start, then the VM
-  exited and its SSH/API port refused connections. No Compose workaround was
-  added. The mandatory Podman gate had completed before that probe.
-- Omitted live rows: a successful fixed-fingerprint request was not run;
-  fingerprint rendering, normalization, duplicate/injection rejection, and
-  no-fallback semantics are covered deterministically. A user-level
-  `open_url` tool invocation and document-specific full-RAG `internal_search`
-  were not run; the underlying Tor HTTPS route, real search path, full health,
-  embedding readiness, and pinned Onyx/OpenSearch integration were exercised.
+- Engine-specific finding: after the Podman engine was restarted, a clean
+  multi-`keep-id` launch exposed a compatibility-API creation race. One
+  PostgreSQL container received only its requested one-ID map and failed its
+  `devpts` mount; rootless crun also required PostgreSQL's
+  `ping_group_range` to stay within the mapped GID. Podman startup now creates
+  PostgreSQL, full-mode OpenSearch, and optional Tor serially before the
+  remaining graph, and PostgreSQL explicitly uses `70 70`. Clean lite and full
+  launches then produced complete maps and passed. The embedding shim still
+  creates its dependency graph before native startup-health translation.
+- Omitted live rows: a user-level `open_url` tool invocation and
+  document-specific full-RAG `internal_search` were not run; the underlying Tor
+  HTTPS route, real search path, full health, embedding readiness, and pinned
+  Onyx/OpenSearch integration were exercised.
 - Final state at handoff: both wrapper stacks are down, shared-data ownership is
-  released, Docker remains available, and the Podman VM is stopped after the
-  failed optional restart probe. Persistent onion state is retained without
-  exposing its address.
+  released, both engines remain available, and the restarted Podman VM remains
+  running. Persistent onion state is retained without exposing its address.

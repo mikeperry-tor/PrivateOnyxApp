@@ -517,6 +517,33 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertNotIn("prepare-podman-opensearch-data", lite_prerequisites)
         self.assertNotIn("PODMAN_SHARE_DOCKER_", makefile)
 
+    def test_podman_keep_id_containers_are_created_serially(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        lite_recipe = makefile.split(
+            "up-lite: claim-shared-data-engine", 1
+        )[1].split("\n\nup-full:", 1)[0]
+        full_recipe = makefile.split(
+            "up-full: claim-shared-data-engine", 1
+        )[1].split("\n\nembedding-ready-once:", 1)[0]
+
+        lite_postgres = 'up --no-start --no-deps relational_db'
+        lite_tor = 'up --no-start --no-deps tor'
+        lite_graph = 'compose $(ONYX_COMPOSE_ENV_FILES) create\n'
+        self.assertLess(lite_recipe.index(lite_postgres), lite_recipe.index(lite_tor))
+        self.assertLess(lite_recipe.index(lite_tor), lite_recipe.index(lite_graph))
+
+        full_postgres = 'up --no-start --no-deps relational_db'
+        full_opensearch = 'up --no-start --no-deps opensearch'
+        full_tor = 'up --no-start --no-deps tor'
+        full_shim = 'create local-embedding-shim'
+        full_graph = 'compose $(ONYX_COMPOSE_ENV_FILES) create\n'
+        self.assertLess(
+            full_recipe.index(full_postgres), full_recipe.index(full_opensearch)
+        )
+        self.assertLess(full_recipe.index(full_opensearch), full_recipe.index(full_tor))
+        self.assertLess(full_recipe.index(full_tor), full_recipe.index(full_shim))
+        self.assertLess(full_recipe.index(full_shim), full_recipe.index(full_graph))
+
     def test_shared_data_engine_claim_wraps_stack_lifecycle(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn(

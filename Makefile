@@ -636,6 +636,10 @@ endif
 
 up-lite: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready
 ifeq ($(PODMAN_SELECTED),true)
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
+ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps tor
+endif
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
 	@COMPOSE_FILE=$(LITE_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
@@ -645,6 +649,11 @@ up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
 up-full: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
 ifeq ($(PODMAN_SELECTED),true)
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps opensearch
+ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps tor
+endif
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif

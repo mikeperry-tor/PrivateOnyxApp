@@ -25,6 +25,9 @@ services:
   # `:U` recursive chown is rejected by this macOS virtiofs path.
   relational_db:
     userns_mode: "keep-id:uid=70,gid=70"
+    # Rootless crun can apply only groups present in this keep-id mapping.
+    sysctls:
+      net.ipv4.ping_group_range: "70 70"
     user: "70:70"
     entrypoint: ["postgres"]
     volumes: !override

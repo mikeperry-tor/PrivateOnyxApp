@@ -365,6 +365,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             services = model["services"]
             postgres = services["relational_db"]
             self.assertEqual(postgres["userns_mode"], "keep-id:uid=70,gid=70")
+            self.assertEqual(
+                postgres["sysctls"]["net.ipv4.ping_group_range"],
+                "70 70",
+            )
             self.assertEqual(postgres["user"], "70:70")
             self.assertEqual(postgres["entrypoint"], ["postgres"])
             self.assertEqual(
