@@ -273,7 +273,7 @@ remote-proxy limitations.
 
 ### Optional: Myst VPN Setup
 
-Myst is disabled by default. Skip this section unless you have explicitly set `MYST_VPN_ENABLED=true` in `.env.wrapper`. In the default no-VPN mode, no wallet, identity, registration, or payment is required, and `make up-lite` / `make up-full` proceeds directly to starting the stack.
+Myst is disabled by default. Skip this section unless you have explicitly set `MYST_VPN_ENABLED=true` in `.env.wrapper`. In the default no-VPN mode, no Myst daemon, wallet, identity, registration, or payment is required; a lightweight sentinel only validates the shared namespace's direct route, and `make up-lite` / `make up-full` proceeds directly to starting the stack.
 
 The Mysterium VPN requires a funded wallet (paid in cryptocurrency) before it can connect. The signup process is handled by a standalone container that creates a cryptographic identity and registers it on-chain (Mysterium sponsors the gas fees).
 

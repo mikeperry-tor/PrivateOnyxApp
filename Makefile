@@ -292,7 +292,7 @@ help:
 	@echo "  make embedserv-install      # Create embedserv venv, download the MLX model, and verify it"
 	@echo "  make embedserv-verify-model # Re-verify an already installed MLX embedding model"
 	@echo ""
-	@echo "VPN setup and payment:"
+	@echo "VPN setup and payment (requries MYST_VPN_ENABLED=true):"
 	@echo "  make vpn-signup-orderform   # Start standalone Myst container, create identity + CoinGate order, show payment URL"
 	@echo "  make vpn-signup-blockchain  # Start standalone Myst container, create identity, show channel address for direct MYST transfer"
 	@echo "  make vpn-signup-stop        # Stop the standalone Myst signup container"
@@ -312,7 +312,7 @@ help:
 	@echo "Configuration:"
 	@echo "  Version manifest: $(VERSION_FILE) (override with VERSION_FILE=...)"
 	@echo "  Override env file: make up-lite ENV_FILE=.env.wrapper"
-	@echo "  Disable VPN: set MYST_VPN_ENABLED=false in $(ENV_FILE) to idle myst-client without kill-switch/connect"
+	@echo "  Enable VPN: set MYST_VPN_ENABLED=true in $(ENV_FILE) to enable Myst VPN setup + egress"
 	@echo "  Proxy: set EGRESS_UPSTREAM_PROXY_URL in $(ENV_FILE) (http/https/socks5)"
 	@echo "         to route Onyx helpers, Obscura, and network-enabled executor egress"
 

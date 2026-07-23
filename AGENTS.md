@@ -95,6 +95,9 @@ proxy settings or caller discipline alone.
   socket-free owner. Preserve their bounded, fail-closed behavior and the
   startup/no-VPN non-arming rules documented in
   `docs/vpn_routing_and_proxies.md` and `docs/resource_minimization.md`.
+- In default no-VPN mode, `netns-holder` remains the namespace owner and the
+  Myst container runs only an inert readiness sentinel. Do not start the Myst
+  daemon or route-reconciliation loop in that mode.
 - Myst signup is a non-restarting, host-driven workflow separate from integrated
   startup. Never retry an ambiguous financial mutation; see
   `docs/onyx_patches_upgrade.md` when upgrading Myst.

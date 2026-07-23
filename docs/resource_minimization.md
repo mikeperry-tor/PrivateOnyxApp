@@ -170,9 +170,11 @@ are not duplicate enforcement.
 
 ### Optional Myst routing
 
-- Myst VPN is disabled by default. In explicit no-VPN mode its container
-  remains only as the stable routing-namespace owner; it requires no wallet or
-  tunnel and never arms VPN recovery.
+- Myst VPN is disabled by default. In explicit no-VPN mode `netns-holder`
+  continues to own the stable routing namespace, while the Myst container runs
+  only an inert readiness sentinel. It starts no Myst daemon or route-
+  reconciliation loop, requires no wallet or tunnel, and never arms VPN
+  recovery.
 
 - Route exemptions and WireGuard MTU are reconciled every 20 seconds, preserving
   hostname-DNS refresh and the repair bound.

@@ -94,21 +94,14 @@ fi
 install_shutdown_handler
 
 # ── Optional VPN bypass ────────────────────────────────────────────────────
-# When MYST_VPN_ENABLED=false, start the daemon in idle mode: no kill-switch
-# is armed, no connect attempt is made, and no identity/registration/funding
-# flow runs. The container still joins netns-holder so namespace references
-# stay valid; traffic egresses directly via the Docker bridge.
+# When MYST_VPN_ENABLED=false, retain this container only as a lightweight
+# readiness sentinel for the shared namespace. netns-holder, not this process,
+# owns that namespace. The container healthcheck still verifies that no stale
+# myst0 exists and that the direct IPv4 default route is usable, while the Myst
+# daemon, kill-switch, connection, and identity/payment paths remain absent.
 if [ "${MYST_VPN_ENABLED:-true}" = "false" ]; then
-  echo "MYST_VPN_ENABLED=false: starting myst daemon in idle mode (no kill-switch, no connect)."
-  # Defense-in-depth: ensure the daemon does not install firewall/kill-switch
-  # rules even if a tunnel is somehow established.
-  export MYST_FIREWALL_ENABLED=false
-  set -- --local-service-discovery=false --consumer
-  if [ -n "${MYST_VPN_WIREGUARD_MTU:-}" ]; then
-    set -- "$@" --wireguard.mtu="${MYST_VPN_WIREGUARD_MTU}"
-  fi
-  set -- "$@" daemon
-  /usr/local/bin/docker-entrypoint.sh "$@" &
+  echo "MYST_VPN_ENABLED=false: Myst daemon disabled; starting no-VPN readiness sentinel."
+  sleep infinity &
   svc_pid="$!"
   set +e
   wait "$svc_pid"
@@ -116,6 +109,8 @@ if [ "${MYST_VPN_ENABLED:-true}" = "false" ]; then
   set -e
   exit "${svc_status}"
 fi
+
+# ── VPN-enabled daemon lifecycle ───────────────────────────────────────────
 
 # Myst wireguard DNS manager invokes <script-dir>/update-resolv-conf on Unix.
 # In containerized namespace-sharing mode, keep DNS managed by Docker.

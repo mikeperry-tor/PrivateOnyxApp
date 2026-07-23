@@ -72,6 +72,19 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("Multiple Myst identities exist", entrypoint)
         self.assertIn("explicit signup repair is required", entrypoint)
 
+    def test_no_vpn_entrypoint_uses_inert_readiness_sentinel(self) -> None:
+        entrypoint = (ROOT / "myst/myst-client-entrypoint.sh").read_text(encoding="utf-8")
+        no_vpn_branch = entrypoint.split("# ── Optional VPN bypass", 1)[1].split(
+            "# ── VPN-enabled daemon lifecycle", 1
+        )[0]
+
+        self.assertIn('if [ "${MYST_VPN_ENABLED:-true}" = "false" ]', no_vpn_branch)
+        self.assertIn("sleep infinity &", no_vpn_branch)
+        self.assertIn('wait "$svc_pid"', no_vpn_branch)
+        self.assertNotIn("docker-entrypoint.sh", no_vpn_branch)
+        self.assertNotIn("myst-route-reconciliation.sh", no_vpn_branch)
+        self.assertNotIn('set -- "$@" daemon', no_vpn_branch)
+
     def test_signup_compose_model_has_no_restart_and_explicit_setup_mode(self) -> None:
         result = subprocess.run(
             [

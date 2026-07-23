@@ -44,6 +44,8 @@
 # signup/payment state.
 #
 # ── Startup sequence ──────────────────────────────────────────────────────────
+# With MYST_VPN_ENABLED=false, skip the daemon and run only an inert process;
+# the healthcheck validates the shared namespace's direct route. Otherwise:
 # 1. Start the Myst daemon (TequilAPI on 127.0.0.1:4050).
 # 2. Wait for TequilAPI to become reachable.
 # 3. In setup-only mode, wait for explicit host-side commands indefinitely.
@@ -164,12 +166,12 @@ services:
       - ./myst-readiness.sh:/usr/local/bin/myst-readiness.sh:ro
       - ./myst-healthcheck.sh:/usr/local/bin/myst-healthcheck.sh:ro
     environment:
-      # Master switch for the Mysterium VPN. When "false", the entrypoint
-      # starts the daemon in idle mode: no kill-switch is armed, no connect
-      # attempt is made, and readiness requires a non-myst0 IPv4 default route
-      # with no stale myst0. Docker interface numbering depends on network
-      # attachment order. The container still joins netns-holder so namespace
-      # references stay valid. See myst/myst-client-entrypoint.sh.
+      # Master switch for the Mysterium VPN. When "false", the entrypoint skips
+      # the Myst daemon and runs only an inert readiness sentinel. Health still
+      # requires a non-myst0 IPv4 default route with no stale myst0. Docker
+      # interface numbering depends on network attachment order. In the wrapper,
+      # this container joins the namespace owned by netns-holder. See
+      # myst/myst-client-entrypoint.sh.
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
       MYST_AUTO_CONNECT: "${MYST_AUTO_CONNECT:-true}"
       # Standalone signup mode starts only the daemon. Identity, registration,
@@ -211,9 +213,8 @@ services:
       MYST_SKIP_UPDATE_RESOLV_CONF: "true"
       # Legacy firewall-related toggle kept separate from NAT traversal bypasses.
       MYST_FIREWALL_DETECTION_ENABLED: "${MYST_FIREWALL_DETECTION_ENABLED:-true}"
-      # Fail-closed: block traffic if connection drops.
-      # The idle path (MYST_VPN_ENABLED=false) overrides this to "false" at
-      # runtime in myst-client-entrypoint.sh for defense-in-depth.
+      # Fail-closed: block traffic if connection drops. No daemon reads this
+      # setting when MYST_VPN_ENABLED=false.
       MYST_FIREWALL_ENABLED: "${MYST_FIREWALL_ENABLED:-true}"
     healthcheck:
       # VPN mode requires Connected plus a usable myst0 IPv4 route. Explicit

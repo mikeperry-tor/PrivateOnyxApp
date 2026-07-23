@@ -68,8 +68,9 @@ services:
       # WireGuard MTU override to fix HTTPS timeouts on path MTU constraints
       # Set to 1280 to work around ISP upstream path MTU constraints
       MYST_VPN_WIREGUARD_MTU: "${MYST_VPN_WIREGUARD_MTU:-1280}"
-      # Master VPN switch. When "false", myst-client idles the daemon without
-      # arming the kill-switch or connecting. See .env.wrapper.example.
+      # Master VPN switch. When "false", myst-client runs only the lightweight
+      # namespace-readiness sentinel; no Myst daemon, kill-switch, or connection
+      # is started. See .env.wrapper.example.
       MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
     depends_on:
       netns-holder:

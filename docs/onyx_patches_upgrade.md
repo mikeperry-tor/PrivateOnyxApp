@@ -561,6 +561,11 @@ unready, and exact startup/no-VPN non-arming behavior. Reconfirm that the
 health command has no container-engine socket and remains the only periodic
 readiness owner.
 
+In explicit no-VPN mode, also confirm that `netns-holder` remains the namespace
+owner, the Myst container starts only its inert readiness sentinel, no Myst
+daemon or route-reconciliation loop exists, and the unchanged healthcheck
+rejects a stale `myst0` or missing direct default route on both engines.
+
 ### Pinned Myst signup and payment CLI contracts
 
 The standalone signup container is a non-restarting, TequilAPI-only service.

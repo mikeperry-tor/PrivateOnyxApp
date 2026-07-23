@@ -223,6 +223,9 @@ termination, after which `restart: unless-stopped` restarts Myst in the stable
 holder namespace. Initial and explicit no-VPN failures remain visible without
 self-restart. The Docker-socket limitation therefore applies only to the
 unrelated standalone code-interpreter service used by ordinary chat.
+In no-VPN mode on either engine, `netns-holder` still owns the namespace and
+the Myst container runs only its inert readiness sentinel; the daemon and
+route-reconciliation loop are absent.
 
 ## Startup-health translation
 

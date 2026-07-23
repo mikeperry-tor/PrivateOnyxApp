@@ -127,8 +127,8 @@ configured operations continue to use their documented container route class.
 
 ## Optional VPN and default no-VPN lifecycle
 
-`netns-holder` gives route-owning processes a stable namespace. Myst and the
-final-hop proxies are trusted co-resident processes; optional Teep or
+`netns-holder` owns the stable namespace used by route-owning processes. Myst
+and the final-hop proxies are trusted co-resident processes; optional Teep or
 Tailscale routing switches deliberately promote those processes into the same
 namespace. This is a routing boundary, not a sandbox between its residents.
 Onyx applications never join it.
@@ -188,12 +188,14 @@ repeat the same operations. This reduces stable-state commands, netlink writes,
 and logs without weakening reconnect repair or changing route ownership; an
 event-driven replacement remains deferred.
 
-With the default `MYST_VPN_ENABLED=false`, the Myst container idles as namespace
-owner, requires no wallet, and readiness requires that no stale `myst0` remains
-plus a usable IPv4 default route. The health supervisor delegates that predicate
-without creating recovery state or signaling PID 1. Switching a live namespace
-from VPN to no-VPN requires tearing down the old stack so a stale interface
-cannot survive.
+With the default `MYST_VPN_ENABLED=false`, the Myst daemon and its route-
+reconciliation loop are not started. The Myst container retains only an inert
+process so its existing healthcheck can act as a readiness sentinel for the
+namespace owned by `netns-holder`: no wallet is required, no stale `myst0` may
+remain, and a usable IPv4 default route must exist. The health supervisor
+delegates that predicate without creating recovery state or signaling PID 1.
+Switching a live namespace from VPN to no-VPN requires tearing down the old
+stack so a stale interface cannot survive.
 
 Configured upstream failures, VPN disconnects, proxy DNS failures, rejected
 destinations, and broken bridges all fail closed. Policy-rejected destinations
