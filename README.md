@@ -141,7 +141,7 @@ Most likely variables you want to change:
   - Set `TOR_EGRESS_ENABLED=true` to route public agent Internet traffic through native Tor, and/or set `TOR_ONION_SERVICE_ENABLED=true` to publish the WebUI as a v3 onion service. `TOR_EXIT_COUNTRY` or `TOR_EXIT_NODE_FINGERPRINTS` may optionally constrain clearnet exits.
   - Set `MYST_VPN_ENABLED=true` to enable the optional Myst VPN, then complete **Optional: Myst VPN Setup** below before starting the stack.
   - You may use an upstream proxy with or without the Mysterium VPN enabled (`EGRESS_UPSTREAM_PROXY_URL`).
-  - Native Tor egress cannot currently be combined with `EGRESS_UPSTREAM_PROXY_URL`, but it can run alongside Myst. See [`docs/plans/deferred/https_proxy_after_tor.md`](./docs/plans/deferred/https_proxy_after_tor.md) for a plan to support HTTPS proxies after Tor; [file an issue](https://github.com/mikeperry-tor/PrivateOnyxApp/issues) if you are aware of any Zero Data Retention HTTPS proxy providers.
+  - Native Tor egress cannot currently be combined with `EGRESS_UPSTREAM_PROXY_URL`, but it can run alongside Myst. See [`docs/plans/deferred/https_proxy_after_tor.md`](./docs/plans/deferred/https_proxy_after_tor.md) for a plan to support HTTPS proxies after Tor; [file an issue](https://github.com/mikeperry-tor/PrivateOnyxApp/issues/new) if you are aware of any Zero Data Retention HTTPS proxy providers.
   - Tor egress does not currently route Teep provider traffic or Tailscale traffic. Those components use their direct routes by default; use `TEEP_ROUTE_THROUGH_MYST_VPN=true` and/or `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` to route them through Myst while agent egress uses Tor. Onion ingress remains compatible with all of these final-hop choices.
   - For detailed Tor behavior and the full routing matrix, see [`docs/native_tor_support.md`](docs/native_tor_support.md) and [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
@@ -639,51 +639,56 @@ The following endpoints are exposed to your docker host:
 - teep prometheus metrics: `http://localhost:8337/metrics`
 - Full-mode local document display: [`http://localhost:8091`](http://localhost:8091)
 
-## Privacy of this stack
+## Privacy and Security of this stack
 
-This stack should be regarded as a proof-of-concept. Private verified inference
-can keep LLM query contents from inference providers, while self-hosted browsing
-avoids sending search activity to commercial search APIs. The default explicit
-no-VPN route does not hide your public IP address from destination sites.
-Enabling the optional single-hop Myst VPN changes that exposure, but is not as
-strong as Tor and may not be as strong as
-[Tinfoil's distributed trust architecture](https://tinfoil.sh/security-and-privacy-faq#web-search).
+Private verified inference keeps LLM query contents from inference providers,
+while self-hosted browsing avoids sending search activity to commercial search
+APIs.
 
-However, the [network security](./docs/internal_network_security.md) of this
+The [network security](./docs/internal_network_security.md) of this
 stack is robust, and [restricted selected-route egress](docs/vpn_routing_and_proxies.md)
 is enforced with Docker Compose network namespaces, service isolation, and
 least-privilege capability configuration in no-VPN, VPN, upstream-proxy, and
 native-Tor modes.
 
-The network restrictions are designed to contain agent-controlled activity:
-web search, `open_url()`, browser requests, and optionally network-enabled
-generated code cannot reach host, LAN, metadata, or stack-managed service
-addresses. Configured MCP/Web integrations and inference/embedding endpoints
-can be granted narrower local access. This separation is not a sandbox for a
-fully compromised Onyx application; such a compromise may abuse the local
-destinations that Onyx is legitimately configured to use.
-
 If the host OS routes container-engine traffic through its own VPN, that route
 acts as a first hop in both the default no-Myst mode and before an explicitly
 enabled Mysterium endpoint. The wrapper does not require or configure a host
-VPN. Traffic explicitly routed through Myst continues to use TLS or HTTPS after
-leaving its exit.
+VPN.
 
-Obscura uses a stable browser vendor/version profile with some per-navigation fingerprint variation, while the stock Onyx Web Crawler uses a fixed browser configuration. Obscura-backed requests clear cookies before each navigation, while the default stock crawler does not retain cookies between requests. No other browser state or browser-based tracking information is preserved.
+These network restrictions are designed to contain agent-controlled activity:
+web search, `open_url()`, browser requests, and optionally network-enabled
+generated code cannot reach host, LAN, metadata, or stack-managed service
+addresses. Unencrypted public HTTP url access is blocked by default; agents
+may only access HTTPS urls.
 
-### Why not just use Tor by default?
+Obscura uses a stable browser vendor/version profile with some per-navigation
+fingerprint variation, while the stack's default Onyx Web Crawler uses a fixed
+browser configuration. Both Obscura and the default Onyx Web Crawler clear
+cookies between every browser navigation. No other browser state or browser-based
+tracking information is preserved.
 
-Native Tor egress is optionally available with `TOR_EGRESS_ENABLED=true`; a separately
-managed Tor proxy may still be selected through `EGRESS_UPSTREAM_PROXY_URL`,
-but the two settings are mutually exclusive. See
-[`docs/vpn_routing_and_proxies.md`](./docs/vpn_routing_and_proxies.md) and
-[`docs/internal_network_security.md`](./docs/internal_network_security.md) for
-the enforced route and trust boundaries.
+Configured MCP/Web integrations and inference/embedding endpoints
+can be granted narrower local access. This separation is not a sandbox for a
+fully compromised Onyx application; such a compromise may abuse the local
+destinations that Onyx is configured to use. By default, such a compromise
+grants access only to ports listening on your docker host localhost interface.
 
-It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that does not use Tor by default. This was a pragmatic choice to produce something that functioned.
+By default, the stack uses no VPN, no Tor, and no proxy; only the host VPN (if any)
+is used. VPN, Tor, and proxy settings must be configured in `.env.wrapper`.
+
+### The Anti-Bot Landscape is also Anti-Privacy
+
+It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that provides a VPN option. This was a pragmatic choice to produce something that functioned.
 
 The reality is that many websites subject Tor and datacenter VPNs to increased captchas and bans compared to [residential IP addresses](https://acid.vegas/blog/the-shady-world-of-ip-leasing/). The most egregious example is Google's move to update [ReCaptcha to require an official Google device, while exempting "official" AI scrapers](https://www.financialexpress.com/life/technology-google-qr-captcha-controversy-explained-why-internet-is-scared-of-this-4237640/).
 
-For operators who need a residential exit, Mysterium is the supported optional choice because its server side is open source and payment can be made in cryptocurrency. Operators who do not need that tradeoff can retain the default no-VPN route or configure another upstream proxy.
+Clouldflare has "come to the rescue" with their [web bot auth](https://blog.cloudflare.com/web-bot-auth/) program and their [monetization gateway](https://blog.cloudflare.com/monetization-gateway/), but these systems do not support privacy of any kind. Personally, I find micropayments preferable to captchas, gated approval whitelists, and IP address bans for us plebs, but as implemented they are just another form of web tracking identifier, except you're additionally publishing your agent's browsing wallet activity on public blockchains...
+
+Privacy-preserving x402 micropayment middleware exists in various [stages](https://github.com/DVB-ANRS/SecretPay) of [prototype](https://github.com/Micopay/micopay-protocol/tree/main), but x402 payments themmselves do not yet have widespread adoption.
+
+In the meantime, for users who need a residential IP address exit, Mysterium is the supported optional choice because its server side is open source and payment can be made in cryptocurrency. Operators who do not need that tradeoff can retain the default no-VPN route or configure another upstream proxy.
+
+An upstream proxy currently can also be configured with or without Myst VPN, but this proxy access is [not yet supported](./docs/plans/deferred/https_proxy_after_tor.md) via Tor. If you know of any proxy providers that suport ZDR, please [file a ticket](https://github.com/mikeperry-tor/PrivateOnyxApp/issues/new).
 
 You can monitor SearXNG search-engine success statistics on the "Engines" tab of the [Preferences Pane](http://localhost:8080/preferences), if you want to test your success with Tor usage, other proxy providers, or your host VPN.
