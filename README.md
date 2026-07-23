@@ -120,13 +120,15 @@ Edit `.env.wrapper` as needed, based on the `.env.wrapper.example` template.
 
 Most likely variables you want to change:
 
-- Container engine selection:
-  - Keep `CONTAINER_BIN=docker` for Docker, or set it to `podman` for Podman.
-    You must perform a clean `make down-*` when switching engines; this is enforced
+- **Container engine selection**:
+  - Set `CONTAINER_BIN=podman` to use Podman instead of Docker.
+  - You must perform a clean `make down-*` when switching engines; this is enforced
     in the stack's startup code to prevent shared database corruption in the
-    bind-mounted `docker-data` directory. Otherwise, switching engines is safe.
-  - On rootless Podman, the Docker-socket code interpreter remains unavailable.
-- Teep LLM Provider/API config:
+    bind-mounted `docker-data` directory. Otherwise, switching between engines is safe
+    to do at a later point.
+  - On rootless Podman, the code interpreter tool and the code subagent are unavailable,
+    due to docker-from-docker launch compatibility issues.
+- **Teep LLM Provider/API config**:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **WebUI canonical origin**:
   - Leave `WEBUI_CANONICAL_ORIGIN=http://localhost:3000` unless Tailscale,
@@ -134,15 +136,13 @@ Most likely variables you want to change:
   - Onyx uses this one origin for invitation and password-reset links, generated
     absolute links, identity-provider and MCP OAuth callbacks, origin-checked
     voice WebSockets, and the `Secure` attribute on authentication and CSRF
-    cookies. Other enabled hostnames can still provide ordinary login, API, and
-    chat with separate browser sessions, subject to the scheme limitation
-    described in [`docs/native_tor_support.md`](docs/native_tor_support.md).
+    cookies.
 - **Tor, VPN, and Proxy Use**:
   - Set `TOR_EGRESS_ENABLED=true` to route public agent Internet traffic through native Tor, and/or set `TOR_ONION_SERVICE_ENABLED=true` to publish the WebUI as a v3 onion service. `TOR_EXIT_COUNTRY` or `TOR_EXIT_NODE_FINGERPRINTS` may optionally constrain clearnet exits.
   - Set `MYST_VPN_ENABLED=true` to enable the optional Myst VPN, then complete **Optional: Myst VPN Setup** below before starting the stack.
-  - You may use an upstream proxy with or without the Mysterium VPN enabled (`EGRESS_UPSTREAM_PROXY_URL`).
-  - Native Tor egress cannot currently be combined with `EGRESS_UPSTREAM_PROXY_URL`, but it can run alongside Myst. See [`docs/plans/deferred/https_proxy_after_tor.md`](./docs/plans/deferred/https_proxy_after_tor.md) for a plan to support HTTPS proxies after Tor; [file an issue](https://github.com/mikeperry-tor/PrivateOnyxApp/issues/new) if you are aware of any Zero Data Retention HTTPS proxy providers.
-  - Tor egress does not currently route Teep provider traffic or Tailscale traffic. Those components use their direct routes by default; use `TEEP_ROUTE_THROUGH_MYST_VPN=true` and/or `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` to route them through Myst while agent egress uses Tor. Onion ingress remains compatible with all of these final-hop choices.
+  - Set `EGRESS_UPSTREAM_PROXY_URL` to use an upstream proxy with or without the Mysterium VPN enabled. You can use your host Tor Browser SOCKS port here instead of launching the built-in Tor container.
+  - Native `TOR_EGRESS_ENABLE=true` Tor egress cannot currently be combined with `EGRESS_UPSTREAM_PROXY_URL`, but it can run alongside Myst. See [`docs/plans/deferred/https_proxy_after_tor.md`](./docs/plans/deferred/https_proxy_after_tor.md) for a plan to support HTTPS proxies after Tor; [file an issue](https://github.com/mikeperry-tor/PrivateOnyxApp/issues/new) if you are aware of any Zero Data Retention HTTPS proxy providers that justify adding this support.
+  - Tor egress does not currently route Teep provider traffic or Tailscale traffic through Tor. Those components use their direct routes by default; use `TEEP_ROUTE_THROUGH_MYST_VPN=true` and/or `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` to route them through Myst while agent egress uses Tor. Onion ingress remains compatible with all of these final-hop choices.
   - For detailed Tor behavior and the full routing matrix, see [`docs/native_tor_support.md`](docs/native_tor_support.md) and [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
   - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let explicitly configured MCP servers, Web Connectors, embedding servers, and LLM inference providers reach services on your private LAN. MCP and Web Connector access also requires a compatible SSRF setting under **Admin → Security Hardening** that will be set correctly by default, but should not be changed.
@@ -626,20 +626,21 @@ That is all an end user needs to do. The start command prepares any images
 selected by the updated [`stack.versions.env`](stack.versions.env) or changed
 content-addressed wrapper build inputs, reuses images that already match, and
 recreates affected services. Persistent application data is retained. This
-works with the container engine selected by `CONTAINER_BIN`; Podman mode
-prepares images in Podman's image store and does not fall back to Docker.
+works with the container engine selected by `CONTAINER_BIN`: Podman mode
+prepares images in Podman's image store, and Docker mode prepares images in
+Docker's image store.
 
-Repository updates that change `stack.versions.env` already include the
-required patch review and upgrade validation. You do not need to run
-`make upgrade`, `make check-upgrade`, or ask a code agent to repeat that work
-after `git pull`.
+Repository updates that change `stack.versions.env` have already performed
+the required patch review, upgrade validation, and compatibility checks.
+You do not need to run `make upgrade`, `make check-upgrade`, or any other
+checks or tests.
 
 If you edit `stack.versions.env` yourself, the version change is development
 work rather than an ordinary stack update. Instruct a code agent to read
-[`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md), review every
-affected patch and shim, perform the upgrade, and complete the validation
-described there. The maintainers follow that process before committing any
-version-manifest update.
+[`docs/onyx_patches_upgrade.md`](docs/onyx_patches_upgrade.md) to update the
+stack for you. It will then review every affected patch and shim, perform the
+upgrade, and complete the validation described there. The maintainers follow
+that same process before committing any version-manifest update.
 
 ## Docker Host Endpoints
 
