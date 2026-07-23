@@ -1,5 +1,21 @@
 # Request handling
 
+## Optional Tor route
+
+Native Tor egress changes only the final clearnet route. The public and host
+policy proxies connect through a private Unix SOCKS volume and delegate
+ordinary target-name resolution to Tor. Callers, URL validation,
+private-target and cleartext-HTTP policy, redirects, limits, browser lifecycle,
+and search-engine selection are unchanged. Internal/host/opt-in LAN exceptions
+remain direct.
+
+For Tor and every configured remote-DNS upstream, ordinary target names are
+never looked up by Docker, system, or Myst DNS, and returned address metadata
+is consumed only as protocol framing. It cannot be reused for a later direct
+connection. A missing socket, failed circuit, or malformed SOCKS response
+fails closed. General outbound `.onion` browsing has not been qualified and is
+unsupported; onion WebUI ingress is a separate inbound role.
+
 This document describes the wrapper-managed `web_search` and built-in Onyx
 Web Crawler `open_url` paths. Search always uses the pinned Obscura browser.
 `open_url` uses the stock Onyx crawler by default and has an explicit direct

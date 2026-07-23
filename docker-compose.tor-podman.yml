@@ -1,0 +1,8 @@
+services:
+  tor:
+    userns_mode: "keep-id:uid=101,gid=102"
+    # Rootless crun can apply only groups present in this keep-id mapping.
+    sysctls:
+      net.ipv4.ping_group_range: "102 102"
+    tmpfs: !override
+      - /run/tor-control:U,mode=0700

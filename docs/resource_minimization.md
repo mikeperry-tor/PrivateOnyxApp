@@ -1,5 +1,18 @@
 # Resource minimization
 
+## Optional Tor lifecycle
+
+When both roles are disabled, the effective model contains no Tor container,
+networks, gateway, runtime mount, renderer work, or Tor health activity.
+Enabling either role starts one shared process; combined egress and onion
+ingress intentionally share guards, resource pressure, and failure fate.
+
+Tor health is a local, cookie-authenticated `GETINFO status/bootstrap-phase`
+query over its private Unix control socket. It runs every five seconds during
+startup and every ten minutes after health is established. It performs no
+periodic Internet or DNS probe and logs no cookie, onion key, or onion address.
+The fixed onion gateway follows the same low-idle local health cadence.
+
 ## Purpose
 
 This document describes the stack's implemented power and resource

@@ -1,0 +1,23 @@
+services:
+  tor:
+    volumes:
+      - tor-runtime:/run/tor-egress
+
+  onyx-public-egress-proxy:
+    environment:
+      EGRESS_TOR_SOCKS_UNIX_PATH: /run/tor-egress/socks
+    volumes:
+      - tor-runtime:/run/tor-egress:ro
+    depends_on:
+      tor: {condition: service_healthy, restart: true}
+
+  onyx-host-egress-proxy:
+    environment:
+      EGRESS_TOR_SOCKS_UNIX_PATH: /run/tor-egress/socks
+    volumes:
+      - tor-runtime:/run/tor-egress:ro
+    depends_on:
+      tor: {condition: service_healthy, restart: true}
+
+volumes:
+  tor-runtime: {}

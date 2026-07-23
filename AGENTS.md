@@ -1,6 +1,6 @@
 # Code Agent Instructions for Private Onyx
 
-This repository is a Docker Compose wrapper for running Onyx with private verified inference, default explicit no-VPN or optional VPN/proxy-routed Obscura browser access, an optional public-proxied stock Onyx crawler mode, SearXNG search, local document RAG, and optional Tailscale exposure.
+This repository is a Docker Compose wrapper for running Onyx with private verified inference, default explicit no-VPN or optional VPN/proxy/Tor-routed Obscura browser access, an optional public-proxied stock Onyx crawler mode, SearXNG search, local document RAG, and optional Tailscale or v3 onion exposure.
 
 It is not the upstream Onyx project, nor is it a fork. Most changes here are deployment, Compose, Python sidecar, shell, SearXNG, or runtime-patch changes around upstream projects.
 
@@ -35,7 +35,7 @@ When a request touches more than one path, read each relevant doc first. Prefer 
 
 At a high level:
 
-- Users reach nginx through a hardened fixed host publisher or the optional fixed Tailscale frontend gateway; nginx stays internal-only.
+- Users reach nginx through a hardened fixed host publisher or optional fixed Tailscale/onion frontend gateways; nginx stays internal-only.
 - Nginx is the single WebUI health boundary: its local root check traverses the
   frontend, while API health remains a separate startup dependency. Do not add
   a duplicate periodic `web_server` health check.
@@ -77,6 +77,11 @@ proxy settings or caller discipline alone.
 - Obscura's narrow network permits its mandatory bridge proxy but no direct
   Internet route; final-hop policy remains authoritative for target DNS and
   private-target rejection.
+- Optional native Tor uses one pinned non-root client for outbound Unix-SOCKS
+  final-hop routing and/or v3 onion ingress. Only the two policy proxies receive
+  the read-only SOCKS volume; only the fixed onion gateway spans its ingress
+  network and `onyx-frontend`. Applications receive neither Tor authority.
+  `WEB_DOMAIN` remains one explicit canonical origin.
 - Onyx applications use internal-only networks. Generic helpers use a fixed
   public bridge, while configured integrations, inference, and embeddings use
   separate route-class bridges. Direct sockets have no external route, and
@@ -132,6 +137,8 @@ Those bullets are only a map. Read the docs above before changing any runtime ne
   - `docker-compose.*-vpn.yml`, `docker-compose.proxy.yml`, and Podman
     overrides - optional routing, proxy, and container-engine layers selected
     by the Makefile.
+  - `docker-compose.tor*.yml` and `tor/` - optional native Tor roles, strict
+    config renderer, local authenticated health, and fixed onion gateway.
 - Routing and component implementations:
   - `browser/obscura_client/` - shared direct-CDP client used by Onyx and
     SearXNG.

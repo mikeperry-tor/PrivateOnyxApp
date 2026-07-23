@@ -1,5 +1,26 @@
 # Podman support
 
+## Native Tor
+
+Podman uses the same pinned image, config bind, and host state bind as Docker,
+so an engine switch preserves the onion identity. Only Tor gets
+`userns_mode: keep-id:uid=101,gid=102`; do not recursively rewrite its state or
+move it to an engine-specific directory.
+
+The SOCKS socket uses an engine-local named volume. Tor mounts it read-write
+and the two policy containers mount it read-only; those containers need no
+matching UID, supplemental group, shared user namespace, privilege, or engine
+socket. The Podman overlay translates the private control tmpfs to native
+`U,mode=0700` ownership, constrains `ping_group_range` to the mapped Tor group
+102 for rootless crun, and translates the onion gateway tmpfs to the existing `:U` form.
+Startup health uses `podman/startup_health.py`; Docker is never a fallback.
+
+Qualification covers all four role models, `make tor-onion-address`,
+cookie-authenticated control health, outbound Tor, simultaneous
+localhost/Tailscale/onion sessions, restart and down/up identity persistence,
+and an engine switch. Both engines must be down before adopting shared Onyx
+data ownership; Tor identity state remains the common host bind.
+
 This document is the compatibility and validation authority for running this
 wrapper with rootless Podman on macOS. Read it before adding a feature that
 changes Compose layering, mounts, container lifecycle, health checks, image

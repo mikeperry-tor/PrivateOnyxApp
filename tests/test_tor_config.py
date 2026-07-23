@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = ROOT / "tor" / "render_config.py"
+SPEC = importlib.util.spec_from_file_location("tor_render_config", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+tor_config = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(tor_config)
+
+
+def settings(**overrides: str) -> argparse.Namespace:
+    values = {
+        "egress": "false",
+        "onion": "false",
+        "country": "",
+        "fingerprints": "",
+        "upstream_proxy": "",
+        "canonical_origin": "http://localhost:3000",
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+class TorConfigTests(unittest.TestCase):
+    def test_role_matrix_and_listener_contract(self) -> None:
+        for egress, onion in ((True, False), (False, True), (True, True)):
+            with self.subTest(egress=egress, onion=onion):
+                text = tor_config.render_text(
+                    egress=egress, onion=onion, country="", fingerprints=()
+                )
+                self.assertIn("DataDirectory /var/lib/tor\n", text)
+                self.assertIn("ControlPort 0\n", text)
+                self.assertIn(
+                    "ControlSocket /run/tor-control/control.sock\n", text
+                )
+                self.assertIn("CookieAuthentication 1\n", text)
+                self.assertIn(
+                    "CookieAuthFile /run/tor-control/control_auth_cookie\n", text
+                )
+                self.assertIn("ClientOnly 1\n", text)
+                self.assertIn("ORPort 0\n", text)
+                self.assertIn("ExitPolicy reject *:*\n", text)
+                self.assertNotIn("HashedControlPassword", text)
+                self.assertNotIn("StrictExitNodes", text)
+                self.assertNotIn("StrictNodes", text)
+                if egress:
+                    self.assertIn(
+                        "SocksPort unix:/run/tor-egress/socks WorldWritable "
+                        "RelaxDirModeCheck\n",
+                        text,
+                    )
+                else:
+                    self.assertIn("SocksPort 0\n", text)
+                if onion:
+                    self.assertIn("HiddenServiceVersion 3\n", text)
+                    self.assertIn(
+                        "HiddenServicePort 80 10.253.247.3:8080\n", text
+                    )
+                else:
+                    self.assertNotIn("HiddenService", text)
+
+    def test_country_and_fingerprints_normalize_without_fallback(self) -> None:
+        egress, onion, country, fingerprints = tor_config.validate_settings(
+            settings(egress="true", country="IS")
+        )
+        self.assertEqual((egress, onion, country, fingerprints), (True, False, "is", ()))
+        self.assertIn(
+            "ExitNodes {is}\n",
+            tor_config.render_text(
+                egress=egress,
+                onion=onion,
+                country=country,
+                fingerprints=fingerprints,
+            ),
+        )
+
+        first = "a" * 40
+        second = "$" + "B" * 40
+        _, _, country, fingerprints = tor_config.validate_settings(
+            settings(egress="true", fingerprints=f"{first},{second}")
+        )
+        self.assertEqual(fingerprints, ("A" * 40, "B" * 40))
+        text = tor_config.render_text(
+            egress=True, onion=False, country=country, fingerprints=fingerprints
+        )
+        self.assertIn(f"ExitNodes ${'A' * 40},${'B' * 40}\n", text)
+        self.assertNotIn("Strict", text)
+
+    def test_invalid_settings_fail_closed(self) -> None:
+        invalid = (
+            {"egress": "yes"},
+            {"onion": "1"},
+            {"country": "is"},
+            {"egress": "true", "country": "A1"},
+            {"egress": "true", "country": "i{"},
+            {"egress": "true", "fingerprints": "a" * 39},
+            {"egress": "true", "fingerprints": f"{'a' * 40},"},
+            {"egress": "true", "fingerprints": f"{'a' * 40},${'A' * 40}"},
+            {
+                "egress": "true",
+                "country": "is",
+                "fingerprints": "a" * 40,
+            },
+            {"egress": "true", "upstream_proxy": "http://proxy.example:8080"},
+            {"canonical_origin": "https://user@example.com"},
+            {"canonical_origin": "https://example.com/path"},
+            {"canonical_origin": "https://*.example.com"},
+            {"canonical_origin": "https://example.com,https://other.example"},
+            {"canonical_origin": "https://exa mple.com"},
+            {"canonical_origin": "https://-invalid.example"},
+            {"canonical_origin": "https://example.com:99999"},
+            {"canonical_origin": "ftp://example.com"},
+            {"canonical_origin": "https://example.com?query"},
+        )
+        for overrides in invalid:
+            with self.subTest(overrides=overrides), self.assertRaises(
+                tor_config.ConfigError
+            ):
+                tor_config.validate_settings(settings(**overrides))
+
+    def test_selector_without_egress_is_rejected(self) -> None:
+        with self.assertRaisesRegex(tor_config.ConfigError, "require"):
+            tor_config.validate_settings(settings(country="is"))
+
+    def test_atomic_failure_preserves_existing_config_and_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config" / "torrc"
+            state_key = root / "state" / "onion-service" / "hs_ed25519_secret_key"
+            config.parent.mkdir(parents=True)
+            state_key.parent.mkdir(parents=True)
+            config.write_text("old\n", encoding="ascii")
+            state_key.write_bytes(b"private")
+            with self.assertRaises(UnicodeEncodeError):
+                tor_config.atomic_write(config, "bad \N{SNOWMAN}\n")
+            self.assertEqual(config.read_text(encoding="ascii"), "old\n")
+            self.assertEqual(state_key.read_bytes(), b"private")
+
+
+if __name__ == "__main__":
+    unittest.main()

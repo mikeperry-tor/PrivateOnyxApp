@@ -46,7 +46,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
         self.assertEqual(fallback.group(1), self.value("TEEP_REF"))
 
     def test_mutable_support_tags_are_not_allowed(self) -> None:
-        for name in ("TAILSCALE_IMAGE",):
+        for name in ("TAILSCALE_IMAGE", "TOR_BASE_IMAGE"):
             image = self.value(name)
             self.assertRegex(image, r"@sha256:[0-9a-f]{64}$")
             self.assertNotIn(":latest", image)
@@ -67,6 +67,8 @@ class ImmutableComponentPinTests(unittest.TestCase):
             "PYTHON_EXECUTOR_UPSTREAM_IMAGE ?= $(call env_value,PYTHON_EXECUTOR_UPSTREAM_IMAGE)",
             self.makefile,
         )
+        self.assertIn("TOR_WRAPPER_SOURCE_HASH", self.makefile)
+        self.assertIn("$(TOR_BASE_IMAGE)", self.makefile)
 
     def test_minio_release_records_its_image_source_revision(self) -> None:
         self.assertRegex(

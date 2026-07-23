@@ -1,5 +1,37 @@
 # VPN routing and restricted egress
 
+## Native Tor final hop
+
+`TOR_EGRESS_ENABLED=true` selects the wrapper-owned Tor client as the
+remote-DNS upstream for the existing public and configured-external final-hop
+policies. It conflicts with `EGRESS_UPSTREAM_PROXY_URL`. Tor runs directly on
+its own `tor-uplink`; this phase does not route Tor through Myst.
+
+Tor creates only `unix:/run/tor-egress/socks`. The explicit `tor-runtime`
+volume is writable by Tor and read-only in the public and host policy
+containers. No application, browser, executor, ingress, Myst, Teep, or
+Tailscale container receives it, and there is no TCP SOCKS listener or bridge.
+Ordinary target names are sent as SOCKS `CONNECT` domain names, never resolved
+through Docker, system, or Myst DNS. Bound-address metadata is discarded and
+cannot become input to a direct connection. Socket loss, protocol failure,
+bootstrap failure, or an unavailable selected exit has no direct fallback.
+
+Trusted internal targets, `host.docker.internal`, and opt-in validated LAN
+integration routes retain their existing direct exceptions. Configured
+non-Tor proxy endpoints are classified before connection in VPN and no-VPN
+modes: public names require all-global answers; exact host/RFC1918 exceptions
+stay narrow; operator-local names require the host route and LAN opt-in.
+Single-label/internal names and blocked or mixed answers fail closed. A
+remote-DNS proxy remains authoritative for the target address and is part of
+the selected trust boundary.
+
+Country and fingerprint `ExitNodes` selectors are mutually exclusive, require
+egress, and add no fallback. Fingerprint selection generally reduces
+reliability and anonymity-set diversity more than country selection.
+Onion-service circuits do not use a clearnet exit selector. Use `make
+health-inventory` and the selected engine's `inspect`/`logs` commands for
+verification; Docker is never an implicit Podman fallback.
+
 This stack keeps application containers off Internet-routed Docker networks.
 Traffic crosses fixed-destination bridges to final-hop policy proxies in the
 trusted `netns-holder` routing namespace. The route owner is Mysterium, a

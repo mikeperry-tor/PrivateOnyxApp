@@ -199,6 +199,60 @@ Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Sear
 
 The following sections detail optional feature configuration, including remote access via Tailscale Funnel, an outbound proxy, Myst VPN, and RAG document search.
 
+### Optional: Native Tor
+
+The wrapper can start one pinned Tor client for either or both of two roles:
+
+```dotenv
+TOR_EGRESS_ENABLED=true
+TOR_ONION_SERVICE_ENABLED=true
+TOR_EXIT_COUNTRY=""
+TOR_EXIT_NODE_FINGERPRINTS=""
+```
+
+Outbound Tor replaces a configured `EGRESS_UPSTREAM_PROXY_URL` and routes the
+existing public final-hop policy paths through a private Unix SOCKS socket.
+Applications do not receive the socket or a Tor/public network, target DNS is
+owned by Tor, and a stopped Tor daemon or unavailable selected exit fails
+closed. Internal, exact host, and explicitly allowed LAN integration routes
+retain their existing direct exceptions. General outbound `.onion` browsing is
+not a supported feature.
+
+Onion ingress creates a public v3 service for the WebUI without publishing
+another host port. Anyone who learns the address can reach the Onyx login, so
+use strong credentials. Retrieve the running address without exposing key
+material:
+
+```bash
+make tor-onion-address
+```
+
+The identity is stored under `docker-data/tor/state`; back it up deliberately
+and protect it like a server credential. Do not delete it unless you intend to
+replace the onion address. Docker and Podman share this host state, while the
+outbound socket is transient and engine-local.
+
+For the onion frontend to be the feature-complete origin, set
+`ONYX_WEB_CANONICAL_ORIGIN="http://<generated-v3-address>.onion"` after the
+first start and restart normally. Localhost, Tailscale, and onion access can
+remain enabled together, but each hostname has separate browser cookies,
+storage, and login sessions. Logout on one hostname does not log out the
+others. OAuth/OIDC/SAML callbacks, email links, voice WebSockets, and similar
+origin-sensitive flows return to or are guaranteed only at the selected
+canonical origin; changing it can require provider callback re-registration.
+The gateways do not add, remove, or translate cookie attributes. In particular,
+with an HTTP canonical origin, the application cookies are not `Secure` even
+when a non-canonical Tailscale frontend is reached over HTTPS.
+
+`TOR_EXIT_COUNTRY` accepts one two-letter country selector.
+`TOR_EXIT_NODE_FINGERPRINTS` accepts up to 16 comma-separated 40-hex relay
+identities; it cannot be combined with the country selector. Both require Tor
+egress. Selection is strict: no matching usable exit means requests fail
+rather than falling back. Country and especially relay pinning can reduce
+availability and anonymity-set diversity. Tor exits are commonly challenged
+or blocked, and Tor does not eliminate traffic-correlation risk. Onion ingress
+does not use the selected clearnet exit.
+
 ### Optional: Tailscale Funnel
 
 You can publish the Onyx WebUI through Tailscale Funnel to access it remotely via any web browser. The WebUI is responsive and works fine on phones and tablets.
@@ -607,7 +661,12 @@ Obscura uses a stable browser vendor/version profile with some per-navigation fi
 
 ### Why not just use Tor by default?
 
-Tor usage is supported by configuring `EGRESS_UPSTREAM_PROXY_URL="socks5h://host.docker.internal:9150"` in `.env.wrapper`, and this [proxy usage](./docs/vpn_routing_and_proxies.md) is [strictly enforced](./docs/internal_network_security.md), but it is not the default.
+Native Tor egress is available with `TOR_EGRESS_ENABLED=true`; a separately
+managed Tor proxy may still be selected through `EGRESS_UPSTREAM_PROXY_URL`,
+but the two settings are mutually exclusive. See
+[`docs/vpn_routing_and_proxies.md`](./docs/vpn_routing_and_proxies.md) and
+[`docs/internal_network_security.md`](./docs/internal_network_security.md) for
+the enforced route and trust boundaries.
 
 It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that does not use Tor by default. This was a pragmatic choice to produce something that functioned.
 

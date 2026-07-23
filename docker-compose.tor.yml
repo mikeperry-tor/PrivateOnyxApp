@@ -1,0 +1,27 @@
+services:
+  tor:
+    image: ${TOR_IMAGE:?TOR_IMAGE must be set}
+    entrypoint: []
+    command: ["tor", "-f", "/etc/tor/torrc"]
+    restart: unless-stopped
+    user: "101:102"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [tor-uplink]
+    volumes:
+      - ./docker-data/tor/config/torrc:/etc/tor/torrc:ro
+      - ./docker-data/tor/state:/var/lib/tor
+      - ./tor/healthcheck.py:/usr/local/bin/tor-healthcheck.py:ro
+    tmpfs:
+      - /run/tor-control:uid=101,gid=102,mode=0700
+    healthcheck:
+      test: ["CMD", "python3", "/usr/local/bin/tor-healthcheck.py"]
+      interval: 10m
+      start_interval: 5s
+      timeout: 10s
+      retries: 1
+      start_period: 300s
+
+networks:
+  tor-uplink: {}

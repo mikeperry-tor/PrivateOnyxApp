@@ -5,6 +5,11 @@ FULL_OVERRIDE_FILE := docker-compose.full.yml
 LITE_OVERRIDE_FILE := docker-compose.lite.yml
 PODMAN_OVERRIDE_FILE := docker-compose.podman.yml
 PODMAN_FULL_OVERRIDE_FILE := docker-compose.podman-full.yml
+TOR_COMMON_FILE := docker-compose.tor.yml
+TOR_EGRESS_FILE := docker-compose.tor-egress.yml
+TOR_ONION_FILE := docker-compose.tor-onion.yml
+TOR_PODMAN_FILE := docker-compose.tor-podman.yml
+TOR_ONION_PODMAN_FILE := docker-compose.tor-onion-podman.yml
 
 env_value = $(strip $(shell for f in "$(ENV_FILE)" "$(VERSION_FILE)"; do [ -f "$$f" ] || continue; sed -n 's/^$(1)=//p' "$$f" | head -1 | sed 's/^"//; s/"$$//'; done | head -1))
 COMPOSE_ENV_FILES = --env-file "$(VERSION_FILE)" --env-file "$(ENV_FILE)"
@@ -50,6 +55,11 @@ TAILSCALE_FUNNEL_ENABLED ?= $(call env_value,TAILSCALE_FUNNEL_ENABLED)
 ONYX_CODE_INTERPRETER_ENABLE_NETWORK ?= $(call env_value,ONYX_CODE_INTERPRETER_ENABLE_NETWORK)
 MYST_VPN_ENABLED ?= $(call env_value,MYST_VPN_ENABLED)
 EGRESS_UPSTREAM_PROXY_URL ?= $(call env_value,EGRESS_UPSTREAM_PROXY_URL)
+TOR_EGRESS_ENABLED ?= $(or $(call env_value,TOR_EGRESS_ENABLED),false)
+TOR_ONION_SERVICE_ENABLED ?= $(or $(call env_value,TOR_ONION_SERVICE_ENABLED),false)
+TOR_EXIT_COUNTRY ?= $(call env_value,TOR_EXIT_COUNTRY)
+TOR_EXIT_NODE_FINGERPRINTS ?= $(call env_value,TOR_EXIT_NODE_FINGERPRINTS)
+ONYX_WEB_CANONICAL_ORIGIN ?= $(or $(call env_value,ONYX_WEB_CANONICAL_ORIGIN),http://localhost:3000)
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -73,6 +83,7 @@ ifeq ($(PODMAN_SELECTED),true)
 export DOCKER_HOST := unix://$(DOCKER_SOCK_PATH)
 endif
 export TEEP_IMAGE
+export ONYX_WEB_CANONICAL_ORIGIN
 
 ifneq ($(filter true,$(TAILSCALE_FUNNEL_ENABLED)),)
 export COMPOSE_PROFILES := tailscale
@@ -115,6 +126,46 @@ PROXY_SUFFIX :=
 ifneq ($(strip $(EGRESS_UPSTREAM_PROXY_URL)),)
 PROXY_SUFFIX :=:docker-compose.proxy.yml
 endif
+
+TOR_BASE_IMAGE ?= $(call env_value,TOR_BASE_IMAGE)
+ifeq ($(strip $(TOR_BASE_IMAGE)),)
+$(error TOR_BASE_IMAGE is not set in $(VERSION_FILE))
+endif
+TOR_WRAPPER_IMAGE_REPOSITORY ?= $(call env_value,TOR_WRAPPER_IMAGE_REPOSITORY)
+ifeq ($(strip $(TOR_WRAPPER_IMAGE_REPOSITORY)),)
+$(error TOR_WRAPPER_IMAGE_REPOSITORY is not set in $(VERSION_FILE))
+endif
+TOR_DOCKERFILE := tor/Dockerfile
+TOR_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(sys.argv[1].encode()+b"\0"); h.update(pathlib.Path(sys.argv[2]).read_bytes()); print(h.hexdigest()[:12])' '$(TOR_BASE_IMAGE)' '$(TOR_DOCKERFILE)')
+TOR_IMAGE ?= $(TOR_WRAPPER_IMAGE_REPOSITORY):0.4.9.11-$(TOR_WRAPPER_SOURCE_HASH)
+export TOR_IMAGE
+
+TOR_COMMON_SUFFIX :=
+TOR_EGRESS_SUFFIX :=
+TOR_ONION_SUFFIX :=
+TOR_PODMAN_SUFFIX :=
+TOR_ONION_PODMAN_SUFFIX :=
+ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
+TOR_COMMON_SUFFIX :=:$(TOR_COMMON_FILE)
+ifneq ($(PODMAN_SELECTED),false)
+TOR_PODMAN_SUFFIX :=:$(TOR_PODMAN_FILE)
+endif
+endif
+ifneq ($(filter true,$(TOR_EGRESS_ENABLED)),)
+TOR_EGRESS_SUFFIX :=:$(TOR_EGRESS_FILE)
+endif
+ifneq ($(filter true,$(TOR_ONION_SERVICE_ENABLED)),)
+TOR_ONION_SUFFIX :=:$(TOR_ONION_FILE)
+ifneq ($(PODMAN_SELECTED),false)
+TOR_ONION_PODMAN_SUFFIX :=:$(TOR_ONION_PODMAN_FILE)
+endif
+endif
+TOR_SUFFIX := $(TOR_COMMON_SUFFIX)$(TOR_EGRESS_SUFFIX)$(TOR_ONION_SUFFIX)$(TOR_PODMAN_SUFFIX)$(TOR_ONION_PODMAN_SUFFIX)
+TOR_DOWN_PODMAN_SUFFIX :=
+ifneq ($(PODMAN_SELECTED),false)
+TOR_DOWN_PODMAN_SUFFIX :=:$(TOR_PODMAN_FILE):$(TOR_ONION_PODMAN_FILE)
+endif
+TOR_DOWN_SUFFIX :=:$(TOR_COMMON_FILE):$(TOR_EGRESS_FILE):$(TOR_ONION_FILE)$(TOR_DOWN_PODMAN_SUFFIX)
 
 # Source of truth: ONYX_IMAGE_TAG in $(VERSION_FILE). Allow ENV_FILE or CLI override.
 ONYX_IMAGE_TAG ?= $(call env_value,ONYX_IMAGE_TAG)
@@ -260,8 +311,10 @@ SEARXNG_REQUIREMENTS_IN := searxng/requirements.in
 SEARXNG_REQUIREMENTS := searxng/requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)$(TOR_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)$(TOR_SUFFIX)
+LITE_DOWN_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)$(TOR_DOWN_SUFFIX)
+FULL_DOWN_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)$(TOR_DOWN_SUFFIX)
 
 # Lite mode has no wrapper-owned host services. Full mode always reconciles the
 # optional bundled MLX service, but selects the host document server only for
@@ -271,7 +324,7 @@ ifeq ($(PODMAN_SELECTED),true)
 FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start
 endif
 
-.PHONY: help test check test-images test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-images test-tor-image test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready tor-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -304,6 +357,7 @@ help:
 	@echo "  make test                      # Run the deterministic Python test suite"
 	@echo "  make check                     # Run deterministic tests and local static checks"
 	@echo "  make test-images               # Validate patches against already-built pinned images"
+	@echo "  make test-tor-image            # Validate the selected local Tor wrapper image"
 	@echo "  make check-upgrade             # Run check plus pinned-image and disposable OpenSearch validation"
 	@echo "  make health-inventory          # Print effective lite/full health cadence inventory"
 	@echo "  make adopt-shared-data-engine  # Repair Docker vs Podman data-dir owner based on CONTAINER_BIN env value"
@@ -315,6 +369,8 @@ help:
 	@echo "  Enable VPN: set MYST_VPN_ENABLED=true in $(ENV_FILE) to enable Myst VPN setup + egress"
 	@echo "  Proxy: set EGRESS_UPSTREAM_PROXY_URL in $(ENV_FILE) (http/https/socks5)"
 	@echo "         to route Onyx helpers, Obscura, and network-enabled executor egress"
+	@echo "  Tor: set TOR_EGRESS_ENABLED=true and/or TOR_ONION_SERVICE_ENABLED=true"
+	@echo "       then use 'make tor-onion-address' to print a running onion address"
 
 test:
 	python3 -m unittest discover -s tests -p 'test_*.py' -v
@@ -332,6 +388,7 @@ check: test
 		$(HOST_PROCESS_MANAGER) \
 		embedserv/idle_embedding_proxy.py \
 		podman \
+		tor \
 		searxng/engines \
 		searxng/patches \
 		tests
@@ -347,6 +404,8 @@ shared-data-engine-status:
 claim-shared-data-engine:
 	@$(SHARED_DATA_GUARD_ENV) python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --container-bin "$(CONTAINER_BIN)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
 
+claim-shared-data-engine: tor-preflight
+
 adopt-shared-data-engine:
 	@$(SHARED_DATA_GUARD_ENV) python3 podman/shared_data_engine.py claim --engine "$(SHARED_DATA_ENGINE)" --container-bin "$(CONTAINER_BIN)" --marker "$(SHARED_DATA_ENGINE_MARKER)" --adopt-unclaimed
 
@@ -360,6 +419,16 @@ test-images:
 		PYTHON_EXECUTOR_IMAGE="$(PYTHON_EXECUTOR_IMAGE)" \
 		SEARXNG_WRAPPER_IMAGE="$(SEARXNG_WRAPPER_IMAGE)" \
 		./tests/validate_pinned_patch_images.sh
+
+test-tor-image:
+	@if ! "$(CONTAINER_BIN)" image inspect "$(TOR_IMAGE)" >/dev/null 2>&1; then \
+		echo "ERROR: Tor wrapper image is missing: $(TOR_IMAGE)" >&2; \
+		echo "Run 'make tor-build CONTAINER_BIN=$(CONTAINER_BIN)' first." >&2; \
+		exit 1; \
+	fi
+	@python3 tests/validate_tor_image.py \
+		--engine "$(CONTAINER_BIN)" \
+		--image "$(TOR_IMAGE)"
 
 test-opensearch-image:
 	@set -eu; \
@@ -407,7 +476,7 @@ check-upgrade:
 	@$(MAKE) --no-print-directory test-images
 	@$(MAKE) --no-print-directory test-opensearch-image
 
-upgrade: upgrade-python-deps myst-build teep-build searxng-build executor-build tailscale-image-ready obscura-image-ready upgrade-onyx
+upgrade: upgrade-python-deps myst-build teep-build searxng-build executor-build tor-build tailscale-image-ready obscura-image-ready upgrade-onyx
 	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."
 
 upgrade-python-deps:
@@ -427,6 +496,45 @@ tailscale-image-ready:
 obscura-image-ready:
 	@echo "Pulling obscura image: $(OBSCURA_IMAGE)"; \
 	"$(CONTAINER_BIN)" pull "$(OBSCURA_IMAGE)"
+
+tor-preflight:
+	@python3 tor/render_config.py validate \
+		--egress "$(TOR_EGRESS_ENABLED)" \
+		--onion "$(TOR_ONION_SERVICE_ENABLED)" \
+		--country "$(TOR_EXIT_COUNTRY)" \
+		--fingerprints "$(TOR_EXIT_NODE_FINGERPRINTS)" \
+		--upstream-proxy "$(EGRESS_UPSTREAM_PROXY_URL)" \
+		--canonical-origin "$(ONYX_WEB_CANONICAL_ORIGIN)"
+
+tor-image-ready:
+	@if [ "$(TOR_EGRESS_ENABLED)" != "true" ] && [ "$(TOR_ONION_SERVICE_ENABLED)" != "true" ]; then exit 0; fi; \
+	if "$(CONTAINER_BIN)" image inspect "$(TOR_IMAGE)" >/dev/null 2>&1; then \
+		echo "Tor wrapper image already present: $(TOR_IMAGE)"; \
+	else \
+		$(MAKE) tor-build; \
+	fi
+
+tor-build:
+	@echo "Pulling immutable Tor base: $(TOR_BASE_IMAGE)"
+	@"$(CONTAINER_BIN)" pull "$(TOR_BASE_IMAGE)"
+	@"$(CONTAINER_BIN)" build \
+		--file "$(TOR_DOCKERFILE)" \
+		--build-arg TOR_BASE_IMAGE="$(TOR_BASE_IMAGE)" \
+		--tag "$(TOR_IMAGE)" \
+		.
+
+tor-config-ready:
+	@if [ "$(TOR_EGRESS_ENABLED)" != "true" ] && [ "$(TOR_ONION_SERVICE_ENABLED)" != "true" ]; then exit 0; fi; \
+	mkdir -p docker-data/tor/config docker-data/tor/state; \
+	chmod 0700 docker-data/tor/state; \
+	python3 tor/render_config.py render \
+		--egress "$(TOR_EGRESS_ENABLED)" \
+		--onion "$(TOR_ONION_SERVICE_ENABLED)" \
+		--country "$(TOR_EXIT_COUNTRY)" \
+		--fingerprints "$(TOR_EXIT_NODE_FINGERPRINTS)" \
+		--upstream-proxy "$(EGRESS_UPSTREAM_PROXY_URL)" \
+		--canonical-origin "$(ONYX_WEB_CANONICAL_ORIGIN)" \
+		--output docker-data/tor/config/torrc
 
 searxng-image-ready:
 	@if "$(CONTAINER_BIN)" image inspect "$(SEARXNG_WRAPPER_IMAGE)" >/dev/null 2>&1; then \
@@ -526,7 +634,7 @@ ifeq ($(PODMAN_SELECTED),true)
 	@python3 podman/startup_health.py prepare-shared-data --opensearch docker-data/opensearch
 endif
 
-up-lite: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready
+up-lite: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
 	@COMPOSE_FILE=$(LITE_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
@@ -535,7 +643,7 @@ endif
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
-up-full: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
+up-full: claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
@@ -637,11 +745,11 @@ upgrade-onyx:
 	@$(MAKE) sync-onyx-env
 
 down-lite:
-	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
+	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(LITE_DOWN_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
 	@$(MAKE) --no-print-directory release-shared-data-engine
 
 down-full:
-	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
+	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(FULL_DOWN_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
 	@"$${MAKE:-make}" podman-doc-server-stop-if-started
 	@"$${MAKE:-make}" embedserv-stop-if-started
 	@"$${MAKE:-make}" embedserv-cleanup-recorded-child
@@ -658,6 +766,21 @@ logs-lite:
 
 logs-full:
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) logs -f --tail=200
+
+tor-onion-address: tor-preflight
+	@set -eu; \
+	if [ "$(TOR_ONION_SERVICE_ENABLED)" != "true" ]; then \
+		echo "ERROR: TOR_ONION_SERVICE_ENABLED must be true" >&2; exit 1; \
+	fi; \
+	container_id=$$(COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) ps -q tor); \
+	if [ -z "$$container_id" ] || [ "$$("$(CONTAINER_BIN)" inspect --format '{{.State.Running}}' "$$container_id" 2>/dev/null)" != "true" ]; then \
+		echo "ERROR: Tor is not running; inspect make ps-lite/ps-full and Tor logs" >&2; exit 1; \
+	fi; \
+	address=$$("$(CONTAINER_BIN)" exec "$$container_id" sh -c 'test -f /var/lib/tor/onion-service/hostname && cat /var/lib/tor/onion-service/hostname'); \
+	if [ -z "$$address" ] || [ "$$(printf '%s\n' "$$address" | wc -l | tr -d ' ')" -ne 1 ]; then \
+		echo "ERROR: Tor onion address is not ready or is unsafe" >&2; exit 1; \
+	fi; \
+	echo "Onion address: $$address"
 
 onyx-image-ready:
 	@set -eu; \

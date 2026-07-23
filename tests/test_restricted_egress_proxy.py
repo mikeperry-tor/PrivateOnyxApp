@@ -844,6 +844,82 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(writer.data.startswith(b"\x05\x01\x00"))
                 self.assertIn(expected_request, writer.data)
 
+    async def test_native_tor_uses_unix_socket_and_common_socks_state_machine(self) -> None:
+        module = _load_module(
+            env_overrides={"EGRESS_TOR_SOCKS_UNIX_PATH": "/run/tor-egress/socks"}
+        )
+        reader = module.asyncio.StreamReader()
+        reader.feed_data(
+            b"\x05\x00"
+            b"\x05\x00\x00\x03\x05bound\x00\x00"
+        )
+        reader.feed_eof()
+        writer = self._Writer()
+        unix_open = AsyncMock(return_value=(reader, writer))
+        with patch.object(module.asyncio, "open_unix_connection", unix_open):
+            result = await module._connect_via_upstream("target.example", 443)
+        self.assertEqual(result, (reader, writer))
+        unix_open.assert_awaited_once_with("/run/tor-egress/socks")
+        self.assertIn(b"\x05\x01\x00\x03\x0etarget.example\x01\xbb", writer.data)
+
+    async def test_native_tor_socket_failure_has_no_direct_fallback(self) -> None:
+        module = _load_module(
+            env_overrides={"EGRESS_TOR_SOCKS_UNIX_PATH": "/run/tor-egress/socks"}
+        )
+        direct = AsyncMock()
+        with patch.object(
+            module.asyncio,
+            "open_unix_connection",
+            AsyncMock(side_effect=FileNotFoundError()),
+        ), patch.object(module, "_open_validated_direct_connection", direct):
+            with self.assertRaisesRegex(ConnectionError, "unavailable"):
+                await module._connect_via_upstream("target.example", 443)
+        direct.assert_not_awaited()
+
+    def test_native_tor_conflicts_with_configured_proxy(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "mutually exclusive"):
+            _load_module(
+                env_overrides={
+                    "EGRESS_TOR_SOCKS_UNIX_PATH": "/run/tor-egress/socks",
+                    "EGRESS_UPSTREAM_PROXY_URL": "http://proxy.example:8080",
+                }
+            )
+
+    async def test_socks_reply_rejects_version_reserved_and_unknown_address(self) -> None:
+        for reply, message in (
+            (b"\x04\x00\x00\x01", "version"),
+            (b"\x05\x00\x01\x01", "reserved"),
+            (b"\x05\x00\x00\x09", "address type"),
+        ):
+            with self.subTest(reply=reply):
+                module = _load_module()
+                reader = module.asyncio.StreamReader()
+                reader.feed_data(b"\x05\x00" + reply)
+                reader.feed_eof()
+                with self.assertRaisesRegex(ConnectionError, message):
+                    await module._socks5_connect(
+                        reader, self._Writer(), "target.example", 443, None, None
+                    )
+
+    async def test_no_vpn_proxy_endpoint_answers_are_classified(self) -> None:
+        module = _load_module(
+            env_overrides={
+                "MYST_VPN_ENABLED": "false",
+                "EGRESS_UPSTREAM_PROXY_URL": "http://proxy.example:8080",
+            }
+        )
+        for answers in (
+            {"192.168.1.10"},
+            {"93.184.216.34", "192.168.1.10"},
+            set(),
+        ):
+            with self.subTest(answers=answers), patch.object(
+                module, "_resolve_system_host", AsyncMock(return_value=answers)
+            ), self.assertRaises(ConnectionError):
+                await module._resolve_upstream_proxy_endpoint(
+                    "proxy.example", 8080
+                )
+
     async def test_public_upstream_proxy_bootstrap_uses_myst_dns(self) -> None:
         module = _load_module(
             env_overrides={

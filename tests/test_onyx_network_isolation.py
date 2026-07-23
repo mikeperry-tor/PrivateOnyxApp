@@ -14,6 +14,7 @@ SECRET_ENV = {
     # Compose interpolation. Direct Compose-model tests supply a inert value.
     "SEARXNG_WRAPPER_IMAGE": "local/private-onyx-searxng:test-model",
     "PYTHON_EXECUTOR_IMAGE": "local/private-onyx-python-executor:test-model",
+    "TOR_IMAGE": "local/private-onyx-tor:test-model",
     "SEARXNG_SECRET": "test",
     "USER_AUTH_SECRET": "test",
     "MINIO_ROOT_USER": "test",
@@ -106,6 +107,157 @@ def _make_compose_files(
 
 @unittest.skipUnless(shutil.which("docker"), "docker compose is required")
 class OnyxNetworkIsolationComposeTests(unittest.TestCase):
+    def test_canonical_origin_and_onion_gateway_contract(self) -> None:
+        origin = "http://" + ("a" * 56) + ".onion"
+        model = _compose_model(
+            "lite",
+            "docker-compose.tor.yml",
+            "docker-compose.tor-onion.yml",
+            env_overrides={"ONYX_WEB_CANONICAL_ORIGIN": origin},
+        )
+        self.assertEqual(
+            model["services"]["api_server"]["environment"]["WEB_DOMAIN"], origin
+        )
+        self.assertEqual(
+            model["services"]["web_server"]["environment"]["WEB_DOMAIN"], origin
+        )
+
+        gateway = (ROOT / "tor" / "frontend-gateway.conf").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(r'"~^[a-z2-7]{56}[.]onion$"', gateway)
+        self.assertIn("proxy_set_header Host $host;", gateway)
+        self.assertIn("proxy_set_header X-Forwarded-For $remote_addr;", gateway)
+        self.assertIn("proxy_set_header X-Forwarded-Proto http;", gateway)
+        self.assertIn('proxy_set_header X-Forwarded-Host "";', gateway)
+        self.assertNotIn("$http_x_forwarded", gateway)
+
+    def test_tor_role_models_are_structurally_exact(self) -> None:
+        default = _compose_model("lite")
+        self.assertNotIn("tor", default["services"])
+        self.assertNotIn("tor-uplink", default["networks"])
+        self.assertNotIn("tor-ingress", default["networks"])
+        self.assertNotIn("tor-runtime", default.get("volumes", {}))
+
+        egress = _compose_model(
+            "lite", "docker-compose.tor.yml", "docker-compose.tor-egress.yml"
+        )
+        self.assertIn("tor", egress["services"])
+        self.assertNotIn("tor-frontend-gateway", egress["services"])
+        self.assertNotIn("tor-ingress", egress["networks"])
+        self.assertIn("tor-runtime", egress["volumes"])
+
+        onion = _compose_model(
+            "lite", "docker-compose.tor.yml", "docker-compose.tor-onion.yml"
+        )
+        self.assertIn("tor-frontend-gateway", onion["services"])
+        self.assertIn("tor-ingress", onion["networks"])
+        self.assertNotIn("tor-runtime", onion.get("volumes", {}))
+        for proxy in ("onyx-public-egress-proxy", "onyx-host-egress-proxy"):
+            self.assertNotIn(
+                "EGRESS_TOR_SOCKS_UNIX_PATH",
+                onion["services"][proxy]["environment"],
+            )
+
+        combined = _compose_model(
+            "lite",
+            "docker-compose.tor.yml",
+            "docker-compose.tor-egress.yml",
+            "docker-compose.tor-onion.yml",
+        )
+        self.assertEqual(
+            set(combined["services"]["tor"]["networks"]),
+            {"tor-uplink", "tor-ingress"},
+        )
+        tor = combined["services"]["tor"]
+        self.assertEqual(tor["user"], "101:102")
+        self.assertTrue(tor["read_only"])
+        self.assertEqual(tor["cap_drop"], ["ALL"])
+        self.assertEqual(tor["security_opt"], ["no-new-privileges:true"])
+        self.assertEqual(tor["entrypoint"], [])
+        self.assertEqual(tor["command"], ["tor", "-f", "/etc/tor/torrc"])
+        self.assertEqual(tor["healthcheck"]["interval"], "10m0s")
+        self.assertEqual(tor["healthcheck"]["start_interval"], "5s")
+        self.assertEqual(
+            tor["healthcheck"]["test"],
+            ["CMD", "python3", "/usr/local/bin/tor-healthcheck.py"],
+        )
+        self.assertEqual(tor["tmpfs"], ["/run/tor-control:uid=101,gid=102,mode=0700"])
+        self.assertNotIn("ports", combined["services"]["tor"])
+        self.assertNotIn("onyx-frontend", combined["services"]["tor"]["networks"])
+        self.assertEqual(
+            set(combined["services"]["tor-frontend-gateway"]["networks"]),
+            {"tor-ingress", "onyx-frontend"},
+        )
+        runtime_receivers = {
+            name
+            for name, service in combined["services"].items()
+            if any(
+                volume.get("source", "").endswith("tor-runtime")
+                for volume in service.get("volumes", [])
+            )
+        }
+        self.assertEqual(
+            runtime_receivers,
+            {"tor", "onyx-public-egress-proxy", "onyx-host-egress-proxy"},
+        )
+        for proxy in ("onyx-public-egress-proxy", "onyx-host-egress-proxy"):
+            runtime = next(
+                volume
+                for volume in combined["services"][proxy]["volumes"]
+                if volume["source"].endswith("tor-runtime")
+            )
+            self.assertTrue(runtime["read_only"])
+
+        podman = _compose_model(
+            "lite",
+            "docker-compose.podman.yml",
+            "docker-compose.tor.yml",
+            "docker-compose.tor-egress.yml",
+            "docker-compose.tor-onion.yml",
+            "docker-compose.tor-podman.yml",
+            "docker-compose.tor-onion-podman.yml",
+        )
+        self.assertEqual(
+            podman["services"]["tor"]["userns_mode"],
+            "keep-id:uid=101,gid=102",
+        )
+        self.assertEqual(
+            podman["services"]["tor"]["sysctls"]["net.ipv4.ping_group_range"],
+            "102 102",
+        )
+        self.assertEqual(
+            podman["services"]["tor"]["tmpfs"],
+            ["/run/tor-control:U,mode=0700"],
+        )
+
+    def test_tor_makefile_layer_selection_is_role_and_engine_specific(self) -> None:
+        for egress, onion in ((False, False), (True, False), (False, True), (True, True)):
+            for engine in ("docker", "podman"):
+                with self.subTest(egress=egress, onion=onion, engine=engine):
+                    files = _make_compose_files(
+                        vpn_enabled=False,
+                        container_bin=engine,
+                        TOR_EGRESS_ENABLED=str(egress).lower(),
+                        TOR_ONION_SERVICE_ENABLED=str(onion).lower(),
+                    )
+                    enabled = egress or onion
+                    self.assertEqual("docker-compose.tor.yml" in files, enabled)
+                    self.assertEqual(
+                        "docker-compose.tor-egress.yml" in files, egress
+                    )
+                    self.assertEqual(
+                        "docker-compose.tor-onion.yml" in files, onion
+                    )
+                    self.assertEqual(
+                        "docker-compose.tor-podman.yml" in files,
+                        enabled and engine == "podman",
+                    )
+                    self.assertEqual(
+                        "docker-compose.tor-onion-podman.yml" in files,
+                        onion and engine == "podman",
+                    )
+
     def test_core_startup_does_not_wait_for_optional_browsing(self) -> None:
         lite = _compose_model("lite")
         self.assertFalse(lite["services"]["api_server"].get("depends_on"))

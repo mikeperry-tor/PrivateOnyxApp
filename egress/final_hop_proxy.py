@@ -105,6 +105,16 @@ RFC1918_SYSTEM_DNS_SUFFIXES = (".local", ".internal", ".home.arpa")
 # http://, https://, socks5://, socks5h://
 # When empty, requests go direct (through the VPN namespace).
 UPSTREAM_PROXY = os.environ.get("EGRESS_UPSTREAM_PROXY_URL", "").strip()
+TOR_SOCKS_UNIX_PATH = os.environ.get("EGRESS_TOR_SOCKS_UNIX_PATH", "").strip()
+if TOR_SOCKS_UNIX_PATH and TOR_SOCKS_UNIX_PATH != "/run/tor-egress/socks":
+    raise RuntimeError(
+        "EGRESS_TOR_SOCKS_UNIX_PATH is an internal fixed setting and must be "
+        "/run/tor-egress/socks"
+    )
+if TOR_SOCKS_UNIX_PATH and UPSTREAM_PROXY:
+    raise RuntimeError(
+        "native Tor egress and EGRESS_UPSTREAM_PROXY_URL are mutually exclusive"
+    )
 _MYST_VPN_ENABLED_RAW = os.environ.get("MYST_VPN_ENABLED", "true").strip()
 if _MYST_VPN_ENABLED_RAW not in {"true", "false"}:
     raise RuntimeError("MYST_VPN_ENABLED must be exactly 'true' or 'false'")
@@ -692,7 +702,7 @@ async def _validate_destination(
         if private != {False}:
             return "DNS returned mixed RFC1918 and non-RFC1918 addresses", ()
 
-    if UPSTREAM_PROXY:
+    if UPSTREAM_PROXY or TOR_SOCKS_UNIX_PATH:
         # Every supported proxy protocol can carry a target hostname. Keep
         # target DNS at the configured proxy instead of resolving locally or
         # through Myst first. Exact host and validated RFC1918 exceptions have
@@ -819,6 +829,10 @@ def _parse_proxy_url(proxy_url: str) -> tuple[str, str, int, str | None, str | N
 
 def _validate_upstream_proxy_config() -> None:
     """Reject unusable upstream proxy configuration before listening."""
+    if TOR_SOCKS_UNIX_PATH and UPSTREAM_PROXY:
+        raise RuntimeError(
+            "native Tor egress and EGRESS_UPSTREAM_PROXY_URL are mutually exclusive"
+        )
     if not UPSTREAM_PROXY:
         return
 
@@ -862,6 +876,8 @@ def _sanitized_upstream_proxy() -> str:
 
 
 def _target_dns_mode() -> str:
+    if TOR_SOCKS_UNIX_PATH:
+        return "native-tor"
     if UPSTREAM_PROXY:
         return "upstream-proxy"
     if MYST_VPN_ENABLED:
@@ -904,8 +920,25 @@ async def _connect_via_upstream(
     ):
         return await _open_validated_direct_connection(validated_ips, target_port)
 
-    if not UPSTREAM_PROXY:
+    if not UPSTREAM_PROXY and not TOR_SOCKS_UNIX_PATH:
         return await _open_validated_direct_connection(validated_ips, target_port)
+
+    if TOR_SOCKS_UNIX_PATH:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(TOR_SOCKS_UNIX_PATH),
+                timeout=TUNNEL_CONNECT_TIMEOUT,
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            raise ConnectionError("native Tor SOCKS socket is unavailable") from exc
+        return await _socks5_connect(
+            reader,
+            writer,
+            target_host,
+            target_port,
+            None,
+            None,
+        )
 
     scheme, proxy_host, proxy_port, proxy_user, proxy_pass = _parse_proxy_url(
         UPSTREAM_PROXY
@@ -973,15 +1006,39 @@ async def _connect_via_socks5(
     reader, writer = await _open_http_proxy_connection(
         proxy_host, proxy_port, scheme
     )
+    return await _socks5_connect(
+        reader, writer, target_host, target_port, username, password
+    )
+
+
+async def _socks5_connect(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    target_host: str,
+    target_port: int,
+    username: str | None,
+    password: str | None,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Run the common bounded SOCKS5 CONNECT exchange on an open stream."""
+    async def read_exactly(size: int) -> bytes:
+        try:
+            return await asyncio.wait_for(
+                reader.readexactly(size), timeout=TUNNEL_CONNECT_TIMEOUT
+            )
+        except asyncio.TimeoutError as exc:
+            writer.close()
+            raise ConnectionError("SOCKS5 reply timed out") from exc
 
     # SOCKS5 greeting: version 5, auth methods
     if username and password:
+        offered_methods = {0x00, 0x02}
         writer.write(b"\x05\x02\x00\x02")  # 2 methods: no-auth, userpass
     else:
+        offered_methods = {0x00}
         writer.write(b"\x05\x01\x00")  # 1 method: no-auth
     await writer.drain()
 
-    resp = await reader.readexactly(2)
+    resp = await read_exactly(2)
     if resp[0] != 5:
         writer.close()
         raise ConnectionError(f"SOCKS5 version mismatch: {resp[0]}")
@@ -990,6 +1047,9 @@ async def _connect_via_socks5(
     if auth_method == 0xFF:
         writer.close()
         raise ConnectionError("SOCKS5: no acceptable auth method")
+    if auth_method not in offered_methods:
+        writer.close()
+        raise ConnectionError("SOCKS5: server selected an unoffered auth method")
 
     if auth_method == 0x02:
         # Username/password auth
@@ -1006,8 +1066,8 @@ async def _connect_via_socks5(
             + p_bytes
         )
         await writer.drain()
-        auth_resp = await reader.readexactly(2)
-        if auth_resp[1] != 0:
+        auth_resp = await read_exactly(2)
+        if auth_resp[0] != 1 or auth_resp[1] != 0:
             writer.close()
             raise ConnectionError("SOCKS5: auth failed")
 
@@ -1041,7 +1101,13 @@ async def _connect_via_socks5(
     await writer.drain()
 
     # Read SOCKS5 response
-    resp = await reader.readexactly(4)
+    resp = await read_exactly(4)
+    if resp[0] != 5:
+        writer.close()
+        raise ConnectionError(f"SOCKS5 response version mismatch: {resp[0]}")
+    if resp[2] != 0:
+        writer.close()
+        raise ConnectionError("SOCKS5 response has a nonzero reserved byte")
     if resp[1] != 0:
         writer.close()
         raise ConnectionError(f"SOCKS5 connect failed: status {resp[1]}")
@@ -1049,12 +1115,18 @@ async def _connect_via_socks5(
     # Read and discard the bound address
     atyp = resp[3]
     if atyp == 1:
-        await reader.readexactly(4 + 2)
+        await read_exactly(4 + 2)
     elif atyp == 3:
-        length = (await reader.readexactly(1))[0]
-        await reader.readexactly(length + 2)
+        length = (await read_exactly(1))[0]
+        if length == 0:
+            writer.close()
+            raise ConnectionError("SOCKS5 response has an empty bound hostname")
+        await read_exactly(length + 2)
     elif atyp == 4:
-        await reader.readexactly(16 + 2)
+        await read_exactly(16 + 2)
+    else:
+        writer.close()
+        raise ConnectionError(f"SOCKS5 response has unknown address type: {atyp}")
 
     return reader, writer
 
@@ -1118,57 +1190,7 @@ async def _open_http_proxy_connection(
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Open a connection to an HTTP/HTTPS upstream proxy."""
     ssl_ctx = _https_proxy_ssl_context() if scheme == "https" else None
-    normalized_host = _normalize_host(proxy_host)
-    literal_ip = _parse_ip_literal(normalized_host)
-    hostname_reason = _hostname_block_reason(normalized_host)
-    if literal_ip is not None:
-        proxy_addresses = (normalized_host,)
-    elif not MYST_VPN_ENABLED:
-        # Explicit no-VPN mode uses the operator-selected system resolver for
-        # the configured proxy endpoint as well as ordinary destinations.
-        proxy_addresses = tuple(
-            sorted(await _resolve_system_host(proxy_host, proxy_port))
-        )
-        if not proxy_addresses:
-            raise ConnectionError("system DNS returned no upstream proxy addresses")
-    elif normalized_host == "host.docker.internal":
-        proxy_addresses = tuple(
-            sorted(await _resolve_system_host(proxy_host, proxy_port))
-        )
-        if not proxy_addresses:
-            raise ConnectionError(
-                "system DNS returned no Docker-host proxy addresses"
-            )
-    elif ALLOW_LAN_ENDPOINTS and _is_rfc1918_system_dns_name(normalized_host):
-        candidate_ips = await _resolve_system_host(proxy_host, proxy_port)
-        if not candidate_ips:
-            raise ConnectionError(
-                "system DNS returned no operator-local proxy addresses"
-            )
-        if not all(_is_rfc1918(ip) for ip in candidate_ips):
-            raise ConnectionError(
-                "operator-local upstream proxy name did not resolve entirely "
-                "to RFC1918 addresses"
-            )
-        proxy_addresses = tuple(sorted(candidate_ips))
-    elif hostname_reason is None:
-        resolved = await _resolve_target_host(normalized_host, proxy_port)
-        if not resolved:
-            raise ConnectionError("VPN DNS returned no upstream proxy addresses")
-        for resolved_ip in resolved:
-            reason = _ip_block_reason(resolved_ip)
-            if reason:
-                raise ConnectionError(
-                    "VPN DNS resolved upstream proxy to blocked "
-                    f"{resolved_ip} ({reason})"
-                )
-        proxy_addresses = tuple(sorted(resolved))
-    else:
-        raise ConnectionError(
-            "upstream proxy hostname requires exact host.docker.internal, an "
-            "RFC1918 literal, or an operator-local suffix with "
-            "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true"
-        )
+    proxy_addresses = await _resolve_upstream_proxy_endpoint(proxy_host, proxy_port)
 
     failures: list[str] = []
     for address in proxy_addresses:
@@ -1200,6 +1222,76 @@ async def _open_http_proxy_connection(
     return reader, writer
 
 
+async def _resolve_upstream_proxy_endpoint(
+    proxy_host: str, proxy_port: int
+) -> tuple[str, ...]:
+    """Resolve and classify the operator-configured TCP proxy endpoint."""
+    normalized_host = _normalize_host(proxy_host)
+    literal_ip = _parse_ip_literal(normalized_host)
+    if literal_ip is not None:
+        if literal_ip.version == 4 and literal_ip.is_private:
+            if _is_rfc1918(normalized_host):
+                return (normalized_host,)
+        reason = _ip_block_reason(normalized_host)
+        if reason:
+            raise ConnectionError(f"blocked upstream proxy address ({reason})")
+        return (normalized_host,)
+
+    hostname_reason = _hostname_block_reason(normalized_host)
+    if normalized_host == "host.docker.internal":
+        resolved = await _resolve_system_host(normalized_host, proxy_port)
+        if not resolved:
+            raise ConnectionError("system DNS returned no Docker-host proxy addresses")
+        for address in resolved:
+            parsed = _parse_ip_literal(address)
+            if (
+                parsed is None
+                or parsed.is_loopback
+                or parsed.is_link_local
+                or parsed.is_multicast
+                or parsed.is_unspecified
+                or parsed.is_reserved
+            ):
+                raise ConnectionError("Docker-host proxy resolved to a forbidden address")
+        return tuple(sorted(resolved))
+
+    if hostname_reason is not None:
+        raise ConnectionError(
+            "upstream proxy hostname requires an ordinary public name, exact "
+            "host.docker.internal, an RFC1918 literal, or an operator-local "
+            "suffix with ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true"
+        )
+
+    if _is_rfc1918_system_dns_name(normalized_host):
+        if not ALLOW_LAN_ENDPOINTS:
+            raise ConnectionError(
+                "operator-local upstream proxy name requires "
+                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true"
+            )
+        resolved = await _resolve_system_host(normalized_host, proxy_port)
+        if not resolved or not all(_is_rfc1918(address) for address in resolved):
+            raise ConnectionError(
+                "operator-local upstream proxy name did not resolve entirely "
+                "to RFC1918 addresses"
+            )
+        return tuple(sorted(resolved))
+
+    resolved = (
+        await _resolve_target_host(normalized_host, proxy_port)
+        if MYST_VPN_ENABLED
+        else await _resolve_system_host(normalized_host, proxy_port)
+    )
+    if not resolved:
+        raise ConnectionError("resolver returned no upstream proxy addresses")
+    for address in resolved:
+        reason = _ip_block_reason(address)
+        if reason:
+            raise ConnectionError(
+                f"upstream proxy resolved to blocked {address} ({reason})"
+            )
+    return tuple(sorted(resolved))
+
+
 async def _open_plain_http_forward_connection(
     target_host: str,
     target_port: int,
@@ -1226,9 +1318,15 @@ async def _open_plain_http_forward_connection(
         )
         return reader, writer, False
 
-    if not UPSTREAM_PROXY:
+    if not UPSTREAM_PROXY and not TOR_SOCKS_UNIX_PATH:
         reader, writer = await _open_validated_direct_connection(
             validated_ips, target_port
+        )
+        return reader, writer, False
+
+    if TOR_SOCKS_UNIX_PATH:
+        reader, writer = await _connect_via_upstream(
+            target_host, target_port, validated_ips
         )
         return reader, writer, False
 

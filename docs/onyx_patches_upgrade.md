@@ -1,5 +1,24 @@
 # Patch and component upgrade checklist
 
+## Tor and canonical-origin contract
+
+When changing the Tor base pin, re-audit its manifest architectures, source
+revision, packaged Tor version, empty image user, entrypoint, UID/GID 101:102,
+GeoIP paths, Python 3, and `/var/lib/tor` volume. Rebuild the minimal derived
+image, run `make test-tor-image` with Docker and Podman, and verify generated
+configs with networking disabled. Reconfirm entrypoint bypass, non-root
+read-only/capability-free operation, private cookie-only control health,
+named-volume ownership, and that the state bind overrides the inherited
+volume.
+
+Render all four Tor role models plus engine corrections and retest direct Tor
+egress, unavailable-selector failure, identity persistence, and simultaneous
+localhost/Tailscale/onion authentication and streaming.
+`ONYX_WEB_CANONICAL_ORIGIN` remains one `WEB_DOMAIN`, passed identically to
+backend and web server. Do not infer general multi-origin support: voice,
+OAuth/federated callbacks, email links, and similar consumers remain
+canonical-origin features, and gateways must not rewrite cookie attributes.
+
 Use this checklist whenever changing Onyx, code-interpreter, its Python
 executor, SearXNG,
 Obscura, Teep, support-image pins, runtime Python inputs, or source-shape

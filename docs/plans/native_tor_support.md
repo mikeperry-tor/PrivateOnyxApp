@@ -17,7 +17,9 @@ a route-owning namespace, and explicit Docker/Podman validation.
 
 ## Status and principal decisions
 
-Status: proposed.
+Status: implemented for the initial direct-Tor acceptance boundary. The
+mandatory simultaneous-ingress gate passed on Docker and Podman. Deferred
+Tor-over-Myst and generalized multi-origin work remain out of scope.
 
 ### Execution scope
 
@@ -1205,15 +1207,53 @@ deferred Tor-over-Myst or multi-origin work.
 
 ## Handoff record
 
-When implementing, update this section rather than appending a dated journal.
-Record:
-
-- selected image tag, immutable digest, source revision, Tor version,
-  architectures, UID/GID, GeoIP paths, and verified image contract;
-- final Compose layers and mount strategy;
-- deterministic and live commands run, with engine/mode/role coverage;
-- selector and failure-injection evidence in non-sensitive summary form;
-- Docker/Podman versions and restart cases exercised;
-- any omitted validation and exact reason; and
-- final running stack/engine state without exposing the onion address unless
-  the operator explicitly wants it recorded.
+- Image: `dockurr/tor:0.4.9.11` at immutable index digest
+  `sha256:446881b3366cbc2cc5cf8d13a76e3104f60824b7c15343d14defe903ded18f0d`,
+  source revision `6823d1099c7f5e9f51b75cf6b7fdf94a627f11f2`, Tor
+  0.4.9.11, and `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+  Audited runtime contracts are UID/GID `101:102`, GeoIP files at
+  `/usr/share/tor/geoip{,6}`, Python 3, the inherited entrypoint and
+  `/var/lib/tor` volume. `make test-tor-image` passed with both engines.
+- Layers: `docker-compose.tor.yml` is common,
+  `docker-compose.tor-egress.yml` adds the engine-local Unix socket volume,
+  `docker-compose.tor-onion.yml` adds the fixed-address ingress/gateway, and
+  the two `*-podman.yml` files supply only keep-id, rootless
+  `ping_group_range`, and tmpfs ownership translations. Config and portable
+  identity use host binds; only Tor writes the runtime volume, only the two
+  policy proxies mount it read-only, and only Tor receives the private control
+  tmpfs.
+- Deterministic validation: `make check` passed 366 tests; focused renderer,
+  effective-model, immutable-pin, frontend, and final-hop proxy suites passed.
+  Docker and Podman focused image checks passed. Docker full mode became
+  healthy with both Tor roles and passed `integration-opensearch` and
+  `integration-opensearch-onyx`; a real SearXNG query returned results through
+  the Tor-routed browser path.
+- Live ingress: combined lite mode passed on Docker 29.6.1/29.6.1 and Podman
+  client 5.8.5/server 5.8.1 with Tailscale enabled and Myst disabled.
+  Independent localhost, Tailscale, and onion registrations/logins, `/api/me`,
+  logout isolation, re-login, and real SSE chat streams all passed. The onion
+  identity survived Docker restart, Docker-to-Podman switching, and Podman
+  down/up. No onion address, key, cookie, or credential was recorded.
+- Live egress/failure evidence: both engines reported Tor for an ordinary HTTPS
+  request through the public final-hop proxy. Stopping Tor caused requests to
+  fail with no fallback and recovery followed Tor health. A strict available
+  `us` selector completed an ordinary request. The syntactically valid unknown
+  `zz` selector logged as unrecognized and held the final-hop tier behind Tor
+  startup health with no unrestricted route. Control health advertised
+  cookie-only authentication, rejected an unauthenticated query, and returned
+  bootstrap completion after cookie authentication.
+- Engine-specific finding: repeated normal Podman down/up passed. An additional
+  optional Podman VM stop/start probe exposed an external Podman/libkrun
+  regression: the 5.8.5 client reported a successful VM start, then the VM
+  exited and its SSH/API port refused connections. No Compose workaround was
+  added. The mandatory Podman gate had completed before that probe.
+- Omitted live rows: a successful fixed-fingerprint request was not run;
+  fingerprint rendering, normalization, duplicate/injection rejection, and
+  no-fallback semantics are covered deterministically. A user-level
+  `open_url` tool invocation and document-specific full-RAG `internal_search`
+  were not run; the underlying Tor HTTPS route, real search path, full health,
+  embedding readiness, and pinned Onyx/OpenSearch integration were exercised.
+- Final state at handoff: both wrapper stacks are down, shared-data ownership is
+  released, Docker remains available, and the Podman VM is stopped after the
+  failed optional restart probe. Persistent onion state is retained without
+  exposing its address.

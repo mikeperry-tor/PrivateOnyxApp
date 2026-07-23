@@ -1,0 +1,6 @@
+services:
+  tor-frontend-gateway:
+    tmpfs: !override
+      - /var/cache/nginx:U,mode=0755
+      - /var/run:U,mode=0755
+      - /tmp
