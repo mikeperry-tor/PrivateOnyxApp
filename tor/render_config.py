@@ -171,7 +171,10 @@ def validate_settings(
         raise ConfigError("Tor country and fingerprint selectors are mutually exclusive")
     if values["EGRESS_UPSTREAM_PROXY_URL"] and egress:
         raise ConfigError(
-            "TOR_EGRESS_ENABLED=true conflicts with EGRESS_UPSTREAM_PROXY_URL"
+            "TOR_EGRESS_ENABLED=true and EGRESS_UPSTREAM_PROXY_URL are mutually "
+            "exclusive; HTTPS-proxy-after-Tor support is deferred because no "
+            "suitable zero-data-retention (ZDR) HTTPS proxy provider is known. "
+            "See docs/plans/deferred/https_proxy_after_tor.md"
         )
     return egress, onion, country, fingerprints
 

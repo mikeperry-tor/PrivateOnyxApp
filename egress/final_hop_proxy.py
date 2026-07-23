@@ -831,7 +831,11 @@ def _validate_upstream_proxy_config() -> None:
     """Reject unusable upstream proxy configuration before listening."""
     if TOR_SOCKS_UNIX_PATH and UPSTREAM_PROXY:
         raise RuntimeError(
-            "native Tor egress and EGRESS_UPSTREAM_PROXY_URL are mutually exclusive"
+            "native Tor egress and EGRESS_UPSTREAM_PROXY_URL are mutually exclusive;" \
+            "HTTPS-proxy-after-Tor support is deferred because no suitable " \
+            "zero-data-retention (ZDR) HTTPS proxy provider is known to exist. " \
+            "See docs/plans/deferred/https_proxy_after_tor.md for implementation details. " \
+            "Please file an issue if you are aware of any suitable providers."
         )
     if not UPSTREAM_PROXY:
         return

@@ -884,7 +884,13 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 "EGRESS_UPSTREAM_PROXY_URL": "http://proxy.example:8080",
             }
         )
-        with self.assertRaisesRegex(RuntimeError, "mutually exclusive"):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            (
+                r"mutually exclusive.*zero-data-retention \(ZDR\).*"
+                r"docs/plans/deferred/https_proxy_after_tor\.md"
+            ),
+        ):
             module._validate_upstream_proxy_config()
 
     async def test_socks_reply_rejects_version_reserved_and_unknown_address(self) -> None:

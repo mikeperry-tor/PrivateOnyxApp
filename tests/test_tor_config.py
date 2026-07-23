@@ -262,6 +262,21 @@ class TorConfigTests(unittest.TestCase):
             ):
                 tor_config.validate_settings(settings(**overrides))
 
+    def test_native_tor_proxy_conflict_explains_deferred_plan(self) -> None:
+        with self.assertRaisesRegex(
+            tor_config.ConfigError,
+            (
+                r"mutually exclusive.*zero-data-retention \(ZDR\).*"
+                r"docs/plans/deferred/https_proxy_after_tor\.md"
+            ),
+        ):
+            tor_config.validate_settings(
+                settings(
+                    egress="true",
+                    upstream_proxy="https://proxy.example:8443",
+                )
+            )
+
     def test_selector_without_egress_is_rejected(self) -> None:
         with self.assertRaisesRegex(tor_config.ConfigError, "require"):
             tor_config.validate_settings(settings(country="is"))
