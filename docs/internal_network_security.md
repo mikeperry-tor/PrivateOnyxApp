@@ -45,6 +45,8 @@ apply in every selected mode.
 | `obscura` | CDP control networks and its fixed browser bridge | shared public final-hop policy through `obscura-egress-bridge` |
 | enabled executor | executor service/control networks and its fixed bridge | shared public final-hop policy through `executor-egress-bridge` |
 | doc-drop and embedding components | their documented full-mode local networks; Podman relay has a dedicated host uplink | only their explicit fixed host/public route where configured |
+| optional `tor` | `tor-ingress` only when onion ingress is enabled; private control tmpfs and optional SOCKS runtime volume are mounts, not networks | dedicated `tor-uplink`; applications never join it |
+| optional `tor-frontend-gateway` | spans only `tor-ingress` and `onyx-frontend`, with fixed nginx forwarding | none |
 
 CDP is powerful browser authority. The API and SearXNG are mutually
 non-isolated with respect to the shared Obscura worker pool: either can create

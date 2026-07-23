@@ -523,7 +523,7 @@ tor-build:
 		--file "$(TOR_DOCKERFILE)" \
 		--build-arg TOR_BASE_IMAGE="$(TOR_BASE_IMAGE)" \
 		--tag "$(TOR_IMAGE)" \
-		.
+		tor
 
 tor-config-ready:
 	@if [ "$(TOR_EGRESS_ENABLED)" != "true" ] && [ "$(TOR_ONION_SERVICE_ENABLED)" != "true" ]; then exit 0; fi; \

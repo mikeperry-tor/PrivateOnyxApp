@@ -1032,6 +1032,9 @@ async def _socks5_connect(
         except asyncio.TimeoutError as exc:
             writer.close()
             raise ConnectionError("SOCKS5 reply timed out") from exc
+        except asyncio.IncompleteReadError as exc:
+            writer.close()
+            raise ConnectionError("SOCKS5 reply was truncated") from exc
 
     # SOCKS5 greeting: version 5, auth methods
     if username and password:

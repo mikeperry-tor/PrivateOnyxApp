@@ -1,0 +1,17 @@
+.git
+.env.wrapper
+.env.wrapper.*
+.DS_Store
+.vscode
+*.swp
+**/__pycache__
+docker-data
+doc-drop
+embedserv/models
+embedserv/*.log
+embedserv/*.pid
+logs
+onyx/onyx_data
+plans
+reference_repos
+tmp

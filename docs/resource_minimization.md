@@ -3,9 +3,11 @@
 ## Optional Tor lifecycle
 
 When both roles are disabled, the effective model contains no Tor container,
-networks, gateway, runtime mount, renderer work, or Tor health activity.
-Enabling either role starts one shared process; combined egress and onion
-ingress intentionally share guards, resource pressure, and failure fate.
+networks, gateway, runtime mount, rendered Tor config, or Tor health activity.
+The ordinary stack preflight still validates the disabled role booleans and
+canonical origin, but creates no Tor file or runtime resource. Enabling either
+role starts one shared process; combined egress and onion ingress intentionally
+share guards, resource pressure, and failure fate.
 
 Tor health is a local, cookie-authenticated `GETINFO status/bootstrap-phase`
 query over its private Unix control socket. It runs every five seconds during

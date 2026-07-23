@@ -39,6 +39,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     class _Writer:
         def __init__(self) -> None:
             self.data = bytearray()
+            self.closed = False
 
         def write(self, data: bytes) -> None:
             self.data.extend(data)
@@ -47,7 +48,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             return None
 
         def close(self) -> None:
-            return None
+            self.closed = True
 
         async def wait_closed(self) -> None:
             return None
@@ -900,6 +901,20 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                     await module._socks5_connect(
                         reader, self._Writer(), "target.example", 443, None, None
                     )
+
+    async def test_socks_truncated_reply_closes_upstream(self) -> None:
+        module = _load_module()
+        reader = module.asyncio.StreamReader()
+        reader.feed_data(b"\x05")
+        reader.feed_eof()
+        writer = self._Writer()
+
+        with self.assertRaisesRegex(ConnectionError, "truncated"):
+            await module._socks5_connect(
+                reader, writer, "target.example", 443, None, None
+            )
+
+        self.assertTrue(writer.closed)
 
     async def test_no_vpn_proxy_endpoint_answers_are_classified(self) -> None:
         module = _load_module(

@@ -339,11 +339,14 @@ The derived Python executor and its `executor-image-ready` prerequisite remain
 Docker-only because rootless Podman omits the socket-dependent code-interpreter
 service entirely; Podman startup and image validation do not build or store it.
 
-Root-context Podman builds use `.containerignore`. It excludes private bind
-data, the document source, generated Onyx deployment state, local model/cache
-trees, logs, and reference checkouts. Preserve those exclusions: without them,
-Podman archives large private host trees into the remote build context before
-the Dockerfile runs, causing long silent starts and unnecessary data exposure.
+Root-context Podman builds use `.containerignore`; Docker uses the matching
+`.dockerignore`. They exclude private bind data, the document source, generated
+Onyx deployment state, local model/cache trees, logs, and reference checkouts.
+Keep the two files identical. Preserve those exclusions: without them, a
+container client can archive large private host trees into a local or remote
+build context before the Dockerfile runs, causing long silent starts and
+unnecessary data exposure. Components that do not need the shared root context,
+such as the Tor wrapper, use their own narrow component directory instead.
 
 ## macOS mounts, ownership, and attributes
 

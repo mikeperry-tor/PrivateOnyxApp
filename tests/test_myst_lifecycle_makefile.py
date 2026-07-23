@@ -119,10 +119,15 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertEqual(myst["environment"]["MYST_SETUP_ONLY"], "true")
         self.assertEqual(myst["environment"]["MYST_AUTO_CONNECT"], "false")
 
-    def test_podman_build_context_excludes_private_and_large_local_state(self) -> None:
+    def test_build_context_excludes_private_and_large_local_state(self) -> None:
+        ignore_paths = (ROOT / ".dockerignore", ROOT / ".containerignore")
+        contents = [
+            path.read_text(encoding="utf-8").splitlines() for path in ignore_paths
+        ]
+        self.assertEqual(contents[0], contents[1])
         ignored = {
             line.strip()
-            for line in (ROOT / ".containerignore").read_text(encoding="utf-8").splitlines()
+            for line in contents[0]
             if line.strip() and not line.startswith("#")
         }
         self.assertTrue(
@@ -136,6 +141,12 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             <= ignored
         )
         self.assertTrue({"onyx/onyx_data", "reference_repos", ".git"} <= ignored)
+
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        tor_build = makefile.split("\ntor-build:", 1)[1].split(
+            "\n\ntor-config-ready:", 1
+        )[0]
+        self.assertTrue(tor_build.rstrip().endswith("\t\ttor"))
 
     def test_podman_compose_is_pinned_to_the_forwarded_unix_socket(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
