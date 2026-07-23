@@ -168,7 +168,11 @@ are not duplicate enforcement.
   but an active indexing operation retains Onyx's normal connector/indexing
   failure reporting and task-recovery behavior.
 
-### Myst routing
+### Optional Myst routing
+
+- Myst VPN is disabled by default. In explicit no-VPN mode its container
+  remains only as the stable routing-namespace owner; it requires no wallet or
+  tunnel and never arms VPN recovery.
 
 - Route exemptions and WireGuard MTU are reconciled every 20 seconds, preserving
   hostname-DNS refresh and the repair bound.

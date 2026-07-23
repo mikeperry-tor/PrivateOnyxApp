@@ -14,7 +14,8 @@ Onyx open_url (ONYX_AGENT_USE_OBSCURA_BROWSER=true)
   -> Obscura
   -> obscura-egress-bridge
   -> public final-hop proxy
-  -> VPN, configured upstream proxy, or explicit no-VPN route
+  -> default no-VPN route, optional Myst VPN, configured upstream proxy,
+     or Myst plus that proxy
 
 Onyx web_search
   -> searxng-service-gateway

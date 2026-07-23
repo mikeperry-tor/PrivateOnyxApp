@@ -1,6 +1,6 @@
 # Code Agent Instructions for Private Onyx
 
-This repository is a Docker Compose wrapper for running Onyx with private verified inference, VPN/proxy-routed Obscura browser access, an optional public-proxied stock Onyx crawler mode, SearXNG search, local document RAG, and optional Tailscale exposure.
+This repository is a Docker Compose wrapper for running Onyx with private verified inference, default explicit no-VPN or optional VPN/proxy-routed Obscura browser access, an optional public-proxied stock Onyx crawler mode, SearXNG search, local document RAG, and optional Tailscale exposure.
 
 It is not the upstream Onyx project, nor is it a fork. Most changes here are deployment, Compose, Python sidecar, shell, SearXNG, or runtime-patch changes around upstream projects.
 

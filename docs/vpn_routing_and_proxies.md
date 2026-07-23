@@ -4,6 +4,9 @@ This stack keeps application containers off Internet-routed Docker networks.
 Traffic crosses fixed-destination bridges to final-hop policy proxies in the
 trusted `netns-holder` routing namespace. The route owner is Mysterium, a
 configured upstream proxy, or the explicit no-VPN system route.
+`MYST_VPN_ENABLED=false` is the default: it selects the explicit no-VPN route
+without requiring a Myst wallet or setup. Mysterium is an opt-in route selected
+with `MYST_VPN_ENABLED=true`; an upstream proxy can be used in either mode.
 
 ## Route classes
 
@@ -78,7 +81,7 @@ unresolved to the final hop:
 | --- | --- |
 | VPN | selected Myst provider DNS and the `myst0` route |
 | Configured remote-DNS upstream | upstream proxy owns target resolution and the final route |
-| Explicit no-VPN | system DNS and system default route in `netns-holder` |
+| No VPN (default) | system DNS and system default route in `netns-holder` |
 
 When the wrapper resolves destinations itself, it validates the complete
 answer set, pins approved addresses, and revalidates redirects/subresources.
@@ -122,7 +125,7 @@ User-opened external links and top-level navigation remain possible.
 Server-side connectors, inference, search, release-note refresh, and other
 configured operations continue to use their documented container route class.
 
-## VPN and no-VPN lifecycle
+## Optional VPN and default no-VPN lifecycle
 
 `netns-holder` gives route-owning processes a stable namespace. Myst and the
 final-hop proxies are trusted co-resident processes; optional Teep or
@@ -185,9 +188,9 @@ repeat the same operations. This reduces stable-state commands, netlink writes,
 and logs without weakening reconnect repair or changing route ownership; an
 event-driven replacement remains deferred.
 
-With `MYST_VPN_ENABLED=false`, the Myst container idles as namespace owner,
-requires no wallet, and readiness requires that no stale `myst0` remains plus
-a usable IPv4 default route. The health supervisor delegates that predicate
+With the default `MYST_VPN_ENABLED=false`, the Myst container idles as namespace
+owner, requires no wallet, and readiness requires that no stale `myst0` remains
+plus a usable IPv4 default route. The health supervisor delegates that predicate
 without creating recovery state or signaling PID 1. Switching a live namespace
 from VPN to no-VPN requires tearing down the old stack so a stale interface
 cannot survive.

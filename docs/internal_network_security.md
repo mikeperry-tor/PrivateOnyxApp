@@ -4,6 +4,9 @@ The stack uses network separation and fixed-destination bridges to limit which
 components can reach CDP, Onyx data services, host-capable destinations, and
 the Internet. The exact routing policy is in
 [VPN routing and restricted egress](vpn_routing_and_proxies.md).
+The explicit no-VPN final hop is the default; Myst VPN and upstream-proxy
+routing are optional. The same destination and no-direct-fallback boundaries
+apply in every selected mode.
 
 ## Reachability and trust boundaries
 

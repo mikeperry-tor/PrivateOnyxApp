@@ -8,7 +8,7 @@ Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0
 
 Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are stable in the default web crawler, but are varied per-navigation in Obscura. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
 
-To further minimize captchas and reduce tracking, all agent internet traffic can use the selected [Mysterium](https://github.com/mysteriumnetwork/node), upstream-proxy, and/or explicit no-VPN routing mode. The stack employs docker/podman network namespace isolation to ensure that all agent traffic exits through the configured VPN and/or upstream proxy, and prohibits DNS leaks and other forms of proxy bypass.
+Agent Internet traffic uses an explicit no-VPN route by default. Operators can optionally enable [Mysterium](https://github.com/mysteriumnetwork/node), configure an upstream proxy, or combine the two to further reduce tracking and captchas. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route and prevents direct-network or DNS fallback.
 
 [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for that device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN.
 
@@ -23,7 +23,7 @@ Additionally, the full mode of Onyx provides RAG search results to the agent fro
 In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
 
 - Onyx telemetry, third-party analytics and error reporting, cloud billing, CAPTCHA, and automatic remote configuration/data-list downloads are explicitly disabled.
-- A restrictive browser Content Security Policy blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's VPN/proxy routing through the user's browser. Additionally, this blocks queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
+- A restrictive browser Content Security Policy blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's selected no-VPN/VPN/proxy route through the user's browser. Additionally, this blocks queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
 - Stock Onyx strips reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality.
 - Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results; this has been patched.
 - Stock Onyx disables `open_url()` whenever its vector database is disabled, which leaves lite mode unable to open and read web pages. This stack keeps crawler-backed web browsing available in lite mode.
@@ -46,7 +46,7 @@ The Docker Compose files in this stack relies on the following components:
 
 2. [Teep](https://github.com/13rac1/teep) provides private verified LLM inference via a local OpenAI-compatible proxy on port 8337. Teep supports [multiple private inference providers](https://github.com/13rac1/teep#supported-providers), and verifies attestation, encryption, and remote runtime properties before requests are allowed to proceed.
 
-3. [Mysterium](https://github.com/mysteriumnetwork/node) is a Wireguard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. The use of residential IP addresses reduces the rate of captchas and rate limiting by search engines and websites. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
+3. [Mysterium](https://github.com/mysteriumnetwork/node) is an optional WireGuard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. It is disabled by default. Enabling it can reduce captchas and rate limiting by search engines and websites through residential exit addresses. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
 4. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides all custom search engines, and optionally the built-in Onyx Web Crawler, with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy in the selected Myst/proxy/no-VPN routing namespace. By default, only the built-in crawler instead uses Onyx's stock HTTP fetch and local Chromium fallback through the fixed public Onyx bridge.
 
@@ -110,7 +110,7 @@ make logs-full
 
 ## First-run configuration
 
-The first time you run the stack, you need to do some configuration of the .env and of the Myst VPN, before the Onyx WebUI will start.
+Before the first start, create and configure `.env.wrapper`. Myst setup is needed only if you opt into the VPN; the default no-VPN mode requires no wallet, identity, registration, or payment.
 
 ### Configure Environment
 
@@ -127,7 +127,8 @@ Most likely variables you want to change:
 - Teep LLM Provider/API config:
   - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
 - **VPN and Proxy Use**:
-  - Set `MYST_VPN_ENABLED=false` to use the explicit no-VPN final-hop route.
+  - `MYST_VPN_ENABLED=false` is the default and uses the explicit no-VPN final-hop route.
+  - Set `MYST_VPN_ENABLED=true` only if you want the optional Myst VPN, then complete **Optional: Myst VPN Setup** below before starting the stack.
   - You may use an upstream proxy with or without the Mysterium VPN enabled (`EGRESS_UPSTREAM_PROXY_URL`).
   - For the full routing matrix, namespace layout, and proxy behavior, see [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Optional LAN access**:
@@ -139,7 +140,7 @@ Most likely variables you want to change:
 
 ## Onyx UI Configuration
 
-Once Mysterium VPN successfully connects (or the service starts with `MYST_VPN_ENABLED=false`), Onyx will need to be configured to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models).
+Once the stack starts—directly in the default no-VPN mode, or after Myst connects when explicitly enabled—configure Onyx to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models).
 
 For LLM inference, select the **OpenAI-Compatible** provider type for teep. This is important for GLM-5.2 and Kimi-K2.6 reasoning models: the wrapper's Onyx patches preserve active-turn assistant reasoning as OpenAI-compatible `reasoning_content`/`reasoning` fields by default, and the OpenAI-Compatible provider keeps teep's raw model IDs on that request path. The BiFrost provider is also compatible, but OpenAI-Compatible is the recommended teep selection. Other provider catalogs may spell GLM and Kimi model names with different dots, dashes, or compressed forms, and the OpenAI-Compatible path avoids LiteLLM native-provider remapping and ensures reasoning preservation.
 
@@ -190,13 +191,13 @@ The stock Onyx Web Crawler appears to be blocked less often than Obscura v0.1.10
 
 SearXNG always uses Obscura; `ONYX_AGENT_USE_OBSCURA_BROWSER` independently selects the built-in crawler transport.
 
-In either case, egress is restricted to ensure usage of VPN and/or upstream proxy, through docker compose network namespace routing. This is the case for all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
+In either case, Docker Compose network-namespace routing restricts egress to the selected final hop: the default no-VPN route, the optional Myst VPN, an upstream proxy, or Myst plus that proxy. This is the case for all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
 
-Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Search, is supported. Connections to these services will traverse via the VPN and/or upstream proxy, but these external providers perform their accesses from their own IP address space. None of these providers offer ZDR policies to consumer end users, so your API key and account on these services will be associated with your usage activity, and this data will be stored, trained on, and/or sold by these providewrs.
+Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Search, is supported. Connections to these services use the selected no-VPN/VPN/upstream-proxy route, but these external providers perform their accesses from their own IP address space. None of these providers offer ZDR policies to consumer end users, so your API key and account on these services will be associated with your usage activity, and this data will be stored, trained on, and/or sold by these providers.
 
 ## Optional Configurations
 
-The following sections detail additional optional feature configuration, including remote access via TailScale Funnel, and RAG document search.
+The following sections detail optional feature configuration, including remote access via Tailscale Funnel, an outbound proxy, Myst VPN, and RAG document search.
 
 ### Optional: Tailscale Funnel
 
@@ -205,7 +206,7 @@ You can publish the Onyx WebUI through Tailscale Funnel to access it remotely vi
 To set this up, in `.env.wrapper`, set `TAILSCALE_FUNNEL_ENABLED=true` and set `TAILSCALE_FUNNEL_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
 
 - Public endpoint: `https://onyx.your-tailnet.ts.net` on port 443
-- By default, the tailscale service does not route through Mysterium VPN, to avoid linking your tailscale account to your search actvity at the Myst VPN exit server.
+- By default, the Tailscale service does not route through Mysterium VPN, to avoid linking your Tailscale account to your search activity at the Myst VPN exit server.
 - Tailscale uses the userspace networking mode, so no VPN activity is involved.
 - To route Tailscale through the VPN namespace instead, set `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` in `.env.wrapper`. **Warning:** this links your Tailscale identity to the VPN exit IP.
 
@@ -272,7 +273,7 @@ remote-proxy limitations.
 
 ### Optional: Myst VPN Setup
 
-> **Skip this section entirely if `MYST_VPN_ENABLED=false`** in your `.env.wrapper`. When the VPN is disabled, no wallet, identity, or payment is required — `make up-lite` / `make up-full` will proceed directly to starting the stack.
+Myst is disabled by default. Skip this section unless you have explicitly set `MYST_VPN_ENABLED=true` in `.env.wrapper`. In the default no-VPN mode, no wallet, identity, registration, or payment is required, and `make up-lite` / `make up-full` proceeds directly to starting the stack.
 
 The Mysterium VPN requires a funded wallet (paid in cryptocurrency) before it can connect. The signup process is handled by a standalone container that creates a cryptographic identity and registers it on-chain (Mysterium sponsors the gas fees).
 
@@ -325,7 +326,7 @@ make vpn-balance
 make up-lite   # or make up-full
 ```
 
-This automatically stops the standalone signup container (your wallet data is preserved) and starts the full stack. If no Myst identity is found, it will tell you to run `make vpn-signup-orderform` or `make vpn-signup-blockchain` first.
+With `MYST_VPN_ENABLED=true`, this automatically stops the standalone signup container (your wallet data is preserved) and starts the full stack. If no Myst identity is found, it will tell you to run `make vpn-signup-orderform` or `make vpn-signup-blockchain` first. This identity check does not apply in the default no-VPN mode.
 
 **Notes:**
 
@@ -475,7 +476,7 @@ previously recorded wrapper-owned MLX process. Docker's document server is
 containerized, while the separate host document process exists only in Podman
 full mode. The shared manager lives at `embedserv/host_process_manager.py`.
 
-MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
+MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the optional stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
 the download libraries when the host requires a build/download proxy.
 
 The stack uses `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs, especially under concurrency load and batched embeddings). LM Studio's embedding support is non-existent.
@@ -574,15 +575,19 @@ The following endpoints are exposed to your docker host:
 
 ## Privacy of this stack
 
-This stack should be regarded as a proof-of-concept. It will keep your LLM
-queries and the resultant search activity out of the hands of AI companies, data
-aggregators, and marketers, but single-hop VPN activity is not as strong as Tor
-(which is supported, but not the default). Single-hop VPN activity may not even
-be as strong as [Tinfoil's distributed trust architecture](https://tinfoil.sh/security-and-privacy-faq#web-search).
+This stack should be regarded as a proof-of-concept. Private verified inference
+can keep LLM query contents from inference providers, while self-hosted browsing
+avoids sending search activity to commercial search APIs. The default explicit
+no-VPN route does not hide your public IP address from destination sites.
+Enabling the optional single-hop Myst VPN changes that exposure, but is not as
+strong as Tor and may not be as strong as
+[Tinfoil's distributed trust architecture](https://tinfoil.sh/security-and-privacy-faq#web-search).
 
 However, the [network security](./docs/internal_network_security.md) of this
-stack is robust, and [restricted VPN+proxy egress is enforced](docs/vpn_routing_and_proxies.md) with docker compose network
-namespaces, service isolation and least-priviledge capability configuration.
+stack is robust, and [restricted selected-route egress](docs/vpn_routing_and_proxies.md)
+is enforced with Docker Compose network namespaces, service isolation, and
+least-privilege capability configuration in no-VPN, VPN, and upstream-proxy
+modes.
 
 The network restrictions are designed to contain agent-controlled activity:
 web search, `open_url()`, browser requests, and optionally network-enabled
@@ -592,20 +597,22 @@ can be granted narrower local access. This separation is not a sandbox for a
 fully compromised Onyx application; such a compromise may abuse the local
 destinations that Onyx is legitimately configured to use.
 
-This stack uses the host OS VPN as the "first hop" before connecting to the
-Mysterium endpoint. Additionally, all inference, search, and web traffic exiting
-the Mysterium VPN uses TLS or https.
+If the host OS routes container-engine traffic through its own VPN, that route
+acts as a first hop in both the default no-Myst mode and before an explicitly
+enabled Mysterium endpoint. The wrapper does not require or configure a host
+VPN. Traffic explicitly routed through Myst continues to use TLS or HTTPS after
+leaving its exit.
 
 Obscura uses a stable browser vendor/version profile with some per-navigation fingerprint variation, while the stock Onyx Web Crawler uses a fixed browser configuration. Obscura-backed requests clear cookies before each navigation, while the default stock crawler does not retain cookies between requests. No other browser state or browser-based tracking information is preserved.
 
 ### Why not just use Tor by default?
 
-Tor usage is supported by configuring `EGRESS_UPSTREAM_PROXY_URL="socks5h://host.docker.internal:9150"` in your .env.wrapper, and this [proxy usage](./docs/vpn_routing_and_proxies.md) is [strictly enforced](./docs/internal_network_security.md), but it is not the default.
+Tor usage is supported by configuring `EGRESS_UPSTREAM_PROXY_URL="socks5h://host.docker.internal:9150"` in `.env.wrapper`, and this [proxy usage](./docs/vpn_routing_and_proxies.md) is [strictly enforced](./docs/internal_network_security.md), but it is not the default.
 
-It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that does not support Tor usage by default. This was a pragmatic choice to produce something that functioned.
+It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that does not use Tor by default. This was a pragmatic choice to produce something that functioned.
 
 The reality is that many websites subject Tor and datacenter VPNs to increased captchas and bans compared to [residential IP addresses](https://acid.vegas/blog/the-shady-world-of-ip-leasing/). The most egregious example is Google's move to update [ReCaptcha to require an official Google device, while exempting "official" AI scrapers](https://www.financialexpress.com/life/technology-google-qr-captcha-controversy-explained-why-internet-is-scared-of-this-4237640/).
 
-Until this landscape changes, residential IP address leasing is the only reliable option for a self-hosted private research agent, and Mysterium was the best choice among those, since the server side is open source, and payment is made in cryptocurrency.
+For operators who need a residential exit, Mysterium is the supported optional choice because its server side is open source and payment can be made in cryptocurrency. Operators who do not need that tradeoff can retain the default no-VPN route or configure another upstream proxy.
 
 You can monitor SearXNG search-engine success statistics on the "Engines" tab of the [Preferences Pane](http://localhost:8080/preferences), if you want to test your success with Tor usage, other proxy providers, or your host VPN.

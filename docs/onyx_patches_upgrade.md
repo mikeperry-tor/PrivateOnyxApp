@@ -278,6 +278,8 @@ entrypoint logs every strict patch success and loads every custom engine.
 Render the exact Makefile layering for lite, full, VPN, no-VPN, upstream proxy,
 Tailscale, Podman, and optional executor modes that changed. Verify:
 
+- the committed user-facing default remains `MYST_VPN_ENABLED=false`, so a
+  first start needs no Myst identity, registration, wallet, or payment;
 - only API/gateway join `onyx-obscura-control`; the gateway is absent from
   `onyx-backend`; SearXNG joins the browser control network;
 - both Onyx `NO_PROXY` forms contain `obscura-cdp-gateway` and no removed alias;

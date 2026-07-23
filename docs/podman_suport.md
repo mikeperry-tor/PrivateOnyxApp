@@ -133,8 +133,9 @@ repeated Podman claims cannot misclassify Podman writers as Docker writers.
 Both engines must be down before switching because shared storage does not make
 concurrent database or index writers safe.
 
-Before either `make up-*` or Myst signup recipe reaches Compose, an atomic marker
-under `docker-data/host-services` claims the shared database/index/wallet data
+Before either `make up-*` or an optional Myst signup recipe reaches Compose, an
+atomic marker under `docker-data/host-services` claims the shared
+database/index/wallet data
 for Docker or Podman. Repeated starts by the same engine are allowed; the other engine fails
 closed until the owner's matching `make down-*` completes successfully. Inspect
 the marker with `make shared-data-engine-status`. On the first claim, the guard
@@ -164,7 +165,8 @@ claim, shared-data preparation, host-side services, and Compose launch therefore
 cannot become peer jobs under `make -j`; a rejected claim stops the serial
 prerequisite chain before any shared-data or host-process mutation.
 
-Standalone signup uses the fixed `private-onyx-myst-signup` Compose project,
+When Myst VPN is explicitly enabled, standalone signup uses the fixed
+`private-onyx-myst-signup` Compose project,
 `MYST_SETUP_ONLY=true`, and `restart: "no"` on both engines. The preflight
 rejects an integrated or wrong-mode same-name container rather than executing
 financial commands in it. `make vpn-signup-stop` releases the selected-engine
