@@ -130,9 +130,9 @@ class LiteOpenUrlAvailabilityPatchTests(unittest.TestCase):
 
     def test_compose_scopes_internal_switch_to_lite_mode(self):
         switch = "ONYX_FORCE_OPEN_URL_AVAILABLE"
-        lite = (ROOT / "docker-compose.lite.yml").read_text()
+        lite = (ROOT / "compose_overlays/docker-compose.lite.yml").read_text()
         base = (ROOT / "docker-compose.yaml").read_text()
-        full = (ROOT / "docker-compose.full.yml").read_text()
+        full = (ROOT / "compose_overlays/docker-compose.full.yml").read_text()
         bootstrap = (
             ROOT / "onyx/patches/sitecustomize_api_server/sitecustomize.py"
         ).read_text()

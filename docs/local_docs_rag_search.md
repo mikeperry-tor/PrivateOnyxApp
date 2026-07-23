@@ -90,7 +90,8 @@ connectors saved with `http://localhost:8091/` must be recreated with
 Implementation:
 
 - Compose services: `doc-drop-web`, `doc-drop-route-gateway`, and
-  `host-doc-display-publisher` in `docker-compose.full.yml`
+  `host-doc-display-publisher` in
+  `compose_overlays/docker-compose.full.yml`
 - Server script: `onyx/doc_drop_webserver.py`
 - User-facing env: `ONYX_RAG_DOC_SOURCE_DIR` and `HOST_PORT_ONYX_RAG_DOC_WEB`
 
@@ -188,7 +189,7 @@ patch.
 
 Implementation:
 
-- Compose env: `docker-compose.full.yml`
+- Compose env: `compose_overlays/docker-compose.full.yml`
 - Runtime patch: `onyx/patches/shared/wrapper_env_patches.py`, installed by the
   API bootstrap
 - User-facing env:
@@ -223,7 +224,8 @@ chat context window. Changes require recreating `api_server` because the base
 
 Implementation:
 
-- Compose service: `local-embedding-shim` in `docker-compose.full.yml`
+- Compose service: `local-embedding-shim` in
+  `compose_overlays/docker-compose.full.yml`
 - Shim script: `onyx/local_embedding_shim.py`
 - Onyx services routed to it: `api_server` and `background`
 

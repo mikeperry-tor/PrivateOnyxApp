@@ -11,7 +11,7 @@ class OnyxPrivacyConfigTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.compose = (ROOT / "docker-compose.yaml").read_text()
-        cls.full = (ROOT / "docker-compose.full.yml").read_text()
+        cls.full = (ROOT / "compose_overlays/docker-compose.full.yml").read_text()
         cls.csp = (ROOT / "onyx/nginx/webui-csp.conf").read_text()
 
     def test_backend_automatic_reporting_and_fetches_are_disabled(self) -> None:

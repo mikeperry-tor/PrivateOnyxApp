@@ -26,15 +26,17 @@ before Compose or shared-data mutation.
 
 The Makefile selects narrowly scoped layers:
 
-- `docker-compose.tor.yml` defines the common Tor process, direct uplink,
-  persistent binds, private control tmpfs, and local health check.
-- `docker-compose.tor-egress.yml` adds the engine-local `tor-runtime` volume
-  and mounts it read-only into the public and host final-hop policy containers.
-- `docker-compose.tor-onion.yml` adds `tor-ingress` and the fixed
-  `tor-frontend-gateway`.
-- `docker-compose.tor-podman.yml` and
-  `docker-compose.tor-onion-podman.yml` contain only Podman ownership, sysctl,
-  and tmpfs translations.
+- `compose_overlays/docker-compose.tor.yml` defines the common Tor process,
+  direct uplink, persistent binds, private control tmpfs, and local health
+  check.
+- `compose_overlays/docker-compose.tor-egress.yml` adds the engine-local
+  `tor-runtime` volume and mounts it read-only into the public and host
+  final-hop policy containers.
+- `compose_overlays/docker-compose.tor-onion.yml` adds `tor-ingress` and the
+  fixed `tor-frontend-gateway`.
+- `compose_overlays/docker-compose.tor-podman.yml` and
+  `compose_overlays/docker-compose.tor-onion-podman.yml` contain only Podman
+  ownership, sysctl, and tmpfs translations.
 
 No Tor layer is selected when both roles are disabled. Combined mode still has
 one Tor service.

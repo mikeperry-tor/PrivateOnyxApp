@@ -134,15 +134,13 @@ Those bullets are only a map. Read the docs above before changing any runtime ne
 - Compose topology:
   - `docker-compose.yaml` - base wrapper stack, restricted control topology,
     policy proxies, fixed bridges, and service gateways.
-  - `docker-compose.full.yml` and `docker-compose.lite.yml` - full RAG and lite
-    mode overlays.
-  - `docker-compose.code-interpreter-network.yml` - optional executor-only
-    internal network and proxy bridge.
-  - `docker-compose.*-vpn.yml`, `docker-compose.proxy.yml`, and Podman
-    overrides - optional routing, proxy, and container-engine layers selected
-    by the Makefile.
-  - `docker-compose.tor*.yml` and `tor/` - optional native Tor roles, strict
-    config renderer, local authenticated health, and fixed onion gateway.
+  - `compose_overlays/` - full/lite mode, optional routing/proxy/executor,
+    Docker/Podman, and native Tor Compose layers selected by the Makefile.
+    The root base remains first so every merged layer resolves relative paths
+    from the repository root.
+  - `compose_overlays/docker-compose.tor*.yml` and `tor/` - optional native
+    Tor roles, strict config renderer, local authenticated health, and fixed
+    onion gateway.
 - Routing and component implementations:
   - `browser/obscura_client/` - shared direct-CDP client used by Onyx and
     SearXNG.

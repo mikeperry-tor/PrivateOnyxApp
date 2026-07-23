@@ -223,8 +223,9 @@ are not duplicate enforcement.
 
 ## Implementation map
 
-- Health cadence and aggregation: `docker-compose.yaml`, mode/engine overlays,
-  `Makefile`, `podman/startup_health.py`, and `tests/health_inventory.py`.
+- Health cadence and aggregation: `docker-compose.yaml`,
+  `compose_overlays/` mode/engine layers, `Makefile`,
+  `podman/startup_health.py`, and `tests/health_inventory.py`.
 - MLX lifecycle and host-process ownership:
   `embedserv/idle_embedding_proxy.py`,
   `embedserv/host_process_manager.py`, `onyx/local_embedding_shim.py`, and
@@ -239,8 +240,9 @@ are not duplicate enforcement.
 - Search-engine and bootstrap reduction: `searxng/core-config/settings.yml`,
   `searxng/patches/`, custom engines under `searxng/engines/`, and the
   SearXNG bootstrap/parser/scheduling tests.
-- OpenSearch, MinIO, and full-mode storage settings: `docker-compose.full.yml`,
-  `docker-compose.yaml`, and the OpenSearch runtime validation suite.
+- OpenSearch, MinIO, and full-mode storage settings:
+  `compose_overlays/docker-compose.full.yml`, `docker-compose.yaml`, and the
+  OpenSearch runtime validation suite.
 - Myst reconciliation and recovery ownership: `myst/myst-client-entrypoint.sh`,
   `myst/route-reconciliation.sh`, `myst/myst-readiness.sh`, effective Compose
   health configuration, and the Myst readiness/reconciliation tests.

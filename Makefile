@@ -1,15 +1,16 @@
 ENV_FILE ?= .env.wrapper
 VERSION_FILE ?= stack.versions.env
 WRAPPER_FILE := docker-compose.yaml
-FULL_OVERRIDE_FILE := docker-compose.full.yml
-LITE_OVERRIDE_FILE := docker-compose.lite.yml
-PODMAN_OVERRIDE_FILE := docker-compose.podman.yml
-PODMAN_FULL_OVERRIDE_FILE := docker-compose.podman-full.yml
-TOR_COMMON_FILE := docker-compose.tor.yml
-TOR_EGRESS_FILE := docker-compose.tor-egress.yml
-TOR_ONION_FILE := docker-compose.tor-onion.yml
-TOR_PODMAN_FILE := docker-compose.tor-podman.yml
-TOR_ONION_PODMAN_FILE := docker-compose.tor-onion-podman.yml
+COMPOSE_OVERLAY_DIR := compose_overlays
+FULL_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.full.yml
+LITE_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.lite.yml
+PODMAN_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.podman.yml
+PODMAN_FULL_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.podman-full.yml
+TOR_COMMON_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor.yml
+TOR_EGRESS_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-egress.yml
+TOR_ONION_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-onion.yml
+TOR_PODMAN_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-podman.yml
+TOR_ONION_PODMAN_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-onion-podman.yml
 
 env_value = $(strip $(shell for f in "$(ENV_FILE)" "$(VERSION_FILE)"; do [ -f "$$f" ] || continue; sed -n 's/^$(1)=//p' "$$f" | head -1 | sed 's/^"//; s/"$$//'; done | head -1))
 wrapper_setting = $(strip $(shell python3 tor/render_config.py get --settings-file "$(ENV_FILE)" --name "$(1)"))
@@ -107,21 +108,21 @@ endif
 # Onyx caller and Teep service remain on explicit internal networks.
 TEEP_VPN_SUFFIX :=
 ifneq ($(filter true,$(TEEP_ROUTE_THROUGH_MYST_VPN)),)
-TEEP_VPN_SUFFIX :=:docker-compose.teep-vpn.yml
+TEEP_VPN_SUFFIX :=:$(COMPOSE_OVERLAY_DIR)/docker-compose.teep-vpn.yml
 endif
 
 # When true, Tailscale shares the trusted route namespace but still reaches
 # Onyx only through its fixed frontend gateway.
 TAILSCALE_VPN_SUFFIX :=
 ifneq ($(filter true,$(TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN)),)
-TAILSCALE_VPN_SUFFIX :=:docker-compose.tailscale-vpn.yml
+TAILSCALE_VPN_SUFFIX :=:$(COMPOSE_OVERLAY_DIR)/docker-compose.tailscale-vpn.yml
 endif
 
 # When enabled, executor pods join only the named internal executor network.
 CODE_INTERPRETER_NETWORK_SUFFIX :=
 ifneq ($(filter true,$(ONYX_CODE_INTERPRETER_ENABLE_NETWORK)),)
 ifneq ($(PODMAN_SELECTED),true)
-CODE_INTERPRETER_NETWORK_SUFFIX :=:docker-compose.code-interpreter-network.yml
+CODE_INTERPRETER_NETWORK_SUFFIX :=:$(COMPOSE_OVERLAY_DIR)/docker-compose.code-interpreter-network.yml
 endif
 endif
 
@@ -130,7 +131,7 @@ endif
 # use local bridges; only final-hop policy proxies receive the upstream URL.
 PROXY_SUFFIX :=
 ifneq ($(strip $(EGRESS_UPSTREAM_PROXY_URL)),)
-PROXY_SUFFIX :=:docker-compose.proxy.yml
+PROXY_SUFFIX :=:$(COMPOSE_OVERLAY_DIR)/docker-compose.proxy.yml
 endif
 
 TOR_BASE_IMAGE ?= $(call env_value,TOR_BASE_IMAGE)

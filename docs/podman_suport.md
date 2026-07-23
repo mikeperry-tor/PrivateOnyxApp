@@ -101,8 +101,8 @@ still valid.
 The Makefile assembles the ordinary base/mode/optional layers first and adds
 the engine-specific layers when `CONTAINER_BIN` resolves to Podman:
 
-- `docker-compose.podman.yml` applies to lite and full modes;
-- `docker-compose.podman-full.yml` applies only to full mode.
+- `compose_overlays/docker-compose.podman.yml` applies to lite and full modes;
+- `compose_overlays/docker-compose.podman-full.yml` applies only to full mode.
 
 Keep Docker and Podman behavior separated in those override files. Preserve
 Compose `${VAR:?message}` checks and the Makefile-generated ephemeral secret
@@ -111,12 +111,13 @@ replaced.
 
 ### Common Podman override
 
-`docker-compose.podman.yml` owns these differences:
+`compose_overlays/docker-compose.podman.yml` owns these differences:
 
 - `code-interpreter` is placed behind an inactive
   `requires-docker-socket` profile. The legacy executor requires Docker socket
   behavior that the rootless macOS Podman VM does not reliably provide.
-- The Makefile also omits `docker-compose.code-interpreter-network.yml` under
+- The Makefile also omits
+  `compose_overlays/docker-compose.code-interpreter-network.yml` under
   Podman even if `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true` remains in a
   shared environment. This prevents an unused executor bridge, network, and
   health loop from running when the executor itself is unavailable.
@@ -132,7 +133,7 @@ replaced.
 
 ### Full-mode override
 
-`docker-compose.podman-full.yml` additionally:
+`compose_overlays/docker-compose.podman-full.yml` additionally:
 
 - makes `background` wait for PostgreSQL health;
 - always uses the same initialized `docker-data/opensearch` bind as Docker

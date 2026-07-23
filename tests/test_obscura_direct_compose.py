@@ -11,8 +11,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.compose = (ROOT / "docker-compose.yaml").read_text()
-        cls.full = (ROOT / "docker-compose.full.yml").read_text()
-        cls.lite = (ROOT / "docker-compose.lite.yml").read_text()
+        cls.full = (ROOT / "compose_overlays/docker-compose.full.yml").read_text()
+        cls.lite = (ROOT / "compose_overlays/docker-compose.lite.yml").read_text()
         cls.manifest = (ROOT / "stack.versions.env").read_text()
         cls.no_proxy = (ROOT / "onyx/helper-egress.env").read_text()
         cls.searxng_dockerfile = (ROOT / "searxng/Dockerfile").read_text()

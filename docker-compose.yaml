@@ -308,7 +308,7 @@ services:
 
   # Set TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true in .env.wrapper to route
   # Tailscale through the Mysterium VPN namespace (applies
-  # docker-compose.tailscale-vpn.yml via Makefile layering).
+  # compose_overlays/docker-compose.tailscale-vpn.yml via Makefile layering).
   tailscale-funnel:
     image: ${TAILSCALE_IMAGE:?TAILSCALE_IMAGE must be set}
     profiles: [tailscale]
@@ -565,8 +565,8 @@ services:
   # Default: uses a dedicated internal Onyx service network plus a direct
   # uplink (no VPN). Its port is published to the host directly.
   # Set TEEP_ROUTE_THROUGH_MYST_VPN=true in .env.wrapper to route teep through
-  # the Mysterium VPN namespace (applies docker-compose.teep-vpn.yml via
-  # Makefile layering).
+  # the Mysterium VPN namespace (applies
+  # compose_overlays/docker-compose.teep-vpn.yml via Makefile layering).
   teep:
     image: ${TEEP_IMAGE:-13rac1/teep:${TEEP_REF:?TEEP_REF must be set}}
     restart: unless-stopped

@@ -106,7 +106,9 @@ class BackgroundSupervisorTests(unittest.TestCase):
                 self.assertTrue(module._is_background_control_process())
 
     def test_compose_starts_background_entrypoint_without_sitecustomize(self) -> None:
-        compose = (ROOT / "docker-compose.full.yml").read_text(encoding="utf-8")
+        compose = (
+            ROOT / "compose_overlays/docker-compose.full.yml"
+        ).read_text(encoding="utf-8")
         self.assertIn(
             'entrypoint: ["python", "-S", "/app/wrapper-background-entrypoint.py"]',
             compose,

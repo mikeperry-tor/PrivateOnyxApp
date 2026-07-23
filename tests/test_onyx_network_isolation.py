@@ -54,10 +54,10 @@ def _compose_model(
         "-f",
         "docker-compose.yaml",
         "-f",
-        f"docker-compose.{mode}.yml",
+        f"compose_overlays/docker-compose.{mode}.yml",
     ]
     for compose_file in extra_files:
-        command.extend(("-f", compose_file))
+        command.extend(("-f", f"compose_overlays/{compose_file}"))
     for profile in profiles:
         command.extend(("--profile", profile))
     command.extend([
@@ -103,6 +103,35 @@ def _make_compose_files(
         if line.startswith(prefix):
             return line.removeprefix(prefix)
     raise AssertionError("FULL_FILES is absent from the Make database")
+
+
+class ComposeOverlayLayoutTests(unittest.TestCase):
+    def test_wrapper_overlays_are_colocated_below_the_root_base(self) -> None:
+        expected = {
+            "docker-compose.code-interpreter-network.yml",
+            "docker-compose.full.yml",
+            "docker-compose.lite.yml",
+            "docker-compose.podman-full.yml",
+            "docker-compose.podman.yml",
+            "docker-compose.proxy.yml",
+            "docker-compose.tailscale-vpn.yml",
+            "docker-compose.teep-vpn.yml",
+            "docker-compose.tor-egress.yml",
+            "docker-compose.tor-onion-podman.yml",
+            "docker-compose.tor-onion.yml",
+            "docker-compose.tor-podman.yml",
+            "docker-compose.tor.yml",
+        }
+        overlay_directory = ROOT / "compose_overlays"
+        self.assertEqual(
+            {path.name for path in overlay_directory.glob("docker-compose.*.yml")},
+            expected,
+        )
+        self.assertEqual(
+            {path.name for path in ROOT.glob("docker-compose*.yml")},
+            set(),
+        )
+        self.assertTrue((ROOT / "docker-compose.yaml").is_file())
 
 
 @unittest.skipUnless(shutil.which("docker"), "docker compose is required")
@@ -505,10 +534,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 ROOT / "Makefile",
                 ROOT / "stack.versions.env",
                 ROOT / "docker-compose.yaml",
-                ROOT / "docker-compose.full.yml",
-                ROOT / "docker-compose.lite.yml",
-                ROOT / "docker-compose.podman.yml",
-                ROOT / "docker-compose.podman-full.yml",
+                ROOT / "compose_overlays/docker-compose.full.yml",
+                ROOT / "compose_overlays/docker-compose.lite.yml",
+                ROOT / "compose_overlays/docker-compose.podman.yml",
+                ROOT / "compose_overlays/docker-compose.podman-full.yml",
             )
         )
         for forbidden in (

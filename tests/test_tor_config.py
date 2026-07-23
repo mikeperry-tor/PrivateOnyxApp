@@ -314,8 +314,12 @@ class TorConfigTests(unittest.TestCase):
                 for line in completed.stdout.splitlines()
                 if line.startswith("FULL_FILES := ")
             )
-            self.assertIn("docker-compose.tor.yml", full_files)
-            self.assertIn("docker-compose.tor-egress.yml", full_files)
+            self.assertIn(
+                "compose_overlays/docker-compose.tor.yml", full_files
+            )
+            self.assertIn(
+                "compose_overlays/docker-compose.tor-egress.yml", full_files
+            )
 
     def test_settings_parser_rejects_ambiguous_multiword_values(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
