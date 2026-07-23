@@ -8,11 +8,12 @@ Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0
 
 Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are stable in the default web crawler, but are varied per-navigation in Obscura. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
 
-Agent Internet traffic uses an explicit no-VPN route by default. Operators can optionally enable [Mysterium](https://github.com/mysteriumnetwork/node), configure an upstream proxy, combine the two, or enable native Tor egress to further reduce tracking and captchas. Native Tor egress is mutually exclusive with an upstream proxy. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route and prevents direct-network or DNS fallback.
+Agent Internet traffic uses an explicit no-VPN route by default. Operators can optionally enable [Mysterium](https://github.com/mysteriumnetwork/node), configure an upstream proxy, combine the two, or enable native Tor egress to further reduce tracking. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route to prevent direct-network, proxy bypass, and DNS leaks.
 
-[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for that device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN. It can run concurrently with the native Tor v3 onion service, providing separate Tailscale and onion entry points, but Tailscale's own traffic cannot currently be routed through Tor.
+[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for your client device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it
+does not create a Tailnet or use the Tailscale VPN itself, either.
 
-If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
+A v3 Tor onion service can also be created for the stack. Onion access and public Tailscale access can be enabled simultaneously.
 
 ## Private Deep Research, RAG, and Code Agent Support
 
@@ -20,13 +21,15 @@ The main reason I created this stack is because none of the private chat provide
 
 Additionally, the full mode of Onyx provides RAG search results to the agent from local collection of PDFs and other documents, and has a Code Agent tool that allows the chat agent to spawn multiple sub-agents to clone and investigate git repositories. Onyx has many other connectors as well.
 
-In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
+If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 
-- Onyx telemetry, third-party analytics and error reporting, cloud billing, CAPTCHA, and automatic remote configuration/data-list downloads are explicitly disabled.
-- A restrictive browser Content Security Policy blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's selected no-VPN/VPN/proxy route through the user's browser. Additionally, this blocks queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
-- Stock Onyx strips reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality.
-- Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results; this has been patched.
-- Stock Onyx disables `open_url()` whenever its vector database is disabled, which leaves lite mode unable to open and read web pages. This stack keeps crawler-backed web browsing available in lite mode.
+In this stack, I also [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
+
+- Onyx telemetry, third-party analytics and error reporting, cloud billing, CAPTCHA, and remote configuration are explicitly disabled.
+- A more restrictive browser Content Security Policy now blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's selected no-VPN/VPN/proxy route through the user's browser. Additionally, this policy blocks Onyx WebUI queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
+- Stock Onyx strips agent reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality. This has been patched.
+- Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results. This has been patched.
+- Stock Onyx disables `open_url()` in lite mode, which leaves lite mode unable to read web pages. This stack keeps crawler-backed web browsing available in lite mode.
 - The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
 - The "Deep Research" mode now also supports much longer research runs, and has been patched to execute all accepted tool calls when a research agent requests several different tools at once, rather than silently dropping some of them like stock Onyx does.
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
@@ -48,13 +51,13 @@ The Docker Compose files in this stack relies on the following components:
 
 3. [Tor](https://hub.docker.com/r/dockurr/tor) can be optionally used to route agent Internet traffic through native Tor egress, expose the WebUI as a persistent v3 onion service, or provide both roles concurrently.
 
-4. [Mysterium](https://github.com/mysteriumnetwork/node) is an optional WireGuard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. It is disabled by default. Enabling it can reduce captchas and rate limiting by search engines and websites through residential exit addresses. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
+4. [Mysterium](https://github.com/mysteriumnetwork/node) is an optional WireGuard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. It is disabled by default. Enabling it can reduce captchas and rate limiting by search engines and websites through residential exit addresses. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users to reduce captcha and ban frequency. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
 5. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides all custom search engines, and optionally the built-in Onyx Web Crawler, with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy in the selected Myst/proxy/no-VPN routing namespace. By default, only the built-in crawler instead uses Onyx's stock HTTP fetch and local Chromium fallback through the fixed public Onyx bridge.
 
-6. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. The wrapper-provided Google, Brave, DuckDuckGo, Startpage, and Bing offline engines navigate and parse rendered result pages through Obscura. SearXNG owns round-robin search provider scheduling, retries after unresponsive providers, and suspends providers after visible anti-bot failures or rate limits.
+6. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. It is patched to issue queries in round-robin fashion to Google, Brave, DuckDuckGo, Startpage, and Bing, accessed through Obscura Browser.  SearXNG has also been patched to retry failed queries in round-robin mode using the next provider, and suspends providers after visible anti-bot failures or rate limit responses.
 
-7. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to access the Onyx web interface via HTTPS from any web browser, using your assigned ts.net service subdomain name. The TLS key is generated locally in this stack and is signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
+7. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to access the Onyx web interface via HTTPS from any web browser, using your assigned public `ts.net` service subdomain name. The TLS key is generated locally in this stack and is signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
 
 ## Prerequisites
 
