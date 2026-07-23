@@ -14,6 +14,9 @@ Before changing a subsystem, read the matching document below, then inspect the 
 
 - `README.md` - user-facing setup instructions, privacy properties, and option consequences. Keep deep implementation details out of this document.
 - `docs/request_handling.md` - direct-Obscura `web_search`, selectable built-in `open_url` transport, lifecycle waits, body/DOM limits, cookies, and anti-bot behavior.
+- `docs/native_tor_support.md` - Tor roles, Compose layers, storage, process
+  contract, health, diagnostics, canonical-origin behavior, and change
+  validation.
 - `docs/vpn_routing_and_proxies.md` - trusted VPN namespace, restricted component networks, final-hop proxy policies, explicit no-VPN mode, and optional routing switches.
 - `docs/internal_network_security.md` - restricted component reachability, destination validation, bridge boundaries, Onyx SSRF interaction, and residual risks.
 - `docs/onyx_patch_info.md` - why local runtime patches exist.

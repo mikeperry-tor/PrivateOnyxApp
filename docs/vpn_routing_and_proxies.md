@@ -5,7 +5,9 @@
 `TOR_EGRESS_ENABLED=true` selects the wrapper-owned Tor client as the
 remote-DNS upstream for the existing public and configured-external final-hop
 policies. It conflicts with `EGRESS_UPSTREAM_PROXY_URL`. Tor runs directly on
-its own `tor-uplink`; this phase does not route Tor through Myst.
+its own `tor-uplink`; this phase does not route Tor through Myst. See
+[Native Tor support](native_tor_support.md) for the complete component,
+storage, health, and diagnostic contract.
 
 Tor creates only `unix:/run/tor-egress/socks`. The explicit `tor-runtime`
 volume is writable by Tor and read-only in the public and host policy

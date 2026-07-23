@@ -1,5 +1,17 @@
 # Optional native Tor support plan
 
+> **Status: implemented (2026-07-23).** This is the implementation and
+> acceptance record for direct native-Tor egress and v3 onion ingress.
+> Normative deployed behavior, diagnostics, and change guidance are documented
+> in [Native Tor support](../../native_tor_support.md),
+> [VPN routing and restricted egress](../../vpn_routing_and_proxies.md),
+> [Internal network security](../../internal_network_security.md),
+> [Resource minimization](../../resource_minimization.md),
+> [Podman support](../../podman_suport.md), and
+> [Patch and component upgrade checklist](../../onyx_patches_upgrade.md).
+> Deferred Tor-over-Myst and generalized multi-origin sections below remain
+> historical design notes, not implemented or scheduled behavior.
+
 ## Purpose
 
 Add optional, first-class Tor support in two independently selectable roles:

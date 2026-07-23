@@ -220,8 +220,9 @@ not a supported feature.
 
 Onion ingress creates a public v3 service for the WebUI without publishing
 another host port. Anyone who learns the address can reach the Onyx login, so
-use strong credentials. Retrieve the running address without exposing key
-material:
+use strong credentials. Detailed topology, storage, health, and diagnostic
+guidance is in [`docs/native_tor_support.md`](docs/native_tor_support.md).
+Retrieve the running address without exposing key material:
 
 ```bash
 make tor-onion-address
