@@ -177,8 +177,13 @@ class TorConfigTests(unittest.TestCase):
                     "CookieAuthFile /run/tor-control/control_auth_cookie\n", text
                 )
                 self.assertIn("ClientOnly 1\n", text)
-                self.assertIn("ORPort 0\n", text)
-                self.assertNotIn("ExitPolicy", text)
+                for redundant_relay_setting in (
+                    "ORPort",
+                    "DirPort",
+                    "ExtORPort",
+                    "ExitPolicy",
+                ):
+                    self.assertNotIn(redundant_relay_setting, text)
                 self.assertNotIn("HashedControlPassword", text)
                 self.assertNotIn("StrictExitNodes", text)
                 self.assertNotIn("StrictNodes", text)

@@ -201,9 +201,6 @@ def render_text(
         "CookieAuthFile /run/tor-control/control_auth_cookie",
         "CookieAuthFileGroupReadable 0",
         "ClientOnly 1",
-        "ORPort 0",
-        "DirPort 0",
-        "ExtORPort 0",
         "Log notice stdout",
     ]
     if country:
