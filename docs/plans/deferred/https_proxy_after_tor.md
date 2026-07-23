@@ -310,9 +310,8 @@ Run:
 
 ```sh
 make check
-make test-images
+make test-patch-images
 make test-tor-image
-make test-opensearch-image
 ```
 
 If implementation proceeds, perform one live Docker and one live Podman

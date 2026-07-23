@@ -24,20 +24,20 @@ require_image() {
     fi
 }
 
-require_image "$onyx_backend_image" "Run 'make onyx-build' before 'make test-images'."
+require_image "$onyx_backend_image" "Run 'make onyx-build' before 'make test-patch-images'."
 if [ "$validate_code_interpreter" = true ]; then
     [ -n "$code_interpreter_image" ] || {
         echo "ERROR: CODE_INTERPRETER_IMAGE is required for Docker validation" >&2
         exit 1
     }
-    require_image "$code_interpreter_image" "Run 'make onyx-build' before 'make test-images'."
+    require_image "$code_interpreter_image" "Run 'make onyx-build' before 'make test-patch-images'."
     [ -n "$python_executor_image" ] || {
         echo "ERROR: PYTHON_EXECUTOR_IMAGE is required for Docker validation" >&2
         exit 1
     }
-    require_image "$python_executor_image" "Run 'make executor-build' before 'make test-images'."
+    require_image "$python_executor_image" "Run 'make executor-build' before 'make test-patch-images'."
 fi
-require_image "$searxng_wrapper_image" "Run 'make searxng-build' before 'make test-images'."
+require_image "$searxng_wrapper_image" "Run 'make searxng-build' before 'make test-patch-images'."
 
 echo "Validating API patch contracts in $onyx_backend_image"
 "$container_bin" run --rm \

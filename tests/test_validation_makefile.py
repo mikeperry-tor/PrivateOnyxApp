@@ -24,9 +24,10 @@ class ValidationMakefileTests(unittest.TestCase):
         for target in (
             "test",
             "check",
-            "test-images",
+            "test-patch-images",
             "test-tor-image",
             "test-opensearch-image",
+            "test-all-images",
             "check-upgrade",
             "integration-opensearch",
             "integration-opensearch-restart",
@@ -37,9 +38,24 @@ class ValidationMakefileTests(unittest.TestCase):
 
         self.assertIn("./tests/validate_pinned_patch_images.sh", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory check", MAKEFILE)
-        self.assertIn("$(MAKE) --no-print-directory test-images", MAKEFILE)
+        self.assertIn("$(MAKE) --no-print-directory test-patch-images", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory test-tor-image", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory test-opensearch-image", MAKEFILE)
+        self.assertIn("$(MAKE) --no-print-directory test-all-images", MAKEFILE)
+        self.assertNotRegex(MAKEFILE, r"(?m)^test-images:")
+        self.assertRegex(
+            MAKEFILE,
+            r"(?m)^test-all-images:\n"
+            r"\t@\$\(MAKE\) --no-print-directory test-patch-images\n"
+            r"\t@\$\(MAKE\) --no-print-directory test-tor-image\n"
+            r"\t@\$\(MAKE\) --no-print-directory test-opensearch-image$",
+        )
+        self.assertRegex(
+            MAKEFILE,
+            r"(?m)^check-upgrade:\n"
+            r"\t@\$\(MAKE\) --no-print-directory check\n"
+            r"\t@\$\(MAKE\) --no-print-directory test-all-images$",
+        )
         self.assertIn('tests/run_opensearch_image_validation.py', MAKEFILE)
         self.assertIn('tests/opensearch_runtime_validation.py', MAKEFILE)
         self.assertIn('tests/onyx_opensearch_runtime_validation.py', MAKEFILE)
@@ -86,8 +102,14 @@ class ValidationMakefileTests(unittest.TestCase):
         upgrade_notes = (ROOT / "docs" / "onyx_patches_upgrade.md").read_text()
         for document in (agents, upgrade_notes):
             self.assertIn("make check-upgrade", document)
-            self.assertIn("make test-images", document)
-        self.assertIn("runtime-patch-only change", agents)
+            self.assertIn("make test-patch-images", document)
+            self.assertIn("make test-all-images", document)
+        self.assertIn("focused Onyx runtime patch", agents)
+        self.assertRegex(
+            agents,
+            r"do not\s+invoke the Tor or OpenSearch image gates",
+        )
+        self.assertIn("only when a change spans multiple image families", agents)
         self.assertIn("Runtime startup must not install packages", agents)
         self.assertIn("onyx/onyx_data/deployment/.env", agents)
 

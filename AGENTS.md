@@ -178,16 +178,25 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
 - `make check` - run `make test`, compile repository runtime/test Python paths,
   validate `make help`, and run `git diff --check`. Use this as the normal
   development pre-handoff check.
-- `make test-images` - install strict runtime patches against the already-built
-  pinned Onyx, code-interpreter, and derived SearXNG images, then run the
-  SearXNG parser tests that need image dependencies. It does not pull or build
-  missing images or permit validation-container networking; use the reported
-  build target first.
+- `make test-patch-images` - install strict runtime patches against the
+  already-built pinned Onyx, code-interpreter, and derived SearXNG images,
+  then run the SearXNG parser tests that need image dependencies. Use it for
+  changes to those patches, images, the derived executor, or SearXNG parsers;
+  It does not pull or build missing images or permit validation-container networking;
+  use the reported build target first.
+- `make test-tor-image` - validate the selected local Tor base/derived image
+  contract, hardened runtime, Unix sockets, volume ownership, and authenticated
+  control path. Use it only for Tor image, config, mount, ownership, health, or
+  control changes.
 - `make test-opensearch-image` - validate the pinned OpenSearch image in an
-  isolated disposable environment.
-- `make check-upgrade` - run `make check`, `make test-images`,
-  `make test-tor-image`, and `make test-opensearch-image`. Run this after
-  `make upgrade` and before the practical live validation matrix.
+  isolated disposable environment. Use it only for the OpenSearch pin,
+  configuration, audit policy, or image-validation workload.
+- `make test-all-images` - run `make test-patch-images`,
+  `make test-tor-image`, and `make test-opensearch-image`. Use it for broad or
+  multi-component image work, not an unrelated focused change.
+- `make check-upgrade` - run `make check` followed by
+  `make test-all-images`. Use it after the broad `make upgrade` flow or as a
+  release-wide image gate before the practical live validation matrix.
 - `make integration-opensearch`, `make integration-opensearch-restart`, and
   `make integration-opensearch-onyx` - validate the running full-stack
   OpenSearch volume, restart recovery, and pinned Onyx integration.
@@ -299,12 +308,22 @@ This stack protects private research, document contents, browsing behavior, infe
 - Baseline workflow:
   - Use `make check` as the normal deterministic development and pre-handoff
     validation.
-  - After changing an image/source pin or dependency lock, run `make upgrade`,
-    then `make check-upgrade` against the newly produced images.
-  - After a runtime-patch-only change, run `make check-upgrade` against the
-    current pinned images; do not run the broader upgrade flow unnecessarily.
-  - `make test-images` must validate the selected local images without silently
-    pulling, rebuilding, or substituting another artifact.
+  - After the broad `make upgrade` flow, run `make check-upgrade` against all
+    newly produced images.
+  - For a focused Onyx runtime patch, code-interpreter/executor, or SearXNG
+    image/parser change, run `make check` and `make test-patch-images`; do not
+    invoke the Tor or OpenSearch image gates.
+  - For a focused Tor image/config/runtime-contract change, run `make check`
+    and `make test-tor-image`; do not invoke patch-image or OpenSearch
+    validation.
+  - For a focused OpenSearch pin/config/audit-validation change, run
+    `make check` and `make test-opensearch-image`; do not invoke patch-image or
+    Tor validation.
+  - Use `make test-all-images` only when a change spans multiple image families
+    or when performing broad/release validation. `make check-upgrade` adds the
+    deterministic `make check` gate before it.
+  - Every focused image target must validate the selected local images without
+    silently pulling, rebuilding, or substituting another artifact.
   - Keep live stack, browser, VPN, and RAG checks explicit. They can require
     credentials, funding, private configuration, external services, or an
     already-running stack.

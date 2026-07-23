@@ -487,12 +487,16 @@ The primary Podman-specific tests are:
   valid with Podman's network layout.
 
 Run `make check` after every Podman script, Makefile, or overlay change. For
-image/source pin or runtime-patch work, follow the repository's ordinary
-`make check-upgrade` rules as well. Under Podman, `make test-images` and
-`make check-upgrade` skip the unsupported socket-dependent code-interpreter
-image contract; Docker continues to require and validate that image. The
-pinned Onyx and derived SearXNG image contracts remain mandatory on both
-engines. `make health-inventory` renders the actual
+image/source pin or runtime-patch work, add only the focused image target for
+the affected family: `make test-patch-images`, `make test-tor-image`, or
+`make test-opensearch-image`. Use `make test-all-images` (or
+`make check-upgrade`, which also runs `make check`) only for changes spanning
+multiple image families or broad release validation. Under Podman,
+`make test-patch-images`, `make test-all-images`, and `make check-upgrade` skip
+the unsupported socket-dependent code-interpreter image contract; Docker
+continues to require and validate that image. The pinned Onyx and derived
+SearXNG image contracts remain mandatory on both engines.
+`make health-inventory` renders the actual
 Makefile-selected engine, private environment, optional overlays, and active
 profiles for lite and full mode and totals their steady checks per hour. It
 does not replace native live inspection.

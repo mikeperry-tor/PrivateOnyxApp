@@ -287,7 +287,7 @@ The suite must cover:
 Run:
 
 ```sh
-make test-images
+make test-patch-images
 ```
 
 Pinned background validation lives in
@@ -296,9 +296,12 @@ produce useful Python assertion locations for schedule, supervisor, liveness,
 and Web Connector freshness drift. Continue to require the selected local
 images; never pull or substitute an image from the validation target.
 
-Run `make check-upgrade` after an image/source pin, dependency lock, or runtime
-patch change. The Tor runtime-volume/control contract and OpenSearch's
-disposable-image workload remain part of that gate.
+For an Onyx, code-interpreter, executor, or SearXNG image/source pin,
+dependency lock, or runtime-patch change, run `make check` and
+`make test-patch-images`. Tor-only and OpenSearch-only work instead adds its
+corresponding focused image target. Use `make test-all-images`, or
+`make check-upgrade` when `make check` is also required, only for changes
+spanning multiple image families or broad release validation.
 
 ### Lifecycle and integration changes
 

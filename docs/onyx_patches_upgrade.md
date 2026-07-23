@@ -35,7 +35,8 @@ contains read-only audit checkouts when present.
    required images. Runtime startup must not invoke a package manager, `pip`,
    or a Playwright browser download.
 4. Run `make check-upgrade`. It first runs the complete deterministic suite and
-   local static checks, then validates strict patch installation against the
+   local static checks, then runs `make test-all-images`: strict patch
+   installation against the
    exact newly pinned local Onyx, code-interpreter, derived Python executor,
    and derived SearXNG images. It also validates the selected local Tor wrapper
    image, a fresh runtime socket volume, the state-bind override, private
@@ -507,12 +508,12 @@ its user-visible behavior:
   and CSP:** retain their dedicated audits elsewhere in this checklist.
 
 `make check-upgrade` preserves the required order: deterministic checks first,
-then strict installation of the API and PDF freshness patch families inside
-the pinned Onyx backend image, the executor patch inside the pinned code-
-interpreter image, the SymPy contract inside the derived Python executor, and
-the SearXNG runtime/parser checks inside the derived image. Any source,
-signature, model, prompt, or command shape mismatch is an upgrade blocker, not
-a reason to weaken validation.
+then `make test-patch-images`, which strictly installs the API and PDF freshness
+patch families inside the pinned Onyx backend image, the executor patch inside
+the pinned code-interpreter image, the SymPy contract inside the derived Python
+executor, and the SearXNG runtime/parser checks inside the derived image. Any
+source, signature, model, prompt, or command shape mismatch is an upgrade
+blocker, not a reason to weaken validation.
 
 The executor image contract is Docker-only because the socket-dependent code
 interpreter is not supported or stored under Podman. With
@@ -670,9 +671,15 @@ make upgrade
 make check-upgrade
 ```
 
-`make test` runs only the deterministic Python suite. `make test-images` runs
-only strict pinned-image contracts plus the image-dependent SearXNG parser
-tests. Neither target starts the application stack or performs the live matrix.
+`make test` runs only the deterministic Python suite.
+`make test-patch-images` runs the strict Onyx, code-interpreter, executor, and
+SearXNG contracts plus the image-dependent SearXNG parser tests. The separate
+Tor and OpenSearch targets validate their own image families.
+`make test-all-images` aggregates all three focused image targets, and
+`make check-upgrade` runs `make check` followed by that aggregate. Use the
+focused target for a focused upgrade; reserve the aggregate gates for broad
+`make upgrade`, multi-family changes, or release validation. None of these
+targets starts the application stack or performs the live matrix.
 
 Also inspect effective lite/full Compose models through the Makefile. Search
 current runtime files for removed service/env/path names and manually classify

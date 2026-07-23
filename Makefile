@@ -330,7 +330,7 @@ ifeq ($(PODMAN_SELECTED),true)
 FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start
 endif
 
-.PHONY: help test check test-images test-tor-image test-opensearch-image check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-patch-images test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -362,8 +362,10 @@ help:
 	@echo "Development and maintenance:"
 	@echo "  make test                      # Run the deterministic Python test suite"
 	@echo "  make check                     # Run deterministic tests and local static checks"
-	@echo "  make test-images               # Validate patches against already-built pinned images"
+	@echo "  make test-patch-images         # Validate patches against already-built pinned images"
 	@echo "  make test-tor-image            # Validate the selected local Tor wrapper image"
+	@echo "  make test-opensearch-image     # Validate pinned OpenSearch in a disposable environment"
+	@echo "  make test-all-images           # Run every focused image validation target"
 	@echo "  make check-upgrade             # Run check plus Onyx/Tor image and disposable OpenSearch validation"
 	@echo "  make health-inventory          # Print effective lite/full health cadence inventory"
 	@echo "  make adopt-shared-data-engine  # Repair Docker vs Podman data-dir owner based on CONTAINER_BIN env value"
@@ -416,7 +418,7 @@ adopt-shared-data-engine:
 release-shared-data-engine:
 	@python3 podman/shared_data_engine.py release --engine "$(SHARED_DATA_ENGINE)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
 
-test-images:
+test-patch-images:
 	@CONTAINER_BIN="$(CONTAINER_BIN)" \
 		ONYX_BACKEND_IMAGE="$(ONYX_BACKEND_IMAGE)" \
 		CODE_INTERPRETER_IMAGE="$(CODE_INTERPRETER_IMAGE)" \
@@ -450,6 +452,11 @@ test-opensearch-image:
 		--iterations "$(OPENSEARCH_VALIDATION_ITERATIONS)" \
 		--expected-version "$(OPENSEARCH_EXPECTED_VERSION)"
 
+test-all-images:
+	@$(MAKE) --no-print-directory test-patch-images
+	@$(MAKE) --no-print-directory test-tor-image
+	@$(MAKE) --no-print-directory test-opensearch-image
+
 integration-opensearch:
 	@python3 tests/opensearch_runtime_validation.py \
 		--container-bin "$(CONTAINER_BIN)" \
@@ -478,9 +485,7 @@ integration-opensearch-onyx:
 
 check-upgrade:
 	@$(MAKE) --no-print-directory check
-	@$(MAKE) --no-print-directory test-images
-	@$(MAKE) --no-print-directory test-tor-image
-	@$(MAKE) --no-print-directory test-opensearch-image
+	@$(MAKE) --no-print-directory test-all-images
 
 upgrade: upgrade-python-deps myst-build teep-build searxng-build executor-build tor-build tailscale-image-ready obscura-image-ready upgrade-onyx
 	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."
