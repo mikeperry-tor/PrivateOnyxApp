@@ -7,8 +7,10 @@ import argparse
 import ipaddress
 import os
 import re
+import shlex
 import sys
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -27,22 +29,43 @@ SETTING_DEFAULTS = {
 }
 
 
+def _parse_env_value(value: str, *, line_number: int) -> str:
+    """Parse the wrapper's deliberately restricted one-line dotenv grammar."""
+    lexer = shlex.shlex(value, posix=True)
+    lexer.commenters = "#"
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError as exc:
+        raise ConfigError(f"invalid wrapper setting on line {line_number}: {exc}") from exc
+    if not tokens:
+        return ""
+    if len(tokens) != 1:
+        raise ConfigError(
+            f"wrapper setting on line {line_number} must be one shell-style value"
+        )
+    return tokens[0]
+
+
 def read_wrapper_settings(path: Path) -> dict[str, str]:
-    """Read only the fixed settings used by the Tor host preflight."""
+    """Read fixed settings using the grammar shared by Make and Tor rendering."""
     values: dict[str, str] = {}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return values
-    for line in lines:
+    for line_number, line in enumerate(lines, 1):
         if not line or line.lstrip().startswith("#") or "=" not in line:
             continue
-        name, value = line.split("=", 1)
-        if name not in SETTING_DEFAULTS or name in values:
+        raw_name, value = line.split("=", 1)
+        name = raw_name.strip()
+        if name not in SETTING_DEFAULTS:
             continue
-        if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
-            value = value[1:-1]
-        values[name] = value
+        if raw_name != name or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+            raise ConfigError(
+                f"invalid wrapper setting name on line {line_number}"
+            )
+        values[name] = _parse_env_value(value, line_number=line_number)
     return values
 
 
@@ -132,17 +155,21 @@ def normalize_fingerprints(value: str) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def validate_settings(args: argparse.Namespace) -> tuple[bool, bool, str, tuple[str, ...]]:
-    egress = parse_bool("TOR_EGRESS_ENABLED", args.egress)
-    onion = parse_bool("TOR_ONION_SERVICE_ENABLED", args.onion)
-    validate_origin(args.canonical_origin)
-    country = normalize_country(args.country)
-    fingerprints = normalize_fingerprints(args.fingerprints)
+def validate_settings(
+    values: Mapping[str, str],
+) -> tuple[bool, bool, str, tuple[str, ...]]:
+    egress = parse_bool("TOR_EGRESS_ENABLED", values["TOR_EGRESS_ENABLED"])
+    onion = parse_bool(
+        "TOR_ONION_SERVICE_ENABLED", values["TOR_ONION_SERVICE_ENABLED"]
+    )
+    validate_origin(values["ONYX_WEB_CANONICAL_ORIGIN"])
+    country = normalize_country(values["TOR_EXIT_COUNTRY"])
+    fingerprints = normalize_fingerprints(values["TOR_EXIT_NODE_FINGERPRINTS"])
     if (country or fingerprints) and not egress:
         raise ConfigError("Tor exit selectors require TOR_EGRESS_ENABLED=true")
     if country and fingerprints:
         raise ConfigError("Tor country and fingerprint selectors are mutually exclusive")
-    if args.upstream_proxy and egress:
+    if values["EGRESS_UPSTREAM_PROXY_URL"] and egress:
         raise ConfigError(
             "TOR_EGRESS_ENABLED=true conflicts with EGRESS_UPSTREAM_PROXY_URL"
         )
@@ -177,7 +204,6 @@ def render_text(
         "ORPort 0",
         "DirPort 0",
         "ExtORPort 0",
-        "ExitPolicy reject *:*",
         "Log notice stdout",
     ]
     if country:
@@ -217,56 +243,27 @@ def atomic_write(path: Path, content: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("validate", "render"))
-    parser.add_argument("--settings-file")
-    parser.add_argument("--egress")
-    parser.add_argument("--onion")
-    parser.add_argument("--country")
-    parser.add_argument("--fingerprints")
-    parser.add_argument("--upstream-proxy")
-    parser.add_argument("--canonical-origin")
+    parser.add_argument("action", choices=("get", "validate", "render"))
+    parser.add_argument("--settings-file", required=True)
+    parser.add_argument("--name", choices=tuple(SETTING_DEFAULTS))
     parser.add_argument("--output")
     return parser
-
-
-def resolve_settings(args: argparse.Namespace) -> None:
-    if args.settings_file:
-        values = settings_from_file_and_environment(Path(args.settings_file))
-        selected = {
-            "egress": values["TOR_EGRESS_ENABLED"],
-            "onion": values["TOR_ONION_SERVICE_ENABLED"],
-            "country": values["TOR_EXIT_COUNTRY"],
-            "fingerprints": values["TOR_EXIT_NODE_FINGERPRINTS"],
-            "upstream_proxy": values["EGRESS_UPSTREAM_PROXY_URL"],
-            "canonical_origin": values["ONYX_WEB_CANONICAL_ORIGIN"],
-        }
-        for name, value in selected.items():
-            if getattr(args, name) is not None:
-                raise ConfigError(
-                    f"--settings-file cannot be combined with --{name.replace('_', '-')}"
-                )
-            setattr(args, name, value)
-        return
-
-    missing = [
-        name
-        for name in ("egress", "onion", "canonical_origin")
-        if getattr(args, name) is None
-    ]
-    if missing:
-        raise ConfigError(
-            "explicit settings require --egress, --onion, and --canonical-origin"
-        )
-    for name in ("country", "fingerprints", "upstream_proxy"):
-        if getattr(args, name) is None:
-            setattr(args, name, "")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        resolve_settings(args)
-        egress, onion, country, fingerprints = validate_settings(args)
+        values = settings_from_file_and_environment(Path(args.settings_file))
+        if args.action == "get":
+            if not args.name:
+                raise ConfigError("--name is required for get")
+            if args.output:
+                raise ConfigError("--output is valid only for render")
+            print(values[args.name])
+            return 0
+        if args.name:
+            raise ConfigError("--name is valid only for get")
+        egress, onion, country, fingerprints = validate_settings(values)
         if args.action == "render":
             if not args.output:
                 raise ConfigError("--output is required for render")
@@ -277,6 +274,8 @@ def main(argv: list[str] | None = None) -> int:
                 fingerprints=fingerprints,
             )
             atomic_write(Path(args.output), content)
+        elif args.output:
+            raise ConfigError("--output is valid only for render")
     except (ConfigError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

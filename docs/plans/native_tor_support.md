@@ -736,9 +736,11 @@ to the implementation described by this plan.
 
 ## Makefile and lifecycle
 
-Add Makefile variables for the four initial Tor options, the general
+Add Make-visible selection variables for the two Tor roles, the general
 `ONYX_WEB_CANONICAL_ORIGIN`, `TOR_BASE_IMAGE`, and the derived `TOR_IMAGE`.
-Use one host-side semantic preflight that validates booleans exactly
+Keep exit-selector values in the shared wrapper-settings parser rather than
+duplicating them as Make variables. Use one host-side semantic preflight that
+validates booleans exactly
 (`true`/`false`), selector syntax, canonical-origin syntax, and cross-option
 constraints before creating directories, pulling/building images, claiming
 shared data, starting host processes, or running Compose. After
@@ -752,8 +754,8 @@ Add or update:
   digest, plus a content-derived local `TOR_IMAGE` tag;
 - `tor-build`/`tor-image-ready`, which pull exactly the base image and build or
   inspect the minimal wrapper without substituting a mutable tag;
-- a mutation-free Tor semantic preflight plus `tor-config-ready`, which invokes
-  the renderer only when a Tor role is enabled;
+- a mutation-free wrapper semantic preflight plus `tor-config-ready`, which
+  invokes the renderer only when a Tor role is enabled;
 - Tor common/egress/onion suffix selection in both `LITE_FILES` and
   `FULL_FILES`;
 - `tor-image-ready` and `tor-config-ready` in the applicable `up-lite` and

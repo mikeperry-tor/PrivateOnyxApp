@@ -210,7 +210,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         lite_definition = next(
             line for line in makefile.splitlines()
-            if line.startswith("up-lite: claim-shared-data-engine")
+            if line.startswith("up-lite: wrapper-config-preflight")
         )
         lite_start = makefile.split(lite_definition, 1)[1].split("\n\n", 1)[0]
         self.assertLess(lite_start.index(" compose "), lite_start.index("startup_health.py configure"))
@@ -218,7 +218,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
         full_definition = next(
             line for line in makefile.splitlines()
-            if line.startswith("up-full: claim-shared-data-engine")
+            if line.startswith("up-full: wrapper-config-preflight")
         )
         full_start = makefile.split(full_definition, 1)[1].split("\n\n", 1)[0]
         self.assertEqual(full_start.count("startup_health.py configure"), 2)
@@ -280,7 +280,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         full_prerequisites = next(
             line
             for line in makefile.splitlines()
-            if line.startswith("up-full: claim-shared-data-engine")
+            if line.startswith("up-full: wrapper-config-preflight")
         )
         self.assertIn("$(FULL_MODE_HOST_PROCESS_TARGETS)", full_prerequisites)
         selection = makefile.split(
@@ -340,7 +340,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         lite_prerequisites = next(
             line
             for line in makefile.splitlines()
-            if line.startswith("up-lite: claim-shared-data-engine")
+            if line.startswith("up-lite: wrapper-config-preflight")
         )
         self.assertNotIn("FULL_MODE_HOST_PROCESS_TARGETS", lite_prerequisites)
         self.assertNotIn("embedserv-start-if-installed", lite_prerequisites)
@@ -515,12 +515,12 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         lite_prerequisites = next(
             line
             for line in makefile.splitlines()
-            if line.startswith("up-lite: claim-shared-data-engine")
+            if line.startswith("up-lite: wrapper-config-preflight")
         )
         full_prerequisites = next(
             line
             for line in makefile.splitlines()
-            if line.startswith("up-full: claim-shared-data-engine")
+            if line.startswith("up-full: wrapper-config-preflight")
         )
         self.assertIn("prepare-podman-postgres-data", lite_prerequisites)
         self.assertIn("prepare-podman-postgres-data", full_prerequisites)
@@ -531,10 +531,10 @@ class MystLifecycleMakefileTests(unittest.TestCase):
     def test_podman_keep_id_containers_are_created_serially(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         lite_recipe = makefile.split(
-            "up-lite: claim-shared-data-engine", 1
+            "up-lite: wrapper-config-preflight", 1
         )[1].split("\n\nup-full:", 1)[0]
         full_recipe = makefile.split(
-            "up-full: claim-shared-data-engine", 1
+            "up-full: wrapper-config-preflight", 1
         )[1].split("\n\nembedding-ready-once:", 1)[0]
 
         lite_postgres = 'up --no-start --no-deps relational_db'
@@ -557,6 +557,10 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_shared_data_engine_claim_wraps_stack_lifecycle(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        claim_target = makefile.split("claim-shared-data-engine:", 1)[1].split(
+            "\n\n", 1
+        )[0]
+        self.assertNotIn("wrapper-config-preflight", claim_target)
         self.assertIn(
             "SHARED_DATA_GUARD_ENV := $(if $(filter true,$(PODMAN_SELECTED)),env -u DOCKER_HOST,)",
             makefile,
@@ -571,6 +575,9 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             ]
             self.assertTrue(
                 any("claim-shared-data-engine" in line for line in definitions)
+            )
+            self.assertTrue(
+                any("wrapper-config-preflight" in line for line in definitions)
             )
         for target in ("down-lite:", "down-full:"):
             recipe = makefile.split(target, 1)[1].split("\n\n", 1)[0]

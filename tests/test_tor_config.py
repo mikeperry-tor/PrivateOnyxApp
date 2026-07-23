@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import importlib.util
 import os
 import subprocess
@@ -17,17 +16,25 @@ tor_config = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(tor_config)
 
 
-def settings(**overrides: str) -> argparse.Namespace:
+def settings(**overrides: str) -> dict[str, str]:
     values = {
-        "egress": "false",
-        "onion": "false",
-        "country": "",
-        "fingerprints": "",
-        "upstream_proxy": "",
-        "canonical_origin": "http://localhost:3000",
+        "TOR_EGRESS_ENABLED": "false",
+        "TOR_ONION_SERVICE_ENABLED": "false",
+        "TOR_EXIT_COUNTRY": "",
+        "TOR_EXIT_NODE_FINGERPRINTS": "",
+        "EGRESS_UPSTREAM_PROXY_URL": "",
+        "ONYX_WEB_CANONICAL_ORIGIN": "http://localhost:3000",
     }
-    values.update(overrides)
-    return argparse.Namespace(**values)
+    names = {
+        "egress": "TOR_EGRESS_ENABLED",
+        "onion": "TOR_ONION_SERVICE_ENABLED",
+        "country": "TOR_EXIT_COUNTRY",
+        "fingerprints": "TOR_EXIT_NODE_FINGERPRINTS",
+        "upstream_proxy": "EGRESS_UPSTREAM_PROXY_URL",
+        "canonical_origin": "ONYX_WEB_CANONICAL_ORIGIN",
+    }
+    values.update({names[name]: value for name, value in overrides.items()})
+    return values
 
 
 class TorConfigTests(unittest.TestCase):
@@ -117,7 +124,7 @@ class TorConfigTests(unittest.TestCase):
                 [
                     "make",
                     "--no-print-directory",
-                    "tor-preflight",
+                    "wrapper-config-preflight",
                     f"ENV_FILE={settings_file}",
                 ],
                 cwd=ROOT,
@@ -141,7 +148,7 @@ class TorConfigTests(unittest.TestCase):
                 [
                     "make",
                     "--no-print-directory",
-                    "tor-preflight",
+                    "wrapper-config-preflight",
                     f"ENV_FILE={settings_file}",
                     "TOR_EGRESS_ENABLED=true",
                     "TOR_ONION_SERVICE_ENABLED=false",
@@ -171,7 +178,7 @@ class TorConfigTests(unittest.TestCase):
                 )
                 self.assertIn("ClientOnly 1\n", text)
                 self.assertIn("ORPort 0\n", text)
-                self.assertIn("ExitPolicy reject *:*\n", text)
+                self.assertNotIn("ExitPolicy", text)
                 self.assertNotIn("HashedControlPassword", text)
                 self.assertNotIn("StrictExitNodes", text)
                 self.assertNotIn("StrictNodes", text)
@@ -253,6 +260,52 @@ class TorConfigTests(unittest.TestCase):
     def test_selector_without_egress_is_rejected(self) -> None:
         with self.assertRaisesRegex(tor_config.ConfigError, "require"):
             tor_config.validate_settings(settings(country="is"))
+
+    def test_settings_parser_is_shared_with_make_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            settings_file = Path(temporary) / "wrapper.env"
+            settings_file.write_text(
+                "TOR_EGRESS_ENABLED=false\n"
+                "TOR_EGRESS_ENABLED='true' # last definition wins\n"
+                'TOR_ONION_SERVICE_ENABLED="false"\n',
+                encoding="utf-8",
+            )
+            values = tor_config.settings_from_file_and_environment(settings_file)
+            self.assertEqual(values["TOR_EGRESS_ENABLED"], "true")
+
+            environment = dict(os.environ)
+            for name in tor_config.SETTING_DEFAULTS:
+                environment.pop(name, None)
+            completed = subprocess.run(
+                [
+                    "make",
+                    "-pn",
+                    f"ENV_FILE={settings_file}",
+                    "CONTAINER_BIN=docker",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            full_files = next(
+                line.removeprefix("FULL_FILES := ")
+                for line in completed.stdout.splitlines()
+                if line.startswith("FULL_FILES := ")
+            )
+            self.assertIn("docker-compose.tor.yml", full_files)
+            self.assertIn("docker-compose.tor-egress.yml", full_files)
+
+    def test_settings_parser_rejects_ambiguous_multiword_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            settings_file = Path(temporary) / "wrapper.env"
+            settings_file.write_text(
+                "ONYX_WEB_CANONICAL_ORIGIN=https://example.com extra\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(tor_config.ConfigError, "one shell-style"):
+                tor_config.read_wrapper_settings(settings_file)
 
     def test_atomic_failure_preserves_existing_config_and_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

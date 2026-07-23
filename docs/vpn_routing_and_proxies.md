@@ -32,6 +32,14 @@ Onion-service circuits do not use a clearnet exit selector. Use `make
 health-inventory` and the selected engine's `inspect`/`logs` commands for
 verification; Docker is never an implicit Podman fallback.
 
+The wrapper-owned canonical-origin, configured-upstream-proxy, and native-Tor
+settings share one restricted single-line parser for Make layer selection and
+host-side configuration rendering. Values may be unquoted or shell-quoted;
+`$` is literal, an unquoted `#` starts a comment, later definitions win, and
+exported or Make command-line values take precedence. Validation belongs to
+stack startup and Tor address inspection, not shared-data ownership or Myst
+signup.
+
 This stack keeps application containers off Internet-routed Docker networks.
 Traffic crosses fixed-destination bridges to final-hop policy proxies in the
 trusted `netns-holder` routing namespace. The route owner is Mysterium, a

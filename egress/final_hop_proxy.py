@@ -115,10 +115,6 @@ if TOR_SOCKS_UNIX_PATH and TOR_SOCKS_UNIX_PATH != "/run/tor-egress/socks":
         "EGRESS_TOR_SOCKS_UNIX_PATH is an internal fixed setting and must be "
         "/run/tor-egress/socks"
     )
-if TOR_SOCKS_UNIX_PATH and UPSTREAM_PROXY:
-    raise RuntimeError(
-        "native Tor egress and EGRESS_UPSTREAM_PROXY_URL are mutually exclusive"
-    )
 _MYST_VPN_ENABLED_RAW = os.environ.get("MYST_VPN_ENABLED", "true").strip()
 if _MYST_VPN_ENABLED_RAW not in {"true", "false"}:
     raise RuntimeError("MYST_VPN_ENABLED must be exactly 'true' or 'false'")

@@ -878,13 +878,14 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         direct.assert_not_awaited()
 
     def test_native_tor_conflicts_with_configured_proxy(self) -> None:
+        module = _load_module(
+            env_overrides={
+                "EGRESS_TOR_SOCKS_UNIX_PATH": "/run/tor-egress/socks",
+                "EGRESS_UPSTREAM_PROXY_URL": "http://proxy.example:8080",
+            }
+        )
         with self.assertRaisesRegex(RuntimeError, "mutually exclusive"):
-            _load_module(
-                env_overrides={
-                    "EGRESS_TOR_SOCKS_UNIX_PATH": "/run/tor-egress/socks",
-                    "EGRESS_UPSTREAM_PROXY_URL": "http://proxy.example:8080",
-                }
-            )
+            module._validate_upstream_proxy_config()
 
     async def test_socks_reply_rejects_version_reserved_and_unknown_address(self) -> None:
         for reply, message in (
