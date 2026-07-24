@@ -332,10 +332,20 @@ Update `egress/final_hop_proxy.py`:
 6. Update the four current exact-host call sites. Do not change trusted
    internal, RFC1918, upstream-proxy authorization, DNS ownership,
    HTTP-framing, bridge-peer, or connection-pinning semantics.
-7. Add the canonical operator, automatic, and effective policies to the
+7. Remove the unused `_blocked_destination_reason()` compatibility wrapper.
+   It has no production or test callers; `_validate_destination()` remains the
+   single destination-policy entry point.
+8. Fix explicit-zero port parsing at the same boundary. In
+   `_parse_authority()`, absolute-form HTTP target parsing, and
+   `_parse_proxy_url()`, apply a protocol default only when `parsed.port is
+   None`; never use `parsed.port or default`. Preserve an explicit `0` so
+   ordinary destination validation rejects it and configured upstream-proxy
+   startup rejects it. This closes CONNECT, origin-form `Host`, absolute-form
+   HTTP, and upstream-proxy variants consistently.
+9. Add the canonical operator, automatic, and effective policies to the
    existing non-secret startup log. Do not log the raw invalid value when
    parser startup fails.
-8. Update the module documentation and comments that currently describe
+10. Update the module documentation and comments that currently describe
    `host.docker.internal` as always available or unrestricted.
 
 Normalize the two sources once at startup into one effective immutable
@@ -399,14 +409,33 @@ Update `docker-compose.yaml`:
   not enforcement points.
 - On `onyx-host-egress-bridge`, keep
   `depends_on.onyx-host-egress-proxy.condition: service_started` and add
-  `restart: true`. The repository's required Compose version supports
-  dependency restart propagation. Whenever a supported Compose operation
-  explicitly recreates or updates the host policy proxy, it must restart the
-  bridge as well, reset its health state, and force a fresh policy-generated
-  403 probe. Do not rely on the bridge's prior `healthy` state or ten-minute
-  steady interval.
+  `restart: true`. Docker Compose defines dependency restart propagation for
+  an explicit Compose-managed dependency update, but this behavior must not be
+  presumed for a Podman Compose provider. Whenever a supported Compose
+  operation explicitly recreates or updates the host policy proxy, the bridge
+  must also be restarted or recreated, have its health state reset, and make a
+  fresh policy-generated 403 probe. Do not rely on the bridge's prior
+  `healthy` state or ten-minute steady interval.
 - Preserve identical policy under Docker and Podman. No Podman-specific
-  overlay change should be necessary.
+  policy overlay should be necessary. The Make-selected lifecycle may require
+  an engine-specific orchestration command if a supported provider does not
+  implement dependency restart propagation; that is an orchestration
+  compatibility detail, not a different security policy.
+
+Delete the empty
+`compose_overlays/docker-compose.proxy.yml` selection marker. Remove
+`PROXY_SUFFIX`, its conditional assignment, and its use in all four lite/full
+start/down Compose file lists. `EGRESS_UPSTREAM_PROXY_URL` is already passed
+to the two final-hop proxies by the base Compose model and to Myst by its
+existing model; an empty layer contributes no configuration or security
+boundary. Update structural tests to stop requiring this file or conditional
+file-set change, and prove effective upstream-proxy environment values remain
+unchanged with and without the URL.
+
+Do not move the duplicated `api_server`/`background` proxy-routing environment
+block into `onyx/helper-egress.env` in this change. That optional cleanup
+changes configuration ownership and AGENTS.md semantics without simplifying
+the enforcement work. Leave it for a separately reviewed change.
 
 ### Makefile selection
 
@@ -436,13 +465,22 @@ Use that reader to compute one canonical set of effective lifecycle inputs:
 
 Export the canonical public values to Compose and pass the same canonical URL,
 MLX model, and derived served model to every embedserv install, verification,
-automatic-start, and cleanup recipe that consumes them. Do not source
+and automatic-start recipe that consumes them. Do not source
 `.env.wrapper` again inside those recipes and do not independently recompute
 defaults with shell parameter expansion: doing either would let a file value
 overwrite an environment or Make command-line value after selection, or make
 the lifecycle launch a different model from the embedding shim. Avoid
 interpolating these values as shell program text; pass them through the
 exported environment.
+
+Make the supported standalone `embedserv-install` and
+`embedserv-verify-model` targets depend on `wrapper-config-preflight` before
+their recipes can mutate the venv, download a model, or inspect a defaulted
+model path. `$(shell ...)` does not propagate the settings reader's exit status
+reliably, so this explicit prerequisite is required even though `make up-full`
+already has it. The configuration-independent `embedserv-stop-if-started`
+target must not consume the current URL or model values and must remain usable
+after a configuration parse error or model change.
 
 Before any of those values participates in ordinary Make expansion, apply the
 same origin-aware literal-dollar preservation pattern already used for
@@ -520,10 +558,11 @@ Preserve safe transition ordering:
    recorded MLX process for diagnosis; it remains unreachable through the
    now-revoked host policy.
 4. Only after replacement readiness succeeds, run one mode-selected cleanup
-   target that stops the previously recorded wrapper-owned MLX process and
-   cleans its recorded child, then continue the existing API/background
-   replacement sequence. This cleanup may use the existing identity/PID
-   safeguards, but it cannot affect the selected policy.
+   target that stops the previously recorded wrapper-owned MLX lifecycle proxy,
+   then continue the existing API/background replacement sequence. A live
+   proxy stops its in-memory `Popen` child during graceful shutdown. This
+   cleanup may use the existing shared-manager identity/PID safeguards, but it
+   cannot affect the selected policy.
 
 This ordering prevents a bundled-to-custom transition from leaving the old
 automatic-3210 policy active after the intended MLX process has stopped. If
@@ -532,54 +571,68 @@ process for diagnosis rather than creating that mismatch.
 
 Remove the `embedserv-serve` recipe from the Makefile and `.PHONY` inventory.
 Do not replace it with another foreground or unrecorded launch target. Keep
-`embedserv-install`, `embedserv-verify-model`, and one bundled-mode automatic
-start target.
+`embedserv-install`, `embedserv-verify-model`,
+`embedserv-start-if-installed`, and `embedserv-stop-if-started`.
 
-Collapse `embedserv-stop-if-started` and
-`embedserv-cleanup-recorded-child` into one internal cleanup target. Its strict
-recipe first stops the lifecycle proxy when its ownership record exists, then
-cleans a separately recorded child when present. Preserve the shared manager's
-existing stop contract: an absent record is harmless, while a malformed or
-identity-mismatched parent record is diagnosed, removed, and treated as a
-non-signaling no-op. Do not change that shared behavior, which is also used by
-the Podman document server. The MLX child cleanup remains strict: a malformed
-record or a live PID whose argv does not exactly match the recorded captured
-argv must fail without signaling or deleting evidence.
+Retain `embedserv/host_process_manager.py` as the one shared cross-platform
+owner for both the top-level MLX lifecycle proxy and the Podman host document
+server. Do not add an MLX-only owned-child launcher, Unix control protocol,
+second record format, platform process API, or service-specific ownership
+branch to the manager. Apart from removing generic untracked-listener
+acceptance, preserve its existing PID/random-token/configuration-fingerprint,
+readiness, atomic-record, and bounded-stop contract for both services.
+Accidental PID reuse does not reproduce the fresh 256-bit token in the live
+command. The contract is not a defense against a malicious same-user host
+process that can read and deliberately reproduce private lifecycle state; that
+local-host threat remains out of scope.
 
-Replace the child record's current PID-only format with a versioned, atomic,
-strictly parsed ASCII JSON record containing the PID and the complete live
-argument vector captured immediately after the MLX child is launched. Encode
-each raw argv byte string with strict base64 so workspace/model paths
-containing spaces, quotes, non-ASCII filesystem bytes, or Unicode round-trip
-without `shlex` interpretation. Require version 1, a PID greater than 1, one
-to 64 argv elements, a nonempty argv[0], no decoded NUL, at most 16 KiB per
-argument, and at most 64 KiB for the complete record. Reject unknown or extra
-fields, invalid base64, invalid types, and a non-canonical trailing shape.
+Simplify MLX child ownership instead of trying to make it durable across a
+proxy crash:
 
-On the supported macOS bundled-MLX path, obtain the live process argument
-vector from Darwin's NUL-delimited `KERN_PROCARGS2` interface through a small
-stdlib `ctypes` helper; do not parse `ps` display text. Capture and record the
-observed full live argv after `Popen`, including whatever interpreter prefix
-the OS actually reports, rather than guessing whether a script shebang adds
-one. If the new child exits or its argv cannot be read unambiguously, terminate
-it if still owned and fail before admitting a request. Cleanup reads live argv
-through the same helper and requires byte-for-byte equality with every
-recorded element and the exact argument count. Prefix, suffix, subsequence,
-quoting-equivalent, or truncated display matches are insufficient. The bundled
-MLX host flow remains macOS-only; a platform without this identity source must
-fail that flow explicitly rather than fall back to `ps`.
+- while the lifecycle proxy is alive, its in-memory `Popen` object is the only
+  child ownership authority;
+- normal idle unload and graceful proxy shutdown continue to stop and wait for
+  that exact child/process group;
+- remove the child PID file, `--child-pid-file`,
+  `--cleanup-recorded-child`, `embedserv-cleanup-recorded-child`, and every
+  process-list-based orphan signaling path; and
+- move the existing child-port availability check before the proxy binds or
+  exposes port 3210. An occupied loopback child port 3211 therefore makes the
+  top-level proxy start fail before the shared manager reports readiness and
+  before Compose can apply automatic 3210.
 
-Cleanup must use this recorded old live argv rather than reconstructing it from
-the current embedding model variables. Preserve the record when a live process
-mismatches. Normal child exit removes only a record whose PID and stored argv
-match the child it owns. This makes cleanup safe when a bundled-to-custom
-transition also changes the model path or served model, including when the
-lifecycle proxy has already exited and only its child remains. Document the
-format as non-secret host lifecycle state; do not store API keys or the
-embedding URL in it.
+If the lifecycle proxy is forcibly killed or crashes after starting MLX, its
+child may remain on loopback port 3211. Do not guess ownership or signal it on
+the next start. A later bundled start must fail visibly because 3211 is
+occupied, without binding 3210 or applying a new automatic grant. A
+bundled-to-custom transition may stop a live recorded proxy after replacement
+readiness; if the recorded proxy is already gone, the shared manager retains
+its existing non-signaling stale-record behavior. The stack-owned automatic
+policy never grants child port 3211; an operator must not add that internal
+implementation port to the ordinary host allowlist. Document manual host
+diagnosis as the recovery for this exceptional crash case. This is an
+intentional availability/resource tradeoff in favor of a small portable
+ownership boundary, not a successful automatic cleanup claim.
 
-Use the consolidated cleanup target from the custom-mode post-readiness
-transition and `down-full`.
+`down-full` likewise calls only the shared manager's top-level proxy stop. A
+live proxy performs graceful child cleanup. A missing, malformed, stale, or
+identity-mismatched proxy record retains the shared manager's non-signaling
+behavior; `down-full` must not fall back to a child PID file or process-list
+guess.
+
+Document and distinguish both exceptional manual-recovery states. A malformed
+or identity-mismatched top-level record can leave the lifecycle proxy itself
+alive, so the next bundled start reports an untracked listener on port 3210.
+A crashed proxy can instead leave only its MLX child, so startup reports
+occupied internal child port 3211 before binding 3210. Neither diagnostic may
+recommend automatic PID signaling, deleting a record as proof of ownership, or
+adding 3211 to the host-port allowlist.
+
+The shared lifecycle implementation remains platform-neutral. The optional MLX
+package itself is macOS-only, while the manager, document server, proxy policy,
+Make selection, and full custom-embedding stack must run on Linux and macOS.
+Any genuinely platform-specific capability test must detect its platform and
+skip elsewhere; portable lifecycle tests must run on both.
 
 Remove the generic `--allow-untracked-listener` option from
 `host_process_manager.py`; the ordinary occupied-untracked-port failure becomes
@@ -614,6 +667,18 @@ failure to stack bring-up:
 5. Podman's native startup-health translation and dependency restart
    propagation must preserve the same result: the restarted bridge never
    reaches healthy and the bounded Compose wait fails.
+
+Passing the fresh and warm failure test is a mandatory acceptance gate for
+every supported Docker and Podman Compose provider. If a Podman provider does
+not honor `depends_on.restart`, add an explicit Make-selected Podman startup
+phase that recreates the host policy proxy and its stopped host bridge
+together, before the ordinary bounded whole-stack start and startup-health
+configuration. That phase must fail closed and must not first run an
+unbounded/waiting start against the stale bridge. Do not add a second parser,
+probe process liveness, or silently continue with provider-dependent stale
+health. The Docker path may continue to use qualified dependency propagation;
+both paths must produce the same externally observed policy and failure
+contract.
 
 Do not add a duplicate periodic health check to the final-hop proxy. The bridge
 is already the externally consumed readiness boundary and proves both that the
@@ -747,6 +812,10 @@ Extend the existing loader's explicit environment with the default
       respectively reach the direct path and return 403;
     - `https://host.docker.internal/...` or an equivalent CONNECT authority
       with implicit/default port 443 is denied; and
+    - explicit port zero in CONNECT authority, absolute-form HTTP, and an
+      origin-form request's `Host` header remains zero through parsing and is
+      rejected before DNS or connection, even when the corresponding protocol
+      default port is allowed; and
     - normalized spellings such as `HOST.DOCKER.INTERNAL.` cannot bypass or
       lose the same port decision.
 14. The startup diagnostic renders the operator, automatic, and effective
@@ -762,6 +831,9 @@ Extend the existing loader's explicit environment with the default
     the same exact-Docker-host resolution/validation helper, but only 3210
     appears in the effective ordinary-destination set; ordinary 9150 remains
     denied unless the operator independently lists it.
+16. Configured `http`, `https`, `socks5`, and `socks5h` upstream URLs with
+    explicit port zero fail startup as invalid instead of aliasing their
+    protocol defaults. Omitted ports retain the documented defaults.
 
 Adapt existing exact-host tests rather than retaining duplicate tests for the
 old unlimited default.
@@ -782,10 +854,14 @@ Extend effective-Compose assertions to prove:
   `false`;
 - Make-selected full Docker/Podman models render bundled-MLX access `true` for
   the exact bundled URL and `false` for Teep and a representative custom URL;
-- the operator value remains independent in every mode; and
+- the operator value remains independent in every mode;
 - the host bridge retains the health probe that requires a policy-generated
   403, declares dependency restart propagation from the host policy proxy, and
-  the Makefile-selected lite/full starts retain bounded `--wait`.
+  the Makefile-selected lite/full starts retain bounded `--wait`;
+- `compose_overlays/docker-compose.proxy.yml`, `PROXY_SUFFIX`, and the four
+  file-list references are absent; and
+- setting a representative upstream proxy changes the effective proxy/Myst
+  environment as before without changing the selected Compose file list.
 
 Use the existing matrix helpers, but do not exhaustively combine every option
 value with every unrelated VPN, Tor, executor, and frontend overlay. The
@@ -799,7 +875,7 @@ Extend the existing host-process selection tests to prove:
   `embedserv-start-if-installed`, and supplies bundled-MLX access `true` to
   every full Compose phase;
 - Teep and representative custom URLs skip MLX launch, supply bundled-MLX
-  access `false`, and defer recorded-process cleanup until after replacement
+  access `false`, and defer the recorded proxy stop until after replacement
   embedding readiness;
 - every lite Compose phase forces bundled-MLX access `false`, even when the
   full-mode embedding setting contains the bundled URL;
@@ -808,8 +884,15 @@ Extend the existing host-process selection tests to prove:
 - file, environment, and Make command-line embedding URL values obey the shared
   parser's documented precedence, with the same coverage for the MLX and
   served-model values; the one canonical URL/model/served-model set reaches
-  Compose plus install, verification, automatic-start, and cleanup targets
+  Compose plus install, verification, automatic-start, and mode selection
   without any of those recipes sourcing the file again;
+- malformed accepted-setting syntax makes direct `embedserv-install` and
+  `embedserv-verify-model` stop at `wrapper-config-preflight` before their
+  recipes execute; the test must not invoke `uv`, create a venv/model path, or
+  fall back to the default model;
+- `embedserv-stop-if-started` has no configuration-preflight prerequisite and
+  consumes no canonical URL/model value, so a malformed current settings file
+  cannot prevent identity-checked shutdown;
 - literal-dollar values from file, environment, and command-line origins
   survive the origin-aware Make freeze, export, recursive Make calls, and
   lifecycle cross-check byte-for-byte;
@@ -820,7 +903,9 @@ Extend the existing host-process selection tests to prove:
   pre-existing unrecorded listener on 3210 fails before Compose, while a
   matching recorded/ready wrapper-managed process remains reusable;
 - `embedserv-serve` is absent from Make recipes and `.PHONY`, while install,
-  verify, automatic start, and the one consolidated cleanup target remain; and
+  verify, automatic start, and the shared-manager proxy-stop target remain;
+- `embedserv-cleanup-recorded-child`, the child PID file, and every
+  process-list-based child cleanup invocation are absent; and
 - Make help, prerequisites, and lifecycle tests contain no foreground/untracked
   launch path.
 
@@ -828,28 +913,32 @@ Also assert exact transition ordering. Bundled mode must start/validate MLX
 before the staged Compose command applies automatic 3210. Custom mode must not
 stop a recorded MLX process in the pre-Compose prerequisite; it must first
 complete the staged Compose wait with bundled-MLX access `false`, then pass
-embedding `/ready`, then invoke the identity-validated consolidated cleanup.
-Simulate failed staged Compose and failed replacement-readiness cases and prove
-cleanup is not invoked in either case.
+embedding `/ready`, then invoke the shared manager's identity-validated
+proxy-stop target. Simulate failed staged Compose and failed
+replacement-readiness cases and prove the stop is not invoked in either case.
 
 ### `tests/test_idle_embedding_proxy.py`
 
-Update child-record tests for the new atomic PID-plus-captured-argv format.
-Cover canonical versioned serialization, every size/count bound, malformed and
-extra fields, strict base64, normal matching removal, a reused PID or argv
-mismatch that is left untouched, and crash cleanup after the current wrapper
-configuration has changed. Mock the Darwin argv reader with paths containing
-spaces and Unicode/non-UTF-8 bytes and with an observed interpreter prefix.
-Prove exact full-vector matches succeed while adversarial prefix-only,
-suffix-only, embedded-subsequence, added-argument, removed-argument, and
-quoting/display-equivalent strings fail without signaling. Also test argv-read
-failure immediately after launch fails closed and does not leave an admitted
-child.
+Remove child-record/orphan-cleanup tests with the deleted implementation.
+Retain the portable in-memory lifecycle tests for exact `Popen` ownership,
+concurrent cold start, model validation, active-request drain, idle unload,
+graceful shutdown, bounded TERM/KILL of the exact child group, and an occupied
+child port.
 
-In particular, simulate a bundled-to-custom transition that also changes both
-the model path and served model, with the parent already absent and only the
-old child record/process remaining; cleanup must validate and stop that old
-child from its captured live argv rather than the new settings.
+Add ordering coverage proving the proxy checks loopback port 3211 before
+binding port 3210. Simulate a proxy crash that leaves 3211 occupied and prove a
+subsequent startup fails without inspecting or signaling the listener and
+without making 3210 ready. Also prove normal shared-manager shutdown of a live
+proxy invokes the proxy's graceful child cleanup, while a stale/mismatched
+top-level record never authorizes child signaling. Do not claim automatic
+orphan cleanup after a parent crash. Require distinct non-secret diagnostics
+for an untracked top-level listener on 3210 and an occupied child port 3211.
+
+Any additional test that genuinely probes a macOS-only dependency or Docker
+Desktop behavior must use explicit platform detection such as
+`sys.platform == "darwin"` and skip on other hosts. Linux must still run all
+portable ownership, policy, lifecycle, and full-stack custom-embedding tests;
+do not use a macOS skip to hide a portable failure.
 
 ### `tests/test_host_process_manager.py`
 
@@ -860,8 +949,22 @@ always raises `ContractError`, the parser exposes no
 reuses a ready service. Preserve and explicitly test the shared stop contract:
 malformed or identity-mismatched records are diagnosed and removed without
 signaling or failing shutdown, including for the Podman document-server use.
+Retain the same record/parser/start/stop implementation for the MLX proxy and
+Podman document server; do not add a second MLX record or ownership helper.
 Do not claim that the separate tracked-PID and listener-readiness checks prove
 socket ownership.
+
+### Existing MCP and Web Connector routing tests
+
+Extend `tests/test_mcp_egress_patch.py` to cover all four saved Admin levels:
+`VALIDATE_ALL` and `VALIDATE_LLM` select the public bridge, while
+`ALLOW_PRIVATE_NETWORK` and `DISABLED` select the host bridge. Extend
+`tests/test_web_connector_egress_patch.py` to prove that only `VALIDATE_ALL`
+selects the public bridge and that `VALIDATE_LLM`,
+`ALLOW_PRIVATE_NETWORK`, and `DISABLED` select the host bridge. Preserve the
+exact internal `doc-drop-web:8091` host-route exception independently. These
+are focused table-driven cases over the existing patch helpers, not a new
+route-selection abstraction.
 
 No image-contract test is required. The proxy script is bind-mounted, and this
 change does not alter an image, runtime patch, parser dependency, Tor image, or
@@ -902,7 +1005,10 @@ Add or retain focused structural tests that tie invalid-policy propagation to
 the actual start contract: the host bridge health probe must fail without a
 policy-generated 403, its host-policy dependency must set `restart: true`, and
 both `up-lite` and the full-mode staged/final starts must use bounded Compose
-`--wait`. Test the selected Docker and Podman effective models. These checks
+`--wait`. Test the selected Docker and Podman effective models. If a supported
+Podman provider requires the explicit Make fallback, structurally assert that
+the policy proxy and stopped bridge are recreated before the bounded
+whole-stack start and before startup-health configuration. These checks
 complement parser unit tests without duplicating the parser in test-only
 startup code; the stateful stale-health regression remains a live engine test.
 
@@ -925,8 +1031,9 @@ and temporary local listeners are available:
 3. Change full mode to Teep or another custom embedding endpoint. Confirm the
    staged Compose start first makes bundled-MLX access false and proves the host
    bridge healthy, custom embedding readiness succeeds, and only then the
-   consolidated cleanup stops the recorded wrapper-owned MLX proxy/child.
-   Confirm port 3210 is denied after cleanup. If a disposable listener can then
+   shared manager stops the recorded live wrapper-owned MLX proxy, whose
+   graceful shutdown stops its in-memory child. Confirm port 3210 is denied
+   after the stop. If a disposable listener can then
    be bound safely to 3210, prove that it records no connection from the denied
    request. Select the custom endpoint's actual host port explicitly when that
    endpoint itself must remain reachable. Also force the staged Compose update
@@ -938,14 +1045,16 @@ and temporary local listeners are available:
    permits both without widening any other port. Restart/recreate the host
    final-hop proxy as required so startup configuration is actually reloaded.
 5. Set one representative invalid value such as `3210,not-a-port` and run the
-   normal Makefile start twice per supported engine scenario: once from a clean
-   stopped stack and once after first establishing a healthy matching stack.
+   normal Makefile start twice for each supported engine/provider: once from a
+   clean stopped stack and once after first establishing a healthy matching
+   stack.
    In the warm case, confirm the policy proxy is recreated, dependency
-   propagation restarts the previously healthy host bridge, and a fresh bridge
-   probe fails. Both starts must exit nonzero within the bounded wait; the host
-   policy must never listen under fallback policy, and logs must contain the
-   non-secret configuration error. Exercise both Docker and Podman when they
-   are release-supported. Do not treat a stale healthy bridge, restarting
+   propagation or the explicit qualified Make fallback restarts/recreates the
+   previously healthy host bridge, and a fresh bridge probe fails. Both starts
+   must exit nonzero within the bounded wait; the host policy must never listen
+   under fallback policy, and logs must contain the non-secret configuration
+   error. Exercise every supported Docker and Podman provider; failure blocks
+   release for that provider. Do not treat a stale healthy bridge, restarting
    policy container, or partially running Compose project as successful
    bring-up.
 6. Separately, when validating the documented Teep embedding path, set the
@@ -972,9 +1081,18 @@ and temporary local listeners are available:
    automatic deny, and one explicit operator allow using the actual resolved
    `host.docker.internal` address and route. Do not assume a Docker Desktop
    gateway address or interface name. Confirm the Podman doc-drop host relay
-   remains unaffected. Also exercise one invalid value and confirm the normal
-   bounded Podman bring-up fails if Podman is part of the release-validation
-   environment.
+   remains unaffected. Also exercise fresh and warm invalid values and confirm
+   the normal bounded Podman bring-up fails for every supported provider. If
+   dependency restart propagation did not qualify, exercise the explicit
+   Make-selected bridge-recreation phase instead.
+
+Run portable deterministic coverage and the custom-embedding full-stack path
+on Linux as well as macOS. Any validation that actually depends on MLX,
+Docker Desktop, or another macOS-only external capability must detect
+`sys.platform == "darwin"` (and the required capability) before running and
+must report a skip on other hosts. Such a skip must not suppress portable
+proxy, ownership-launcher, Make/Compose, Podman, or Linux custom-embedding
+coverage.
 
 Do not test all 65,535 ports, every URL path, every HTTP method, or a Cartesian
 product of VPN/upstream/Tor and option values. The parser tests establish set
@@ -1114,8 +1232,13 @@ Update all current documentation that describes exact
    - explain the compromised-backend boundary and the remaining allowed-port
      authority; and
    - retain the independent Onyx Admin SSRF route-selection layer: a host port
-     grant does not by itself move MCP/Web integrations from the public route
-      to the host-capable route; and
+     grant does not itself select the host-capable route;
+   - state the two distinct pinned mappings exactly: MCP uses the public route
+     for `VALIDATE_ALL` and `VALIDATE_LLM` and the host route for
+     `ALLOW_PRIVATE_NETWORK` and `DISABLED`; Web Connector uses the public
+     route only for `VALIDATE_ALL` and the host route for `VALIDATE_LLM`,
+     `ALLOW_PRIVATE_NETWORK`, and `DISABLED`, with the exact internal doc-drop
+     route remaining separately stack-owned; and
    - add the host-port setting and warm-reconfiguration bridge-health check to
      the verification checklist.
 4. `docs/vpn_routing_and_proxies.md`
@@ -1137,13 +1260,20 @@ Update all current documentation that describes exact
      selection skips MLX for a custom upstream;
    - document the safe bundled-to-custom transition ordering: revoke automatic
      3210, prove bridge policy health, validate the custom embedding endpoint,
-     and only then stop the recorded MLX process;
+     and only then stop the recorded live MLX lifecycle proxy;
    - remove `make embedserv-serve` and every supported-foreground/untracked
      listener description; document install, optional verification, and
      automatic `make up-full` ownership as the supported flow;
-   - document the durable child record's captured Darwin-argv identity and
-     cleanup behavior across model/configuration changes, without describing
-     it as containing secrets;
+   - document that the existing shared host manager owns the top-level MLX
+     proxy and Podman document server with the same portable
+     PID/token/configuration contract, while the live proxy alone owns its MLX
+     child through `Popen`;
+   - remove durable child-record/crash-cleanup claims and document the explicit
+     failure mode: an orphaned loopback child makes the next bundled start fail
+     before port 3210 binds and requires manual host diagnosis;
+   - separately document an untracked live top-level proxy on port 3210 after
+     malformed/mismatched record handling, and keep its manual recovery
+     diagnostic distinct from the occupied-child-port-3211 case;
    - require port 8337 or the configured custom Teep/embedding host port to be
      added explicitly for the Teep path;
    - document the `none` startup failure behavior; and
@@ -1169,12 +1299,16 @@ Update all current documentation that describes exact
 10. `docs/resource_minimization.md`
     - remove the foreground/operator-listener lifecycle description;
     - document automatic bundled-full ownership, custom transition ordering,
-      the durable captured-argv child record, and the unchanged shared-manager
-      stop semantics; and
+      one shared cross-platform manager for the MLX proxy and Podman document
+      server, in-memory-only MLX child ownership, and the fail-closed orphan
+      port behavior;
+    - distinguish manual recovery for an untracked top-level proxy on 3210
+      from an orphaned child on 3211;
     - document the host bridge's dependency restart and fresh startup-health
       evaluation when the policy proxy is recreated; and
-    - update deterministic lifecycle coverage to include exact-host policy and
-      model-changing orphan-child cleanup.
+    - update deterministic lifecycle coverage to include exact-host policy,
+      normal live-proxy child cleanup, and refusal to signal an orphan after a
+      proxy crash.
 11. `AGENTS.md`
     - update the orientation bullets that currently describe exact
       `host.docker.internal` as a default exception, and mention operator
@@ -1209,16 +1343,24 @@ Implementation is complete only when:
   wrapper-owned automatic full startup;
 - the shared settings reader accepts the embedding URL, MLX model, and served
   model with their documented precedence and literal-dollar preservation; one
-  canonical effective set drives Compose, every embedserv consumer, mode, and
-  automatic-policy selection without recipes re-sourcing the file;
+  canonical effective set drives Compose, install, verification, automatic
+  start, mode, and automatic-policy selection without recipes re-sourcing the
+  file, while top-level stop remains configuration-independent;
+- malformed accepted settings prevent direct `embedserv-install` and
+  `embedserv-verify-model` recipes from executing through the shared preflight;
 - bundled-to-custom transition tests prove automatic 3210 is revoked through a
   healthy staged policy path and replacement readiness succeeds before
-  consolidated recorded MLX cleanup, while either failure leaves the old
-  process intact;
-- an orphaned MLX child remains identity-safe and cleanable after the
-  transition also changes model path or served-model name, using an exact
-  NUL-delimited Darwin argv capture stored in its bounded strict record rather
-  than a `ps` display-string subsequence;
+  the shared manager stops the recorded live MLX proxy, while either failure
+  leaves the old proxy intact;
+- the same cross-platform `host_process_manager.py`
+  PID/token/configuration/readiness contract owns both the top-level MLX proxy
+  and Podman document server, with no MLX-specific ownership protocol;
+- a live MLX proxy owns and stops only its in-memory `Popen` child, while an
+  orphaned loopback child after a proxy crash is never identified or signaled
+  automatically and makes the next bundled start fail before port 3210 binds;
+- diagnostics and documentation distinguish an untracked top-level listener
+  on 3210 from an orphaned child on 3211 without recommending automatic
+  signaling;
 - `all`, `none`, and valid numeric lists behave exactly as specified;
 - keywords require exact lowercase spelling, while numeric lists accept only
   the documented ASCII whitespace and digit grammar;
@@ -1234,6 +1376,9 @@ Implementation is complete only when:
 - CONNECT and absolute-form HTTP handler tests prove that normalized hostnames,
   explicit and implicit ports, status mapping, and the shared allow decision
   remain connected;
+- explicit port zero is preserved and rejected for CONNECT, origin-form
+  `Host`, absolute-form HTTP, and every supported configured upstream-proxy
+  scheme, while omitted ports still receive protocol defaults;
 - startup logs render the effective parsed policy canonically without echoing
   raw invalid input;
 - positive and negative request-path tests prove that an explicitly configured
@@ -1242,11 +1387,24 @@ Implementation is complete only when:
   while an ordinary target of the same authority is denied with and without
   that upstream setting;
 - doc-drop and RFC1918 policies remain independent;
+- the exact saved-SSRF-level matrices for MCP and Web Connector routing remain
+  distinct, documented, and covered across all four levels;
 - documentation clearly states that the separate RFC1918 opt-in can retain a
   host-gateway-IP path and that allowed ports do not authenticate a host
   service;
 - public/browser/executor routes gain no host destination access;
-- Docker and Podman effective models preserve the existing topology;
+- Docker and Podman effective models preserve the existing topology, every
+  supported provider passes the fresh and warm invalid-policy gate, and a
+  provider lacking dependency restart propagation uses the explicit
+  Make-selected bridge-recreation phase;
+- the empty upstream-proxy Compose overlay and its Make suffix are removed
+  without changing effective final-hop or Myst proxy configuration, and the
+  unused `_blocked_destination_reason()` wrapper is absent;
+- shared implementation remains portable across Linux and macOS, the full
+  custom-embedding stack is validated on Linux, the optional MLX server remains
+  the sole Mac-only exception, and genuinely platform-specific compatibility
+  tests are explicitly platform-gated rather than embedded in enforcement or
+  lifecycle logic;
 - required deterministic and feasible live validation passes, with any
   credential-, model-, or engine-dependent omission stated precisely; and
 - all current user-facing, security, routing, RAG, Podman, upgrade, and agent
