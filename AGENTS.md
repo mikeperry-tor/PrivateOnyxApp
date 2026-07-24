@@ -240,6 +240,7 @@ This stack protects private research, document contents, browsing behavior, infe
 - Remove shims and patches when component configuration options or other updates are discovered that could provide the desired functionality.
 - Don't preserve compatibility for old behavior. Prefer current, explicit behavior over indefinite backwards compatibility.
 - Keep optional features opt-in and visibly configured.
+- The stack must run on both Mac and Linux hosts, with the exception of the MLX server. All tests that probe platform-specific capability should detect the current platform and not on other kinds of hosts.
 
 ### General Failure Handling
 
