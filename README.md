@@ -22,7 +22,9 @@ Additionally, the full mode of Onyx provides RAG search results to the agent fro
 
 If you do not need intense multi-agent deep research, code research subagents, and RAG functionality, your best option is [TinFoil](https://tinfoil.sh), which has an excellent [security architecture](https://tinfoil.sh/security-and-privacy-faq) and decent cross-device app support, with encrypted syncing of chats.
 
-In this stack, I also [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
+## Key Patches to Stock Onyx
+
+In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
 
 - Onyx telemetry, third-party analytics and error reporting, cloud billing, CAPTCHA, and remote configuration are explicitly disabled.
 - A more restrictive browser Content Security Policy now blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's selected Tor/VPN/proxy via the user's browser. Additionally, this policy blocks Onyx WebUI queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
@@ -40,7 +42,7 @@ In this stack, I also [patched Onyx](./docs/onyx_patch_info.md) to improve sever
 
 I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
 
-## Components
+## Core Components
 
 The Docker Compose files in this stack relies on the following components:
 
@@ -57,6 +59,8 @@ The Docker Compose files in this stack relies on the following components:
 6. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. It is patched to issue queries in round-robin fashion to Google, Brave, DuckDuckGo, Startpage, and Bing, accessed through Obscura Browser.  SearXNG has also been patched to retry failed queries in round-robin mode using the next provider, and suspends providers after visible anti-bot failures or rate limit responses.
 
 7. [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) is a free service that creates a reverse proxy to access the Onyx web interface via HTTPS from any web browser, using your assigned public `ts.net` service subdomain name. The TLS key is generated locally in this stack and is signed with Let's Encrypt. This means that Tailscale's infrastructure is unable to read the contents of your remote communications to the instance.
+
+8. [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) is optionally installed for local embeddings on MacOS, for RAG document search. Other local embedding providers are supported but not recommended due to accuracy and API issues. Teep can also be used for private embeddings on non-Mac hosts.
 
 ## Prerequisites
 
@@ -120,7 +124,7 @@ Mandatory configuration:
 
 - **Teep LLM Provider/API config**:
   - Set at least one real teep key to use teep in `.env.wrapper`. [Tinfoil](https://tinfoil.sh/) and/or [NearAI](https://cloud.near.ai/) are recommended. Both have excellent TEE attestation coverage.
-  - You can [configure Onyx](#onyx-ui-configuration) to use another inference provider other than teep, but one of these teep API keys must have a non-empty value for the stack to start. This value can be a placeholder (which is the default).
+  - You can [configure Onyx](#onyx-admin-ui-configuration) to use another inference provider other than teep, but one of these teep API keys must have a non-empty value for the stack to start. This value can be a placeholder (which is the default).
 
 Other key variables you may want to change:
 
@@ -147,7 +151,7 @@ Other key variables you may want to change:
     - Even if the Onyx application code itself becomes fully compromised, it can reach only explicitly configured or allowed host endpoints.
   - **Enabling LAN access additionally will allow a compromised Onyx service to access anything on your LAN.**
 
-## Onyx UI Configuration
+## Onyx Admin UI Configuration
 
 Once the stack starts, configure Onyx via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models).
 
@@ -676,7 +680,7 @@ The reality is that many websites subject Tor and datacenter VPNs to increased c
 
 Clouldflare has "come to the rescue" with their [web bot auth](https://blog.cloudflare.com/web-bot-auth/) program and their [monetization gateway](https://blog.cloudflare.com/monetization-gateway/), but these systems do not natively support privacy of any kind. Web Bot Auth is basically "papers please" gated-registration for commercial entities, and current x402 micropayment specs are just another form of web tracking, except you're additionally publishing your browsing wallet activity on public blockchains. As a selling point, I guess, this browsing activity can be conveniently and publicly associated with any other purchases you may have made with that wallet. [We Live in Public](https://en.wikipedia.org/wiki/We_Live_in_Public) now, apprently. (Spoiler: that movie did not end well).
 
-Personally, I do actually like micropayments as a concept. They would be vastly better than endless captchas, gated approval whitelists for big tech, and IP address bans for  self-hosted plebs and privacy-exhiles. In fact, privacy-enhancing x402 micropayment middleware _do_ exist in [various](https://github.com/betterclever/zimppy/) [stages](https://github.com/DVB-ANRS/SecretPay) of [prototype](https://github.com/Micopay/micopay-protocol), but even x402 payments themmselves do not yet have widespread adoption.
+Personally, I do actually like micropayments as a concept. They would be vastly better than endless captchas, gated approval whitelists for big tech, and IP address bans for  self-hosted plebs and privacy-exiles. In fact, privacy-enhancing x402 micropayment middleware _do_ exist in [various](https://github.com/betterclever/zimppy/) [stages](https://github.com/DVB-ANRS/SecretPay) of [prototype](https://github.com/Micopay/micopay-protocol), but even x402 payments themselves do not yet have widespread adoption.
 
 In the meantime, for users who need a residential IP address exit, Mysterium is the primary supported optional choice because its server side is open source and payment can be made in cryptocurrency.
 
