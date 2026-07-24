@@ -8,10 +8,9 @@ Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0
 
 Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are stable in the default web crawler, but are varied per-navigation in Obscura. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
 
-Users can optionally enable [Mysterium VPN](https://github.com/mysteriumnetwork/node), configure an upstream proxy, combine the two, or enable native Tor egress to further reduce tracking. Tor onion service access is supported in the Tor egress mode. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route to prevent direct-network, proxy bypass, and DNS leaks.
+Users can optionally enable [Tor](https://www.torproject.org/) for the Agent's internet access. Tor onion service access is supported in the Tor egress mode. Alternatively, [Mysterium VPN](https://github.com/mysteriumnetwork/node) can be used for this purpose, or an upstream proxy, or both. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route to prevent host/LAN access, proxy bypass, and DNS leaks.
 
-[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for your client device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it
-does not create a Tailnet or use the Tailscale VPN itself, either.
+[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for your client device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN itself, either.
 
 A v3 Tor onion service can also be created for the stack. Onion access and public Tailscale access can be enabled simultaneously.
 
@@ -115,13 +114,17 @@ make logs-full
 
 ## First-run configuration
 
-Before the first start, create and configure `.env.wrapper`. Myst setup is needed only if you opt into the VPN; the default no-VPN mode requires no wallet, identity, registration, or payment.
-
-### Configure Environment
+Before the first start, copy `.env.wrapper.example` to `.env.wrapper`.
 
 Edit `.env.wrapper` as needed, based on the `.env.wrapper.example` template.
 
-Most likely variables you want to change:
+Mandatory configuration:
+
+- **Teep LLM Provider/API config**:
+  - Set at least one real teep key to use teep in `.env.wrapper`. [Tinfoil](https://tinfoil.sh/) and/or [NearAI](https://cloud.near.ai/) are recommended. Both have excellent TEE attestation coverage.
+  - You can [configure Onyx](#onyx-ui-configuration) to use another inference provider other than teep, but one of these teep API keys must have a non-empty value for the stack to start. This value can be a placeholder (which is the default).
+
+Other key variables you may want to change:
 
 - **Container engine selection**:
   - Set `CONTAINER_BIN=podman` to use Podman instead of Docker.
@@ -131,15 +134,6 @@ Most likely variables you want to change:
     to do at a later point.
   - On rootless Podman, the code interpreter tool and the code subagent are unavailable,
     due to docker-from-docker launch compatibility issues.
-- **Teep LLM Provider/API config**:
-  - Set at least one teep key (for example `TEEP_NEARAI_API_KEY`, `TEEP_TINFOIL_API_KEY`)
-- **WebUI canonical origin**:
-  - Leave `WEBUI_CANONICAL_ORIGIN=http://localhost:3000` unless Tailscale,
-    onion, or another hostname should be the authoritative WebUI URL.
-  - Onyx uses this one origin for invitation and password-reset links, generated
-    absolute links, identity-provider and MCP OAuth callbacks, origin-checked
-    voice WebSockets, and the `Secure` attribute on authentication and CSRF
-    cookies.
 - **Tor, VPN, and Proxy Use**:
   - Set `TOR_EGRESS_ENABLED=true` to route public agent Internet traffic through native Tor, and/or set `TOR_ONION_SERVICE_ENABLED=true` to publish the WebUI as a v3 onion service. `TOR_EXIT_COUNTRY` or `TOR_EXIT_NODE_FINGERPRINTS` may optionally constrain clearnet exits.
   - Set `MYST_VPN_ENABLED=true` to enable the optional Myst VPN, then complete **Optional: Myst VPN Setup** below before starting the stack.
@@ -149,34 +143,32 @@ Most likely variables you want to change:
   - For detailed Tor behavior and the full routing matrix, see [`docs/native_tor_support.md`](docs/native_tor_support.md) and [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Docker-host integration ports and optional LAN access**:
   - `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` selects which TCP ports configured integrations may reach at exact `host.docker.internal`. Its default is `none`; use a numeric comma-separated list for trusted services, or `all` to deliberately restore the former any-port exposure.
-  - Full mode automatically allows only the exact host/LAN authority selected by `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`. `EGRESS_UPSTREAM_PROXY_URL` receives the same endpoint-only treatment in every mode. Neither authority needs the broad host-port or LAN option, and neither grants another destination on the same machine or network.
-  - Teep (8337 by default), Ollama, LM Studio, MCP servers, and other custom host services still require their actual port in the list when used for anything other than the configured embedding or upstream-proxy role.
-  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let other explicitly configured MCP servers, Web Connectors, and LLM inference providers reach services on your private LAN. MCP and Web Connector access also requires a compatible SSRF setting under **Admin → Security Hardening** that will be set correctly by default, but should not be changed.
-  - LAN service destinations require an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`; failed, empty, or mixed public/private lookups are rejected.
-  - This setting does **not** give agent web search, `open_url()`, browser activity, or generated code access to your host, LAN, private addresses, metadata endpoints, or stack-managed services. Those agent-controlled paths remain public-only (or have no network at all).
-  - Exact selected host ports do not require the LAN option. If the Onyx application becomes fully compromised, it can reach selected host ports; enabling LAN access additionally retains a possible path through a known RFC1918 host-gateway address. The agent’s public tools still cannot select either route.
+    - Ollama, LM Studio, MCP servers, and other custom host services require their actual port in the list when used for anything other than `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
+  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let [Onyx MCP servers](#optional-external-mcp-servers), LAN-targeted Onyx Web Connectors, and LAN LLM inference providers reach services on your private LAN.
+  - **The agent's tools still cannot access your host or LAN**, regardless of any host or LAN configuration option value. This includes the code agent and code interpreter tool; even if you [grant network access to coding tools](#optional-network-access-for-the-code-interpreter), they still cannot access your host or LAN, regardless of any configuration setting. This is enforced through this stack's docker service network isolation, not Onyx code.
+    - Even if the Onyx application code itself becomes fully compromised, it can reach only explicitly configured or allowed host endpoints. **Enabling LAN access additionally will allow a compromised Onyx service to access anything on your LAN.**
 
 ## Onyx UI Configuration
 
-Once the stack starts—directly in the default no-VPN mode, or after Myst connects when explicitly enabled—configure Onyx to use teep via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models).
+Once the stack starts, configure Onyx via its [Web-based Admin Interface](http://localhost:3000/admin/configuration/language-models).
 
-For LLM inference, select the **OpenAI-Compatible** provider type for teep. This is important for GLM-5.2 and Kimi-K2.6 reasoning models: the wrapper's Onyx patches preserve active-turn assistant reasoning as OpenAI-compatible `reasoning_content`/`reasoning` fields by default, and the OpenAI-Compatible provider keeps teep's raw model IDs on that request path. The BiFrost provider is also compatible, but OpenAI-Compatible is the recommended teep selection. Other provider catalogs may spell GLM and Kimi model names with different dots, dashes, or compressed forms, and the OpenAI-Compatible path avoids LiteLLM native-provider remapping and ensures reasoning preservation.
+### Onyx LLM Configuration
+
+For LLM inference, select the **OpenAI-Compatible** provider type for teep. This is important for GLM-5.2 and Kimi-K2.6 reasoning models: the wrapper's Onyx patches preserve active-turn assistant reasoning as OpenAI-compatible `reasoning_content`/`reasoning` fields by default, and the OpenAI-Compatible provider keeps teep's raw model IDs on that request path.
+
+Other provider catalogs may spell GLM and Kimi model names with different dots, dashes, or compressed forms, and the OpenAI-Compatible path has been patched to avoid LiteLLM native-provider remapping and ensure reasoning preservation.
 
 Use `http://teep:8337/v1` as the OpenAI baseurl.
 
 The models supported by your API key from `.env.wrapper` should then be listed if you refresh the dropdown. Use teep's exact model ID as listed in the model selection drowndrop.
 
-Set `ONYX_AGENT_LLM_MAX_TOKENS` in `.env.wrapper` to the limit you want the stack to use (the default 900000 is good for GLM-5.2).
-
 The wrapper recognizes exactly `http://teep:8337/v1` as its bundled private
 inference endpoint. Other supported configured chat endpoints may be public,
-may use a selected `host.docker.internal` port, or may use a private LAN address when
-`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. These inference permissions are
-not inherited by agent browsing or generated code.
+may use a `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` selected `host.docker.internal` port, or may use a private LAN address when `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`.
 
 ### Inference Provider Recommendations
 
-The best privacy preserving providers supported by teep are currently `neardirect` and `tinfoil_v3_direct`, which are the direct completions version of [NearAI](https://cloud.near.ai) and [Tinfoil.sh](https://tinfoil.sh), respectively. NearAI is also useful in that it can be paid in cryptocurrency.
+The best privacy preserving provider aliases in teep are currently `neardirect` and `tinfoil_v3_direct`, which are the direct completions version of [NearAI](https://cloud.near.ai) and [Tinfoil.sh](https://tinfoil.sh), respectively. NearAI is also useful in that it can be paid in cryptocurrency.
 
 This stack can also use a local OpenAI-compatible, LM Studio, or Ollama chat
 endpoint through `host.docker.internal` or an explicitly enabled RFC1918
@@ -195,9 +187,11 @@ Verifiable private inference is only currently possible with Open Weight models.
 
 For a research agent like Onyx, the primary desirable property is a low hallucination rate. The [Artificial Analysis Omniscience Index](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) provides a [Hallucination Rate benchmark](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) that is worth tracking for this purpose.
 
-Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.2 is the best option for text, and Kimi-K2.6 is the best multimodal option. Configure these with Onyx's OpenAI-Compatible provider type so the stack's Onyx patches can preserve active-turn reasoning fields continue across tool-using turns.
+Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.2 is the best option for text, and Kimi-K2.6 is the best option for text+images. Configure these with Onyx's OpenAI-Compatible provider type so the stack's Onyx patches can preserve active-turn reasoning fields continue across tool-using turns.
 
-### Search and Web Crawler Provider Configuration
+Set `ONYX_AGENT_LLM_MAX_TOKENS` in `.env.wrapper` to the limit you want the stack to use (the default 900000 is good for GLM-5.2; 250000 is good for Kimi K2.6).
+
+### Onyx Search and Web Crawler Provider Configuration
 
 Select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Panel](http://localhost:3000/admin/configuration/web-search):
 
@@ -208,16 +202,15 @@ Select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Pa
 
 The stock Onyx Web Crawler appears to be blocked less often than Obscura v0.1.10 by websites, but you can set `ONYX_AGENT_USE_OBSCURA_BROWSER=true` to cause the Onyx Web Crawler to use the Obscura Browser instead of Onyx's internal fetch + Chromium Playwrite fallback.
 
-SearXNG always uses Obscura; `ONYX_AGENT_USE_OBSCURA_BROWSER` independently selects the built-in crawler transport.
+SearXNG always uses Obscura.
 
-In either case, Docker Compose network-namespace routing restricts egress to the selected final hop: the default no-VPN route, the optional Myst VPN, an upstream proxy, Myst plus that proxy, or native Tor. This is the case for all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
+In either case, Docker Compose network-namespace routing restricts egress to the selected final hop (Tor exit, VPN, or proxy). This is the case for all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
 
-Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Search, is supported. Connections to these services use the selected no-VPN/VPN/upstream-proxy route, but these external providers perform their accesses from their own IP address space. None of these providers offer ZDR policies to consumer end users, so your API key and account on these services will be associated with your usage activity, and this data will be stored, trained on, and/or sold by these providers.
+Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Search, is supported. Connections to these services use the selected no-VPN/VPN/upstream-proxy route, but these external providers perform their accesses from their own IP address space. None of these providers offer ZDR policies to consumer end users, so your API key and account on these services will be associated with your usage activity, and this data will be stored, trained on, and/or sold by these providers. A nice rant about this situation can be found at the [end of this README](#the-anti-bot-landscape-is-also-anti-privacy).
 
 ### Onyx Font Color Issues
 
-If you are using Tor Browser, Mullvad Browser, or another browser with anti-fingerprinting defenses,
-font colorization may end up black-on-green and be hard to read.
+If you are using Tor Browser, Mullvad Browser, or another browser with anti-fingerprinting defenses, font colorization may end up black-on-green and be hard to read.
 
 To fix this, go to the Onyx **_User Settings_** (the icon **below** the Admin settings gear). Nagivate to **Settings → General → Appearance → Color Mode**. Select **Dark** explicitly in this dropdown. This switches Onyx's text, menus, inputs, and page surfaces to their coordinated dark palette, which renders nicely on the default background.
 
@@ -233,26 +226,15 @@ The wrapper can start one pinned Tor client for either or both of two roles:
 
 ```dotenv
 TOR_EGRESS_ENABLED=true
-TOR_ONION_SERVICE_ENABLED=true
 TOR_EXIT_COUNTRY=""
 TOR_EXIT_NODE_FINGERPRINTS=""
 ```
 
 `TOR_EGRESS_ENABLED=true` routes the existing public final-hop policy paths
-through a private Unix SOCKS socket.  Applications do not receive the socket or
-a Tor/public network, target DNS is owned by Tor, and a stopped Tor daemon or
-unavailable selected exit fails closed. Internal, selected exact-host ports,
-the exact configured embedding/proxy authorities, and explicitly allowed LAN
-integration routes retain direct exceptions. Native Tor egress also permits
+through a private Unix SOCKS socket. Target DNS is owned by Tor, and a stopped
+Tor daemon or unavailable selected exit fails closed. Native Tor egress permits
 `http://` destinations whose host ends in `.onion` without enabling general
-clearnet HTTP. The wrapper does not pre-validate the onion address; Tor remains
-authoritative for onion-name validation and connection handling.
-
-Native Tor egress currently covers agent-controlled and configured-external
-final-hop policy paths only. It does not route Teep provider connections or
-Tailscale traffic, and there are no Teep-through-Tor or Tailscale-through-Tor
-options. Both components use their direct routes by default or may be routed
-through Myst with their component-specific settings.
+clearnet HTTP.
 
 `TOR_EXIT_COUNTRY` accepts one two-letter country selector.
 `TOR_EXIT_NODE_FINGERPRINTS` accepts up to 16 comma-separated 40-hex relay
@@ -261,11 +243,20 @@ egress. Selection is strict: no matching usable exit means requests fail rather
 than falling back. Country and especially relay pinning can reduce availability
 and anonymity-set diversity.
 
-Onion ingress creates a public v3 service for the WebUI without publishing
-another host port. Anyone who learns the address can reach the Onyx login, so
-use strong credentials. Detailed topology, storage, health, and diagnostic
-guidance is in [`docs/native_tor_support.md`](docs/native_tor_support.md).
-Retrieve the running address without exposing key material:
+Native Tor egress currently covers agent-controlled and configured-external
+final-hop policy paths only. It does not route Teep provider connections or
+Tailscale traffic, and there are no Teep-through-Tor or Tailscale-through-Tor
+options. Both components use their direct routes by default or may be routed
+through Myst with their component-specific settings.
+
+#### Optional Tor Onion Service Ingress
+
+The `.env.wrapper` value `TOR_ONION_SERVICE_ENABLED=true` creates a Tor onion
+service to access the Onyx WebUI. It can be set independently from
+`TOR_EGRESS_ENABLED=true`
+
+Onion ingress creates a v3 onion service for the WebUI. Retrieve the created
+address while the stack is running with:
 
 ```bash
 make tor-onion-address
@@ -275,8 +266,20 @@ The identity is stored under `docker-data/tor/state`; back it up deliberately
 and protect it like a server credential. Do not delete it unless you intend to
 replace the onion address. Copying the onion-service files copies the service
 identity and allows the holder to operate that same onion address. Docker and
-Podman share this host state, while the outbound socket is transient and
-engine-local.
+Podman share this host state.
+
+To make the onion service the authoritative WebUI URL, first retrieve its
+address, then set `WEBUI_CANONICAL_ORIGIN=http://your-address.onion` in
+`.env.wrapper` and restart the stack. Onyx will use that onion URL for
+invitation, verification, password-reset links, and generated absolute links.
+
+This URL will also be used for identity-provider and MCP OAuth callbacks; and
+origin-checked voice WebSockets, though neither of these have been verified to work
+(they likely will not).
+
+The onion URL uses HTTP because Tor provides the authenticated and encrypted
+connection. Selecting it as canonical leaves authentication and CSRF cookies
+without the `Secure` attribute on every ingress, including HTTPS Tailscale.
 
 Tailscale, onion, and localhost host-side access can be used simultaneously, but
 each hostname has separate browser cookies, storage, and login sessions. Logout
@@ -291,35 +294,50 @@ section for instructions.
 
 You can publish the Onyx WebUI through Tailscale Funnel to access it remotely via any web browser. The WebUI is responsive and works fine on phones and tablets.
 
-To set this up, in `.env.wrapper`, set `TAILSCALE_FUNNEL_ENABLED=true` and set `TAILSCALE_FUNNEL_AUTHKEY` using a free auth key created at [Tailscale Keys Settings](https://login.tailscale.com/admin/settings/keys).
-
-- Public endpoint: `https://onyx.your-tailnet.ts.net` on port 443
-- By default, the Tailscale service does not route through Mysterium VPN, to avoid linking your Tailscale account to your search activity at the Myst VPN exit server.
-- Tailscale uses the userspace networking mode, so no VPN activity is involved.
-- To route Tailscale through the VPN namespace instead, set `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` in `.env.wrapper`. **Warning:** this links your Tailscale identity to the VPN exit IP.
-- Tailscale Funnel and Tor onion ingress can be enabled concurrently as separate entry points, but Tailscale itself cannot currently be routed through Tor.
-
-Tailscale Funnel prerequisites:
+Tailscale Funnel prerequisites in your Tailscale account admin portal:
 
 - MagicDNS enabled
 - HTTPS certificates enabled for your tailnet
 - Funnel node attribute enabled for your user/device in ACL policy
 
+To set this up, in `.env.wrapper`, set `TAILSCALE_FUNNEL_ENABLED=true` and set `TAILSCALE_FUNNEL_AUTHKEY` using a free auth key created at [Tailscale Admin Settings Keys Page](https://login.tailscale.com/admin/settings/keys).
+
 Bring the stack up as usual (`make up-lite` or `make up-full`).
 
-Disable by setting `TAILSCALE_FUNNEL_ENABLED=false` and restarting. The Tailscale process and its fixed frontend gateway are then omitted from the effective Compose model.
+Your Onyx WebUI will then be available publicly at `https://onyx.your-tailnet.ts.net`.
+
+- To make this Tailscale URL the authoritative WebUI URL, also set
+  `WEBUI_CANONICAL_ORIGIN=https://onyx.your-tailnet.ts.net`, using the actual
+  Funnel hostname. Onyx will use that URL for invitation, verification, and
+  password-reset links; generated absolute links; identity-provider and MCP
+  OAuth callbacks; and origin-checked voice WebSockets. Update any externally
+  registered MCP callback URLs after changing it.
+- The HTTPS canonical origin marks authentication and CSRF cookies `Secure`
+  globally. This protects the Tailscale cookies from downgraded HTTP
+  connections, but prevents login through the HTTP onion URL and
+  `http://localhost:3000`. Voice WebSockets work only from the Tailscale
+  hostname, and absolute links opened from another hostname lead to Tailscale
+  and its separate browser session.
+
+By default, the Tailscale service does not route through Mysterium VPN, to avoid linking your Tailscale account to your search activity at the Myst VPN exit server. To route Tailscale through the VPN namespace instead, set `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` in `.env.wrapper`.
+
+Tailscale Funnel and Tor onion ingress can be enabled concurrently as separate entry points, but Tailscale itself cannot currently be routed through Tor.
 
 #### Optional: Network Access for the Code-Interpreter
 
-By default, Onyx's code-interpreter (the `onyxdotapp/code-interpreter` image from [onyx-dot-app/python-sandbox](https://github.com/onyx-dot-app/python-sandbox)) selects Docker's `none` network for every executor pod it spawns. This means the Python tool and coding-agent bash sessions have **zero network access** — the LLM-generated code cannot make any outbound requests. Upstream exposes explicit Docker network and run-argument settings, but leaves networking disabled unless configured.
+By default, Onyx's code-interpreter (the `onyxdotapp/code-interpreter` image from [onyx-dot-app/python-sandbox](https://github.com/onyx-dot-app/python-sandbox)) selects Docker's `none` network for every executor pod it spawns. Each pod is temporary and
+least-priv sandboxed.
 
-You can optionally give executor pods restricted proxy-only access by setting:
+You can optionally give these executor pods public internet access by setting:
 
 ```bash
 # Give code-interpreter executor pods network access
 # Executors remain isolated from stack, host, LAN, and direct internet routes.
 ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true
 ```
+
+As noted previously, this access is still restricted to public internet endpoints and routed through the Myst VPN/Tor/Proxy. Tor onion access is allowed with `TOR_EGRESS_ENABLED=true`.
+This tool is still prevented from accessing the host or LAN, regardless of any configuration setting.
 
 ### Optional: Outbound Proxy (`EGRESS_UPSTREAM_PROXY_URL`)
 
@@ -346,21 +364,14 @@ EGRESS_UPSTREAM_PROXY_URL="socks5h://proxy.example.com:1080"
 A configured proxy at exact `host.docker.internal`, an RFC1918 literal, or an
 operator-local `.local`, `.internal`, or `.home.arpa` name does not require a
 host integration port or `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`.
-Operator-local names must resolve entirely to RFC1918 addresses. The configured
-proxy authority is independent routing infrastructure; an ordinary host-route
-request to the same authority is still denied unless separately permitted.
+Operator-local names must resolve entirely to RFC1918 addresses. Invalid
+upstream proxy URLs fail policy-proxy startup.
+
 Choosing a host- or LAN-based upstream proxy does not give agent browsing or
-generated code permission to access other host or LAN destinations.
+generated code permission to access other host or LAN destinations, unless that upstream proxy can route to them (for example, a proxy on your LAN that allows LAN access).
 
-Invalid upstream proxy URLs fail policy-proxy startup.
-
-The same destination permissions apply whether or not an upstream proxy is
-configured. Agent browsing and generated code remain unable to target host,
-LAN, metadata, or stack-managed service addresses. Explicitly configured MCP,
-Web Connector, inference, and embedding endpoints retain only the local access
-described under **Optional LAN access**. See the
-[internal network policy](./docs/internal_network_security.md) for DNS and
-remote-proxy limitations.
+Explicitly configured MCP, Web Connector, inference, and embedding endpoints
+retain only the local access.
 
 ### Optional: Myst VPN Setup
 
@@ -368,12 +379,12 @@ Myst is disabled by default. Skip this section unless you have explicitly set `M
 
 The Mysterium VPN requires a funded wallet (paid in cryptocurrency) before it can connect. The signup process is handled by a standalone container that creates a cryptographic identity and registers it on-chain (Mysterium sponsors the gas fees).
 
-Note that because our usage of Mysterium is crypto-native, a normal Mysterium VPN app subscription won't work here. However, the good news is that crypto-native Mysterium is *considerably* cheaper than the app subscription fee, especially since this agent does not use much data, and there is no monthly fee or funds expiration. I've used less than 10 $MYST ($2 USD) in actual VPN fees since I started this project.
+Note that because our usage of Mysterium is crypto-native, a normal Mysterium VPN app subscription won't work here. However, the good news is that crypto-native Mysterium is _considerably_ cheaper than the app subscription fee, especially since this agent does not use much data, and there is no monthly fee or funds expiration. I've used less than 10 $MYST ($2 USD) in actual VPN fees since I started this project.
 
 There are two ways to fund the wallet:
 
-- **Option A — Order page (CoinGate):** Pay via a crypto payment gateway. Easiest for first-time users, but requires email, name, and address.
-- **Option B — Direct blockchain transfer:** Transfer $MYST directly on Polygon. Cheaper (no gateway fees), but requires acquiring $MYST yourself.
+- **Option A - Order page (CoinGate):** Pay via a crypto payment gateway. Easiest for first-time users, but requires email, name, and address.
+- **Option B - Direct blockchain transfer:** Transfer $MYST directly on Polygon. Cheaper (no gateway fees), but requires acquiring $MYST yourself.
 
 Both options use the same standalone container and produce the same identity/keystore. You only need to run one.
 
@@ -442,7 +453,7 @@ You can fund your wallet by transferring $MYST tokens directly on-chain, bypassi
 make vpn-signup-blockchain
 ```
 
-This launches the same standalone Myst container as `make vpn-signup-orderform`, creates a new identity (or reuses an existing one), registers it on-chain (Mysterium sponsors the gas fees), and prints your **channel address** — the address you must send $MYST to. No payment order is created.
+This launches the same standalone Myst container as `make vpn-signup-orderform`, creates a new identity (or reuses an existing one), registers it on-chain (Mysterium sponsors the gas fees), and prints your **channel address** - the address you must send $MYST to. No payment order is created.
 
 The output will look like:
 
@@ -527,7 +538,6 @@ If you are on a Mac, the makefile has rules that can install
 (which is a [leading SOTA open weight embedding model](https://huggingface.co/spaces/mteb/leaderboard)), served via
 [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings).
 
-
 ```sh
 # Install mlx-openai-server and mlx-embeddings, download the model, and verify it
 make embedserv-install
@@ -536,8 +546,7 @@ make up-full
 ```
 
 To re-run model integrity verification independently later, use
-`make embedserv-verify-model`. It requires an existing installation and tells
-you to run `make embedserv-install` first when the model or verifier is absent.
+`make embedserv-verify-model`.
 
 You can select a different model via `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` in
 `.env.wrapper`, using the huggingface ID of any MLX-packaged embedding model.
@@ -546,34 +555,14 @@ After `make embedserv-install` has installed the selected model, `make up-full`
 automatically launches a lightweight lifecycle proxy at the bundled default
 endpoint, `http://host.docker.internal:3210/v1/embeddings`. It loads the MLX
 model for the first embedding request and unloads it ten minutes after the last
-request completes. Full startup first creates only the shim and its routing
-dependencies, performs exactly one inference-backed `/ready` call, and creates
-fresh API/background services only after that succeeds; `/health` never loads
-the model. This readiness step prints what it is waiting for and has no short
-wrapper deadline: a slow but live MLX load remains visibly in the foreground,
-where you can interrupt it with Ctrl-C and inspect `embedserv/serve.log`.
-A request after unload waits for the owned child to finish stopping, if needed,
-and then includes the full cold-start delay. Cold start is unbounded while the
-child remains alive; after readiness, each single proxy-to-MLX request has a
-five-minute blocked-socket timeout. The shim adds neither another timeout nor
-a retry, so it never ambiguously replays an embedding POST. The supported flow
-is install, optional verification, and `make up-full`; there is no foreground
-untracked-listener mode. `make down-full` stops only the identity-validated
-wrapper-managed proxy. A live proxy drains accepted requests and stops its
-exact in-memory child. Lite mode never starts a host embedding or document
-process. Full mode skips MLX launch for Teep or another custom upstream.
-During a transition it first applies the new exact configured embedding
-authority, proves bridge and replacement readiness, and only then stops a
-previously recorded live proxy.
-An untracked proxy on 3210 or an orphaned child on loopback 3211 after a crash
-fails the next bundled start and requires manual host diagnosis. Docker's document server is
-containerized, while the separate host document process exists only in Podman
-full mode. The shared manager lives at `embedserv/host_process_manager.py`.
+request completes.
 
-MLX embedding server installation and embedding model download run on the host before the embedding shim is ready; they are not routed through the optional stack VPN. Standard host `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables are honored by `uv` and
-the download libraries when the host requires a build/download proxy.
+See the [Onyx Embedding Configuration](#optional-embedding-model-configuration-in-onyx) for
+information on how to configure Onyx to use this endpoint; it is not exactly straight-forward.
 
-The stack uses `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs, especially under concurrency load and batched embeddings). LM Studio's embedding support is non-existent.
+Full mode skips MLX launch for Teep or another custom `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` value.
+
+The stack uses `mlx-embeddings` because llama.cpp embeddings support is very buggy (including many subtle accuracy drift bugs, especially under concurrency load and batched embeddings). LM Studio's embedding support is similarly problematic, but worse. For some reason, embedding services recieve little attention from the open source community; `mlx-embeddings` is a rare standout. You are better off with teep than any other alternative option.
 
 ### Optional: Using Teep for Embeddings
 
@@ -618,17 +607,20 @@ This Onyx configuration choices cause the stack's patches to route embedding req
 
 ### Optional: External MCP servers
 
-You can add any MCP servers you operate or trust through Onyx Admin. Their streamable
-HTTP, SSE, redirects, discovery, registration, OAuth, token, refresh, and tool
-traffic is subject to the saved **Admin → Security Hardening** setting. Public
-MCP servers may use nonstandard TCP ports. Exact host access requires the saved
-Admin SSRF level to select the host-capable MCP route (`Allow Private Network`
-or `Disabled` in the pinned contract) and the actual Docker-host port to be
-selected. A selected port does not override that application route choice; do
-not weaken the global Admin setting to compensate for an omitted port. Other
-RFC1918 destinations require
-`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. These MCP permissions do not
-extend to agent browsing or generated code.
+You can add any MCP servers you operate or trust through Onyx Admin.
+
+Access to MCP servers is subject to the saved **Admin → Security Hardening** setting,
+in addition to `.env.wrapper` host port and LAN settings.
+
+To access an MCP server on your host, add the server port to `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS`.
+
+To access an MCP server on your LAN, ensure `Allow Private Network` or
+`Disabled` is set in the Onyx Security Hardening settings, and
+set`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`.
+
+These MCP permissions do not extend to agent browsing or generated code. Onyx
+SSRF protections are redundant to this stack's network topology isolation, and
+less comprehensive as well.
 
 ## Upgrading the Stack
 
@@ -673,64 +665,46 @@ The following endpoints are exposed to your docker host:
 - teep prometheus metrics: `http://localhost:8337/metrics`
 - Full-mode local document display: [`http://localhost:8091`](http://localhost:8091)
 
-This is an inbound host/operator inventory, not a container-to-host allowlist.
-Published ports 3000, 8080, 8091, and 8337 are not automatically reachable by
-Onyx containers. The authority selected by the full-mode embedding URL is the
-only endpoint-specific exception; port 3210 is not a general browser endpoint.
-
 ## Privacy and Security of this stack
 
-Private verified inference keeps LLM query contents from inference providers,
+Teep's private verified inference keeps LLM query contents from inference providers,
 while self-hosted browsing avoids sending search activity to commercial search
 APIs.
 
-The [network security](./docs/internal_network_security.md) of this
-stack is robust, and [restricted selected-route egress](docs/vpn_routing_and_proxies.md)
+The [network security](./docs/internal_network_security.md) of this stack is
+robust, and [restricted selected-route egress](docs/vpn_routing_and_proxies.md)
 is enforced with Docker Compose network namespaces, service isolation, and
-least-privilege capability configuration in no-VPN, VPN, upstream-proxy, and
-native-Tor modes.
-
-If the host OS routes container-engine traffic through its own VPN, that route
-acts as a first hop in both the default no-Myst mode and before an explicitly
-enabled Mysterium endpoint. The wrapper does not require or configure a host
-VPN.
+least-privilege capability configuration.
 
 These network restrictions are designed to contain agent-controlled activity:
 web search, `open_url()`, browser requests, and optionally network-enabled
 generated code cannot reach host, LAN, metadata, or stack-managed service
 addresses. Unencrypted public HTTP url access is blocked by default; agents
-may only access HTTPS urls.
+may only access HTTPS urls, and Tor Onion services (if `TOR_EGRESS_ENABLED=true`).
 
-Obscura uses a stable browser vendor/version profile with some per-navigation
-fingerprint variation, while the stack's default Onyx Web Crawler uses a fixed
-browser configuration. Both Obscura and the default Onyx Web Crawler clear
-cookies between every browser navigation. No other browser state or browser-based
-tracking information is preserved.
+If the host OS routes container-engine traffic through its own VPN, that route
+acts as a first hop before connecting to Tor, the Myst VPN, or stack's proxy. By
+default, the stack uses no VPN, no Tor, and no proxy. The stack's VPN, Tor, and
+proxy settings must be configured in `.env.wrapper`.
 
-Configured MCP/Web integrations and inference/embedding endpoints
-can be granted narrower local access. This separation is not a sandbox for a
-fully compromised Onyx application; such a compromise may abuse the local
-destinations that Onyx is configured to use. The operator host-port default is
-`none`; full mode separately permits only its exact configured embedding
-authority, while a configured upstream proxy receives only its own authority.
-`all` deliberately restores any-port exposure, and an allowed port authorizes
-whichever host process occupies it. Enabling separate RFC1918 LAN access
-retains the documented host-gateway-IP residual.
-
-By default, the stack uses no VPN, no Tor, and no proxy; only the host VPN (if any)
-is used. VPN, Tor, and proxy settings must be configured in `.env.wrapper`.
+With respect to web browser privacy, Obscura uses a stable browser
+vendor/version profile with some per-navigation fingerprint variation, while the
+stack's default Onyx Web Crawler uses a fixed Chromium MacOS browser
+configuration profile. Both Obscura and the default Onyx Web Crawler clear
+cookies between every browser navigation. No other browser state or
+browser-based tracking information is preserved.
 
 ### The Anti-Bot Landscape is also Anti-Privacy
 
-It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that provides a VPN option. This was a pragmatic choice to produce something that functioned.
+It may seem strange that a [Tor Project](https://www.torproject.org) employee created a private inference stack that provides a non-Tor dVPN option. This was a pragmatic choice to produce something that functioned well.
 
 The reality is that many websites subject Tor and datacenter VPNs to increased captchas and bans compared to [residential IP addresses](https://acid.vegas/blog/the-shady-world-of-ip-leasing/). The most egregious example is Google's move to update [ReCaptcha to require an official Google device, while exempting "official" AI scrapers](https://www.financialexpress.com/life/technology-google-qr-captcha-controversy-explained-why-internet-is-scared-of-this-4237640/).
 
-Clouldflare has "come to the rescue" with their [web bot auth](https://blog.cloudflare.com/web-bot-auth/) program and their [monetization gateway](https://blog.cloudflare.com/monetization-gateway/), but these systems do not support privacy of any kind. Personally, I find micropayments preferable to captchas, gated approval whitelists, and IP address bans for us plebs, but as implemented they are just another form of web tracking identifier, except you're additionally publishing your agent's browsing wallet activity on public blockchains...
+Clouldflare has "come to the rescue" with their [web bot auth](https://blog.cloudflare.com/web-bot-auth/) program and their [monetization gateway](https://blog.cloudflare.com/monetization-gateway/), but these systems do not natively support privacy of any kind. Web Bot Auth is basically "papers please" gated-registration for commercial entities, and current x402 micropayment specs are just another form of web tracking, except you're additionally publishing your browsing wallet activity on public blockchains. As a selling point, I guess, this browsing activity can be conveniently and publicly associated with any other purchases you may have made with that wallet. [We Live in Public](https://en.wikipedia.org/wiki/We_Live_in_Public) now, apprently. (Spoiler: that movie did not end well).
 
-Privacy-preserving x402 micropayment middleware exists in various [stages](https://github.com/DVB-ANRS/SecretPay) of [prototype](https://github.com/Micopay/micopay-protocol/tree/main), but x402 payments themmselves do not yet have widespread adoption.
+Personally, I do actually like micropayments as a concept. They would be vastly better than endless captchas, gated approval whitelists for big tech, and IP address bans for  self-hosted plebs and privacy-exhiles. In fact, privacy-enhancing x402 micropayment middleware _do_ exist in [various](https://github.com/betterclever/zimppy/) [stages](https://github.com/DVB-ANRS/SecretPay) of [prototype](https://github.com/Micopay/micopay-protocol), but even x402 payments themmselves do not yet have widespread adoption.
 
-In the meantime, for users who need a residential IP address exit, Mysterium is the supported optional choice because its server side is open source and payment can be made in cryptocurrency. Operators who do not need that tradeoff can retain the default no-VPN route or configure another upstream proxy.
+In the meantime, for users who need a residential IP address exit, Mysterium is the primary supported optional choice because its server side is open source and payment can be made in cryptocurrency.
 
 An upstream proxy currently can also be configured with or without Myst VPN, but this proxy access is [not yet supported](./docs/plans/deferred/https_proxy_after_tor.md) via Tor. If you know of any proxy providers that suport ZDR, please [file a ticket](https://github.com/mikeperry-tor/PrivateOnyxApp/issues/new).
 
