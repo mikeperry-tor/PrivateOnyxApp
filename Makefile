@@ -67,6 +67,40 @@ override TOR_EXIT_NODE_FINGERPRINTS := $(value TOR_EXIT_NODE_FINGERPRINTS)
 export TOR_EXIT_NODE_FINGERPRINTS
 endif
 WEBUI_CANONICAL_ORIGIN ?= $(call wrapper_setting,WEBUI_CANONICAL_ORIGIN)
+# Freeze environment/command-line values before Make can reinterpret literal
+# dollars. File-origin values come only from the restricted settings reader.
+ifneq ($(filter command line environment,$(origin ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL)),)
+override ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL := $(value ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL)
+else
+ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL := $(call wrapper_setting,ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL)
+endif
+ifneq ($(filter command line environment,$(origin ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL)),)
+override ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL := $(value ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL)
+else
+ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL := $(call wrapper_setting,ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL)
+endif
+ifneq ($(filter command line environment,$(origin ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL)),)
+override ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL := $(value ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL)
+else
+ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL := $(call wrapper_setting,ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL)
+endif
+EMBEDSERV_DEFAULT_UPSTREAM_URL := http://host.docker.internal:3210/v1/embeddings
+EMBEDSERV_DEFAULT_MODEL := majentik/harrier-oss-v1-0.6b-MLX-8bit
+ifeq ($(strip $(ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL)),)
+override ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL := $(EMBEDSERV_DEFAULT_UPSTREAM_URL)
+endif
+ifeq ($(strip $(ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL)),)
+override ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL := $(EMBEDSERV_DEFAULT_MODEL)
+endif
+ifeq ($(strip $(ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL)),)
+override ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL := $(ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL)
+endif
+EMBEDSERV_MODE := $(if $(filter $(EMBEDSERV_DEFAULT_UPSTREAM_URL),$(ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL)),bundled,custom)
+FULL_BUNDLED_MLX_HOST_ACCESS := $(if $(filter bundled,$(EMBEDSERV_MODE)),true,false)
+export ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL
+export ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL
+export ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL
+export EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -124,14 +158,6 @@ ifneq ($(filter true,$(ONYX_CODE_INTERPRETER_ENABLE_NETWORK)),)
 ifneq ($(PODMAN_SELECTED),true)
 CODE_INTERPRETER_NETWORK_SUFFIX :=:$(COMPOSE_OVERLAY_DIR)/docker-compose.code-interpreter-network.yml
 endif
-endif
-
-# When EGRESS_UPSTREAM_PROXY_URL is non-empty, apply the proxy override
-# layer records the explicit upstream-proxy mode. Restricted components always
-# use local bridges; only final-hop policy proxies receive the upstream URL.
-PROXY_SUFFIX :=
-ifneq ($(strip $(EGRESS_UPSTREAM_PROXY_URL)),)
-PROXY_SUFFIX :=:$(COMPOSE_OVERLAY_DIR)/docker-compose.proxy.yml
 endif
 
 TOR_BASE_IMAGE ?= $(call env_value,TOR_BASE_IMAGE)
@@ -303,10 +329,8 @@ EMBEDSERV_REQUIREMENTS_IN := $(EMBEDSERV_DIR)/requirements.in
 EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
-EMBEDSERV_DEFAULT_UPSTREAM_URL := http://host.docker.internal:3210/v1/embeddings
 EMBEDSERV_LOG := $(EMBEDSERV_DIR)/serve.log
 EMBEDSERV_PID_FILE := $(EMBEDSERV_DIR)/serve.pid
-EMBEDSERV_CHILD_PID_FILE := $(EMBEDSERV_DIR)/child.pid
 OPENSEARCH_VALIDATION_CONTAINER ?= onyx-opensearch-1
 OPENSEARCH_VALIDATION_API_CONTAINER ?= onyx-api_server-1
 OPENSEARCH_VALIDATION_DOCUMENTS ?= 500
@@ -318,10 +342,10 @@ SEARXNG_REQUIREMENTS_IN := searxng/requirements.in
 SEARXNG_REQUIREMENTS := searxng/requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)$(TOR_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)$(TOR_SUFFIX)
-LITE_DOWN_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)$(TOR_DOWN_SUFFIX)
-FULL_DOWN_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(PROXY_SUFFIX)$(TOR_DOWN_SUFFIX)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)
+LITE_DOWN_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)
+FULL_DOWN_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)
 
 # Lite mode has no wrapper-owned host services. Full mode always reconciles the
 # optional bundled MLX service, but selects the host document server only for
@@ -331,7 +355,7 @@ ifeq ($(PODMAN_SELECTED),true)
 FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start
 endif
 
-.PHONY: help test check test-patch-images test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-serve embedserv-start-if-installed embedserv-stop-if-started embedserv-cleanup-recorded-child vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-patch-images test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -581,6 +605,7 @@ executor-build:
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
+up-lite: override EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS := false
 check-container-health-capability:
 	@set -eu; \
 	case "$(CONTAINER_BIN)" in \
@@ -639,13 +664,20 @@ ifeq ($(PODMAN_SELECTED),true)
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps tor
 endif
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps netns-holder
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps --force-recreate onyx-host-egress-proxy onyx-host-egress-bridge
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
 	@COMPOSE_FILE=$(LITE_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420
+ifeq ($(PODMAN_SELECTED),true)
+	@python3 podman/startup_health.py assert-healthy --container-bin "$(CONTAINER_BIN)" --project onyx \
+		--service onyx-host-egress-bridge
+endif
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
+up-full: override EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS := $(FULL_BUNDLED_MLX_HOST_ACCESS)
 up-full: wrapper-config-preflight claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
@@ -653,11 +685,18 @@ ifeq ($(PODMAN_SELECTED),true)
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps tor
 endif
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps netns-holder
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps --force-recreate onyx-host-egress-proxy onyx-host-egress-bridge
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420 local-embedding-shim
+ifeq ($(PODMAN_SELECTED),true)
+	@python3 podman/startup_health.py assert-healthy --container-bin "$(CONTAINER_BIN)" --project onyx \
+		--service onyx-host-egress-bridge
+endif
 	@$(MAKE) --no-print-directory embedding-ready-once
+	@$(MAKE) --no-print-directory embedserv-stop-after-custom-ready
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
@@ -760,7 +799,6 @@ down-full:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(FULL_DOWN_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
 	@"$${MAKE:-make}" podman-doc-server-stop-if-started
 	@"$${MAKE:-make}" embedserv-stop-if-started
-	@"$${MAKE:-make}" embedserv-cleanup-recorded-child
 	@$(MAKE) --no-print-directory release-shared-data-engine
 
 ps-lite:
@@ -883,18 +921,13 @@ teep-build:
 		--tag "$(TEEP_IMAGE)" \
 		.
 
-embedserv-install:
+embedserv-install: wrapper-config-preflight
 	@set -eu; \
-	if [ ! -f "$(ENV_FILE)" ]; then \
-		echo "ERROR: missing $(ENV_FILE)"; \
-		exit 1; \
-	fi; \
 	if ! command -v uv >/dev/null 2>&1; then \
 		echo "ERROR: uv is required for embedserv-install"; \
 		exit 1; \
 	fi; \
-	set -a; . "$(ENV_FILE)"; set +a; \
-	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL}"; \
 	venv_python="$(PWD)/$(EMBEDSERV_VENV)/bin/python"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
 	mkdir -p "$(EMBEDSERV_DIR)" "$$(dirname "$$model_dir")"; \
@@ -907,14 +940,9 @@ embedserv-install:
 	$(MAKE) --no-print-directory embedserv-verify-model; \
 	echo "Model ready and verified at $$model_dir"
 
-embedserv-verify-model:
+embedserv-verify-model: wrapper-config-preflight
 	@set -eu; \
-	if [ ! -f "$(ENV_FILE)" ]; then \
-		echo "ERROR: missing $(ENV_FILE)"; \
-		exit 1; \
-	fi; \
-	set -a; . "$(ENV_FILE)"; set +a; \
-	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
+	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL}"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
 	verifier="$(PWD)/$(EMBEDSERV_VENV)/bin/hf"; \
 	if [ ! -x "$$verifier" ] || [ ! -d "$$model_dir" ]; then \
@@ -937,56 +965,25 @@ embedserv-verify-model:
 		exit "$$verify_rc"; \
 	fi
 
-embedserv-serve: embedserv-verify-model
-	@set -eu; \
-	if [ ! -f "$(ENV_FILE)" ]; then \
-		echo "ERROR: missing $(ENV_FILE)"; \
-		exit 1; \
-	fi; \
-	set -a; . "$(ENV_FILE)"; set +a; \
-	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
-	served_model="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL:-$$model_repo}"; \
-	embeddings_url="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-http://host.docker.internal:3210/v1/embeddings}"; \
-	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
-	if [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; then \
-		echo "ERROR: embedserv-serve owns only the bundled default upstream: $(EMBEDSERV_DEFAULT_UPSTREAM_URL)"; \
-		exit 1; \
-	fi; \
-	echo "Launching idle lifecycle proxy for $$served_model on 127.0.0.1:3210"; \
-	exec python3 "$(EMBEDSERV_DIR)/idle_embedding_proxy.py" \
-		--listen-port 3210 \
-		--child-port 3211 \
-		--server-executable "$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server" \
-		--model-path "$$model_dir" \
-		--served-model-name "$$served_model" \
-		--child-pid-file "$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)"
-
 # Start the bundled host MLX server for full mode only after its selected model
 # has been installed and only while the shim still targets the bundled default
 # endpoint. Custom endpoints (including Teep) remain entirely operator-owned.
-# If configuration changed away from the bundled endpoint, clean up only a
-# previously recorded wrapper-owned MLX process; a clean custom-upstream start
-# does not execute the host process manager at all.
+# A custom transition defers identity-checked cleanup until the new policy and
+# embedding readiness have succeeded.
 embedserv-start-if-installed:
 	@set -eu; \
-	if [ ! -f "$(ENV_FILE)" ]; then \
-		echo "ERROR: missing $(ENV_FILE)"; \
-		exit 1; \
-	fi; \
-	set -a; . "$(ENV_FILE)"; set +a; \
-	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
-	served_model="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL:-$$model_repo}"; \
-	embeddings_url="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-$(EMBEDSERV_DEFAULT_UPSTREAM_URL)}"; \
+	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL}"; \
+	served_model="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL}"; \
+	embeddings_url="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL}"; \
 	venv_server="$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
 	proxy_script="$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py"; \
-	child_pid_file="$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)"; \
-	if [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; then \
-		if [ -e "$(EMBEDSERV_PID_FILE)" ] || [ -e "$(EMBEDSERV_CHILD_PID_FILE)" ]; then \
-			echo "Embedding shim changed to a custom upstream; stopping the previously managed MLX server"; \
-			"$${MAKE:-make}" --no-print-directory embedserv-stop-if-started; \
-			"$${MAKE:-make}" --no-print-directory embedserv-cleanup-recorded-child; \
-		fi; \
+	if { [ "$(EMBEDSERV_MODE)" = "bundled" ] && [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; } || \
+	   { [ "$(EMBEDSERV_MODE)" = "custom" ] && [ "$$embeddings_url" = "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; }; then \
+		echo "ERROR: embedding lifecycle mode disagrees with the canonical upstream URL"; \
+		exit 1; \
+	fi; \
+	if [ "$(EMBEDSERV_MODE)" = "custom" ]; then \
 		echo "Embedding shim uses a custom upstream; not starting bundled MLX server: $$embeddings_url"; \
 		exit 0; \
 	fi; \
@@ -1015,7 +1012,6 @@ embedserv-start-if-installed:
 		--port 3210 \
 		--startup-timeout 120 \
 		--stop-timeout 50 \
-		--allow-untracked-listener \
 		--truncate-log \
 		--require-executable "$$venv_server" \
 		--require-directory "$$model_dir" \
@@ -1024,12 +1020,11 @@ embedserv-start-if-installed:
 		--child-port 3211 \
 		--server-executable "$$venv_server" \
 		--model-path "$$model_dir" \
-		--served-model-name "$$served_model" \
-		--child-pid-file "$$child_pid_file"
+		--served-model-name "$$served_model"
 
 # Stop only the lifecycle proxy recorded by the automatic full-mode startup. An
 # absent, exited, malformed, or reused PID is a diagnosed no-op so down-full is
-# not made brittle by stale host state. Foreground/manual servers are untouched.
+# not made brittle by stale host state.
 embedserv-stop-if-started:
 	@if [ ! -e "$(EMBEDSERV_PID_FILE)" ]; then exit 0; fi; \
 	python3 "$(PWD)/$(HOST_PROCESS_MANAGER)" stop \
@@ -1038,19 +1033,17 @@ embedserv-stop-if-started:
 		--identity "$(PWD)/embedserv/idle_embedding_proxy.py" \
 		--stop-timeout 50
 
-embedserv-cleanup-recorded-child:
+embedserv-stop-after-custom-ready:
 	@set -eu; \
-	if [ ! -f "$(EMBEDSERV_CHILD_PID_FILE)" ]; then exit 0; fi; \
-	set -a; . "$(ENV_FILE)"; set +a; \
-	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"; \
-	served_model="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL:-$$model_repo}"; \
-	python3 "$(PWD)/$(EMBEDSERV_DIR)/idle_embedding_proxy.py" \
-		--child-port 3211 \
-		--server-executable "$(PWD)/$(EMBEDSERV_VENV)/bin/mlx-openai-server" \
-		--model-path "$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo" \
-		--served-model-name "$$served_model" \
-		--child-pid-file "$(PWD)/$(EMBEDSERV_CHILD_PID_FILE)" \
-		--cleanup-recorded-child
+	embeddings_url="$${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL}"; \
+	if { [ "$(EMBEDSERV_MODE)" = "bundled" ] && [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; } || \
+	   { [ "$(EMBEDSERV_MODE)" = "custom" ] && [ "$$embeddings_url" = "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]; }; then \
+		echo "ERROR: embedding lifecycle mode disagrees with the canonical upstream URL"; \
+		exit 1; \
+	fi; \
+	if [ "$(EMBEDSERV_MODE)" = "custom" ]; then \
+		"$${MAKE:-make}" --no-print-directory embedserv-stop-if-started; \
+	fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # VPN signup, order status, balance, and connection information

@@ -230,41 +230,15 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
             self.assertTrue(lifecycle._child_healthy(child))
         connection.request.assert_called_with("GET", "/v1/models")
 
-    def test_stale_child_cleanup_is_identity_safe(self) -> None:
-        command = ["/venv/mlx-openai-server", "launch", "--port", "3211"]
-        with tempfile.TemporaryDirectory() as directory:
-            pid_file = Path(directory) / "child.pid"
-            pid_file.write_text("424242\n", encoding="ascii")
-            inspected = MagicMock()
-            inspected.returncode = 0
-            inspected.stdout = "python /different/server launch --port 3211\n"
-            with patch.object(self.module.subprocess, "run", return_value=inspected):
-                with self.assertRaisesRegex(RuntimeError, "different command"):
-                    self.module.cleanup_recorded_child(command, pid_file)
-            self.assertTrue(pid_file.exists())
-
-    def test_proxy_crash_record_cleans_matching_child_group(self) -> None:
-        command = ["/venv/mlx-openai-server", "launch", "--port", "3211"]
-        with tempfile.TemporaryDirectory() as directory:
-            pid_file = Path(directory) / "child.pid"
-            pid_file.write_text("424242\n", encoding="ascii")
-            inspected = MagicMock()
-            inspected.returncode = 0
-            inspected.stdout = (
-                "python /venv/mlx-openai-server launch --port 3211\n"
-            )
-            with (
-                patch.object(self.module.subprocess, "run", return_value=inspected),
-                patch.object(self.module.os, "killpg") as kill_group,
-                patch.object(
-                    self.module.os, "kill", side_effect=ProcessLookupError
-                ),
-            ):
-                self.assertTrue(
-                    self.module.cleanup_recorded_child(command, pid_file)
-                )
-            kill_group.assert_called_once_with(424242, self.module.signal.SIGTERM)
-            self.assertFalse(pid_file.exists())
+    def test_child_ownership_is_in_memory_only(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("child-pid-file", source)
+        self.assertNotIn("cleanup_recorded_child", source)
+        self.assertNotIn('["ps",', source)
+        self.assertLess(
+            source.index("require_port_available(args.child_port)"),
+            source.index('ProxyServer(("0.0.0.0", args.listen_port)'),
+        )
 
     def test_request_racing_idle_stop_waits_then_relaunches(self) -> None:
         old_child = FakeChild()

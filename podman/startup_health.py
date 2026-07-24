@@ -40,6 +40,7 @@ class ContainerHealth:
     state: str
     regular: dict[str, Any] | None
     startup: dict[str, Any] | None
+    health_status: str | None = None
 
 
 def prepare_shared_data(
@@ -185,9 +186,36 @@ def _load_containers(container_bin: str, project: str) -> list[ContainerHealth]:
                 state=item.get("State", {}).get("Status", "unknown"),
                 regular=regular if _health_enabled(regular) else None,
                 startup=item.get("Config", {}).get("StartupHealthCheck"),
+                health_status=(item.get("State", {}).get("Health") or {}).get(
+                    "Status"
+                ),
             )
         )
     return result
+
+
+def assert_services_healthy(
+    container_bin: str, project: str, services: Sequence[str]
+) -> int:
+    """Fail unless every named Compose service is running and healthy."""
+    if not services:
+        raise ContractError("select at least one service to assert healthy")
+    containers = _load_containers(container_bin, project)
+    by_service = {container.service: container for container in containers}
+    for service in services:
+        container = by_service.get(service)
+        if container is None:
+            raise ContractError(f"{service}: Compose container is absent")
+        if container.state != "running" or container.health_status != "healthy":
+            raise ContractError(
+                f"{service}: expected running/healthy, found "
+                f"{container.state}/{container.health_status or 'none'}"
+            )
+    print(
+        "Podman post-wait health assertion passed for: "
+        + ", ".join(sorted(set(services)))
+    )
+    return len(set(services))
 
 
 def _duration_ns(value: Any) -> int:
@@ -384,7 +412,8 @@ def configure_project(
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "action", choices=("check", "configure", "prepare-shared-data")
+        "action",
+        choices=("assert-healthy", "check", "configure", "prepare-shared-data"),
     )
     parser.add_argument("--container-bin", default="podman")
     parser.add_argument("--project", default="onyx")
@@ -392,6 +421,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--skip-capability-check", action="store_true")
     parser.add_argument("--postgres")
     parser.add_argument("--opensearch")
+    parser.add_argument("--service", action="append", default=[])
     return parser.parse_args(argv)
 
 
@@ -401,6 +431,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.action == "check":
             version = check_capability(args.container_bin)
             print(f"Podman {version} startup-health controls are available.")
+        elif args.action == "assert-healthy":
+            assert_services_healthy(args.container_bin, args.project, args.service)
         elif args.action == "prepare-shared-data":
             prepared = prepare_shared_data(
                 postgres=args.postgres, opensearch=args.opensearch

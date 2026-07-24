@@ -18,8 +18,9 @@ through Docker, system, or Myst DNS. Bound-address metadata is discarded and
 cannot become input to a direct connection. Socket loss, protocol failure,
 bootstrap failure, or an unavailable selected exit has no direct fallback.
 
-Trusted internal targets, `host.docker.internal`, and opt-in validated LAN
-integration routes retain their existing direct exceptions. Configured
+Trusted internal targets, permitted exact `host.docker.internal` ports, and
+opt-in validated LAN integration routes retain direct exceptions. Denied host
+ports fail before DNS and never fall through to Tor. Configured
 non-Tor proxy endpoints are classified before connection in VPN and no-VPN
 modes: public names require all-global answers; exact host/RFC1918 exceptions
 stay narrow; operator-local names require the host route and LAN opt-in.
@@ -34,9 +35,10 @@ Onion-service circuits do not use a clearnet exit selector. Use `make
 health-inventory` and the selected engine's `inspect`/`logs` commands for
 verification; Docker is never an implicit Podman fallback.
 
-The wrapper-owned canonical-origin, configured-upstream-proxy, and native-Tor
-settings share one restricted single-line parser for Make layer selection and
-host-side configuration rendering. Values may be unquoted or shell-quoted;
+The wrapper-owned canonical-origin, configured-upstream-proxy, native-Tor, and
+restart-time embedding URL/model selection settings share one restricted
+single-line parser for Make selection and host-side configuration rendering.
+Values may be unquoted or shell-quoted;
 `$` is literal, an unquoted `#` starts a comment, later definitions win, and
 exported or Make command-line values take precedence. Validation belongs to
 stack startup and Tor address inspection, not shared-data ownership or Myst
@@ -66,8 +68,12 @@ search-host denial was deliberately removed: enabled executors may receive the
 real public search-engine response or challenge. No named search-host blocking
 mode remains.
 
-The host-capable listener alone owns exact `host.docker.internal` and opt-in
-LAN behavior. `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` lets configured
+The host-capable listener alone owns selected exact `host.docker.internal`
+ports and opt-in LAN behavior. The strict host-port setting defaults to
+`none`, accepts numeric ports or `all`, and receives automatic 3210 only for
+the exact bundled-MLX full selection. An explicitly configured exact-host
+upstream proxy remains independent routing infrastructure and never becomes an
+ordinary destination grant. `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` lets configured
 Onyx integrations use RFC1918 literals and operator-local names ending in
 `.local`, `.internal`, or `.home.arpa`, only after complete-answer-set
 classification. It does not extend this capability to public helpers,
@@ -330,10 +336,18 @@ share `/Volumes`; in particular, do not share it merely to follow the
 
 Myst discovers the pre-tunnel bridge gateway by parsing the tokens following
 `via` and `dev`, not fixed `ip route` field positions. This matters on Podman,
-whose device-filtered route output omits the redundant `dev eth0` tokens. The
-exact `host.docker.internal` route therefore remains on the engine bridge for
-host-capable policy traffic such as the bundled embedding server, while the
-VPN default route remains authoritative for public traffic.
+whose device-filtered route output omits the redundant `dev eth0` tokens. An
+allowed exact `host.docker.internal` route remains on the engine bridge, while
+a denied port has no fallback and the VPN default route remains authoritative
+for public traffic.
+
+When Compose recreates the host policy proxy, its dependent bridge is also
+restarted and must produce a fresh policy-generated 403 health response.
+Podman startup explicitly recreates that stopped pair before translating
+startup health, preventing a prior healthy bridge from satisfying a new
+bounded start. It then asserts the bridge is running and healthy because its
+policy-generated 403 proves the proxy path, while the external Compose provider
+can otherwise return success with the bridge still in native startup health.
 
 Check that application, browser, executor, and host-capable networks remain
 distinct; the fixed bridges point at the intended listener; target DNS does

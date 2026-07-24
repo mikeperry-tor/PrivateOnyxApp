@@ -8,8 +8,8 @@ by configured Onyx integrations. Both routes fail closed on ambiguous DNS,
 private destinations, malformed HTTP framing, and disallowed cleartext URLs.
 
 1. **For plain HTTP URLs**: returns ``403 Forbidden`` by default with a clear
-   explanatory message. The host route retains narrow exceptions for exact
-   ``host.docker.internal``, RFC1918 literals, and opt-in proxy-validated
+   explanatory message. The host route retains narrow exceptions for selected
+   exact ``host.docker.internal`` ports, RFC1918 literals, and opt-in proxy-validated
    ``.local``/``.internal``/``.home.arpa`` destinations. Set
    ``EGRESS_ALLOW_HTTP_URLS=true`` only when general cleartext HTTP fetches are
    intentionally required.
@@ -41,9 +41,10 @@ that configured TCP endpoint before connecting. Native Tor instead opens only
 the fixed ``/run/tor-egress/socks`` Unix socket and shares the same SOCKS5
 state machine. Restricted components reach policy instances only through their
 local bridges. In VPN mode, public proxy names use provider DNS and public
-proxy addresses follow the Myst route. Exact ``host.docker.internal`` uses its
-narrow route; an RFC1918 IPv4 literal receives only an exact proxy-endpoint
-route; and operator-local proxy names use system DNS only with
+proxy addresses follow the Myst route. A permitted ordinary exact
+``host.docker.internal`` port and an independently configured exact-host
+upstream endpoint use their narrow direct roles; an RFC1918 IPv4 literal
+receives only an exact proxy-endpoint route; and operator-local proxy names use system DNS only with
 ``ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true``.
 
 Architecture::
@@ -103,6 +104,51 @@ ALLOW_LAN_ENDPOINTS = (
     == "true"
 )
 RFC1918_SYSTEM_DNS_SUFFIXES = (".local", ".internal", ".home.arpa")
+
+
+def _parse_allowed_host_ports(raw: str) -> tuple[bool, frozenset[int]]:
+    """Parse the strict ordinary Docker-host destination port policy."""
+    value = raw.strip(" \t\r\n\v\f")
+    if not value or value == "none":
+        return False, frozenset()
+    if value == "all":
+        return True, frozenset()
+    ports: set[int] = set()
+    for item in value.split(","):
+        candidate = item.strip(" \t\r\n\v\f")
+        if not re.fullmatch(r"[0-9]+", candidate):
+            raise RuntimeError(
+                "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS must be 'none', 'all', "
+                "or a comma-separated list of TCP ports"
+            )
+        port = int(candidate, 10)
+        if not 0 < port <= 65535:
+            raise RuntimeError(
+                "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS contains an invalid TCP port"
+            )
+        ports.add(port)
+    return False, frozenset(ports)
+
+
+HOST_PORTS_ALLOW_ALL, OPERATOR_ALLOWED_HOST_PORTS = _parse_allowed_host_ports(
+    os.environ.get("ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS", "none")
+)
+_BUNDLED_MLX_HOST_ACCESS_RAW = os.environ.get(
+    "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS", "false"
+)
+if not _BUNDLED_MLX_HOST_ACCESS_RAW:
+    _BUNDLED_MLX_HOST_ACCESS_RAW = "false"
+if _BUNDLED_MLX_HOST_ACCESS_RAW not in {"true", "false"}:
+    raise RuntimeError(
+        "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS must be exactly 'true' or 'false'"
+    )
+BUNDLED_MLX_HOST_ACCESS = _BUNDLED_MLX_HOST_ACCESS_RAW == "true"
+AUTOMATIC_ALLOWED_HOST_PORTS = (
+    frozenset({3210}) if BUNDLED_MLX_HOST_ACCESS else frozenset()
+)
+EFFECTIVE_ALLOWED_HOST_PORTS = (
+    OPERATOR_ALLOWED_HOST_PORTS | AUTOMATIC_ALLOWED_HOST_PORTS
+)
 
 # Upstream proxy (EGRESS_UPSTREAM_PROXY_URL from .env.wrapper). When set,
 # the proxy routes its own requests through this upstream. Supports:
@@ -278,8 +324,16 @@ def _is_rfc1918(ip_text: str) -> bool:
     )
 
 
-def _is_exact_host_exception(host: str) -> bool:
-    return ROUTE_CLASS == "host" and _normalize_host(host) == "host.docker.internal"
+def _is_exact_docker_host(host: str) -> bool:
+    return _normalize_host(host) == "host.docker.internal"
+
+
+def _is_allowed_exact_host_destination(host: str, port: int) -> bool:
+    return (
+        ROUTE_CLASS == "host"
+        and _is_exact_docker_host(host)
+        and (HOST_PORTS_ALLOW_ALL or port in EFFECTIVE_ALLOWED_HOST_PORTS)
+    )
 
 
 def _is_rfc1918_system_dns_name(host: str) -> bool:
@@ -326,7 +380,8 @@ def _parse_authority(authority: str, default_port: int) -> tuple[str, int]:
     parsed = urlparse("//" + authority)
     host = parsed.hostname or ""
     try:
-        port = parsed.port or default_port
+        parsed_port = parsed.port
+        port = default_port if parsed_port is None else parsed_port
     except ValueError as e:
         raise ValueError(f"invalid port in target {authority!r}") from e
     return host, port
@@ -392,7 +447,7 @@ def _plain_http_allowed(
     return (
         ALLOW_HTTP_URLS
         or _is_trusted_internal_destination(host, port)
-        or _is_exact_host_exception(host)
+        or _is_allowed_exact_host_destination(host, port)
         or (
             ROUTE_CLASS == "host"
             and ALLOW_LAN_ENDPOINTS
@@ -609,6 +664,32 @@ async def _resolve_target_host(host: str, port: int) -> set[str]:
     return await _dns_query_a(host, resolver_ip, local_ip)
 
 
+async def _resolve_exact_docker_host(host: str, port: int) -> tuple[str, ...]:
+    """Resolve, validate, and pin the exact engine-host logical identity."""
+    if not _is_exact_docker_host(host):
+        raise ConnectionError("exact Docker-host resolution requires host.docker.internal")
+    try:
+        resolved = await _resolve_system_host(_normalize_host(host), port)
+    except (socket.gaierror, OSError, ValueError) as exc:
+        raise ConnectionError(
+            "Docker-host DNS resolution failed: system resolver error"
+        ) from exc
+    if not resolved:
+        raise ConnectionError("Docker-host DNS resolution returned no addresses")
+    for address in resolved:
+        parsed = _parse_ip_literal(address)
+        if (
+            parsed is None
+            or parsed.is_loopback
+            or parsed.is_link_local
+            or parsed.is_multicast
+            or parsed.is_unspecified
+            or parsed.is_reserved
+        ):
+            raise ConnectionError("Docker-host resolved to a forbidden address")
+    return tuple(sorted(resolved))
+
+
 async def _validate_destination(
     host: str, port: int
 ) -> tuple[str | None, tuple[str, ...]]:
@@ -624,28 +705,16 @@ async def _validate_destination(
     if not 0 < port <= 65535:
         return "invalid port", ()
 
-    # The host-capable route has one always-available Docker-host identity.
-    # It is deliberately exact (not a suffix rule) and is resolved only by the
-    # host-capable final-hop proxy in the trusted namespace.
-    if _is_exact_host_exception(host):
+    # Exact Docker-host destinations are denied by port before DNS. An allowed
+    # port remains direct and uses the engine resolver only in this trusted
+    # final-hop namespace.
+    if ROUTE_CLASS == "host" and _is_exact_docker_host(host):
+        if not _is_allowed_exact_host_destination(host, port):
+            return "host.docker.internal port is not allowed", ()
         try:
-            resolved_ips = await _resolve_system_host(host, port)
-        except (socket.gaierror, OSError, ValueError) as e:
-            return f"host exception DNS resolution failed: {e}", ()
-        if not resolved_ips:
-            return "host exception DNS resolution returned no addresses", ()
-        for resolved_ip in resolved_ips:
-            ip = _parse_ip_literal(resolved_ip)
-            if (
-                ip is None
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_multicast
-                or ip.is_unspecified
-                or ip.is_reserved
-            ):
-                return "host exception resolved to a forbidden address", ()
-        return None, tuple(sorted(resolved_ips))
+            return None, await _resolve_exact_docker_host(host, port)
+        except ConnectionError as exc:
+            return str(exc), ()
 
     if _is_trusted_internal_destination(host, port):
         try:
@@ -723,12 +792,6 @@ async def _validate_destination(
             return f"DNS resolved to blocked {resolved_ip} ({resolved_reason})", ()
 
     return None, tuple(sorted(resolved_ips))
-
-
-async def _blocked_destination_reason(host: str, port: int) -> str | None:
-    """Compatibility helper used by policy tests and diagnostics."""
-    reason, _validated_ips = await _validate_destination(host, port)
-    return reason
 
 
 async def _allowed_client_reason(peer: Any) -> str | None:
@@ -821,7 +884,8 @@ def _parse_proxy_url(proxy_url: str) -> tuple[str, str, int, str | None, str | N
     scheme = parsed.scheme.lower()
     host = parsed.hostname or ""
     default_ports = {"http": 80, "https": 443, "socks5": 1080, "socks5h": 1080}
-    port = parsed.port or default_ports.get(scheme, 0)
+    parsed_port = parsed.port
+    port = default_ports.get(scheme, 0) if parsed_port is None else parsed_port
     username = unquote(parsed.username) if parsed.username is not None else None
     password = unquote(parsed.password) if parsed.password is not None else None
     return scheme, host, port, username, password
@@ -889,6 +953,14 @@ def _target_dns_mode() -> str:
     return "system-explicit-no-vpn"
 
 
+def _format_host_port_policy(allow_all: bool, ports: frozenset[int]) -> str:
+    if allow_all:
+        return "all"
+    if not ports:
+        return "none"
+    return ",".join(str(port) for port in sorted(ports))
+
+
 def _https_proxy_ssl_context() -> ssl.SSLContext:
     """Build a verified TLS context for HTTPS upstream proxy connections."""
     ssl_ctx = ssl.create_default_context()
@@ -916,7 +988,7 @@ async def _connect_via_upstream(
     if _is_trusted_internal_destination(target_host, target_port):
         return await _open_validated_direct_connection(validated_ips, target_port)
 
-    if _is_exact_host_exception(target_host):
+    if _is_allowed_exact_host_destination(target_host, target_port):
         return await _open_validated_direct_connection(validated_ips, target_port)
 
     if ROUTE_CLASS == "host" and ALLOW_LAN_ENDPOINTS and validated_ips and all(
@@ -1245,22 +1317,8 @@ async def _resolve_upstream_proxy_endpoint(
         return (normalized_host,)
 
     hostname_reason = _hostname_block_reason(normalized_host)
-    if normalized_host == "host.docker.internal":
-        resolved = await _resolve_system_host(normalized_host, proxy_port)
-        if not resolved:
-            raise ConnectionError("system DNS returned no Docker-host proxy addresses")
-        for address in resolved:
-            parsed = _parse_ip_literal(address)
-            if (
-                parsed is None
-                or parsed.is_loopback
-                or parsed.is_link_local
-                or parsed.is_multicast
-                or parsed.is_unspecified
-                or parsed.is_reserved
-            ):
-                raise ConnectionError("Docker-host proxy resolved to a forbidden address")
-        return tuple(sorted(resolved))
+    if _is_exact_docker_host(normalized_host):
+        return await _resolve_exact_docker_host(normalized_host, proxy_port)
 
     if hostname_reason is not None:
         raise ConnectionError(
@@ -1312,7 +1370,7 @@ async def _open_plain_http_forward_connection(
     """
     if (
         _is_trusted_internal_destination(target_host, target_port)
-        or _is_exact_host_exception(target_host)
+        or _is_allowed_exact_host_destination(target_host, target_port)
         or (
             ROUTE_CLASS == "host"
             and ALLOW_LAN_ENDPOINTS
@@ -1759,9 +1817,10 @@ async def _handle_forward_http(
             return
         target_host = parsed.hostname or ""
         try:
-            target_port = parsed.port or (
+            parsed_port = parsed.port
+            target_port = (
                 443 if parsed.scheme.lower() == "https" else 80
-            )
+            ) if parsed_port is None else parsed_port
         except ValueError:
             await _write_text_response(
                 client_writer, 400, "Bad Request", "Invalid HTTP proxy target port."
@@ -1923,7 +1982,9 @@ async def main() -> None:
         "Restricted egress proxy starting on %s:%d "
         "(route_class: %s, upstream: %s, allowed_clients: %s, "
         "allow_http_urls: %s, block_internal_hosts: %s, "
-        "trusted_internal_destinations: %s, target_dns: %s)",
+        "trusted_internal_destinations: %s, target_dns: %s, "
+        "operator_host_ports: %s, bundled_mlx_host_access: %s, "
+        "effective_host_ports: %s)",
         LISTEN_HOST,
         LISTEN_PORT,
         ROUTE_CLASS,
@@ -1937,6 +1998,9 @@ async def main() -> None:
         )
         or "none",
         _target_dns_mode(),
+        _format_host_port_policy(HOST_PORTS_ALLOW_ALL, OPERATOR_ALLOWED_HOST_PORTS),
+        str(BUNDLED_MLX_HOST_ACCESS).lower(),
+        _format_host_port_policy(HOST_PORTS_ALLOW_ALL, EFFECTIVE_ALLOWED_HOST_PORTS),
     )
 
     server = await asyncio.start_server(

@@ -502,20 +502,22 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         self.assertEqual(validations, [])
 
     def test_private_enabled_connector_uses_host_proxy(self) -> None:
-        connector, calls, playwright_proxies, _ = self._load_patched_modules(
-            "allow_private"
-        )
-        instance = connector.WebConnector("http://nas.home/docs")
-        self.assertEqual(list(instance.load_from_state()), ["loaded"])
+        for level in ("validate_llm", "allow_private", "disabled"):
+            with self.subTest(level=level):
+                connector, calls, playwright_proxies, _ = self._load_patched_modules(
+                    level
+                )
+                instance = connector.WebConnector("http://nas.home/docs")
+                self.assertEqual(list(instance.load_from_state()), ["loaded"])
 
-        expected = {
-            "http": "http://onyx-host-egress-bridge:3128",
-            "https": "http://onyx-host-egress-bridge:3128",
-        }
-        self.assertTrue(all(call[2]["proxies"] == expected for call in calls))
-        self.assertEqual(
-            playwright_proxies, ["http://onyx-host-egress-bridge:3128"]
-        )
+                expected = {
+                    "http": "http://onyx-host-egress-bridge:3128",
+                    "https": "http://onyx-host-egress-bridge:3128",
+                }
+                self.assertTrue(all(call[2]["proxies"] == expected for call in calls))
+                self.assertEqual(
+                    playwright_proxies, ["http://onyx-host-egress-bridge:3128"]
+                )
 
     def test_pdf_freshness_sentinels_skip_only_when_safe(self) -> None:
         self._load_patched_modules("validate_all")

@@ -238,6 +238,58 @@ class PodmanStartupHealthTests(unittest.TestCase):
         with self.assertRaisesRegex(startup_health.ContractError, "Retries"):
             startup_health._verify_regular(_container(), drifted)
 
+    @patch.object(startup_health, "_load_containers")
+    def test_post_wait_assertion_requires_fresh_running_health(
+        self, load_containers
+    ) -> None:
+        healthy = _container(state="running")
+        healthy = startup_health.ContainerHealth(
+            healthy.container_id,
+            "onyx-host-egress-proxy",
+            healthy.state,
+            healthy.regular,
+            healthy.startup,
+            "healthy",
+        )
+        bridge = startup_health.ContainerHealth(
+            "bridge-id",
+            "onyx-host-egress-bridge",
+            "running",
+            healthy.regular,
+            healthy.startup,
+            "starting",
+        )
+        load_containers.return_value = [healthy, bridge]
+        with self.assertRaisesRegex(
+            startup_health.ContractError,
+            "onyx-host-egress-bridge: expected running/healthy",
+        ):
+            startup_health.assert_services_healthy(
+                "podman",
+                "onyx",
+                ("onyx-host-egress-proxy", "onyx-host-egress-bridge"),
+            )
+
+        load_containers.return_value = [
+            healthy,
+            startup_health.ContainerHealth(
+                bridge.container_id,
+                bridge.service,
+                bridge.state,
+                bridge.regular,
+                bridge.startup,
+                "healthy",
+            ),
+        ]
+        self.assertEqual(
+            startup_health.assert_services_healthy(
+                "podman",
+                "onyx",
+                ("onyx-host-egress-proxy", "onyx-host-egress-bridge"),
+            ),
+            2,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

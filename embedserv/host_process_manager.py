@@ -5,8 +5,8 @@ This shared, stdlib-only lifecycle helper lives with the bundled MLX embedding
 server, but it also manages the Podman-only host document server. It is not
 used by lite mode, by Docker's containerized document server, or by a clean
 full-mode Docker start whose embedding shim targets Teep or another custom
-upstream. A configuration change may still use it to stop a previously
-wrapper-managed MLX process before handing ownership to a custom upstream.
+upstream. After custom policy and embedding readiness succeed, a configuration
+change may use it to stop a previously wrapper-managed MLX process.
 
 Service-specific policy remains in the managed services: this module owns only
 detached launch, atomic PID/token/configuration records, readiness waits, and
@@ -175,9 +175,6 @@ def start(args: argparse.Namespace) -> None:
         args.record_file.unlink(missing_ok=True)
 
     if _tcp_ready(args.port):
-        if args.allow_untracked_listener and not had_record:
-            print(f"An operator-managed {args.name} is already listening on port {args.port}")
-            return
         raise ContractError(f"port {args.port} is owned by an untracked process")
 
     if not any(args.identity in item for item in command):
@@ -272,7 +269,6 @@ def _parser() -> argparse.ArgumentParser:
     start_parser.add_argument(
         "--fingerprint-file", type=Path, action="append", default=[]
     )
-    start_parser.add_argument("--allow-untracked-listener", action="store_true")
     start_parser.add_argument("--truncate-log", action="store_true")
     start_parser.add_argument(
         "--require-executable", type=Path, action="append", default=[]

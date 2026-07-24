@@ -100,10 +100,20 @@ not grant browser or executor access to the host listener.
 `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` adds validated RFC1918 LAN
 destinations only to the host-capable route used by configured MCP/Web
 integrations, inference providers, and the embedding shim. Exact
-`host.docker.internal` remains a separate default exception on that route.
-Neither permission is inherited by agent browsing or executor code. This is an
-agent-activity boundary, not containment against arbitrary code execution in a
-trusted Onyx application process that can legitimately use the host route.
+`host.docker.internal` is governed independently by
+`ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS`, whose operator default is `none`.
+Bundled-MLX full mode adds only stack-owned port 3210; lite and custom
+embedding modes add none. Denied ports are rejected before Docker DNS and have
+no Tor, VPN, upstream-proxy, or direct fallback. Allowed ports authorize
+whichever host process is listening, not a service identity. Enabling LAN
+access retains a possible known RFC1918 host-gateway path.
+
+Saved Admin SSRF levels remain an independent route-selection layer. MCP uses
+the public route for `VALIDATE_ALL` and `VALIDATE_LLM`, and the host route for
+`ALLOW_PRIVATE_NETWORK` and `DISABLED`. Web Connector uses the public route
+only for `VALIDATE_ALL`; its other three levels use the host route. The exact
+stack-owned `doc-drop-web:8091` authority remains separate. A host-port grant
+does not itself select either host-capable route.
 
 Podman full mode has one additional, narrow host boundary for local documents.
 The capability-free `doc-drop-web` relay alone joins a dedicated non-internal
@@ -214,6 +224,9 @@ logging can also be incomplete.
   handler attributes, and eval are blocked while login hydration, same-origin
   APIs/WebSockets, and local previews work.
 - Full-mode doc-drop remains a local path and does not gain browser/CDP access.
+- Exact Docker-host allow/deny tests cover the default, numeric, `all`, and
+  bundled-3210 policies. Recreating the host policy restarts the dependent
+  bridge so a warm invalid setting cannot reuse stale healthy state.
 - Under Podman, only the fixed doc-drop relay joins the host uplink; the host
   server rejects non-loopback peers before thread creation, caps and
   socket-bounds active connections, and the relay has no source mount.

@@ -215,6 +215,13 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         lite_start = makefile.split(lite_definition, 1)[1].split("\n\n", 1)[0]
         self.assertLess(lite_start.index(" compose "), lite_start.index("startup_health.py configure"))
         self.assertLess(lite_start.index("startup_health.py configure"), lite_start.index("up -d --wait"))
+        self.assertLess(
+            lite_start.index("up --no-start --no-deps netns-holder"),
+            lite_start.index(
+                "up --no-start --no-deps --force-recreate "
+                "onyx-host-egress-proxy onyx-host-egress-bridge"
+            ),
+        )
 
         full_definition = next(
             line for line in makefile.splitlines()
@@ -231,6 +238,17 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )
         self.assertEqual(lite_start.count("--wait-timeout 420"), 1)
         self.assertEqual(full_start.count("--wait-timeout 420"), 2)
+        self.assertEqual(lite_start.count("assert-healthy"), 1)
+        self.assertEqual(full_start.count("assert-healthy"), 1)
+        for start in (lite_start, full_start):
+            self.assertIn("--service onyx-host-egress-bridge", start)
+        self.assertLess(
+            full_start.index("up --no-start --no-deps netns-holder"),
+            full_start.index(
+                "up --no-start --no-deps --force-recreate "
+                "onyx-host-egress-proxy onyx-host-egress-bridge"
+            ),
+        )
 
     def test_stack_start_prerequisites_are_serialized(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
@@ -250,7 +268,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertNotIn("VPN_AUTOHEAL", makefile)
         self.assertFalse((ROOT / "docker-compose.podman-vpn.yml").exists())
 
-    def test_embedding_proxy_uses_absolute_identity_and_child_record(self) -> None:
+    def test_embedding_proxy_uses_absolute_identity_without_child_record(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         start = makefile.split("embedserv-start-if-installed:", 1)[1].split(
             "embedserv-stop-if-started:", 1
@@ -259,12 +277,12 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn('"$(PWD)/$(HOST_PROCESS_MANAGER)" start', start)
         self.assertIn("--identity", start)
         self.assertIn("--fingerprint-file", start)
-        self.assertIn("--allow-untracked-listener", start)
-        self.assertIn("--child-pid-file", start)
+        self.assertNotIn("--allow-untracked-listener", start)
+        self.assertNotIn("--child-pid-file", start)
         self.assertIn("--require-executable", start)
         self.assertIn("--require-directory", start)
         stop_target = makefile.split("embedserv-stop-if-started:", 1)[1].split(
-            "embedserv-cleanup-recorded-child:", 1
+            "embedserv-stop-after-custom-ready:", 1
         )[0]
         self.assertIn('"$(PWD)/$(HOST_PROCESS_MANAGER)" stop', stop_target)
         self.assertLess(
@@ -273,7 +291,8 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )
         self.assertIn("--identity", stop_target)
         stop = makefile.split("down-full:", 1)[1].split("ps-lite:", 1)[0]
-        self.assertIn("embedserv-cleanup-recorded-child", stop)
+        self.assertNotIn("embedserv-cleanup-recorded-child", stop)
+        self.assertNotIn("embedserv-serve:", makefile)
 
     def test_podman_full_start_manages_host_document_server(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
@@ -350,12 +369,15 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             "embedserv-stop-if-started:", 1
         )[0]
         custom_branch = start.split(
-            'if [ "$$embeddings_url" != "$(EMBEDSERV_DEFAULT_UPSTREAM_URL)" ]', 1
+            'if [ "$(EMBEDSERV_MODE)" = "custom" ]; then', 1
         )[1].split("\tfi; \\\n", 1)[0]
-        self.assertIn('if [ -e "$(EMBEDSERV_PID_FILE)" ]', custom_branch)
-        self.assertIn("embedserv-stop-if-started", custom_branch)
-        self.assertIn("embedserv-cleanup-recorded-child", custom_branch)
+        self.assertNotIn("embedserv-stop-if-started", custom_branch)
         self.assertNotIn('"$(PWD)/$(HOST_PROCESS_MANAGER)" start', custom_branch)
+        full = makefile.split("up-full:", 1)[1].split("embedding-ready-once:", 1)[0]
+        self.assertLess(
+            full.index("embedding-ready-once"),
+            full.index("embedserv-stop-after-custom-ready"),
+        )
 
     def test_clean_teep_start_does_not_execute_host_manager(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -366,6 +388,13 @@ class MystLifecycleMakefileTests(unittest.TestCase):
                 "http://host.docker.internal:8337/v1/embeddings\n",
                 encoding="utf-8",
             )
+            environment = dict(os.environ)
+            for name in (
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL",
+                "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL",
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL",
+            ):
+                environment.pop(name, None)
             result = subprocess.run(
                 [
                     "make",
@@ -374,9 +403,9 @@ class MystLifecycleMakefileTests(unittest.TestCase):
                     f"ENV_FILE={env_file}",
                     "HOST_PROCESS_MANAGER=/must/not/be/executed.py",
                     f"EMBEDSERV_PID_FILE={temporary / 'serve.pid'}",
-                    f"EMBEDSERV_CHILD_PID_FILE={temporary / 'child.pid'}",
                 ],
                 cwd=ROOT,
+                env=environment,
                 capture_output=True,
                 text=True,
                 check=False,

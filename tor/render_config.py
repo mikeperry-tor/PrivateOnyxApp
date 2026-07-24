@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate wrapper Tor settings and atomically render the fixed torrc."""
+"""Read shared wrapper startup settings and atomically render the fixed torrc."""
 
 from __future__ import annotations
 
@@ -26,6 +26,9 @@ SETTING_DEFAULTS = {
     "TOR_EXIT_NODE_FINGERPRINTS": "",
     "EGRESS_UPSTREAM_PROXY_URL": "",
     "WEBUI_CANONICAL_ORIGIN": "http://localhost:3000",
+    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": "",
+    "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL": "",
+    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL": "",
 }
 
 
@@ -48,7 +51,7 @@ def _parse_env_value(value: str, *, line_number: int) -> str:
 
 
 def read_wrapper_settings(path: Path) -> dict[str, str]:
-    """Read fixed settings using the grammar shared by Make and Tor rendering."""
+    """Read selected restart-time settings using the shared restricted grammar."""
     values: dict[str, str] = {}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()

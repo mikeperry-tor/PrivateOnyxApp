@@ -127,32 +127,36 @@ class MCPProxyPatchTests(unittest.TestCase):
         return client, state, transports, clients, levels, mcp_ssrf
 
     def test_strict_level_selects_public_proxy_without_wrapper_validation(self) -> None:
-        client, _state, transports, clients, _levels, mcp_ssrf = self._apply(
-            "VALIDATE_ALL"
-        )
-        self.assertEqual(
-            transports[-1].kwargs["proxy"],
-            "http://onyx-public-egress-bridge:3128",
-        )
-        self.assertIs(client.kwargs["transport"], transports[-1])
-        self.assertFalse(client.kwargs["trust_env"])
-        self.assertTrue(client.kwargs["follow_redirects"])
-        self.assertEqual(clients[-1]["headers"], {"x-test": "1"})
-        mcp_ssrf.validate_mcp_outbound_url.assert_not_called()
+        for level in ("VALIDATE_ALL", "VALIDATE_LLM"):
+            with self.subTest(level=level):
+                client, _state, transports, clients, _levels, mcp_ssrf = self._apply(
+                    level
+                )
+                self.assertEqual(
+                    transports[-1].kwargs["proxy"],
+                    "http://onyx-public-egress-bridge:3128",
+                )
+                self.assertIs(client.kwargs["transport"], transports[-1])
+                self.assertFalse(client.kwargs["trust_env"])
+                self.assertTrue(client.kwargs["follow_redirects"])
+                self.assertEqual(clients[-1]["headers"], {"x-test": "1"})
+                mcp_ssrf.validate_mcp_outbound_url.assert_not_called()
 
     def test_private_level_selects_host_proxy_and_egress_remains_authoritative(
         self,
     ) -> None:
-        client, state, transports, _clients, levels, mcp_ssrf = self._apply(
-            "ALLOW_PRIVATE_NETWORK"
-        )
-        self.assertEqual(
-            transports[-1].kwargs["proxy"],
-            "http://onyx-host-egress-bridge:3128",
-        )
-        state.level = levels.DISABLED
-        self.assertIs(client.kwargs["transport"], transports[-1])
-        mcp_ssrf.validate_mcp_outbound_url.assert_not_called()
+        for level in ("ALLOW_PRIVATE_NETWORK", "DISABLED"):
+            with self.subTest(level=level):
+                client, state, transports, _clients, levels, mcp_ssrf = self._apply(
+                    level
+                )
+                self.assertEqual(
+                    transports[-1].kwargs["proxy"],
+                    "http://onyx-host-egress-bridge:3128",
+                )
+                state.level = levels.DISABLED
+                self.assertIs(client.kwargs["transport"], transports[-1])
+                mcp_ssrf.validate_mcp_outbound_url.assert_not_called()
 
 
 if __name__ == "__main__":

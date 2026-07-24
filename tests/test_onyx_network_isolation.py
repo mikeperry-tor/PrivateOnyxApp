@@ -113,7 +113,6 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             "docker-compose.lite.yml",
             "docker-compose.podman-full.yml",
             "docker-compose.podman.yml",
-            "docker-compose.proxy.yml",
             "docker-compose.tailscale-vpn.yml",
             "docker-compose.teep-vpn.yml",
             "docker-compose.tor-egress.yml",
@@ -355,7 +354,6 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
     def test_makefile_selects_every_optional_network_layer(self) -> None:
         default_files = _make_compose_files(vpn_enabled=True)
         optional_files = (
-            "docker-compose.proxy.yml",
             "docker-compose.code-interpreter-network.yml",
             "docker-compose.teep-vpn.yml",
             "docker-compose.tailscale-vpn.yml",
@@ -372,6 +370,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         for compose_file in optional_files:
             self.assertIn(compose_file, enabled_files)
+        self.assertNotIn("docker-compose.proxy.yml", enabled_files)
 
     def test_podman_override_uses_user_owned_tmpfs_without_docker_uid_options(self) -> None:
         model = _compose_model(
@@ -730,12 +729,57 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
 
         public = services["onyx-public-egress-proxy"]["environment"]
         host = services["onyx-host-egress-proxy"]["environment"]
+        self.assertEqual(public["ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS"], "none")
+        self.assertEqual(public["EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS"], "false")
+        self.assertEqual(host["ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS"], "none")
+        self.assertEqual(host["EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS"], "false")
         self.assertEqual(public["ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS"], "false")
         self.assertNotIn("EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS", public)
         self.assertEqual(
             host["EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS"],
             "doc-drop-web:8091",
         )
+        dependency = services["onyx-host-egress-bridge"]["depends_on"][
+            "onyx-host-egress-proxy"
+        ]
+        self.assertEqual(dependency["condition"], "service_started")
+        self.assertTrue(dependency["restart"])
+        health = services["onyx-host-egress-bridge"]["healthcheck"]["test"]
+        self.assertIn("grep -q '^HTTP/1.1 403'", health[-1])
+
+    def test_host_port_policy_reaches_only_host_final_hop(self) -> None:
+        model = _compose_model(
+            "full",
+            env_overrides={
+                "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "3210,11434",
+                "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true",
+            },
+        )
+        services = model["services"]
+        operator = "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS"
+        automatic = "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS"
+        self.assertEqual(
+            services["onyx-host-egress-proxy"]["environment"][operator],
+            "3210,11434",
+        )
+        self.assertEqual(
+            services["onyx-host-egress-proxy"]["environment"][automatic],
+            "true",
+        )
+        self.assertEqual(
+            services["onyx-public-egress-proxy"]["environment"][operator], "none"
+        )
+        self.assertEqual(
+            services["onyx-public-egress-proxy"]["environment"][automatic],
+            "false",
+        )
+        for name, service in services.items():
+            if name not in {
+                "onyx-host-egress-proxy",
+                "onyx-public-egress-proxy",
+            }:
+                self.assertNotIn(operator, service.get("environment", {}))
+                self.assertNotIn(automatic, service.get("environment", {}))
 
     def test_integration_lan_option_reaches_only_host_policy_and_route_owner(
         self,
@@ -853,7 +897,6 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
     def test_optional_overlay_matrix_preserves_application_isolation(self) -> None:
         model = _compose_model(
             "full",
-            "docker-compose.proxy.yml",
             "docker-compose.code-interpreter-network.yml",
             "docker-compose.teep-vpn.yml",
             "docker-compose.tailscale-vpn.yml",

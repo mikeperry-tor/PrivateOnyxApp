@@ -42,7 +42,7 @@ class HostProcessManagerTests(unittest.TestCase):
                 manager.start(args)
 
     @patch.object(manager, "_tcp_ready", return_value=True)
-    def test_untracked_listener_is_accepted_only_when_requested(self, _ready) -> None:
+    def test_untracked_listener_is_always_rejected(self, _ready) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = argparse.Namespace(
@@ -52,9 +52,18 @@ class HostProcessManagerTests(unittest.TestCase):
                 identity="/service.py",
                 name="operator service",
                 port=12345,
-                allow_untracked_listener=True,
             )
-            manager.start(args)
+            with self.assertRaisesRegex(manager.ContractError, "untracked"):
+                manager.start(args)
+
+    def test_parser_has_no_untracked_listener_escape_hatch(self) -> None:
+        with self.assertRaises(SystemExit):
+            manager._parser().parse_args(
+                [
+                    "start",
+                    "--allow-untracked-listener",
+                ]
+            )
 
     @patch.object(manager, "_ready", return_value=False)
     @patch.object(manager, "_owned", return_value=True)

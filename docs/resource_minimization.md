@@ -67,6 +67,10 @@ fallbacks, retries, migrations, or weaker ownership checks.
   by startup health.
 - Full mode stages `local-embedding-shim`, performs one visible inference-backed
   `/ready` request, and only then starts a fresh API/background tier.
+- Recreating the host policy restarts its bridge and forces a fresh
+  policy-generated 403 startup probe. Podman recreates the stopped pair before
+  native startup-health configuration and asserts the bridge is running and
+  healthy after the external Compose provider returns.
 
 `make health-inventory` is the source of truth for the selected engine,
 environment, profiles, exact health set, and approximate steady checks per
@@ -90,18 +94,20 @@ hour. Do not copy fixed counts into documentation.
   requests with an active child, and then stops the child. An incomplete cold
   start may be cancelled during shutdown.
 - Parent ownership uses an absolute command identity, random per-launch token,
-  and configuration fingerprint. Child ownership separately validates the PID,
-  expected complete command, child port, and advertised served model.
+  and configuration fingerprint. The live proxy's in-memory `Popen` object is
+  the only child ownership authority; the child port and advertised model are
+  validated without a durable child PID record.
 - `embedserv/host_process_manager.py` supplies the shared detached start/readiness/record/
   stop mechanics for this proxy and the Podman document server. It never signals
   a PID based only on a record number. Service-specific peer, model, child, and
   content-policy checks remain in the services themselves.
 - Lite mode selects neither host process. Docker full mode uses the manager only
-  for the bundled default MLX endpoint; Teep and other custom embedding
-  endpoints skip it unless a recorded wrapper-owned MLX process from the prior
-  configuration must be stopped. The host document server is Podman full-only.
-- Custom embedding endpoints and manually launched listeners remain
-  operator-owned and are not stopped by `make down-full`.
+  for the bundled default MLX endpoint. A custom transition first revokes
+  automatic host port 3210, proves bridge and replacement readiness, and only
+  then stops a recorded live proxy. The host document server is Podman full-only.
+- An untracked top-level listener on 3210 and an orphaned child on loopback
+  3211 are distinct manual-recovery failures. Neither authorizes PID guessing
+  or automatic signaling; an occupied 3211 fails before 3210 binds.
 
 ### Onyx background work
 
@@ -276,10 +282,11 @@ The suite must cover:
 - Beat schedule cadence, absence of disabled producers/workers, retention of
   upstream `tick()`, and watchdog restart thresholds;
 - shared host-process atomic records, ownership-token validation,
-  configuration changes, readiness failure, operator listeners, malformed
+  configuration changes, readiness failure, untracked listeners, malformed
   records, and PID reuse;
 - MLX idle unload, concurrent cold start, request-during-unload, five-minute
-  socket timeout, shutdown drain, child identity, and crash cleanup;
+  socket timeout, normal live-proxy child cleanup, and fail-closed orphan
+  refusal after a proxy crash;
 - Myst no-op and drifted-route reconciliation;
 - SearXNG exact engine/plugin configuration and all custom parsers;
 - OpenSearch configuration and validation helpers.

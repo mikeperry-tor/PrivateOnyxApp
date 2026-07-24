@@ -28,6 +28,8 @@ def _load_module(
         "MYST_VPN_ENABLED": "true",
         "EGRESS_UPSTREAM_PROXY_URL": "",
         "EGRESS_ALLOW_HTTP_URLS": "false",
+        "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "none",
+        "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "false",
     }
     env.update(env_overrides or {})
     with patch.dict(os.environ, env, clear=True):
@@ -102,7 +104,10 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_host_proxy_resolves_exact_host_itself(self) -> None:
         module = _load_module(
             "host",
-            {"EGRESS_ROUTE_CLASS": "host"},
+            {
+                "EGRESS_ROUTE_CLASS": "host",
+                "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "9150",
+            },
         )
         with patch.object(
             module,
@@ -121,6 +126,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
+                "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "9150",
             },
         )
         forbidden_addresses = (
@@ -140,7 +146,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                     "host.docker.internal", 9150
                 )
             self.assertEqual(
-                reason, "host exception resolved to a forbidden address"
+                reason, "Docker-host resolved to a forbidden address"
             )
             self.assertEqual(addresses, ())
 
@@ -149,6 +155,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "EGRESS_ROUTE_CLASS": "host",
+                "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "9150",
             },
         )
         with patch.object(
@@ -168,6 +175,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
+                "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true",
             },
         )
         self.assertTrue(
@@ -201,6 +209,116 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             public_module._plain_http_allowed("host.docker.internal", 3210)
         )
+
+    async def test_default_host_port_policy_denies_before_dns(self) -> None:
+        module = _load_module("host")
+        resolver = AsyncMock()
+        with patch.object(module, "_resolve_system_host", resolver):
+            for port in (3210, 8337, 9150):
+                with self.subTest(port=port):
+                    reason, addresses = await module._validate_destination(
+                        "HOST.DOCKER.INTERNAL.", port
+                    )
+                    self.assertEqual(
+                        reason, "host.docker.internal port is not allowed"
+                    )
+                    self.assertEqual(addresses, ())
+        resolver.assert_not_awaited()
+
+    async def test_bundled_mlx_grant_unions_with_operator_ports(self) -> None:
+        module = _load_module(
+            "host",
+            {
+                "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "8337",
+                "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true",
+            },
+        )
+        self.assertEqual(module.OPERATOR_ALLOWED_HOST_PORTS, frozenset({8337}))
+        self.assertEqual(
+            module.EFFECTIVE_ALLOWED_HOST_PORTS, frozenset({3210, 8337})
+        )
+        resolver = AsyncMock(return_value={"192.168.65.2"})
+        with patch.object(module, "_resolve_system_host", resolver):
+            for port in (3210, 8337):
+                reason, addresses = await module._validate_destination(
+                    "host.docker.internal", port
+                )
+                self.assertIsNone(reason)
+                self.assertEqual(addresses, ("192.168.65.2",))
+            reason, addresses = await module._validate_destination(
+                "host.docker.internal", 9150
+            )
+        self.assertEqual(reason, "host.docker.internal port is not allowed")
+        self.assertEqual(addresses, ())
+        self.assertEqual(resolver.await_count, 2)
+
+    def test_host_port_parser_is_strict_ascii(self) -> None:
+        module = _load_module()
+        self.assertEqual(
+            module._parse_allowed_host_ports(" 3210,\t8337,03210 "),
+            (False, frozenset({3210, 8337})),
+        )
+        self.assertEqual(
+            module._parse_allowed_host_ports("none"), (False, frozenset())
+        )
+        self.assertEqual(
+            module._parse_allowed_host_ports("all"), (True, frozenset())
+        )
+        for invalid in (
+            "3210,",
+            "port",
+            "\N{ARABIC-INDIC DIGIT ONE}",
+            "\N{NO-BREAK SPACE}3210",
+            "all,3210",
+            "ALL",
+            "None",
+            "0",
+            "65536",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(RuntimeError):
+                    module._parse_allowed_host_ports(invalid)
+
+    def test_bundled_mlx_boolean_is_strict(self) -> None:
+        for invalid in ("True", "1", " true", "false ", "anything"):
+            with self.subTest(invalid=invalid), self.assertRaises(RuntimeError):
+                _load_module(
+                    "host",
+                    {"EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": invalid},
+                )
+
+    def test_explicit_zero_ports_are_preserved_for_rejection(self) -> None:
+        module = _load_module()
+        self.assertEqual(module._parse_authority("example.com:0", 443), ("example.com", 0))
+        for scheme in ("http", "https", "socks5", "socks5h"):
+            with self.subTest(scheme=scheme):
+                parsed = module._parse_proxy_url(f"{scheme}://proxy.example:0")
+                self.assertEqual(parsed[2], 0)
+                zero_module = _load_module(
+                    env_overrides={
+                        "EGRESS_UPSTREAM_PROXY_URL": f"{scheme}://proxy.example:0"
+                    }
+                )
+                with self.assertRaisesRegex(RuntimeError, "invalid port"):
+                    zero_module._validate_upstream_proxy_config()
+
+    async def test_configured_exact_host_proxy_does_not_grant_ordinary_port(self) -> None:
+        module = _load_module(
+            "host",
+            {
+                "EGRESS_UPSTREAM_PROXY_URL": (
+                    "socks5h://host.docker.internal:9150"
+                ),
+            },
+        )
+        resolver = AsyncMock()
+        with patch.object(module, "_resolve_system_host", resolver):
+            reason, addresses = await module._validate_destination(
+                "host.docker.internal", 9150
+            )
+        self.assertEqual(reason, "host.docker.internal port is not allowed")
+        self.assertEqual(addresses, ())
+        resolver.assert_not_awaited()
 
     async def test_plain_http_host_exception_bypasses_external_upstream(self) -> None:
         module = _load_module(

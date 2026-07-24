@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,9 @@ def settings(**overrides: str) -> dict[str, str]:
         "TOR_EXIT_NODE_FINGERPRINTS": "",
         "EGRESS_UPSTREAM_PROXY_URL": "",
         "WEBUI_CANONICAL_ORIGIN": "http://localhost:3000",
+        "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": "",
+        "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL": "",
+        "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL": "",
     }
     names = {
         "egress": "TOR_EGRESS_ENABLED",
@@ -133,6 +137,77 @@ class TorConfigTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_embedding_lifecycle_settings_share_reader_and_precedence(self) -> None:
+        names = (
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL",
+            "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL",
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            settings_file = Path(temporary) / "wrapper.env"
+            settings_file.write_text(
+                f'{names[0]}="http://host.docker.internal:8337/v1/embeddings"\n'
+                f'{names[0]}="http://host.docker.internal:11434/v1/embeddings"\n'
+                f'{names[1]}="model$file"\n'
+                f'{names[2]}="served$file"\n',
+                encoding="utf-8",
+            )
+            clean_environment = {
+                key: value
+                for key, value in os.environ.items()
+                if key not in tor_config.SETTING_DEFAULTS
+            }
+            with mock.patch.dict(
+                os.environ, clean_environment, clear=True
+            ):
+                values = tor_config.settings_from_file_and_environment(
+                    settings_file
+                )
+            self.assertEqual(
+                values[names[0]],
+                "http://host.docker.internal:11434/v1/embeddings",
+            )
+            self.assertEqual(values[names[1]], "model$file")
+            self.assertEqual(values[names[2]], "served$file")
+
+            environment = clean_environment | {names[1]: "environment$model"}
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(MODULE_PATH),
+                    "get",
+                    "--settings-file",
+                    str(settings_file),
+                    "--name",
+                    names[1],
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), "environment$model")
+
+            completed = subprocess.run(
+                [
+                    "make",
+                    "-pn",
+                    "help",
+                    f"ENV_FILE={settings_file}",
+                    f"{names[2]}=command$line",
+                ],
+                cwd=ROOT,
+                env=clean_environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn(
+                f"{names[2]} := command$$line",
+                completed.stdout,
+            )
 
     def test_command_line_environment_preserves_optional_dollar_fingerprint(
         self,

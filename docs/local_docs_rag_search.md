@@ -284,8 +284,9 @@ and proceeds to create the API/background tier only after that succeeds. A
 failure is returned without retry and leaves the diagnostic subset running;
 already-running API/background services are not recreated by a later failed
 validation. The response and logs expose no API key or upstream response body.
-The default plain-HTTP `host.docker.internal` endpoint uses the host route's
-fixed exact-host exception even when public cleartext URLs are disabled;
+The default plain-HTTP `host.docker.internal:3210` endpoint uses the
+stack-owned bundled-full grant even when the operator list is `none` and public
+cleartext URLs are disabled. Custom host endpoints require their actual port;
 arbitrary public HTTP destinations remain blocked. RFC1918 HTTP destinations
 are available to the configured embedding integration only when
 `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Use an RFC1918 literal or a
@@ -353,7 +354,6 @@ Implementation:
 
 - `make embedserv-install`
 - `make embedserv-verify-model`
-- `make embedserv-serve`
 - `embedserv/requirements.in`
 - `embedserv/requirements.txt` (hashed lock file)
 
@@ -367,11 +367,11 @@ always performs this verification after downloading the model. The separate
 directs the operator to run the install target when its model or verifier is
 absent.
 
-On macOS, the Makefile can install and launch an MLX embedding server:
+On macOS, install the MLX embedding server, then let full startup own it:
 
 ```sh
 make embedserv-install
-make embedserv-serve
+make up-full
 ```
 
 Use `make embedserv-verify-model` whenever an independent integrity recheck is
@@ -381,9 +381,11 @@ Once the selected model is installed, `make up-full` automatically launches a
 small host lifecycle proxy when the shim uses the bundled default URL. It skips
 this startup when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` selects Teep or another
 custom service. A clean custom-upstream start does not execute the host process
-manager; if a prior bundled run left an ownership record, startup first uses
-that record to stop only the old wrapper-owned process. Lite mode never selects
-either host service. The proxy accepts only bounded `POST /v1/embeddings` requests,
+manager. During a bundled-to-custom transition, startup first applies policy
+with automatic 3210 false and proves the host bridge, then validates the custom
+embedding endpoint, and only then uses the ownership record to stop a live old
+wrapper-owned proxy. Either failure retains it for diagnosis. Lite mode never
+selects either host service. The proxy accepts only bounded `POST /v1/embeddings` requests,
 starts the pinned `mlx-openai-server` child on the first request, and unloads
 the child ten minutes after the last active request completes. Concurrent cold
 requests share one startup, and a request is forwarded exactly once: a child
@@ -416,12 +418,12 @@ lifecycle closed and its child stopped. A cold startup can be cancelled by
 proxy shutdown. Connections initiated after listener shutdown are necessarily
 refused by the operating system.
 
-Before every child launch, the proxy requires the loopback child port to be
-unoccupied. It records the child PID atomically, validates a stale record
-against the complete expected MLX command before signaling it, and verifies
-that `/v1/models` advertises the configured served model. A port-only health
-response is never accepted as ownership or model identity. An unrecorded
-listener or a reused PID fails closed and is left untouched.
+Before binding the top-level listener and before every child launch, the proxy
+requires loopback child port 3211 to be unoccupied. The live proxy's in-memory
+`Popen` object is the only child ownership authority, and `/v1/models` must
+advertise the configured served model. A forced proxy crash can leave an
+orphaned child on 3211; the next bundled start fails before port 3210 binds and
+requires manual host diagnosis. It never inspects or signals that listener.
 
 If the default URL is selected without an installed server/model, startup fails
 immediately with setup guidance. Automatic startup waits only for the lifecycle
@@ -431,8 +433,7 @@ timeout. `make up-full` prints that it is waiting and the lifecycle log path;
 Ctrl-C remains the operator escape when a live child never becomes ready. A
 definite child exit, occupied child port, invalid configuration, or failed
 readiness inference still fails startup rather than being hidden.
-The proxy writes to `embedserv/serve.log`; direct `make embedserv-serve` remains
-the foreground form. Automatic launch uses the absolute proxy-script path and
+The proxy writes to `embedserv/serve.log`. Automatic launch uses the absolute proxy-script path and
 an explicit detached process session so it survives the initiating shell. Its
 record contains a random per-launch ownership token and a fingerprint of every
 launch-defining argument plus the proxy script contents. Repeated startup
@@ -440,10 +441,12 @@ reuses it only when the live command contains that token and the fingerprint
 still matches; a configuration or implementation change restarts only that
 identity-validated proxy. `make down-full` likewise requires
 the token in the live command before signaling it. Graceful shutdown
-signals its owned child group; a separate strict child record also lets the
-next start or `make down-full` clean up that child after a proxy crash. Both
-paths wait a bounded grace period and force-stop only the identity-validated
-child. Missing records are harmless; malformed or reused PIDs and unowned
+signals its in-memory owned child group. A malformed or identity-mismatched
+top-level record is removed without signaling; if its proxy remains on 3210,
+the next start reports an untracked top-level listener. This is distinct from
+the orphaned-child 3211 diagnostic. Both normal paths wait a bounded grace
+period and signal only the identity-validated live proxy; that proxy owns its
+child in memory. Missing records are harmless; malformed or reused PIDs and unowned
 listeners fail closed and are never signaled. Manually launched and custom
 servers remain untouched.
 
@@ -483,15 +486,17 @@ ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:3210/v1/embedd
 defaults it to `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` for the bundled MLX server
 flow.
 
-`make embedserv-serve` owns only the bundled default URL and binds its lifecycle
-proxy to host port 3210; its MLX child binds only to `127.0.0.1:3211`. The
-Docker-side shim reaches the proxy through `host.docker.internal`.
+`make up-full` owns the bundled default URL and binds its lifecycle proxy to
+host port 3210; its MLX child binds only to `127.0.0.1:3211`. The Docker-side
+shim reaches it through the automatic stack-owned 3210 grant. That grant is
+part of the applied policy until recreation/removal, not a liveness monitor.
 
 To use Teep instead of the bundled MLX server, configure:
 
 ```env
 ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:8337/v1/embeddings"
 ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B"
+ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS="8337"
 ```
 
 Use the configured `HOST_PORT_TEEP` in the URL if it is not `8337`.
@@ -500,8 +505,8 @@ controls the bundled MLX download/server and serves as the shim's fallback
 model when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL` is unset. The shim reaches
 Teep through its fixed host publisher, not the internal `teep` service name.
 
-Exact `host.docker.internal` uses the narrow host exception without another
-setting. If the embedding service instead uses an RFC1918 literal or a
+Teep port 8337 (or the actual `HOST_PORT_TEEP`) must be selected explicitly.
+If the embedding service instead uses an RFC1918 literal or a
 `.local`, `.internal`, or `.home.arpa` LAN name, set:
 
 ```env

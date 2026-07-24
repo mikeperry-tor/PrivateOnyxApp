@@ -303,6 +303,11 @@ The Podman Makefile lifecycle is consequently create/configure/start:
 3. `podman compose create` creates stopped containers.
 4. `startup_health.py configure` installs and verifies native startup checks.
 5. `podman compose up -d --wait --wait-timeout 420` starts the verified graph.
+6. The wrapper inspects the host bridge after the provider returns and requires
+   it to be running and healthy. Its probe requires a policy-generated 403, so
+   this closes a verified provider gap where the external Compose provider can
+   return zero after its wait expires while that native-startup-health
+   container remains `starting`.
 
 Podman's native startup check intentionally uses zero startup retries so it
 does not restart a slow or broken service. Podman can consequently leave such
@@ -454,9 +459,15 @@ interface/address state. Preserve the tested exact host-route and final-hop
 policy behavior; a Podman workaround must not give applications direct egress
 or join them to the trusted Myst namespace.
 
-`host.docker.internal` is still the configured logical host alias. Validate
-the actual resolved address and route inside the relevant container rather
-than assuming Docker Desktop's address or interface.
+`host.docker.internal` remains the configured logical host alias only for
+operator-selected ports plus bundled-full automatic 3210. Validate the actual
+resolved address and route inside the relevant container rather than assuming
+Docker Desktop's address or interface. Compatibility checks cover one allow,
+one deny, and fresh/warm invalid-policy starts. The warm case recreates the
+policy/bridge pair and must fail bounded startup rather than reuse stale
+healthy state. The post-wait assertion makes that failure authoritative even
+if the external Compose provider reports success after leaving the bridge in
+`starting`.
 
 ## Deterministic coverage
 

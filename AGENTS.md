@@ -94,7 +94,8 @@ proxy settings or caller discipline alone.
   validated RFC1918 endpoints used by configured MCP/Web integrations,
   inference providers, and the embedding shim. It must never grant LAN access
   to generic helpers, `open_url`, browser activity, or executors. Exact
-  `host.docker.internal` remains a separate default host-route exception.
+  `host.docker.internal` is restricted by the operator-default `none` port
+  policy; bundled-MLX full mode alone adds stack-owned port 3210.
 - Myst and the final-hop proxies are trusted routing-namespace processes.
   Enabling Myst routing for Teep or Tailscale deliberately promotes that
   trusted component into the same namespace, including its loopback,
@@ -221,7 +222,8 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   `make myst-build`, and `make teep-build` - image builds. The Docker-only
   executor image is derived from its pinned upstream release plus the hashed
   `executor/requirements.txt` lock and includes SymPy.
-- `make embedserv-install`, `make embedserv-verify-model`, and `make embedserv-serve` - optional local MLX embedding server flow for the full RAG stack.
+- `make embedserv-install` and `make embedserv-verify-model` prepare optional
+  local MLX embeddings; `make up-full` owns the supported lifecycle.
 
 `make up-lite` and `make up-full` generate ephemeral local secrets on every start, including SearXNG, Onyx auth, and MinIO credentials. Do not move those secrets (or any other new ephemeral secrets) into `.env.wrapper.example`.
 
