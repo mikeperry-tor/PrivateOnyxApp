@@ -584,8 +584,11 @@ services:
       TEEP_MAX_CONNS: "${TEEP_MAX_CONNS:-6}"
       TEEP_SERVE_ARGS: "${TEEP_SERVE_ARGS:---offline}"
       VENICE_API_KEY: "${TEEP_VENICE_API_KEY:-}"
-      TINFOIL_API_KEY: "${TEEP_TINFOIL_API_KEY:-}"
-      NEARAI_API_KEY: "${TEEP_NEARAI_API_KEY:-}"
+      # Teep requires at least one nonempty provider key to start. Inert
+      # placeholders keep an unconfigured stack healthy; explicit empty values
+      # still disable either provider.
+      TINFOIL_API_KEY: "${TEEP_TINFOIL_API_KEY-API_KEY_HERE}"
+      NEARAI_API_KEY: "${TEEP_NEARAI_API_KEY-API_KEY_HERE}"
       CHUTES_API_KEY: "${TEEP_CHUTES_API_KEY:-}"
       PHALA_API_KEY: "${TEEP_PHALA_API_KEY:-}"
     healthcheck:

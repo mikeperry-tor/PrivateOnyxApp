@@ -255,6 +255,18 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
 
                     self.assertEqual(defaulted, expected)
 
+    def test_teep_placeholder_keys_are_defaults_not_forced_values(self) -> None:
+        services = _compose_model(
+            "lite",
+            env_overrides={
+                "TEEP_TINFOIL_API_KEY": "",
+                "TEEP_NEARAI_API_KEY": "",
+            },
+        )["services"]
+        teep_environment = services["teep"]["environment"]
+        self.assertEqual(teep_environment["TINFOIL_API_KEY"], "")
+        self.assertEqual(teep_environment["NEARAI_API_KEY"], "")
+
     def test_wrapper_overlays_are_colocated_below_the_root_base(self) -> None:
         expected = {
             "docker-compose.code-interpreter-network.yml",
