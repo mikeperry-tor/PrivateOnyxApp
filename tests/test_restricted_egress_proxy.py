@@ -252,6 +252,30 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(addresses, ())
         self.assertEqual(resolver.await_count, 2)
 
+    async def test_all_policy_uses_pinned_direct_host_path(self) -> None:
+        module = _load_module(
+            "host", {"ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "all"}
+        )
+        resolver = AsyncMock(return_value={"192.168.65.2"})
+        direct = AsyncMock(return_value=(object(), object()))
+        with patch.object(module, "_resolve_system_host", resolver), patch.object(
+            module, "_open_validated_direct_connection", direct
+        ), patch.object(
+            module,
+            "_parse_proxy_url",
+            side_effect=AssertionError("allowed host target reached upstream"),
+        ):
+            reason, addresses = await module._validate_destination(
+                "HOST.DOCKER.INTERNAL.", 11434
+            )
+            result = await module._connect_via_upstream(
+                "HOST.DOCKER.INTERNAL.", 11434, addresses
+            )
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("192.168.65.2",))
+        self.assertEqual(result, direct.return_value)
+        direct.assert_awaited_once_with(("192.168.65.2",), 11434)
+
     def test_host_port_parser_is_strict_ascii(self) -> None:
         module = _load_module()
         self.assertEqual(
@@ -319,6 +343,155 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reason, "host.docker.internal port is not allowed")
         self.assertEqual(addresses, ())
         resolver.assert_not_awaited()
+
+    async def test_configured_exact_host_socks_proxy_is_independent_routing_path(
+        self,
+    ) -> None:
+        module = _load_module(
+            "host",
+            {
+                "EGRESS_UPSTREAM_PROXY_URL": (
+                    "socks5h://host.docker.internal:9150"
+                ),
+            },
+        )
+        upstream_reader = module.asyncio.StreamReader()
+        upstream_reader.feed_data(
+            b"\x05\x00"
+            b"\x05\x00\x00\x01"
+            b"\x00\x00\x00\x00\x00\x00"
+        )
+        upstream_reader.feed_eof()
+        upstream_writer = self._Writer()
+        resolver = AsyncMock(return_value={"192.168.65.2"})
+        open_connection = AsyncMock(
+            return_value=(upstream_reader, upstream_writer)
+        )
+        with patch.object(module, "_resolve_system_host", resolver), patch.object(
+            module.asyncio, "open_connection", open_connection
+        ):
+            reason, addresses = await module._validate_destination(
+                "public.example", 443
+            )
+            result = await module._connect_via_upstream(
+                "public.example", 443, addresses
+            )
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ())
+        self.assertEqual(result, (upstream_reader, upstream_writer))
+        resolver.assert_awaited_once_with("host.docker.internal", 9150)
+        open_connection.assert_awaited_once_with(
+            "192.168.65.2", 9150, ssl=None, server_hostname=None
+        )
+        self.assertIn(
+            b"\x05\x01\x00\x03\x0epublic.example\x01\xbb",
+            upstream_writer.data,
+        )
+
+    async def test_host_policy_is_connected_to_handlers_and_port_zero(
+        self,
+    ) -> None:
+        denied = _load_module("host")
+        resolver = AsyncMock()
+        connect = AsyncMock()
+        with patch.object(denied, "_resolve_system_host", resolver), patch.object(
+            denied, "_connect_via_upstream", connect
+        ):
+            for target in (
+                "host.docker.internal:9150",
+                "HOST.DOCKER.INTERNAL.:443",
+                "host.docker.internal:0",
+            ):
+                writer = self._Writer()
+                await denied._handle_connect(
+                    target, AsyncMock(), writer, ("test", 1)
+                )
+                self.assertIn(b"403 Forbidden", writer.data)
+
+            for target, headers in (
+                ("http://host.docker.internal:0/path", []),
+                ("/path", [("host", "host.docker.internal:0")]),
+            ):
+                writer = self._Writer()
+                await denied._handle_forward_http(
+                    "GET",
+                    target,
+                    headers,
+                    AsyncMock(),
+                    writer,
+                    ("test", 1),
+                )
+                self.assertIn(b"403 Forbidden", writer.data)
+        resolver.assert_not_awaited()
+        connect.assert_not_awaited()
+
+        allowed = _load_module(
+            "host", {"EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true"}
+        )
+        client_writer = self._Writer()
+        upstream_writer = self._Writer()
+        direct = AsyncMock(return_value=(object(), upstream_writer))
+        pipe = AsyncMock()
+        with patch.object(
+            allowed,
+            "_resolve_system_host",
+            AsyncMock(return_value={"192.168.65.2"}),
+        ), patch.object(
+            allowed, "_open_validated_direct_connection", direct
+        ), patch.object(allowed, "_pipe", pipe):
+            await allowed._handle_connect(
+                "HOST.DOCKER.INTERNAL.:3210",
+                AsyncMock(),
+                client_writer,
+                ("test", 1),
+            )
+        self.assertIn(b"200 Connection Established", client_writer.data)
+        direct.assert_awaited_once_with(("192.168.65.2",), 3210)
+        self.assertEqual(pipe.await_count, 2)
+
+    def test_host_policy_diagnostic_format_is_canonical(self) -> None:
+        module = _load_module()
+        self.assertEqual(
+            module._format_host_port_policy(False, frozenset()), "none"
+        )
+        self.assertEqual(
+            module._format_host_port_policy(
+                False, frozenset({8337, 3210, 8337})
+            ),
+            "3210,8337",
+        )
+        self.assertEqual(
+            module._format_host_port_policy(True, frozenset({3210})), "all"
+        )
+
+    async def test_startup_diagnostic_reports_effective_host_policy(self) -> None:
+        module = _load_module(
+            "host",
+            {
+                "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "8337",
+                "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true",
+            },
+        )
+
+        class _Server:
+            async def __aenter__(self) -> "_Server":
+                return self
+
+            async def __aexit__(self, *_args: object) -> None:
+                return None
+
+            async def serve_forever(self) -> None:
+                return None
+
+        logger = Mock()
+        with patch.object(module, "logger", logger), patch.object(
+            module.asyncio, "start_server", AsyncMock(return_value=_Server())
+        ):
+            await module.main()
+
+        startup = logger.info.call_args_list[0]
+        self.assertIn("effective_host_ports: %s", startup.args[0])
+        self.assertEqual(startup.args[-3:], ("8337", "true", "3210,8337"))
 
     async def test_plain_http_host_exception_bypasses_external_upstream(self) -> None:
         module = _load_module(

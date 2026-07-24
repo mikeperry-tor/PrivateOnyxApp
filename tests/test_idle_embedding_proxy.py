@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tempfile
 import threading
 import time
@@ -235,10 +236,37 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
         self.assertNotIn("child-pid-file", source)
         self.assertNotIn("cleanup_recorded_child", source)
         self.assertNotIn('["ps",', source)
-        self.assertLess(
-            source.index("require_port_available(args.child_port)"),
-            source.index('ProxyServer(("0.0.0.0", args.listen_port)'),
-        )
+
+    def test_orphaned_child_port_fails_before_top_level_listener(self) -> None:
+        argv = [
+            str(MODULE_PATH),
+            "--listen-port",
+            "3210",
+            "--child-port",
+            "3211",
+            "--server-executable",
+            "/venv/mlx-openai-server",
+            "--model-path",
+            "/models/embedding",
+            "--served-model-name",
+            "expected-model",
+        ]
+        version = MagicMock(stdout="Version: 1.8.1\n")
+        occupied = RuntimeError("127.0.0.1:3211 is already occupied")
+        with patch.object(sys, "argv", argv), patch.object(
+            self.module.subprocess, "run", return_value=version
+        ), patch.object(
+            self.module, "require_port_available", side_effect=occupied
+        ) as port_check, patch.object(
+            self.module, "ProxyServer"
+        ) as proxy_server, patch.object(
+            self.module.os, "killpg"
+        ) as kill_group:
+            with self.assertRaisesRegex(RuntimeError, "3211 is already occupied"):
+                self.module.main()
+        port_check.assert_called_once_with(3211)
+        proxy_server.assert_not_called()
+        kill_group.assert_not_called()
 
     def test_request_racing_idle_stop_waits_then_relaunches(self) -> None:
         old_child = FakeChild()

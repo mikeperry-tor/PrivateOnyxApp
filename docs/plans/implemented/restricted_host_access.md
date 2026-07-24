@@ -1,8 +1,16 @@
 # Restricted Docker-host access
 
+> **Status: implemented (2026-07-24).** This is the implementation and
+> acceptance record for restricted Docker-host access. Normative deployed
+> behavior, diagnostics, and change guidance are documented in
+> [Internal network security](../../internal_network_security.md),
+> [VPN routing and restricted egress](../../vpn_routing_and_proxies.md),
+> [Local document RAG](../../local_docs_rag_search.md), and
+> [Podman support](../../podman_suport.md).
+
 ## Status and objective
 
-This document is an implementation plan for replacing the host route's
+This document records the implementation that replaced the host route's
 unrestricted `host.docker.internal` destination exception with an explicit
 port policy:
 

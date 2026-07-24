@@ -12,6 +12,48 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MystLifecycleMakefileTests(unittest.TestCase):
+    def _make_database(
+        self,
+        env_file: Path,
+        *,
+        environment: dict[str, str] | None = None,
+        assignments: tuple[str, ...] = (),
+    ) -> str:
+        clean_environment = dict(os.environ)
+        for name in (
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL",
+            "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL",
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL",
+            "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS",
+        ):
+            clean_environment.pop(name, None)
+        clean_environment.update(environment or {})
+        result = subprocess.run(
+            [
+                "make",
+                "-pn",
+                "help",
+                f"ENV_FILE={env_file}",
+                *assignments,
+            ],
+            cwd=ROOT,
+            env=clean_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    @staticmethod
+    def _simple_make_value(database: str, name: str) -> str:
+        prefix = f"{name} := "
+        return next(
+            line.removeprefix(prefix)
+            for line in database.splitlines()
+            if line.startswith(prefix)
+        )
+
     def test_connection_info_target_executes_myst_in_running_container(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fake_container = Path(directory) / "fake-container"
@@ -354,6 +396,89 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             "embedserv-start-if-installed podman-doc-server-start",
         )
 
+    def test_evaluated_embedding_selection_matrix_is_canonical(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            empty = root / "empty.env"
+            empty.write_text("", encoding="utf-8")
+            bundled = self._make_database(empty)
+            self.assertEqual(
+                self._simple_make_value(bundled, "EMBEDSERV_MODE"), "bundled"
+            )
+            self.assertEqual(
+                self._simple_make_value(
+                    bundled, "FULL_BUNDLED_MLX_HOST_ACCESS"
+                ),
+                "true",
+            )
+            self.assertEqual(
+                self._simple_make_value(
+                    bundled, "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL"
+                ),
+                "http://host.docker.internal:3210/v1/embeddings",
+            )
+
+            custom = root / "custom.env"
+            custom.write_text(
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="
+                "http://host.docker.internal:8337/v1/embeddings\n"
+                "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL=model$file\n"
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL=served$file\n",
+                encoding="utf-8",
+            )
+            custom_database = self._make_database(custom)
+            self.assertEqual(
+                self._simple_make_value(custom_database, "EMBEDSERV_MODE"),
+                "custom",
+            )
+            self.assertEqual(
+                self._simple_make_value(
+                    custom_database, "FULL_BUNDLED_MLX_HOST_ACCESS"
+                ),
+                "false",
+            )
+            self.assertEqual(
+                self._simple_make_value(
+                    custom_database, "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL"
+                ),
+                "model$$file",
+            )
+            self.assertEqual(
+                self._simple_make_value(
+                    custom_database, "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL"
+                ),
+                "served$$file",
+            )
+
+            overridden = self._make_database(
+                custom,
+                environment={
+                    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                        "http://host.docker.internal:3210/v1/embeddings"
+                    ),
+                    "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL": "environment$model",
+                },
+                assignments=(
+                    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL=command$model",
+                ),
+            )
+            self.assertEqual(
+                self._simple_make_value(overridden, "EMBEDSERV_MODE"),
+                "bundled",
+            )
+            self.assertEqual(
+                self._simple_make_value(
+                    overridden, "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL"
+                ),
+                "environment$$model",
+            )
+            self.assertEqual(
+                self._simple_make_value(
+                    overridden, "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL"
+                ),
+                "command$$model",
+            )
+
     def test_lite_and_custom_embedding_skip_unused_host_manager(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         lite_prerequisites = next(
@@ -373,11 +498,61 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[1].split("\tfi; \\\n", 1)[0]
         self.assertNotIn("embedserv-stop-if-started", custom_branch)
         self.assertNotIn('"$(PWD)/$(HOST_PROCESS_MANAGER)" start', custom_branch)
-        full = makefile.split("up-full:", 1)[1].split("embedding-ready-once:", 1)[0]
-        self.assertLess(
-            full.index("embedding-ready-once"),
-            full.index("embedserv-stop-after-custom-ready"),
+        full = makefile.split(
+            "up-full: wrapper-config-preflight", 1
+        )[1].split("embedding-ready-once:", 1)[0]
+        full_lines = [
+            line.strip()
+            for line in full.splitlines()
+            if line.startswith("\t@")
+        ]
+        staged_start = next(
+            line
+            for line in full_lines
+            if "up -d --wait --wait-timeout 420 local-embedding-shim" in line
         )
+        readiness = next(
+            line
+            for line in full_lines
+            if "$(MAKE) --no-print-directory embedding-ready-once" in line
+        )
+        cleanup = next(
+            line
+            for line in full_lines
+            if "$(MAKE) --no-print-directory embedserv-stop-after-custom-ready"
+            in line
+        )
+        self.assertLess(
+            full_lines.index(staged_start),
+            full_lines.index(readiness),
+        )
+        self.assertLess(
+            full_lines.index(readiness),
+            full_lines.index(cleanup),
+        )
+        for line in (staged_start, readiness, cleanup):
+            self.assertTrue(line.startswith("@"))
+            self.assertNotIn("|| true", line)
+        self.assertNotIn(";", readiness)
+        self.assertNotIn(";", cleanup)
+
+    def test_stack_targets_close_automatic_host_policy_selection(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn(
+            "up-lite: override EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS := false",
+            makefile,
+        )
+        self.assertIn(
+            "up-full: override EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS := "
+            "$(FULL_BUNDLED_MLX_HOST_ACCESS)",
+            makefile,
+        )
+        full_prerequisites = next(
+            line
+            for line in makefile.splitlines()
+            if line.startswith("up-full: wrapper-config-preflight")
+        )
+        self.assertIn("$(FULL_MODE_HOST_PROCESS_TARGETS)", full_prerequisites)
 
     def test_clean_teep_start_does_not_execute_host_manager(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -412,6 +587,40 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("custom upstream; not starting bundled MLX server", result.stdout)
+
+    def test_embedding_mutations_stop_at_malformed_wrapper_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invalid = root / "invalid.env"
+            invalid.write_text(
+                'ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL="unterminated\n',
+                encoding="utf-8",
+            )
+            for target in ("embedserv-install", "embedserv-verify-model"):
+                with self.subTest(target=target):
+                    result = subprocess.run(
+                        [
+                            "make",
+                            "--no-print-directory",
+                            target,
+                            f"ENV_FILE={invalid}",
+                            f"EMBEDSERV_VENV={root / 'must-not-exist'}",
+                            f"EMBEDSERV_MODEL_CACHE={root / 'models'}",
+                        ],
+                        cwd=ROOT,
+                        env={
+                            key: value
+                            for key, value in os.environ.items()
+                            if not key.startswith("ONYX_RAG_EMBEDDING_")
+                        },
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("invalid wrapper setting", result.stderr)
+                    self.assertFalse((root / "must-not-exist").exists())
+                    self.assertFalse((root / "models").exists())
 
     def test_missing_default_embedding_server_reports_setup_options(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
