@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -43,6 +45,7 @@ def _compose_model(
     *extra_files: str,
     profiles: tuple[str, ...] = (),
     env_overrides: dict[str, str] | None = None,
+    wrapper_env_file: str = ".env.wrapper.example",
 ) -> dict:
     command = [
         "docker",
@@ -50,7 +53,7 @@ def _compose_model(
         "--env-file",
         "stack.versions.env",
         "--env-file",
-        ".env.wrapper.example",
+        wrapper_env_file,
         "-f",
         "docker-compose.yaml",
         "-f",
@@ -106,6 +109,114 @@ def _make_compose_files(
 
 
 class ComposeOverlayLayoutTests(unittest.TestCase):
+    def test_every_example_option_has_a_compose_or_host_default_owner(self) -> None:
+        example_names = {
+            line.split("=", 1)[0]
+            for raw_line in (ROOT / ".env.wrapper.example")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if (line := raw_line.strip())
+            and not line.startswith("#")
+            and "=" in line
+        }
+        compose_names: set[str] = set()
+        for path in (
+            ROOT / "docker-compose.yaml",
+            *(ROOT / "compose_overlays").glob("docker-compose*.yml"),
+        ):
+            compose_names.update(
+                re.findall(
+                    r"\$\{([A-Z][A-Z0-9_]*)",
+                    path.read_text(encoding="utf-8"),
+                )
+            )
+
+        self.assertEqual(
+            example_names - compose_names,
+            {
+                "CONTAINER_BIN",
+                "TEEP_ROUTE_THROUGH_MYST_VPN",
+                "MYST_VPN_ORDER_AMOUNT",
+                "MYST_VPN_ORDER_CURRENCY",
+                "MYST_VPN_ORDER_GATEWAY",
+                "MYST_VPN_ORDER_COUNTRY",
+                "MYST_VPN_ORDER_GATEWAY_DATA",
+                "TOR_EGRESS_ENABLED",
+                "TOR_ONION_SERVICE_ENABLED",
+                "TOR_EXIT_COUNTRY",
+                "TOR_EXIT_NODE_FINGERPRINTS",
+                "ONYX_CODE_INTERPRETER_ENABLE_NETWORK",
+                "TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN",
+            },
+        )
+
+    def test_example_values_match_compose_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            empty_env = Path(temporary) / "empty.env"
+            empty_env.write_text("", encoding="utf-8")
+
+            cases = (
+                ("lite", ()),
+                ("full", ()),
+                ("lite", ("docker-compose.podman.yml",)),
+                (
+                    "full",
+                    (
+                        "docker-compose.podman.yml",
+                        "docker-compose.podman-full.yml",
+                    ),
+                ),
+            )
+            for mode, extra_files in cases:
+                with self.subTest(mode=mode, extra_files=extra_files):
+                    expected = _compose_model(
+                        mode, *extra_files, profiles=("tailscale",)
+                    )
+                    defaulted = _compose_model(
+                        mode,
+                        *extra_files,
+                        profiles=("tailscale",),
+                        wrapper_env_file=str(empty_env),
+                    )
+
+                    # Compose interpolation cannot express the model-specified
+                    # newline inside a ${VAR:-default} expression. Keep the
+                    # newline-correct example value while accepting the
+                    # single-line Compose fallback when the option is absent.
+                    prefix_fields = {
+                        "api_server": "ASYM_QUERY_PREFIX",
+                        "background": "ASYM_QUERY_PREFIX",
+                        "local-embedding-shim": "SHIM_QUERY_PREFIX",
+                    }
+                    specified_prefix = (
+                        "Instruct: Given a document query, retrieve the most "
+                        "relevant chunk.\nQuery: "
+                    )
+                    fallback_prefix = specified_prefix.replace("\n", " ")
+                    for service_name, field_name in prefix_fields.items():
+                        if service_name not in expected["services"]:
+                            continue
+                        self.assertEqual(
+                            expected["services"][service_name]["environment"][
+                                field_name
+                            ],
+                            specified_prefix,
+                        )
+                        self.assertEqual(
+                            defaulted["services"][service_name]["environment"][
+                                field_name
+                            ],
+                            fallback_prefix,
+                        )
+                        del expected["services"][service_name]["environment"][
+                            field_name
+                        ]
+                        del defaulted["services"][service_name]["environment"][
+                            field_name
+                        ]
+
+                    self.assertEqual(defaulted, expected)
+
     def test_wrapper_overlays_are_colocated_below_the_root_base(self) -> None:
         expected = {
             "docker-compose.code-interpreter-network.yml",

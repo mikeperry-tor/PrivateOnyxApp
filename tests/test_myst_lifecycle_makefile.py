@@ -20,11 +20,20 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         assignments: tuple[str, ...] = (),
     ) -> str:
         clean_environment = dict(os.environ)
-        for name in (
+        names_to_clear = {
             "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL",
             "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL",
             "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL",
-        ):
+        }
+        example = (ROOT / ".env.wrapper.example").read_text(encoding="utf-8")
+        for raw_line in example.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name = line.split("=", 1)[0].strip()
+            if name.isidentifier():
+                names_to_clear.add(name)
+        for name in names_to_clear:
             clean_environment.pop(name, None)
         clean_environment.update(environment or {})
         result = subprocess.run(
@@ -52,6 +61,29 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             for line in database.splitlines()
             if line.startswith(prefix)
         )
+
+    def test_empty_wrapper_uses_example_host_workflow_defaults(self) -> None:
+        expected = {
+            "CONTAINER_BIN": "docker",
+            "TEEP_ROUTE_THROUGH_MYST_VPN": "false",
+            "TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN": "false",
+            "TAILSCALE_FUNNEL_ENABLED": "false",
+            "ONYX_CODE_INTERPRETER_ENABLE_NETWORK": "false",
+            "MYST_VPN_ENABLED": "false",
+            "MYST_VPN_ORDER_AMOUNT": "100",
+            "MYST_VPN_ORDER_CURRENCY": "MYST",
+            "MYST_VPN_ORDER_GATEWAY": "coingate",
+            "MYST_VPN_ORDER_COUNTRY": "US",
+            "MYST_VPN_ORDER_GATEWAY_DATA": "custom_id=mysterium-onyx",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            empty = Path(temporary) / "empty.env"
+            empty.write_text("", encoding="utf-8")
+            database = self._make_database(empty)
+
+        for name, value in expected.items():
+            with self.subTest(name=name):
+                self.assertEqual(self._simple_make_value(database, name), value)
 
     def test_connection_info_target_executes_myst_in_running_container(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

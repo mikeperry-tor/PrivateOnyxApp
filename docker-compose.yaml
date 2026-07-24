@@ -71,7 +71,7 @@ services:
       # Master VPN switch. When "false", myst-client runs only the lightweight
       # namespace-readiness sentinel; no Myst daemon, kill-switch, or connection
       # is started. See .env.wrapper.example.
-      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
+      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-false}"
     depends_on:
       netns-holder:
         condition: service_started
@@ -166,7 +166,7 @@ services:
       ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS: "none"
       ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL: ""
       ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS: "false"
-      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
+      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-false}"
       EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
       ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
       EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
@@ -186,7 +186,7 @@ services:
       ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS: "${ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS:-none}"
       ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL: ""
       ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS: "${ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS:-false}"
-      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-true}"
+      MYST_VPN_ENABLED: "${MYST_VPN_ENABLED:-false}"
       EGRESS_UPSTREAM_PROXY_URL: "${EGRESS_UPSTREAM_PROXY_URL:-}"
       ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13: "${ONYX_AGENT_HTTPS_PROXY_REQUIRE_TLS13:-true}"
       EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
@@ -326,7 +326,7 @@ services:
       TAILSCALE_FUNNEL_TARGET_PORT: "8080"
       TAILSCALE_FUNNEL_HTTPS_PORT: "443"
       TS_AUTHKEY: "${TAILSCALE_FUNNEL_AUTHKEY:-}"
-      TS_HOSTNAME: "${TAILSCALE_FUNNEL_HOSTNAME:-onyx-funnel}"
+      TS_HOSTNAME: "${TAILSCALE_FUNNEL_HOSTNAME:-onyx}"
       TS_AUTH_ONCE: "true"
       TS_ACCEPT_DNS: "false"
       TS_USERSPACE: "true"
@@ -403,7 +403,7 @@ services:
       MCP_SERVER_ALLOW_PRIVATE_NETWORK: "true"
       MCP_SERVER_ALLOW_LOOPBACK: "false"
       # Wrapper-level alias for Onyx's asymmetric query prefix setting.
-      ASYM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-}"
+      ASYM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-Instruct: Given a document query, retrieve the most relevant chunk. Query: }"
       # Interactive chat tool-call loop cap (per request).
       MAX_LLM_CYCLES: "${MAX_LLM_CYCLES:-200}"
       # Nested Deep Research limits. Keep call acceptance separate from bounded
@@ -411,15 +411,15 @@ services:
       MAX_RESEARCH_AGENT_CYCLES: "${MAX_RESEARCH_AGENT_CYCLES:-200}"
       MAX_DEEP_RESEARCH_TOOL_CALLS_PER_BATCH: "${MAX_DEEP_RESEARCH_TOOL_CALLS_PER_BATCH:-256}"
       MAX_DEEP_RESEARCH_PARALLEL_TOOLS: "${MAX_DEEP_RESEARCH_PARALLEL_TOOLS:-1}"
-      # Wrapper alias for Onyx's GEN_AI_MAX_TOKENS override. Empty means no
-      # override; when set, sitecustomize makes this win over stored DB and
+      # Wrapper alias for Onyx's GEN_AI_MAX_TOKENS override. Sitecustomize
+      # makes the configured/default value win over stored DB and
       # provider-advertised context limits.
-      GEN_AI_MAX_TOKENS: "${ONYX_AGENT_LLM_MAX_TOKENS:-}"
+      GEN_AI_MAX_TOKENS: "${ONYX_AGENT_LLM_MAX_TOKENS:-900000}"
       # Keep the inherited per-URL character cap effectively unlimited by
       # default. The aggregate user-facing control remains independently
       # configurable.
       ONYX_OPEN_URL_MAX_CHARS_PER_URL: "${ONYX_OPEN_URL_MAX_CHARS_PER_URL:-0}"
-      ONYX_OPEN_URL_MAX_TOTAL_CHARS: "${ONYX_OPEN_URL_MAX_TOTAL_CHARS:-}"
+      ONYX_OPEN_URL_MAX_TOTAL_CHARS: "${ONYX_OPEN_URL_MAX_TOTAL_CHARS:-0}"
       ONYX_AGENT_USE_OBSCURA_BROWSER: "${ONYX_AGENT_USE_OBSCURA_BROWSER:-false}"
       ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB: "${ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB:-20}"
       ONYX_OBSCURA_CDP_URL: "ws://obscura-cdp-gateway:9222/devtools/browser"
@@ -582,7 +582,7 @@ services:
     environment:
       TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-0.0.0.0:8337}"
       TEEP_MAX_CONNS: "${TEEP_MAX_CONNS:-6}"
-      TEEP_SERVE_ARGS: "${TEEP_SERVE_ARGS:-}"
+      TEEP_SERVE_ARGS: "${TEEP_SERVE_ARGS:---offline}"
       VENICE_API_KEY: "${TEEP_VENICE_API_KEY:-}"
       TINFOIL_API_KEY: "${TEEP_TINFOIL_API_KEY:-}"
       NEARAI_API_KEY: "${TEEP_NEARAI_API_KEY:-}"

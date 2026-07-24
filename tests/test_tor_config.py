@@ -396,6 +396,33 @@ class TorConfigTests(unittest.TestCase):
                 "compose_overlays/docker-compose.tor-egress.yml", full_files
             )
 
+    def test_empty_wrapper_uses_example_routing_defaults(self) -> None:
+        names = (
+            "TOR_EGRESS_ENABLED",
+            "TOR_ONION_SERVICE_ENABLED",
+            "TOR_EXIT_COUNTRY",
+            "TOR_EXIT_NODE_FINGERPRINTS",
+            "EGRESS_UPSTREAM_PROXY_URL",
+            "WEBUI_CANONICAL_ORIGIN",
+        )
+        clean_environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in tor_config.SETTING_DEFAULTS
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            empty = Path(temporary) / "empty.env"
+            empty.write_text("", encoding="utf-8")
+            with mock.patch.dict(os.environ, clean_environment, clear=True):
+                defaults = tor_config.settings_from_file_and_environment(empty)
+                example = tor_config.settings_from_file_and_environment(
+                    ROOT / ".env.wrapper.example"
+                )
+
+        for name in names:
+            with self.subTest(name=name):
+                self.assertEqual(defaults[name], example[name])
+
     def test_settings_parser_rejects_ambiguous_multiword_values(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             settings_file = Path(temporary) / "wrapper.env"

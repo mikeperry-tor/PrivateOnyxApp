@@ -67,8 +67,8 @@ services:
       MCP_SERVER_ALLOW_PRIVATE_NETWORK: "true"
       MCP_SERVER_ALLOW_LOOPBACK: "false"
       # Wrapper-level alias for Onyx's asymmetric query prefix setting.
-      ASYM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-}"
-      EMBEDDING_BATCH_SIZE: "${ONYX_RAG_EMBEDDING_BATCH_SIZE:-}"
+      ASYM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-Instruct: Given a document query, retrieve the most relevant chunk. Query: }"
+      EMBEDDING_BATCH_SIZE: "${ONYX_RAG_EMBEDDING_BATCH_SIZE:-32}"
       MODEL_SERVER_HOST: "local-embedding-shim"
       MODEL_SERVER_PORT: "9101"
       INDEXING_MODEL_SERVER_HOST: "local-embedding-shim"
@@ -247,11 +247,11 @@ services:
 
   api_server:
     environment:
-      EMBEDDING_BATCH_SIZE: "${ONYX_RAG_EMBEDDING_BATCH_SIZE:-}"
+      EMBEDDING_BATCH_SIZE: "${ONYX_RAG_EMBEDDING_BATCH_SIZE:-32}"
       # Optional internal_search/RAG character caps. Empty/0 means no wrapper
       # cap; Onyx's own section-count and selection behavior is left intact.
       ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT: "${ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT:-}"
-      ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS: "${ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS:-}"
+      ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS: "${ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS:-0}"
       MODEL_SERVER_HOST: "local-embedding-shim"
       MODEL_SERVER_PORT: "9101"
       INDEXING_MODEL_SERVER_HOST: "local-embedding-shim"
@@ -287,7 +287,7 @@ services:
       ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY: "${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_API_KEY:-}"
       ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL: "${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL:-}"
       ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL: "${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"
-      SHIM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-}"
+      SHIM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-Instruct: Given a document query, retrieve the most relevant chunk. Query: }"
       SHIM_PASSAGE_PREFIX: "${ONYX_RAG_EMBEDDING_PASSAGE_PREFIX:-}"
       ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
     volumes:
