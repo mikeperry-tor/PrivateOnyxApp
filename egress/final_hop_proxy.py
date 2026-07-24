@@ -4,12 +4,14 @@
 The proxy exposes two explicit destination-policy route classes. The public
 route accepts only globally routable targets. The host route additionally
 supports the narrow, validated local-host and opt-in RFC1918 exceptions used
-by configured Onyx integrations. Both routes fail closed on ambiguous DNS,
-private destinations, malformed HTTP framing, and disallowed cleartext URLs.
+by configured Onyx integrations, plus the exact local authority selected by
+the full-mode embedding URL. Both routes fail closed on ambiguous DNS, private
+destinations, malformed HTTP framing, and disallowed cleartext URLs.
 
 1. **For plain HTTP URLs**: returns ``403 Forbidden`` by default with a clear
    explanatory message. The host route retains narrow exceptions for selected
-   exact ``host.docker.internal`` ports, RFC1918 literals, and opt-in proxy-validated
+   exact ``host.docker.internal`` ports, the configured local embedding
+   authority, RFC1918 literals, and opt-in proxy-validated
    ``.local``/``.internal``/``.home.arpa`` destinations. Set
    ``EGRESS_ALLOW_HTTP_URLS=true`` only when general cleartext HTTP fetches are
    intentionally required.
@@ -42,10 +44,13 @@ the fixed ``/run/tor-egress/socks`` Unix socket and shares the same SOCKS5
 state machine. Restricted components reach policy instances only through their
 local bridges. In VPN mode, public proxy names use provider DNS and public
 proxy addresses follow the Myst route. A permitted ordinary exact
-``host.docker.internal`` port and an independently configured exact-host
-upstream endpoint use their narrow direct roles; an RFC1918 IPv4 literal
-receives only an exact proxy-endpoint route; and operator-local proxy names use system DNS only with
-``ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true``.
+``host.docker.internal`` port, the full-mode configured local embedding
+authority, and the configured upstream-proxy authority use narrow direct
+roles. Configured endpoint authorities may independently select exact
+``host.docker.internal``, an RFC1918 IPv4 literal, or an operator-local name;
+the latter is accepted only when its complete system-DNS answer set is
+RFC1918. These exact configured authorities do not enable ordinary host/LAN
+destinations.
 
 Architecture::
 
@@ -85,7 +90,7 @@ import ssl
 import struct
 import sys
 import traceback
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import unquote, urlparse
 
 # ── Configuration ────────────────────────────────────────────────────────
@@ -133,22 +138,9 @@ def _parse_allowed_host_ports(raw: str) -> tuple[bool, frozenset[int]]:
 HOST_PORTS_ALLOW_ALL, OPERATOR_ALLOWED_HOST_PORTS = _parse_allowed_host_ports(
     os.environ.get("ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS", "none")
 )
-_BUNDLED_MLX_HOST_ACCESS_RAW = os.environ.get(
-    "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS", "false"
-)
-if not _BUNDLED_MLX_HOST_ACCESS_RAW:
-    _BUNDLED_MLX_HOST_ACCESS_RAW = "false"
-if _BUNDLED_MLX_HOST_ACCESS_RAW not in {"true", "false"}:
-    raise RuntimeError(
-        "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS must be exactly 'true' or 'false'"
-    )
-BUNDLED_MLX_HOST_ACCESS = _BUNDLED_MLX_HOST_ACCESS_RAW == "true"
-AUTOMATIC_ALLOWED_HOST_PORTS = (
-    frozenset({3210}) if BUNDLED_MLX_HOST_ACCESS else frozenset()
-)
-EFFECTIVE_ALLOWED_HOST_PORTS = (
-    OPERATOR_ALLOWED_HOST_PORTS | AUTOMATIC_ALLOWED_HOST_PORTS
-)
+CONFIGURED_EMBEDDING_URL = os.environ.get(
+    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL", ""
+).strip()
 
 # Upstream proxy (EGRESS_UPSTREAM_PROXY_URL from .env.wrapper). When set,
 # the proxy routes its own requests through this upstream. Supports:
@@ -200,8 +192,9 @@ HTTPS_PROXY_REQUIRE_TLS13 = (
 # destination validation: even public HTTP hosts leak path/query contents in
 # cleartext and should not be fetched by an LLM web tool unless the operator
 # explicitly opts in. The host route's exact ``host.docker.internal`` identity
-# is the narrow exception needed by local HTTP inference and embedding servers;
-# it remains proxy-resolved, address-pinned, and unavailable to public routes.
+# and the configured local embedding authority are the narrow exceptions needed
+# by local HTTP inference and embedding servers. They remain proxy-resolved,
+# address-pinned, and unavailable to public routes.
 ALLOW_HTTP_URLS = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in (
     "1",
     "true",
@@ -275,6 +268,59 @@ def _normalize_host(host: str) -> str:
         return normalized
 
 
+class ConfiguredEndpoint(NamedTuple):
+    host: str
+    port: int
+
+
+def _parse_configured_embedding_endpoint(
+    raw_url: str,
+) -> ConfiguredEndpoint | None:
+    """Parse the one full-mode embedding authority trusted by host policy."""
+    if not raw_url:
+        return None
+    if ROUTE_CLASS != "host":
+        raise RuntimeError(
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL is allowed only for the "
+            "host route class"
+        )
+    try:
+        parsed = urlparse(raw_url)
+        host = _normalize_host(parsed.hostname or "")
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError(
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL has an invalid authority"
+        ) from exc
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise RuntimeError(
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL must use http or https"
+        )
+    port = (
+        (80 if scheme == "http" else 443)
+        if parsed_port is None
+        else parsed_port
+    )
+    if (
+        not host
+        or not host.isascii()
+        or not 0 < port <= 65535
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise RuntimeError(
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL has an invalid authority"
+        )
+    return ConfiguredEndpoint(host=host, port=port)
+
+
+CONFIGURED_EMBEDDING_ENDPOINT = _parse_configured_embedding_endpoint(
+    CONFIGURED_EMBEDDING_URL
+)
+
+
 def _parse_ip_literal(
     ip_text: str,
 ) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -332,7 +378,7 @@ def _is_allowed_exact_host_destination(host: str, port: int) -> bool:
     return (
         ROUTE_CLASS == "host"
         and _is_exact_docker_host(host)
-        and (HOST_PORTS_ALLOW_ALL or port in EFFECTIVE_ALLOWED_HOST_PORTS)
+        and (HOST_PORTS_ALLOW_ALL or port in OPERATOR_ALLOWED_HOST_PORTS)
     )
 
 
@@ -340,6 +386,33 @@ def _is_rfc1918_system_dns_name(host: str) -> bool:
     """Return whether an operator-local name may use system DNS classification."""
     normalized = _normalize_host(host)
     return any(normalized.endswith(suffix) for suffix in RFC1918_SYSTEM_DNS_SUFFIXES)
+
+
+def _is_configured_embedding_destination(host: str, port: int) -> bool:
+    return (
+        ROUTE_CLASS == "host"
+        and CONFIGURED_EMBEDDING_ENDPOINT is not None
+        and (_normalize_host(host), port)
+        == (
+            CONFIGURED_EMBEDDING_ENDPOINT.host,
+            CONFIGURED_EMBEDDING_ENDPOINT.port,
+        )
+    )
+
+
+def _configured_endpoint_uses_local_route(host: str) -> bool:
+    normalized = _normalize_host(host)
+    return (
+        _is_exact_docker_host(normalized)
+        or _is_rfc1918(normalized)
+        or _is_rfc1918_system_dns_name(normalized)
+    )
+
+
+def _is_configured_local_embedding_destination(host: str, port: int) -> bool:
+    return _is_configured_embedding_destination(
+        host, port
+    ) and _configured_endpoint_uses_local_route(host)
 
 
 def _loose_ipv4_literal(host: str) -> str | None:
@@ -447,6 +520,7 @@ def _plain_http_allowed(
     return (
         ALLOW_HTTP_URLS
         or _is_trusted_internal_destination(host, port)
+        or _is_configured_local_embedding_destination(host, port)
         or _is_allowed_exact_host_destination(host, port)
         or (
             ROUTE_CLASS == "host"
@@ -690,6 +764,80 @@ async def _resolve_exact_docker_host(host: str, port: int) -> tuple[str, ...]:
     return tuple(sorted(resolved))
 
 
+async def _resolve_configured_endpoint(
+    host: str,
+    port: int,
+    *,
+    purpose: str,
+) -> tuple[str, ...]:
+    """Resolve one explicitly configured endpoint without broad LAN grants."""
+    normalized_host = _normalize_host(host)
+    literal_ip = _parse_ip_literal(normalized_host)
+    if literal_ip is not None:
+        if _is_rfc1918(normalized_host):
+            return (normalized_host,)
+        reason = _ip_block_reason(normalized_host)
+        if reason:
+            raise ConnectionError(f"blocked {purpose} address ({reason})")
+        return (normalized_host,)
+
+    if _is_exact_docker_host(normalized_host):
+        return await _resolve_exact_docker_host(normalized_host, port)
+
+    if _is_rfc1918_system_dns_name(normalized_host):
+        try:
+            resolved = await _resolve_system_host(normalized_host, port)
+        except (socket.gaierror, OSError, ValueError) as exc:
+            raise ConnectionError(
+                f"{purpose} system DNS resolution failed"
+            ) from exc
+        if not resolved:
+            raise ConnectionError(
+                f"{purpose} system DNS resolution returned no addresses"
+            )
+        private = {_is_rfc1918(address) for address in resolved}
+        if private != {True}:
+            qualifier = "mixed" if len(private) > 1 else "non-RFC1918"
+            raise ConnectionError(
+                f"{purpose} system DNS returned {qualifier} addresses"
+            )
+        return tuple(sorted(resolved))
+
+    hostname_reason = _hostname_block_reason(normalized_host)
+    if hostname_reason is not None:
+        raise ConnectionError(f"blocked {purpose} hostname ({hostname_reason})")
+
+    try:
+        resolved = (
+            await _resolve_target_host(normalized_host, port)
+            if MYST_VPN_ENABLED
+            else await _resolve_system_host(normalized_host, port)
+        )
+    except (socket.gaierror, OSError, RuntimeError, ValueError) as exc:
+        raise ConnectionError(f"{purpose} DNS resolution failed") from exc
+    if not resolved:
+        raise ConnectionError(f"{purpose} DNS resolution returned no addresses")
+    for address in resolved:
+        reason = _ip_block_reason(address)
+        if reason:
+            raise ConnectionError(
+                f"{purpose} resolved to blocked {address} ({reason})"
+            )
+    return tuple(sorted(resolved))
+
+
+async def _resolve_configured_embedding_destination(
+    host: str, port: int
+) -> tuple[str, ...] | None:
+    if not _is_configured_local_embedding_destination(host, port):
+        return None
+    return await _resolve_configured_endpoint(
+        host,
+        port,
+        purpose="configured embedding endpoint",
+    )
+
+
 async def _validate_destination(
     host: str, port: int
 ) -> tuple[str | None, tuple[str, ...]]:
@@ -705,9 +853,18 @@ async def _validate_destination(
     if not 0 < port <= 65535:
         return "invalid port", ()
 
-    # Exact Docker-host destinations are denied by port before DNS. An allowed
-    # port remains direct and uses the engine resolver only in this trusted
-    # final-hop namespace.
+    try:
+        configured_embedding_ips = (
+            await _resolve_configured_embedding_destination(host, port)
+        )
+    except ConnectionError as exc:
+        return str(exc), ()
+    if configured_embedding_ips is not None:
+        return None, configured_embedding_ips
+
+    # The one configured local embedding authority is resolved and pinned
+    # before ordinary destination policy. Every other exact Docker-host
+    # destination is denied by port before DNS unless operator-selected.
     if ROUTE_CLASS == "host" and _is_exact_docker_host(host):
         if not _is_allowed_exact_host_destination(host, port):
             return "host.docker.internal port is not allowed", ()
@@ -961,6 +1118,13 @@ def _format_host_port_policy(allow_all: bool, ports: frozenset[int]) -> str:
     return ",".join(str(port) for port in sorted(ports))
 
 
+def _format_configured_endpoint(endpoint: ConfiguredEndpoint | None) -> str:
+    if endpoint is None:
+        return "none"
+    display_host = f"[{endpoint.host}]" if ":" in endpoint.host else endpoint.host
+    return f"{display_host}:{endpoint.port}"
+
+
 def _https_proxy_ssl_context() -> ssl.SSLContext:
     """Build a verified TLS context for HTTPS upstream proxy connections."""
     ssl_ctx = ssl.create_default_context()
@@ -986,6 +1150,9 @@ async def _connect_via_upstream(
     Returns (reader, writer) for the established tunnel.
     """
     if _is_trusted_internal_destination(target_host, target_port):
+        return await _open_validated_direct_connection(validated_ips, target_port)
+
+    if _is_configured_local_embedding_destination(target_host, target_port):
         return await _open_validated_direct_connection(validated_ips, target_port)
 
     if _is_allowed_exact_host_destination(target_host, target_port):
@@ -1269,7 +1436,11 @@ async def _open_http_proxy_connection(
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Open a connection to an HTTP/HTTPS upstream proxy."""
     ssl_ctx = _https_proxy_ssl_context() if scheme == "https" else None
-    proxy_addresses = await _resolve_upstream_proxy_endpoint(proxy_host, proxy_port)
+    proxy_addresses = await _resolve_configured_endpoint(
+        proxy_host,
+        proxy_port,
+        purpose="configured upstream proxy endpoint",
+    )
 
     failures: list[str] = []
     for address in proxy_addresses:
@@ -1301,62 +1472,6 @@ async def _open_http_proxy_connection(
     return reader, writer
 
 
-async def _resolve_upstream_proxy_endpoint(
-    proxy_host: str, proxy_port: int
-) -> tuple[str, ...]:
-    """Resolve and classify the operator-configured TCP proxy endpoint."""
-    normalized_host = _normalize_host(proxy_host)
-    literal_ip = _parse_ip_literal(normalized_host)
-    if literal_ip is not None:
-        if literal_ip.version == 4 and literal_ip.is_private:
-            if _is_rfc1918(normalized_host):
-                return (normalized_host,)
-        reason = _ip_block_reason(normalized_host)
-        if reason:
-            raise ConnectionError(f"blocked upstream proxy address ({reason})")
-        return (normalized_host,)
-
-    hostname_reason = _hostname_block_reason(normalized_host)
-    if _is_exact_docker_host(normalized_host):
-        return await _resolve_exact_docker_host(normalized_host, proxy_port)
-
-    if hostname_reason is not None:
-        raise ConnectionError(
-            "upstream proxy hostname requires an ordinary public name, exact "
-            "host.docker.internal, an RFC1918 literal, or an operator-local "
-            "suffix with ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true"
-        )
-
-    if _is_rfc1918_system_dns_name(normalized_host):
-        if not ALLOW_LAN_ENDPOINTS:
-            raise ConnectionError(
-                "operator-local upstream proxy name requires "
-                "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true"
-            )
-        resolved = await _resolve_system_host(normalized_host, proxy_port)
-        if not resolved or not all(_is_rfc1918(address) for address in resolved):
-            raise ConnectionError(
-                "operator-local upstream proxy name did not resolve entirely "
-                "to RFC1918 addresses"
-            )
-        return tuple(sorted(resolved))
-
-    resolved = (
-        await _resolve_target_host(normalized_host, proxy_port)
-        if MYST_VPN_ENABLED
-        else await _resolve_system_host(normalized_host, proxy_port)
-    )
-    if not resolved:
-        raise ConnectionError("resolver returned no upstream proxy addresses")
-    for address in resolved:
-        reason = _ip_block_reason(address)
-        if reason:
-            raise ConnectionError(
-                f"upstream proxy resolved to blocked {address} ({reason})"
-            )
-    return tuple(sorted(resolved))
-
-
 async def _open_plain_http_forward_connection(
     target_host: str,
     target_port: int,
@@ -1370,6 +1485,7 @@ async def _open_plain_http_forward_connection(
     """
     if (
         _is_trusted_internal_destination(target_host, target_port)
+        or _is_configured_local_embedding_destination(target_host, target_port)
         or _is_allowed_exact_host_destination(target_host, target_port)
         or (
             ROUTE_CLASS == "host"
@@ -1983,8 +2099,7 @@ async def main() -> None:
         "(route_class: %s, upstream: %s, allowed_clients: %s, "
         "allow_http_urls: %s, block_internal_hosts: %s, "
         "trusted_internal_destinations: %s, target_dns: %s, "
-        "operator_host_ports: %s, bundled_mlx_host_access: %s, "
-        "effective_host_ports: %s)",
+        "operator_host_ports: %s, configured_embedding_endpoint: %s)",
         LISTEN_HOST,
         LISTEN_PORT,
         ROUTE_CLASS,
@@ -1999,8 +2114,7 @@ async def main() -> None:
         or "none",
         _target_dns_mode(),
         _format_host_port_policy(HOST_PORTS_ALLOW_ALL, OPERATOR_ALLOWED_HOST_PORTS),
-        str(BUNDLED_MLX_HOST_ACCESS).lower(),
-        _format_host_port_policy(HOST_PORTS_ALLOW_ALL, EFFECTIVE_ALLOWED_HOST_PORTS),
+        _format_configured_endpoint(CONFIGURED_EMBEDDING_ENDPOINT),
     )
 
     server = await asyncio.start_server(

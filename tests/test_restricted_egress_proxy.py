@@ -29,7 +29,7 @@ def _load_module(
         "EGRESS_UPSTREAM_PROXY_URL": "",
         "EGRESS_ALLOW_HTTP_URLS": "false",
         "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "none",
-        "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "false",
+        "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": "",
     }
     env.update(env_overrides or {})
     with patch.dict(os.environ, env, clear=True):
@@ -175,7 +175,9 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             {
                 "EGRESS_ROUTE_CLASS": "host",
                 "ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true",
-                "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true",
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                    "http://host.docker.internal:3210/v1/embeddings"
+                ),
             },
         )
         self.assertTrue(
@@ -225,18 +227,19 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(addresses, ())
         resolver.assert_not_awaited()
 
-    async def test_bundled_mlx_grant_unions_with_operator_ports(self) -> None:
+    async def test_configured_embedding_authority_is_independent_of_operator_ports(
+        self,
+    ) -> None:
         module = _load_module(
             "host",
             {
                 "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "8337",
-                "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true",
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                    "http://host.docker.internal:3210/v1/embeddings"
+                ),
             },
         )
         self.assertEqual(module.OPERATOR_ALLOWED_HOST_PORTS, frozenset({8337}))
-        self.assertEqual(
-            module.EFFECTIVE_ALLOWED_HOST_PORTS, frozenset({3210, 8337})
-        )
         resolver = AsyncMock(return_value={"192.168.65.2"})
         with patch.object(module, "_resolve_system_host", resolver):
             for port in (3210, 8337):
@@ -251,6 +254,86 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reason, "host.docker.internal port is not allowed")
         self.assertEqual(addresses, ())
         self.assertEqual(resolver.await_count, 2)
+
+    async def test_configured_embedding_lan_endpoints_need_no_broad_opt_in(
+        self,
+    ) -> None:
+        literal = _load_module(
+            "host",
+            {
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                    "http://192.168.1.20:8080/v1/embeddings"
+                ),
+                "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080",
+            },
+        )
+        direct = AsyncMock(return_value=(object(), object()))
+        with patch.object(
+            literal, "_open_validated_direct_connection", direct
+        ), patch.object(
+            literal,
+            "_parse_proxy_url",
+            side_effect=AssertionError("configured embedding reached upstream"),
+        ):
+            reason, addresses = await literal._validate_destination(
+                "192.168.1.20", 8080
+            )
+            result = await literal._connect_via_upstream(
+                "192.168.1.20", 8080, addresses
+            )
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("192.168.1.20",))
+        self.assertEqual(result, direct.return_value)
+        direct.assert_awaited_once_with(("192.168.1.20",), 8080)
+
+        named = _load_module(
+            "host",
+            {
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                    "https://embedding.internal:8443/v1/embeddings"
+                ),
+            },
+        )
+        resolver = AsyncMock(return_value={"192.168.1.21", "192.168.1.22"})
+        with patch.object(named, "_resolve_system_host", resolver):
+            reason, addresses = await named._validate_destination(
+                "EMBEDDING.INTERNAL.", 8443
+            )
+        self.assertIsNone(reason)
+        self.assertEqual(addresses, ("192.168.1.21", "192.168.1.22"))
+        resolver.assert_awaited_once_with("embedding.internal", 8443)
+
+    async def test_configured_embedding_exception_is_exact_and_fail_closed(
+        self,
+    ) -> None:
+        module = _load_module(
+            "host",
+            {
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                    "http://embedding.internal:8080/v1/embeddings"
+                ),
+            },
+        )
+        resolver = AsyncMock(return_value={"192.168.1.20", "93.184.216.34"})
+        with patch.object(module, "_resolve_system_host", resolver):
+            reason, addresses = await module._validate_destination(
+                "embedding.internal", 8080
+            )
+        self.assertIn("mixed", reason or "")
+        self.assertEqual(addresses, ())
+
+        system_resolver = AsyncMock()
+        public_resolver = AsyncMock(return_value={"192.168.1.20"})
+        with patch.object(
+            module, "_resolve_system_host", system_resolver
+        ), patch.object(module, "_resolve_target_host", public_resolver):
+            reason, addresses = await module._validate_destination(
+                "embedding.internal", 8081
+            )
+        self.assertIn("DNS resolved to blocked", reason or "")
+        self.assertEqual(addresses, ())
+        system_resolver.assert_not_awaited()
+        public_resolver.assert_awaited_once_with("embedding.internal", 8081)
 
     async def test_all_policy_uses_pinned_direct_host_path(self) -> None:
         module = _load_module(
@@ -303,13 +386,28 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(RuntimeError):
                     module._parse_allowed_host_ports(invalid)
 
-    def test_bundled_mlx_boolean_is_strict(self) -> None:
-        for invalid in ("True", "1", " true", "false ", "anything"):
+    def test_configured_embedding_url_is_strict(self) -> None:
+        for invalid in (
+            "ftp://host.docker.internal:3210/v1/embeddings",
+            "http://host.docker.internal:0/v1/embeddings",
+            "http://user:pass@host.docker.internal:3210/v1/embeddings",
+            "http:///v1/embeddings",
+            "http://host.docker.internal:3210/v1/embeddings#fragment",
+        ):
             with self.subTest(invalid=invalid), self.assertRaises(RuntimeError):
                 _load_module(
                     "host",
-                    {"EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": invalid},
+                    {"ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": invalid},
                 )
+        with self.assertRaisesRegex(RuntimeError, "host route class"):
+            _load_module(
+                "public",
+                {
+                    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                        "http://host.docker.internal:3210/v1/embeddings"
+                    )
+                },
+            )
 
     def test_explicit_zero_ports_are_preserved_for_rejection(self) -> None:
         module = _load_module()
@@ -426,7 +524,12 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         connect.assert_not_awaited()
 
         allowed = _load_module(
-            "host", {"EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true"}
+            "host",
+            {
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                    "http://host.docker.internal:3210/v1/embeddings"
+                )
+            },
         )
         client_writer = self._Writer()
         upstream_writer = self._Writer()
@@ -469,7 +572,9 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             "host",
             {
                 "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "8337",
-                "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true",
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                    "http://host.docker.internal:3210/v1/embeddings"
+                ),
             },
         )
 
@@ -490,8 +595,8 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             await module.main()
 
         startup = logger.info.call_args_list[0]
-        self.assertIn("effective_host_ports: %s", startup.args[0])
-        self.assertEqual(startup.args[-3:], ("8337", "true", "3210,8337"))
+        self.assertIn("configured_embedding_endpoint: %s", startup.args[0])
+        self.assertEqual(startup.args[-2:], ("8337", "host.docker.internal:3210"))
 
     async def test_plain_http_host_exception_bypasses_external_upstream(self) -> None:
         module = _load_module(
@@ -1229,8 +1334,10 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(answers=answers), patch.object(
                 module, "_resolve_system_host", AsyncMock(return_value=answers)
             ), self.assertRaises(ConnectionError):
-                await module._resolve_upstream_proxy_endpoint(
-                    "proxy.example", 8080
+                await module._resolve_configured_endpoint(
+                    "proxy.example",
+                    8080,
+                    purpose="configured upstream proxy endpoint",
                 )
 
     async def test_public_upstream_proxy_bootstrap_uses_myst_dns(self) -> None:
@@ -1362,7 +1469,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             module, "_resolve_system_host", system_resolver
         ), patch.object(module, "_resolve_target_host", vpn_resolver):
             with self.assertRaisesRegex(
-                ConnectionError, "upstream proxy hostname requires"
+                ConnectionError, "blocked configured upstream proxy endpoint hostname"
             ):
                 await module._open_http_proxy_connection(
                     "unknown-proxy", 1080, "socks5"
@@ -1371,12 +1478,10 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         system_resolver.assert_not_awaited()
         vpn_resolver.assert_not_awaited()
 
-    async def test_operator_local_proxy_name_requires_all_rfc1918_answers(
+    async def test_operator_local_proxy_name_is_exact_without_broad_lan_opt_in(
         self,
     ) -> None:
-        module = _load_module(
-            env_overrides={"ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS": "true"}
-        )
+        module = _load_module()
         system_resolver = AsyncMock(return_value={"192.168.1.20"})
         vpn_resolver = AsyncMock()
         open_connection = AsyncMock(return_value=(object(), object()))
@@ -1394,6 +1499,17 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         open_connection.assert_awaited_once_with(
             "192.168.1.20", 1080, ssl=None, server_hostname=None
         )
+
+        mixed_resolver = AsyncMock(
+            return_value={"192.168.1.20", "93.184.216.34"}
+        )
+        with patch.object(module, "_resolve_system_host", mixed_resolver):
+            with self.assertRaisesRegex(ConnectionError, "mixed addresses"):
+                await module._resolve_configured_endpoint(
+                    "proxy.internal",
+                    1080,
+                    purpose="configured upstream proxy endpoint",
+                )
 
     async def test_no_final_hop_readiness_path_can_resolve_or_contact_upstream(self) -> None:
         module = _load_module()

@@ -7,8 +7,20 @@
 > [VPN routing and restricted egress](../../vpn_routing_and_proxies.md),
 > [Local document RAG](../../local_docs_rag_search.md), and
 > [Podman support](../../podman_suport.md).
+>
+> **Superseded endpoint detail (2026-07-24):** The static
+> `EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS` boolean and automatic-port union
+> described in this historical record were subsequently removed. Full mode now
+> passes the canonical `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` only to the host
+> policy, which permits only that URL's exact local authority. The configured
+> `EGRESS_UPSTREAM_PROXY_URL` authority uses the same endpoint resolver. Exact
+> `host.docker.internal`, RFC1918 literals, and supported operator-local names
+> with complete RFC1918 system-DNS answers need neither broad integration
+> setting for these two configured roles. They do not become ordinary
+> destinations. The original design and acceptance details below are retained
+> as the historical record of the preceding implementation.
 
-## Status and objective
+## Historical status and objective
 
 This document records the implementation that replaced the host route's
 unrestricted `host.docker.internal` destination exception with an explicit
@@ -1331,7 +1343,7 @@ Historical implemented/deferred plan documents should remain historical unless
 they are presented as current operational authority; do not mechanically
 rewrite archived design records.
 
-## Completion criteria
+## Historical completion criteria
 
 Implementation is complete only when:
 

@@ -460,14 +460,15 @@ policy behavior; a Podman workaround must not give applications direct egress
 or join them to the trusted Myst namespace.
 
 `host.docker.internal` remains the configured logical host alias only for
-operator-selected ports plus bundled-full automatic 3210. Validate the actual
-resolved address and route inside the relevant container rather than assuming
-Docker Desktop's address or interface. Compatibility checks cover one allow,
-one deny, and fresh/warm invalid-policy starts. The warm case recreates the
-policy/bridge pair and must fail bounded startup rather than reuse stale
-healthy state. The post-wait assertion makes that failure authoritative even
-if the external Compose provider reports success after leaving the bridge in
-`starting`.
+operator-selected ports plus the exact full-mode configured embedding
+authority and configured upstream-proxy authority. Validate the actual resolved
+address and route inside the relevant container rather than assuming Docker
+Desktop's address or interface. Compatibility checks cover configured-authority
+allow, ordinary deny, and fresh/warm invalid-policy starts. The warm case
+recreates the policy/bridge pair and must fail bounded startup rather than reuse
+stale healthy state. The post-wait assertion makes that failure authoritative
+even if the external Compose provider reports success after leaving the bridge
+in `starting`.
 
 ## Deterministic coverage
 

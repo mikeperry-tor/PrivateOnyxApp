@@ -23,7 +23,7 @@ opt-in validated LAN integration routes retain direct exceptions. Denied host
 ports fail before DNS and never fall through to Tor. Configured
 non-Tor proxy endpoints are classified before connection in VPN and no-VPN
 modes: public names require all-global answers; exact host/RFC1918 exceptions
-stay narrow; operator-local names require the host route and LAN opt-in.
+stay narrow; operator-local names require complete RFC1918 system-DNS answers.
 Single-label/internal names and blocked or mixed answers fail closed. A
 remote-DNS proxy remains authoritative for the target address and is part of
 the selected trust boundary.
@@ -70,10 +70,13 @@ mode remains.
 
 The host-capable listener alone owns selected exact `host.docker.internal`
 ports and opt-in LAN behavior. The strict host-port setting defaults to
-`none`, accepts numeric ports or `all`, and receives automatic 3210 only for
-the exact bundled-MLX full selection. An explicitly configured exact-host
-upstream proxy remains independent routing infrastructure and never becomes an
-ordinary destination grant. `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` lets configured
+`none` and accepts numeric ports or `all`. Full mode independently gives the
+host listener only the exact configured embedding authority. Every policy
+process independently holds only its configured upstream-proxy authority.
+Those configured authorities may use exact `host.docker.internal`, an RFC1918
+literal, or a supported operator-local name whose complete system-DNS answer
+set is RFC1918; they never become ordinary destination grants.
+`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` lets other configured
 Onyx integrations use RFC1918 literals and operator-local names ending in
 `.local`, `.internal`, or `.home.arpa`, only after complete-answer-set
 classification. It does not extend this capability to public helpers,
@@ -140,10 +143,10 @@ wrapper guarantee in remote-DNS mode; the upstream must enforce equivalent
 policy.
 
 Named public upstream proxies are resolved by provider DNS and use the VPN
-route in VPN mode. Exact host and RFC1918-literal proxy endpoints use only the
-documented narrow route exceptions. Named operator-local proxies require the
-RFC1918 opt-in and never fall back to external DNS when local lookup is empty
-or fails.
+route in VPN mode. Exact host, RFC1918-literal, and supported operator-local
+proxy endpoints use only their configured authority. Operator-local names are
+resolved through system DNS, require an all-RFC1918 answer set, and never fall
+back to external DNS when local lookup is empty or fails.
 
 ## WebUI browser egress
 

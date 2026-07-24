@@ -102,9 +102,10 @@ hour. Do not copy fixed counts into documentation.
   a PID based only on a record number. Service-specific peer, model, child, and
   content-policy checks remain in the services themselves.
 - Lite mode selects neither host process. Docker full mode uses the manager only
-  for the bundled default MLX endpoint. A custom transition first revokes
-  automatic host port 3210, proves bridge and replacement readiness, and only
-  then stops a recorded live proxy. The host document server is Podman full-only.
+  for the bundled default MLX endpoint. A custom transition first applies only
+  the replacement configured embedding authority, proves bridge and replacement
+  readiness, and only then stops a recorded live proxy. The host document
+  server is Podman full-only.
 - An untracked top-level listener on 3210 and an orphaned child on loopback
   3211 are distinct manual-recovery failures. Neither authorizes PID guessing
   or automatic signaling; an occupied 3211 fails before 3210 binds.

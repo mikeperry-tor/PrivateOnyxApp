@@ -730,9 +730,12 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         public = services["onyx-public-egress-proxy"]["environment"]
         host = services["onyx-host-egress-proxy"]["environment"]
         self.assertEqual(public["ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS"], "none")
-        self.assertEqual(public["EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS"], "false")
         self.assertEqual(host["ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS"], "none")
-        self.assertEqual(host["EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS"], "false")
+        self.assertEqual(public["ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL"], "")
+        self.assertEqual(
+            host["ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL"],
+            "http://host.docker.internal:3210/v1/embeddings",
+        )
         self.assertEqual(public["ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS"], "false")
         self.assertNotIn("EGRESS_PROXY_TRUSTED_INTERNAL_DESTINATIONS", public)
         self.assertEqual(
@@ -747,39 +750,48 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         health = services["onyx-host-egress-bridge"]["healthcheck"]["test"]
         self.assertIn("grep -q '^HTTP/1.1 403'", health[-1])
 
-    def test_host_port_policy_reaches_only_host_final_hop(self) -> None:
+    def test_host_port_and_embedding_policy_reach_only_intended_services(
+        self,
+    ) -> None:
         model = _compose_model(
             "full",
             env_overrides={
                 "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS": "3210,11434",
-                "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS": "true",
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                    "http://host.docker.internal:8337/v1/embeddings"
+                ),
             },
         )
         services = model["services"]
         operator = "ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS"
-        automatic = "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS"
+        embedding = "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL"
         self.assertEqual(
             services["onyx-host-egress-proxy"]["environment"][operator],
             "3210,11434",
         )
         self.assertEqual(
-            services["onyx-host-egress-proxy"]["environment"][automatic],
-            "true",
+            services["onyx-host-egress-proxy"]["environment"][embedding],
+            "http://host.docker.internal:8337/v1/embeddings",
         )
         self.assertEqual(
             services["onyx-public-egress-proxy"]["environment"][operator], "none"
         )
         self.assertEqual(
-            services["onyx-public-egress-proxy"]["environment"][automatic],
-            "false",
+            services["onyx-public-egress-proxy"]["environment"][embedding], ""
         )
         for name, service in services.items():
             if name not in {
                 "onyx-host-egress-proxy",
                 "onyx-public-egress-proxy",
+                "local-embedding-shim",
             }:
                 self.assertNotIn(operator, service.get("environment", {}))
-                self.assertNotIn(automatic, service.get("environment", {}))
+                self.assertNotIn(embedding, service.get("environment", {}))
+
+        lite = _compose_model("lite")["services"]
+        self.assertEqual(
+            lite["onyx-host-egress-proxy"]["environment"][embedding], ""
+        )
 
     def test_integration_lan_option_reaches_only_host_policy_and_route_owner(
         self,

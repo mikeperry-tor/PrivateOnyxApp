@@ -284,15 +284,16 @@ and proceeds to create the API/background tier only after that succeeds. A
 failure is returned without retry and leaves the diagnostic subset running;
 already-running API/background services are not recreated by a later failed
 validation. The response and logs expose no API key or upstream response body.
-The default plain-HTTP `host.docker.internal:3210` endpoint uses the
-stack-owned bundled-full grant even when the operator list is `none` and public
-cleartext URLs are disabled. Custom host endpoints require their actual port;
-arbitrary public HTTP destinations remain blocked. RFC1918 HTTP destinations
-are available to the configured embedding integration only when
-`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Use an RFC1918 literal or a
-`.local`, `.internal`, or `.home.arpa` name whose complete DNS answer set
-validates as RFC1918. Empty or failed lookups for those operator-local suffixes
-fail closed without external DNS/proxy fallback. This setting does not give
+Full mode gives the host policy only the exact authority parsed from
+`ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`, even when the operator host-port list is
+`none` and broad LAN access is disabled. This covers exact
+`host.docker.internal`, RFC1918 literals, and `.local`, `.internal`, or
+`.home.arpa` names whose complete system-DNS answer set validates as RFC1918.
+Empty, failed, non-RFC1918, or mixed local answers fail closed without
+external DNS/proxy fallback. The configured local embedding authority connects
+directly rather than traversing `EGRESS_UPSTREAM_PROXY_URL`; other local
+authorities remain denied unless separately permitted. Arbitrary public HTTP
+destinations remain blocked. This endpoint-specific permission does not give
 agent browsing or generated code access to the embedding endpoint or LAN.
 
 ## Why The Shim Exists
@@ -382,10 +383,11 @@ small host lifecycle proxy when the shim uses the bundled default URL. It skips
 this startup when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` selects Teep or another
 custom service. A clean custom-upstream start does not execute the host process
 manager. During a bundled-to-custom transition, startup first applies policy
-with automatic 3210 false and proves the host bridge, then validates the custom
-embedding endpoint, and only then uses the ownership record to stop a live old
-wrapper-owned proxy. Either failure retains it for diagnosis. Lite mode never
-selects either host service. The proxy accepts only bounded `POST /v1/embeddings` requests,
+with only the new configured embedding authority and proves the host bridge,
+then validates the custom embedding endpoint, and only then uses the ownership
+record to stop a live old wrapper-owned proxy. Either failure retains it for
+diagnosis. Lite mode never selects either host service. The proxy accepts only
+bounded `POST /v1/embeddings` requests,
 starts the pinned `mlx-openai-server` child on the first request, and unloads
 the child ten minutes after the last active request completes. Concurrent cold
 requests share one startup, and a request is forwarded exactly once: a child
@@ -488,15 +490,15 @@ flow.
 
 `make up-full` owns the bundled default URL and binds its lifecycle proxy to
 host port 3210; its MLX child binds only to `127.0.0.1:3211`. The Docker-side
-shim reaches it through the automatic stack-owned 3210 grant. That grant is
-part of the applied policy until recreation/removal, not a liveness monitor.
+shim reaches it through the exact configured embedding authority installed in
+the full-mode host policy. That authority is part of the applied policy until
+recreation/removal, not a liveness monitor.
 
 To use Teep instead of the bundled MLX server, configure:
 
 ```env
 ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:8337/v1/embeddings"
 ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B"
-ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS="8337"
 ```
 
 Use the configured `HOST_PORT_TEEP` in the URL if it is not `8337`.
@@ -505,13 +507,11 @@ controls the bundled MLX download/server and serves as the shim's fallback
 model when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL` is unset. The shim reaches
 Teep through its fixed host publisher, not the internal `teep` service name.
 
-Teep port 8337 (or the actual `HOST_PORT_TEEP`) must be selected explicitly.
-If the embedding service instead uses an RFC1918 literal or a
-`.local`, `.internal`, or `.home.arpa` LAN name, set:
-
-```env
-ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true
-```
+Teep port 8337 (or the actual `HOST_PORT_TEEP`) is permitted automatically only
+because it is the exact configured embedding authority. An RFC1918 literal or
+a `.local`, `.internal`, or `.home.arpa` LAN name receives the same
+endpoint-specific treatment without enabling broad LAN access; names must
+resolve entirely to RFC1918 addresses.
 
 The shim itself has no direct route. It uses HTTP absolute-form or HTTPS
 CONNECT through `onyx-host-egress-bridge`, verifies TLS, reuses pooled
@@ -647,9 +647,8 @@ Common failure modes:
 - Indexing starts but embedding fails with connection errors: confirm the host
   embedding server is running at `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`,
   `onyx-host-egress-bridge` and its final-hop proxy are healthy,
-  `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` is set only when the configured
-  endpoint is on an RFC1918 LAN, and the URL uses a container-reachable host
-  name.
+  the configured local name resolves entirely to RFC1918 addresses, and the URL
+  uses a container-reachable host name.
 - Search returns weak results after successful indexing: verify query prefix
   logs, embedding dimension, model identity, and whether old documents were
   indexed with a different model or prefix.

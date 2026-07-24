@@ -96,11 +96,9 @@ ifeq ($(strip $(ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL)),)
 override ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL := $(ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL)
 endif
 EMBEDSERV_MODE := $(if $(filter $(EMBEDSERV_DEFAULT_UPSTREAM_URL),$(ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL)),bundled,custom)
-FULL_BUNDLED_MLX_HOST_ACCESS := $(if $(filter bundled,$(EMBEDSERV_MODE)),true,false)
 export ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL
 export ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL
 export ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL
-export EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS
 PODMAN_COMPOSE_PROVIDER ?= podman
 ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
@@ -605,7 +603,6 @@ executor-build:
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
-up-lite: override EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS := false
 check-container-health-capability:
 	@set -eu; \
 	case "$(CONTAINER_BIN)" in \
@@ -677,7 +674,6 @@ endif
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
-up-full: override EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS := $(FULL_BUNDLED_MLX_HOST_ACCESS)
 up-full: wrapper-config-preflight claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db

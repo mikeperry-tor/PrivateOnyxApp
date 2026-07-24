@@ -24,7 +24,6 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL",
             "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL",
             "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL",
-            "EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS",
         ):
             clean_environment.pop(name, None)
         clean_environment.update(environment or {})
@@ -407,12 +406,6 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             )
             self.assertEqual(
                 self._simple_make_value(
-                    bundled, "FULL_BUNDLED_MLX_HOST_ACCESS"
-                ),
-                "true",
-            )
-            self.assertEqual(
-                self._simple_make_value(
                     bundled, "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL"
                 ),
                 "http://host.docker.internal:3210/v1/embeddings",
@@ -430,12 +423,6 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             self.assertEqual(
                 self._simple_make_value(custom_database, "EMBEDSERV_MODE"),
                 "custom",
-            )
-            self.assertEqual(
-                self._simple_make_value(
-                    custom_database, "FULL_BUNDLED_MLX_HOST_ACCESS"
-                ),
-                "false",
             )
             self.assertEqual(
                 self._simple_make_value(
@@ -536,17 +523,13 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertNotIn(";", readiness)
         self.assertNotIn(";", cleanup)
 
-    def test_stack_targets_close_automatic_host_policy_selection(self) -> None:
+    def test_stack_targets_use_canonical_embedding_url_without_legacy_boolean(
+        self,
+    ) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        self.assertIn(
-            "up-lite: override EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS := false",
-            makefile,
-        )
-        self.assertIn(
-            "up-full: override EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS := "
-            "$(FULL_BUNDLED_MLX_HOST_ACCESS)",
-            makefile,
-        )
+        self.assertNotIn("EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS", makefile)
+        self.assertNotIn("FULL_BUNDLED_MLX_HOST_ACCESS", makefile)
+        self.assertIn("export ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL", makefile)
         full_prerequisites = next(
             line
             for line in makefile.splitlines()

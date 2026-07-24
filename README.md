@@ -149,9 +149,9 @@ Most likely variables you want to change:
   - For detailed Tor behavior and the full routing matrix, see [`docs/native_tor_support.md`](docs/native_tor_support.md) and [`docs/vpn_routing_and_proxies.md`](docs/vpn_routing_and_proxies.md).
 - **Docker-host integration ports and optional LAN access**:
   - `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` selects which TCP ports configured integrations may reach at exact `host.docker.internal`. Its default is `none`; use a numeric comma-separated list for trusted services, or `all` to deliberately restore the former any-port exposure.
-  - A bundled-MLX `make up-full` start automatically and visibly adds only port 3210. Lite mode and custom-embedding full mode add no automatic port. The applied grant lasts until the host policy is recreated or removed; it does not authenticate or track whichever process later occupies the port.
-  - Teep (8337 by default), Ollama, LM Studio, MCP servers, and every other custom host service require their actual port in the list. Full startup fails closed when the selected custom host embedding endpoint's port is absent.
-  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let explicitly configured MCP servers, Web Connectors, embedding servers, and LLM inference providers reach services on your private LAN. MCP and Web Connector access also requires a compatible SSRF setting under **Admin → Security Hardening** that will be set correctly by default, but should not be changed.
+  - Full mode automatically allows only the exact host/LAN authority selected by `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`. `EGRESS_UPSTREAM_PROXY_URL` receives the same endpoint-only treatment in every mode. Neither authority needs the broad host-port or LAN option, and neither grants another destination on the same machine or network.
+  - Teep (8337 by default), Ollama, LM Studio, MCP servers, and other custom host services still require their actual port in the list when used for anything other than the configured embedding or upstream-proxy role.
+  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let other explicitly configured MCP servers, Web Connectors, and LLM inference providers reach services on your private LAN. MCP and Web Connector access also requires a compatible SSRF setting under **Admin → Security Hardening** that will be set correctly by default, but should not be changed.
   - LAN service destinations require an RFC1918 IP literal or a name ending in `.local`, `.internal`, or `.home.arpa`; failed, empty, or mixed public/private lookups are rejected.
   - This setting does **not** give agent web search, `open_url()`, browser activity, or generated code access to your host, LAN, private addresses, metadata endpoints, or stack-managed services. Those agent-controlled paths remain public-only (or have no network at all).
   - Exact selected host ports do not require the LAN option. If the Onyx application becomes fully compromised, it can reach selected host ports; enabling LAN access additionally retains a possible path through a known RFC1918 host-gateway address. The agent’s public tools still cannot select either route.
@@ -242,8 +242,9 @@ TOR_EXIT_NODE_FINGERPRINTS=""
 through a private Unix SOCKS socket.  Applications do not receive the socket or
 a Tor/public network, target DNS is owned by Tor, and a stopped Tor daemon or
 unavailable selected exit fails closed. Internal, selected exact-host ports,
-and explicitly allowed LAN integration routes retain direct exceptions. General
-outbound `.onion` browsing is not a supported feature.
+the exact configured embedding/proxy authorities, and explicitly allowed LAN
+integration routes retain direct exceptions. General outbound `.onion`
+browsing is not a supported feature.
 
 Native Tor egress currently covers agent-controlled and configured-external
 final-hop policy paths only. It does not route Teep provider connections or
@@ -340,15 +341,14 @@ EGRESS_UPSTREAM_PROXY_URL="socks5://proxy.example.com:1080"
 EGRESS_UPSTREAM_PROXY_URL="socks5h://proxy.example.com:1080"
 ```
 
-An exact host Tor proxy
-(via `EGRESS_UPSTREAM_PROXY_URL=socks5h://host.docker.internal:9150`) does not
-require either host integration port 9150 or
-`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. The configured proxy authority is
-independent routing infrastructure; an ordinary host-route request to port
-9150 is still denied unless 9150 is separately selected. Choosing a host- or
-LAN-based upstream proxy only makes that proxy available as routing
-infrastructure; it does not give agent browsing or generated code permission to
-access other host or LAN destinations.
+A configured proxy at exact `host.docker.internal`, an RFC1918 literal, or an
+operator-local `.local`, `.internal`, or `.home.arpa` name does not require a
+host integration port or `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`.
+Operator-local names must resolve entirely to RFC1918 addresses. The configured
+proxy authority is independent routing infrastructure; an ordinary host-route
+request to the same authority is still denied unless separately permitted.
+Choosing a host- or LAN-based upstream proxy does not give agent browsing or
+generated code permission to access other host or LAN destinations.
 
 Invalid upstream proxy URLs fail policy-proxy startup.
 
@@ -560,8 +560,9 @@ untracked-listener mode. `make down-full` stops only the identity-validated
 wrapper-managed proxy. A live proxy drains accepted requests and stops its
 exact in-memory child. Lite mode never starts a host embedding or document
 process. Full mode skips MLX launch for Teep or another custom upstream.
-During a transition it first removes automatic 3210, proves bridge and
-replacement readiness, and only then stops a previously recorded live proxy.
+During a transition it first applies the new exact configured embedding
+authority, proves bridge and replacement readiness, and only then stops a
+previously recorded live proxy.
 An untracked proxy on 3210 or an orphaned child on loopback 3211 after a crash
 fails the next bundled start and requires manual host diagnosis. Docker's document server is
 containerized, while the separate host document process exists only in Podman
@@ -582,7 +583,6 @@ model in `.env.wrapper`:
 ```env
 ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="http://host.docker.internal:8337/v1/embeddings"
 ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B"
-ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS="8337"
 ```
 
 Teep uses `TEEP_NEARAI_API_KEY` from the `.env.wrapper` file for the upstream
@@ -592,8 +592,9 @@ MLX flow. `make up-full` sees the custom Teep URL and does not start MLX.
 
 Use `host.docker.internal` here because this setting identifies an embedding
 endpoint running on the Docker host; stack-managed service names are not a
-user-configurable addressing surface for this option. Port 8337 is not allowed
-by default; select the actual `HOST_PORT_TEEP` value.
+user-configurable addressing surface for this option. Full mode permits only
+this configured authority automatically, including the actual
+`HOST_PORT_TEEP` value in the URL.
 
 ### Optional: Embedding Model Configuration in Onyx
 
@@ -672,8 +673,8 @@ The following endpoints are exposed to your docker host:
 
 This is an inbound host/operator inventory, not a container-to-host allowlist.
 Published ports 3000, 8080, 8091, and 8337 are not automatically reachable by
-Onyx containers. Port 3210 is added only while the applied full-stack policy
-selects bundled MLX; it is not a general browser endpoint.
+Onyx containers. The authority selected by the full-mode embedding URL is the
+only endpoint-specific exception; port 3210 is not a general browser endpoint.
 
 ## Privacy and Security of this stack
 
@@ -708,10 +709,11 @@ Configured MCP/Web integrations and inference/embedding endpoints
 can be granted narrower local access. This separation is not a sandbox for a
 fully compromised Onyx application; such a compromise may abuse the local
 destinations that Onyx is configured to use. The operator host-port default is
-`none`; bundled-MLX full mode adds only 3210, while lite and custom-embedding
-full mode add none. `all` deliberately restores any-port exposure, and an
-allowed port authorizes whichever host process occupies it. Enabling separate
-RFC1918 LAN access retains the documented host-gateway-IP residual.
+`none`; full mode separately permits only its exact configured embedding
+authority, while a configured upstream proxy receives only its own authority.
+`all` deliberately restores any-port exposure, and an allowed port authorizes
+whichever host process occupies it. Enabling separate RFC1918 LAN access
+retains the documented host-gateway-IP residual.
 
 By default, the stack uses no VPN, no Tor, and no proxy; only the host VPN (if any)
 is used. VPN, Tor, and proxy settings must be configured in `.env.wrapper`.

@@ -311,9 +311,10 @@ Tailscale, Podman, and optional executor modes that changed. Verify:
   distinct, fixed-destination, and peer authenticated;
 - browser/public/executor share the public policy while host-only exceptions
   remain on the host listener; public search hosts are not locally denied;
-- exact `host.docker.internal` defaults to no ordinary integration ports,
-  bundled-full adds only 3210, and the configured upstream-proxy authority
-  remains usable without becoming an ordinary destination;
+- exact `host.docker.internal` defaults to no ordinary integration ports;
+  full mode adds only its exact configured embedding authority, and the
+  configured upstream-proxy authority remains usable without either becoming
+  an ordinary destination;
 - recreating the host policy forces fresh dependent-bridge health under both
   Docker and Podman, including warm invalid configuration;
 - target DNS is Myst/provider, upstream-owned remote DNS, or explicit no-VPN

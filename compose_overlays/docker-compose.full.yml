@@ -274,6 +274,10 @@ services:
 
   # Model-server-compatible embedding shim for local OpenAI-compatible
   # /v1/embeddings endpoints.
+  onyx-host-egress-proxy:
+    environment:
+      ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL: "${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-http://host.docker.internal:3210/v1/embeddings}"
+
   local-embedding-shim:
     image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
     restart: unless-stopped

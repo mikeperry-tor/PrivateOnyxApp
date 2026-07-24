@@ -92,10 +92,11 @@ proxy settings or caller discipline alone.
   executors never inherit Onyx exceptions.
 - `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` is the user-facing opt-in for
   validated RFC1918 endpoints used by configured MCP/Web integrations,
-  inference providers, and the embedding shim. It must never grant LAN access
-  to generic helpers, `open_url`, browser activity, or executors. Exact
-  `host.docker.internal` is restricted by the operator-default `none` port
-  policy; bundled-MLX full mode alone adds stack-owned port 3210.
+  and inference providers. It must never grant LAN access to generic helpers,
+  `open_url`, browser activity, or executors. Exact `host.docker.internal` is
+  restricted by the operator-default `none` port policy. Full mode separately
+  permits only its exact configured embedding authority; each configured
+  upstream proxy similarly receives only its own authority.
 - Myst and the final-hop proxies are trusted routing-namespace processes.
   Enabling Myst routing for Teep or Tailscale deliberately promotes that
   trusted component into the same namespace, including its loopback,
