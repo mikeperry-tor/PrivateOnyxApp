@@ -10,7 +10,7 @@ The core correctness property is privacy-preserving request handling. Preserve t
 
 These instructions are an orientation layer. They tell you where to look and which repo-wide invariants not to violate; they do not replace the subsystem docs.
 
-Before changing a subsystem, read the matching document below, then inspect the implementation. If the implementation and docs disagree, treat that as a bug to resolve. Do not paper over drift with vague wording.
+Before changing a subsystem, read the matching document below, then inspect the implementation. If the implementation and docs disagree, treat that as a bug to resolve or report. Do not paper over drift with vague wording; do not allow unrelated drift to persist without reporting it to the user.
 
 - `README.md` - user-facing setup instructions, privacy properties, and option consequences. Keep deep implementation details out of this document.
 - `docs/request_handling.md` - direct-Obscura `web_search`, selectable built-in `open_url` transport, lifecycle waits, body/DOM limits, cookies, and anti-bot behavior.
@@ -39,34 +39,13 @@ When a request touches more than one path, read each relevant doc first. Prefer 
 At a high level:
 
 - Users reach nginx through a hardened fixed host publisher or optional fixed Tailscale/onion frontend gateways; nginx stays internal-only.
-- Nginx is the single WebUI health boundary: its local root check traverses the
-  frontend, while API health remains a separate startup dependency. Do not add
-  a duplicate periodic `web_server` health check.
 - There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
-- Full mode stages embedding readiness before replacing the API/background tier
-  and follows the low-idle health, worker, model-lifecycle, search, and storage
-  policy in `docs/resource_minimization.md`. Keep those controls static,
-  explicit, and fail-closed rather than adding runtime administrative work.
-- `embedserv/host_process_manager.py` provides shared lifecycle ownership for
-  wrapper-managed host services. Keep service-specific peer, model, child, and
-  content validation in the services; see `docs/local_docs_rag_search.md` and
-  `docs/podman_suport.md` for selection and shutdown semantics.
-- The recommended local-RAG Admin model name `nomic-ai/nomic-embed-text-v23` is intentionally synthetic: it preserves Onyx's `nomic-ai` feature gates while a strict runtime patch aliases only tokenizer construction to the bundled v1 tokenizer.
-- Ordinary chat uses the standalone code-interpreter service. Its LLM-facing
-  tool name is `run_python`, while its display name remains Code Interpreter.
-  Onyx Craft is a separate OpenCode-based, per-user sandbox environment; this
-  wrapper leaves it disabled because it has no supported Craft sandbox backend
-  or privacy/resource lifecycle policy.
 - Onyx sends LLM requests through the included Teep local inference service.
-- The shared API runtime patches give nested Deep Research agents the tools selected for the current chat Agent and execute complete model-emitted tool batches with bounded concurrency.
 - Onyx `web_search` uses only the wrapper's supported SearXNG engines, which
   render through Obscura; inherited stock engines are absent.
-- Onyx `open_url()` is a chat-time read tool, not an ingestion path. Full mode
-  may prefer an exact-ID indexed copy after concurrent crawler/indexed lookup;
-  the default crawler remains the public-only stock requests/Chromium path.
-- Lite mode keeps crawler-backed `open_url()` available through a strict runtime
-  patch while indexed URL retrieval remains disabled.
-- Setting `ONYX_AGENT_USE_OBSCURA_BROWSER=true` moves only the built-in crawler to the single-navigation Obscura path. At Obscura 0.1.10, testing found the stock crawler was blocked less often; re-evaluate this default on Obscura upgrades.
+- Onyx `open_url()` is a chat-time read tool, not an ingestion or semantic
+  retrieval path. Its indexed/crawler and selectable transport contracts are
+  documented in `docs/request_handling.md`.
 
 ## Network Security
 
@@ -75,51 +54,25 @@ topology, explicit routes, and final-hop destination policy, as documented in
 `docs/internal_network_security.md`. Safety must not depend on application-level
 proxy settings or caller discipline alone.
 
-- SearXNG, Obscura, and optional executor pods use narrow internal networks. Internet traffic crosses component bridges to final-hop policy proxies in the trusted Mysterium routing namespace.
-- Direct callers validate URL syntax without resolving target names; authoritative destination DNS and address validation remain at the final-hop policy.
-- Obscura's narrow network permits its mandatory bridge proxy but no direct
-  Internet route; final-hop policy remains authoritative for target DNS and
-  private-target rejection.
-- Optional native Tor uses one pinned non-root client for outbound Unix-SOCKS
-  final-hop routing and/or v3 onion ingress. Only the two policy proxies receive
-  the read-only SOCKS volume; only the fixed onion gateway spans its ingress
-  network and `onyx-frontend`. Applications receive neither Tor authority.
-  Tor egress permits `http://` only for hosts ending in `.onion`; caller-side
-  validation receives that internal capability from the egress overlay, while
-  the final-hop exception independently requires the fixed Tor socket and
-  delegates onion-name validation to Tor.
-  `WEBUI_CANONICAL_ORIGIN` remains one explicit canonical origin, passed to
-  Onyx internally as `WEB_DOMAIN`.
-- Onyx applications use internal-only networks. Generic helpers use a fixed
-  public bridge, while configured integrations, inference, and embeddings use
-  separate route-class bridges. Direct sockets have no external route, and
-  executors never inherit Onyx exceptions.
+- Applications and executors must not acquire direct fallback egress when a
+  selected bridge, policy proxy, VPN, upstream proxy, or Tor path fails.
+- Authoritative target DNS and private-address rejection remain at the final
+  hop. Caller-side URL checks must not become an alternate, weaker authority.
+- Applications use internal-only networks and separate route-class bridges.
+  Generic helpers and executors must not inherit configured integration,
+  inference, embedding, host, or LAN exceptions.
 - `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` is the user-facing opt-in for
-  validated RFC1918 endpoints used by configured MCP/Web integrations,
-  and inference providers. It must never grant LAN access to generic helpers,
-  `open_url`, browser activity, or executors. Exact `host.docker.internal` is
-  restricted by the operator-default `none` port policy. Full mode separately
-  permits only its exact configured embedding authority; each configured
-  upstream proxy similarly receives only its own authority.
+  validated RFC1918 endpoints used by configured integrations and inference
+  providers. It must never grant LAN access to generic helpers, `open_url`,
+  browser activity, or executors.
 - Myst and the final-hop proxies are trusted routing-namespace processes.
   Enabling Myst routing for Teep or Tailscale deliberately promotes that
   trusted component into the same namespace, including its loopback,
   interfaces, routes, and policy listeners. Their fixed gateways constrain
   application ingress; they are not a sandbox between co-resident processes.
-- Myst route/MTU reconciliation and post-readiness recovery each have one
-  socket-free owner. Preserve their bounded, fail-closed behavior and the
-  startup/no-VPN non-arming rules documented in
-  `docs/vpn_routing_and_proxies.md` and `docs/resource_minimization.md`.
-- In default no-VPN mode, `netns-holder` remains the namespace owner and the
-  Myst container runs only an inert readiness sentinel. Do not start the Myst
-  daemon or route-reconciliation loop in that mode.
-- Myst signup is a non-restarting, host-driven workflow separate from integrated
-  startup. Never retry an ambiguous financial mutation; see
-  `docs/onyx_patches_upgrade.md` when upgrading Myst.
-- Optional Onyx telemetry, third-party analytics/tracing, cloud billing,
-  CAPTCHA, and remote configuration/data-list fetches are disabled; intentional
-  local administrative analytics and release-note behavior are documented in
-  `docs/onyx_patches_upgrade.md`.
+- Optional VPN, proxy, Tor, and no-VPN lifecycles must preserve their documented
+  fail-closed ownership and non-arming behavior. Never retry an ambiguous
+  financial mutation.
 - Nginx adds a restrictive WebUI CSP because browser requests are outside the
   container routing boundary. Preserve the tested policy and its documented
   compatibility exception; do not describe it as complete XSS prevention.
@@ -177,18 +130,23 @@ Those bullets are only a map. Read the docs above before changing any runtime ne
 
 Use the Makefile instead of hand-assembling compose commands unless you are debugging the Makefile itself.
 
-- `make help` - list supported targets and key overrides.
+- `make help` is a user-facing command index. Add targets to it only for
+  user-facing workflows or key bug-report diagnostics; keep internal
+  development and component-scoped targets in this file or the owning
+  subsystem document.
 - `make test` - run the deterministic Python suite without requiring images,
   credentials, a running stack, or the private `.env.wrapper` contents.
 - `make check` - run `make test`, compile repository runtime/test Python paths,
   validate `make help`, and run `git diff --check`. Use this as the normal
-  development pre-handoff check.
+  pre-handoff check when implementation, configuration, tests, or build/runtime
+  tooling changes.
 - `make test-patch-images` - install strict runtime patches against the
   already-built pinned Onyx, code-interpreter, and derived SearXNG images,
-  then run the SearXNG parser tests that need image dependencies. Use it for
-  changes to those patches, images, the derived executor, or SearXNG parsers;
-  It does not pull or build missing images or permit validation-container networking;
-  use the reported build target first.
+  then run the SearXNG parser tests that need image dependencies. Use it for a
+  focused Onyx runtime patch, code-interpreter/executor, or SearXNG image/parser
+  change; do not invoke the Tor or OpenSearch image gates. It does not pull or
+  build missing images or permit validation-container networking; use the
+  reported build target first.
 - `make test-tor-image` - validate the selected local Tor base/derived image
   contract, hardened runtime, Unix sockets, volume ownership, and authenticated
   control path. Use it only for Tor image, config, mount, ownership, health, or
@@ -197,8 +155,9 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   isolated disposable environment. Use it only for the OpenSearch pin,
   configuration, audit policy, or image-validation workload.
 - `make test-all-images` - run `make test-patch-images`,
-  `make test-tor-image`, and `make test-opensearch-image`. Use it for broad or
-  multi-component image work, not an unrelated focused change.
+  `make test-tor-image`, and `make test-opensearch-image`. Reserve it for
+  changes spanning multiple image families or broad release validation; do not
+  use it for unrelated focused work.
 - `make check-upgrade` - run `make check` followed by
   `make test-all-images`. Use it after the broad `make upgrade` flow or as a
   release-wide image gate before the practical live validation matrix.
@@ -208,9 +167,6 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
 - `make up-lite` / `make up-full` - start the selected stack; full mode also
   performs its documented staged embedding-readiness flow; `CONTAINER_BIN` selects
   between docker and podman runtimes for the stack.
-- Shared-data directory access checks fail closed on Docker/Podman runtime
-  ownership status. Use `make adopt-shared-data-engine` to reset ownership
-  only after verifying both engines are down; see `docs/podman_suport.md`.
 - `make health-inventory` - render the Makefile-selected engine/environment and
   optional overlays for lite/full healthcheck commands, startup/steady
   cadences, and approximate steady checks per hour.
@@ -226,13 +182,13 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
 - `make onyx-build`, `make executor-build`, `make searxng-build`,
   `make myst-build`, and `make teep-build` - image builds. The Docker-only
   executor image is derived from its pinned upstream release plus the hashed
-  `executor/requirements.txt` lock and includes SymPy.
-- `make embedserv-install` and `make embedserv-verify-model` prepare optional
-  local MLX embeddings; `make up-full` owns the supported lifecycle.
+  `executor/requirements.txt` lock.
 
 `make up-lite` and `make up-full` generate ephemeral local secrets on every start, including SearXNG, Onyx auth, and MinIO credentials. Do not move those secrets (or any other new ephemeral secrets) into `.env.wrapper.example`.
 
-Do not read or modify the custom `.env.wrapper` unless specifically asked to do so. You may source this file into your environment without reading the contents, to apply the environment to service restart and patch diagnosis.
+Do not display, inspect, modify, stage, or shell-source the custom
+`.env.wrapper` unless specifically asked to do so. Pass it through the
+supported Make and Compose mechanisms when its configuration is needed.
 
 ## Repository Rules
 
@@ -245,17 +201,23 @@ This stack protects private research, document contents, browsing behavior, infe
 - Prefer structured parsers or compose-aware inspection over ad hoc text hacks when changing configuration formats.
 - Prefer component-configurable behavior over shims and patches.
 - Remove shims and patches when component configuration options or other updates are discovered that could provide the desired functionality.
-- Don't preserve compatibility for old behavior. Prefer current, explicit behavior over indefinite backwards compatibility.
+- Don't preserve compatibility for old behavior unless the user specifically
+  requests it. Prefer current, explicit behavior over backwards compatibility.
 - Keep optional features opt-in and visibly configured.
-- The stack must run on both Mac and Linux hosts, with the exception of the MLX server. All tests that probe platform-specific capability should detect the current platform and not on other kinds of hosts.
+- Preserve the documented Docker/Podman and macOS/Linux support matrix. Do not
+  assume that documented engine-specific behavior is interchangeable, and
+  avoid introducing new platform dependencies.
 
 ### General Failure Handling
 
 - Fail loudly and fail closed, especially for patch application and patch error handling.
 - Do not add silent fallbacks, broad error suppression, `|| true`, direct-network bypasses, empty-result substitutes, or weaker parser paths unless the user explicitly asks for that behavior.
 - Shell scripts should use strict error handling where practical and should not hide failing commands that affect privacy, routing, or validation.
-- Python sidecars should return clear HTTP errors and log non-secret reasons.
-- Patches and overlay modifications should self-validate their application and halt service health or stack launch otherwise.
+- Python sidecars should return clear protocol-appropriate errors and log
+  non-secret reasons.
+- Privacy-, routing-, and runtime-patch-critical assumptions should be
+  startup-validated and halt service health or stack launch when they do not
+  hold.
 - Keep image/tag resolution, patch application, routing setup, proxy setup, and validation checks as visible non-secret failures.
 
 ### Component-Specific Rules
@@ -271,25 +233,22 @@ This stack protects private research, document contents, browsing behavior, infe
     environment handling.
   - Onyx applications must never join `netns-holder` or gain direct fallback when VPN, policy-proxy, or bridge connectivity fails.
 - Request handling:
-  - Keep supported search engines on the shared direct-Obscura path and preserve their atomic pre-thread provider reservation.
-  - Preserve `open_url`'s chat-time exact-ID reuse semantics: it must not ingest
-    crawled pages, replace `internal_search`, or turn URL opening into semantic
-    retrieval. Indexed and crawler work remain failure-tolerant siblings, with
-    indexed content preferred only after both paths complete.
+  - Keep supported search engines on the shared direct-Obscura path.
+  - Preserve `open_url` as a chat-time read operation. It must not ingest
+    crawled pages, replace `internal_search`, or become semantic retrieval.
   - Keep the built-in crawler's default stock requests/local-Chromium transport
     public-only; switching it to Obscura must not alter SearXNG's path.
-  - Keep `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` authoritative for the built-in
-    crawler in both transports without extending it to indexed retrieval,
-    external providers, background ingestion, or SearXNG search limits.
-  - When explicitly switched to Obscura, preserve one navigation, event-based
-    waits, anti-bot visibility, cleanup, and body/DOM limits. Re-test the
-    default on Obscura upgrades.
-  - Do not add other hidden retries, fallbacks, or fixed sleeps.
+  - Do not add hidden retries, fallbacks, or fixed sleeps.
 - Documentation:
-  - Update docs and AGENTS.md when behavior, defaults, commands, routing, or optional feature semantics change.
-  - AGENTS.md is for orientation material; specifics belong in the docs directory.
+  - Update AGENTS.md only when repository-wide invariants, documentation
+    routing, supported workflows, or key locations change. Put subsystem
+    behavior and validation details in the owning document.
   - README.md is for user-facing deployment properties, not implementation details.
-  - Remove/replace obsolete text instead of keeping historical sections or adding dated journal entries.
+  - In normative README and subsystem documentation, remove or replace obsolete
+    text instead of retaining historical sections.
+  - Files under `docs/plans/implemented/` are historical implementation records.
+    Preserve them as records, but do not append progress journals or post-
+    implementation fix diaries to them.
 - Patch upgrades:
   - Before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`.
   - Runtime patches should remain narrow, startup-validated, strict by default, and documented.
@@ -297,10 +256,9 @@ This stack protects private research, document contents, browsing behavior, infe
     download browsers. Change dependency inputs deliberately, regenerate hashed
     locks with `make upgrade-python-deps`, and commit the resulting lock files.
 - Local RAG compatibility:
-  - Preserve the exact fake-nomic saved model name and tokenizer-only alias unless Onyx's feature gates are deliberately reworked.
   - Do not enable Craft or its cleanup schedule without adding and documenting a supported sandbox backend.
-  - The Onyx PDF parser operates by producing parsing results on stdout. Onyx bootstrap diagnostics must stay on stderr because isolated child stdout carries a pickled result.
-  - Bootstrap or process-isolation changes require a real PDF extraction test.
+  - Follow `docs/local_docs_rag_search.md` for embedding-model compatibility,
+    bootstrap process isolation, and required PDF extraction validation.
 - Untracked stack files:
   - Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data.
     Do not read, stage, or rewrite them unless the user explicitly asks.
@@ -313,61 +271,35 @@ This stack protects private research, document contents, browsing behavior, infe
 ### Testing and Validation
 
 - Baseline workflow:
-  - Use `make check` as the normal deterministic development and pre-handoff
-    validation.
-  - After the broad `make upgrade` flow, run `make check-upgrade` against all
-    newly produced images.
-  - For a focused Onyx runtime patch, code-interpreter/executor, or SearXNG
-    image/parser change, run `make check` and `make test-patch-images`; do not
-    invoke the Tor or OpenSearch image gates.
-  - For a focused Tor image/config/runtime-contract change, run `make check`
-    and `make test-tor-image`; do not invoke patch-image or OpenSearch
-    validation.
-  - For a focused OpenSearch pin/config/audit-validation change, run
-    `make check` and `make test-opensearch-image`; do not invoke patch-image or
-    Tor validation.
-  - Use `make test-all-images` only when a change spans multiple image families
-    or when performing broad/release validation. `make check-upgrade` adds the
-    deterministic `make check` gate before it.
+  - Use `make check` as the normal deterministic pre-handoff validation when
+    implementation, configuration, tests, or build/runtime tooling changes.
+  - For changes limited to documentation, AGENTS.md, or plans, inspect the diff
+    and run `git diff --check`; `make check` is not required.
+  - Use the component-scoped image target documented in **Commands** for a
+    focused image or runtime-contract change. Use aggregate image targets only
+    for multi-family or broad release work.
   - Every focused image target must validate the selected local images without
     silently pulling, rebuilding, or substituting another artifact.
   - Keep live stack, browser, VPN, and RAG checks explicit. They can require
     credentials, funding, private configuration, external services, or an
     already-running stack.
+  - All tests that probe OS/platform-specific capability should detect the
+    current OS/platform prior to running the test.
 - Deterministic test coverage:
   - Use `make test` for the complete Python suite. Use the underlying unittest
     command only when focused debugging is useful.
-  - Add focused cases under `tests/` for proxy destination/DNS policy, HTTP
-    framing, bridge-peer authentication, route-class enforcement, executor
-    network selection, and injected executor environment changes.
-  - Runtime-limit patches need cases covering signature drift, configured
-    values, and invalid values.
+  - Do not add tests whose subject is documentation. Test executable behavior
+    and machine-consumed contracts at their source instead.
   - Deterministic tests must not require live Internet access, VPN credentials,
     or the private `.env.wrapper`.
 - Compose and lifecycle changes:
-  - For Compose or Makefile changes, run `make help` and inspect the effective
-    Compose model for every affected mode using the Makefile's layering.
+  - For Compose or Makefile changes, inspect the effective Compose model for the
+    affected Makefile-selected engine/mode/feature combinations identified by
+    the owning subsystem's validation matrix.
   - For startup changes, run the relevant `make up-lite` or `make up-full`, then
     inspect `make ps-*` and targeted service logs when practical.
-- Request and routing changes:
-  - For request-path changes, exercise a real `web_search` query and a real
-    `open_url` request. Inspect SearXNG, Obscura, CDP gateway, API, bridge, and
-    final-hop logs as needed.
-  - For VPN/proxy changes, verify namespace membership, egress path,
-    `NO_PROXY` behavior, and the absence of direct host-port or direct-network
-    bypasses.
-- Runtime patch and component changes:
-  - For Onyx patches, confirm strict-mode startup success diagnostics and
-    exercise the patched behavior.
-  - For Python executor dependency changes, rebuild the derived executor,
-    verify its exact package version without network access, and exercise a
-    real code-interpreter call. Keep package descriptions aligned with the
-    validated executor contents.
-  - For full-mode RAG, test doc-drop crawling, PDF freshness/reindexing,
-    embedding-shim health, and `internal_search`.
-  - For SearXNG engines, test every affected custom engine with a real query.
-  - For code-interpreter routing/proxy changes, test disabled and enabled modes
-    and confirm that LLM-facing capability text matches executor networking.
+  - Run the deterministic, image, lifecycle, and live checks required by each
+    affected subsystem document.
 - Incomplete validation:
   - If a relevant check cannot be run safely, state exactly what was omitted
     and why.

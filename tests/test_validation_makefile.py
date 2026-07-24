@@ -97,22 +97,5 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertIn('if [ "$validate_code_interpreter" = true ]', IMAGE_SCRIPT)
         self.assertIn("supported Podman model omits", IMAGE_SCRIPT)
 
-    def test_upgrade_flow_is_documented_for_agents_and_maintainers(self) -> None:
-        agents = (ROOT / "AGENTS.md").read_text()
-        upgrade_notes = (ROOT / "docs" / "onyx_patches_upgrade.md").read_text()
-        for document in (agents, upgrade_notes):
-            self.assertIn("make check-upgrade", document)
-            self.assertIn("make test-patch-images", document)
-            self.assertIn("make test-all-images", document)
-        self.assertIn("focused Onyx runtime patch", agents)
-        self.assertRegex(
-            agents,
-            r"do not\s+invoke the Tor or OpenSearch image gates",
-        )
-        self.assertIn("only when a change spans multiple image families", agents)
-        self.assertIn("Runtime startup must not install packages", agents)
-        self.assertIn("onyx/onyx_data/deployment/.env", agents)
-
-
 if __name__ == "__main__":
     unittest.main()
