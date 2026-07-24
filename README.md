@@ -8,7 +8,7 @@ Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0
 
 Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are stable in the default web crawler, but are varied per-navigation in Obscura. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
 
-Agent Internet traffic uses an explicit no-VPN route by default. Operators can optionally enable [Mysterium](https://github.com/mysteriumnetwork/node), configure an upstream proxy, combine the two, or enable native Tor egress to further reduce tracking. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route to prevent direct-network, proxy bypass, and DNS leaks.
+Users can optionally enable [Mysterium VPN](https://github.com/mysteriumnetwork/node), configure an upstream proxy, combine the two, or enable native Tor egress to further reduce tracking. Tor onion service access is supported in the Tor egress mode. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route to prevent direct-network, proxy bypass, and DNS leaks.
 
 [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for your client device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it
 does not create a Tailnet or use the Tailscale VPN itself, either.
@@ -49,7 +49,7 @@ The Docker Compose files in this stack relies on the following components:
 
 2. [Teep](https://github.com/13rac1/teep) provides private verified LLM inference via a local OpenAI-compatible proxy on port 8337. Teep supports [multiple private inference providers](https://github.com/13rac1/teep#supported-providers), and verifies attestation, encryption, and remote runtime properties before requests are allowed to proceed.
 
-3. [Tor](https://hub.docker.com/r/dockurr/tor) can be optionally used to route agent Internet traffic through native Tor egress, expose the WebUI as a persistent v3 onion service, or provide both roles concurrently.
+3. [Tor](https://hub.docker.com/r/dockurr/tor) can be optionally used to route agent Internet traffic through native Tor egress, expose the WebUI as a persistent v3 onion service, or provide both roles concurrently. When Tor is enabled, the Agent can also access onion service URLs.
 
 4. [Mysterium](https://github.com/mysteriumnetwork/node) is an optional WireGuard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. It is disabled by default. Enabling it can reduce captchas and rate limiting by search engines and websites through residential exit addresses. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users to reduce captcha and ban frequency. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
@@ -243,8 +243,10 @@ through a private Unix SOCKS socket.  Applications do not receive the socket or
 a Tor/public network, target DNS is owned by Tor, and a stopped Tor daemon or
 unavailable selected exit fails closed. Internal, selected exact-host ports,
 the exact configured embedding/proxy authorities, and explicitly allowed LAN
-integration routes retain direct exceptions. General outbound `.onion`
-browsing is not a supported feature.
+integration routes retain direct exceptions. Native Tor egress also permits
+`http://` destinations whose host ends in `.onion` without enabling general
+clearnet HTTP. The wrapper does not pre-validate the onion address; Tor remains
+authoritative for onion-name validation and connection handling.
 
 Native Tor egress currently covers agent-controlled and configured-external
 final-hop policy paths only. It does not route Teep provider connections or

@@ -177,6 +177,13 @@ public redirect, private/loopback initial URL and redirect, NXDOMAIN, broken
 bridge, and remote-DNS upstream mode. SearXNG must remain direct Obscura under
 both preference values.
 
+Exercise HTTP onion initial URLs and redirects in both crawler modes. The API
+capability must be present only in the native-Tor egress Compose model, the
+shared validator must accept any normalized host ending in `.onion` without
+pre-validating its address, and the final-hop exception must require the fixed
+Tor Unix socket. Clearnet HTTP and non-Tor remote-DNS upstreams must remain
+denied when `EGRESS_ALLOW_HTTP_URLS=false`.
+
 The current default reflects parallel testing in which the stock crawler was
 blocked less often and was substantially more reliable than Obscura 0.1.10.
 Every Obscura pin upgrade must repeat comparable parallel URL batches and

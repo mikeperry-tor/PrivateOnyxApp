@@ -56,6 +56,29 @@ class ObscuraClientTests(unittest.TestCase):
             with self.assertRaises(ObscuraClientError, msg=value):
                 normalize_public_url(value, allow_http=False)
 
+    def test_http_onion_requires_narrow_transport_capability(self):
+        onion_url = "http://service.subdomain.onion/path"
+        normalized, fragment = normalize_public_url(
+            onion_url,
+            allow_http=False,
+            allow_http_onion=True,
+        )
+        self.assertEqual(normalized, onion_url)
+        self.assertIsNone(fragment)
+
+        for value in (
+            onion_url,
+            "http://onion/",
+            "http://service.onion.example/",
+            "http://example.com/",
+        ):
+            with self.subTest(value=value), self.assertRaises(ObscuraClientError):
+                normalize_public_url(
+                    value,
+                    allow_http=False,
+                    allow_http_onion=False,
+                )
+
     def test_sync_adapter_rejects_nested_event_loop(self):
         async def nested():
             with self.assertRaisesRegex(RuntimeError, "active event loop"):

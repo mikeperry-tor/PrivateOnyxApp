@@ -73,11 +73,14 @@ signal; clients do not reconnect or navigate a second time.
 
 ## Destination validation
 
-Client-side URL validation accepts only explicit `https`, or `http` when
-`EGRESS_ALLOW_HTTP_URLS=true`; rejects credentials, fragments, invalid IDNA,
-canonical internal names, and `file:`; and deliberately does not perform
-target DNS. Authoritative resolution and address validation stay at the final
-hop so the connection uses the same approved answer.
+Client-side URL validation accepts explicit `https`, general `http` only when
+`EGRESS_ALLOW_HTTP_URLS=true`, and `http` hosts ending in `.onion` only when
+the Tor egress layer supplies its internal capability. It rejects credentials,
+fragments, invalid IDNA, canonical internal names, and `file:`, and deliberately
+does not perform target DNS. The final-hop proxy independently requires its
+fixed Tor socket for the onion HTTP exception. Authoritative resolution and
+address validation stay at the final hop so the connection uses the same
+approved answer.
 
 For wrapper-resolved routes, the final-hop proxy denies loopback, link-local,
 metadata, Docker/Podman internal names, multicast, unspecified, reserved,

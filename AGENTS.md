@@ -84,6 +84,10 @@ proxy settings or caller discipline alone.
   final-hop routing and/or v3 onion ingress. Only the two policy proxies receive
   the read-only SOCKS volume; only the fixed onion gateway spans its ingress
   network and `onyx-frontend`. Applications receive neither Tor authority.
+  Tor egress permits `http://` only for hosts ending in `.onion`; caller-side
+  validation receives that internal capability from the egress overlay, while
+  the final-hop exception independently requires the fixed Tor socket and
+  delegates onion-name validation to Tor.
   `WEBUI_CANONICAL_ORIGIN` remains one explicit canonical origin, passed to
   Onyx internally as `WEB_DOMAIN`.
 - Onyx applications use internal-only networks. Generic helpers use a fixed

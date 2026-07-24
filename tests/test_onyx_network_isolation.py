@@ -174,6 +174,12 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertNotIn("tor-frontend-gateway", egress["services"])
         self.assertNotIn("tor-ingress", egress["networks"])
         self.assertIn("tor-runtime", egress["volumes"])
+        self.assertEqual(
+            egress["services"]["api_server"]["environment"][
+                "EGRESS_ALLOW_HTTP_ONION_URLS"
+            ],
+            "true",
+        )
 
         onion = _compose_model(
             "lite", "docker-compose.tor.yml", "docker-compose.tor-onion.yml"
@@ -181,6 +187,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertIn("tor-frontend-gateway", onion["services"])
         self.assertIn("tor-ingress", onion["networks"])
         self.assertNotIn("tor-runtime", onion.get("volumes", {}))
+        self.assertNotIn(
+            "EGRESS_ALLOW_HTTP_ONION_URLS",
+            onion["services"]["api_server"]["environment"],
+        )
         for proxy in ("onyx-public-egress-proxy", "onyx-host-egress-proxy"):
             self.assertNotIn(
                 "EGRESS_TOR_SOCKS_UNIX_PATH",

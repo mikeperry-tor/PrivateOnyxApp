@@ -69,6 +69,15 @@ def _allow_http() -> bool:
     raise RuntimeError("EGRESS_ALLOW_HTTP_URLS must be a boolean")
 
 
+def _allow_http_onion() -> bool:
+    raw = os.environ.get("EGRESS_ALLOW_HTTP_ONION_URLS", "false").strip().lower()
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    raise RuntimeError("EGRESS_ALLOW_HTTP_ONION_URLS must be exactly true or false")
+
+
 def _validate_proxy() -> str:
     proxy_url = os.environ.get("ONYX_HELPER_HTTP_PROXY_URL", "").strip()
     parsed = urlsplit(proxy_url)
@@ -95,7 +104,11 @@ def _validate_proxy() -> str:
 
 def _normalize(url: str, *, ssrf_exception_type: type[Exception]) -> str:
     try:
-        normalized, _fragment = normalize_public_url(url, allow_http=_allow_http())
+        normalized, _fragment = normalize_public_url(
+            url,
+            allow_http=_allow_http(),
+            allow_http_onion=_allow_http_onion(),
+        )
         return normalized
     except ObscuraClientError as exc:
         raise ssrf_exception_type(str(exc)) from exc
@@ -161,6 +174,7 @@ def install() -> None:
     """Install the public-only transport around the pinned stock crawler."""
     _validate_proxy()
     _allow_http()
+    _allow_http_onion()
     document_limit_bytes = _parse_document_limit()
 
     from onyx.tools.tool_implementations.open_url import onyx_web_crawler

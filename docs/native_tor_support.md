@@ -12,9 +12,11 @@ The wrapper can run one pinned Tor client for two independently selected roles:
 Enabling either role starts the same Tor process. Combined mode deliberately
 shares guard state, resource pressure, and failure fate rather than creating
 two distinguishable Tor clients. Tor runs directly on `tor-uplink`; routing Tor
-through Myst is not implemented. General outbound `.onion` browsing, bridges,
-pluggable transports, relay operation, onion client authorization, arbitrary
-torrc fragments, and automatic identity backup are unsupported.
+through Myst is not implemented. Outbound onion destinations are supported
+through the egress role, including `http://` hosts ending in `.onion` without
+the general cleartext-HTTP opt-in. Bridges, pluggable transports, relay
+operation, onion client authorization, arbitrary torrc fragments, and
+automatic identity backup are unsupported.
 
 `TOR_EXIT_COUNTRY` and `TOR_EXIT_NODE_FINGERPRINTS` optionally constrain
 clearnet exits. They are mutually exclusive, require Tor egress, and do not
@@ -63,6 +65,16 @@ ports, the exact configured local embedding authority, and explicitly allowed
 LAN integration routes retain direct semantics. An unlisted
 `host.docker.internal` port is denied before DNS and never falls through to
 Tor.
+
+The egress layer gives `api_server` one internal capability allowing the stock
+and direct-Obscura `open_url` validators to accept `http://` whenever the
+normalized host ends in `.onion`. Initial URLs and existing redirect/final-URL
+checks use the same rule. The final-hop policy independently permits that
+cleartext scheme only when its fixed native-Tor Unix socket is configured.
+Other remote-DNS upstream proxies do not receive the exception, and ordinary
+clearnet HTTP remains controlled by `EGRESS_ALLOW_HTTP_URLS`. The wrapper does
+not validate the onion name beyond its suffix; the complete hostname,
+including any subdomain, is sent to Tor for authoritative validation.
 
 The onion ingress path is:
 

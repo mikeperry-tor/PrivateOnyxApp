@@ -511,6 +511,10 @@ def _is_trusted_internal_destination(host: str, port: int) -> bool:
     return (_normalize_host(host), port) in TRUSTED_INTERNAL_DESTINATIONS
 
 
+def _is_onion_hostname(host: str) -> bool:
+    return _normalize_host(host).endswith(".onion")
+
+
 def _plain_http_allowed(
     host: str, port: int, validated_ips: tuple[str, ...] = ()
 ) -> bool:
@@ -519,6 +523,7 @@ def _plain_http_allowed(
     )
     return (
         ALLOW_HTTP_URLS
+        or (bool(TOR_SOCKS_UNIX_PATH) and _is_onion_hostname(host))
         or _is_trusted_internal_destination(host, port)
         or _is_configured_local_embedding_destination(host, port)
         or _is_allowed_exact_host_destination(host, port)

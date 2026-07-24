@@ -137,7 +137,9 @@ def _public_ip_literal(host: str) -> bool:
     )
 
 
-def normalize_public_url(url: str, *, allow_http: bool) -> tuple[str, str | None]:
+def normalize_public_url(
+    url: str, *, allow_http: bool, allow_http_onion: bool = False
+) -> tuple[str, str | None]:
     """Validate without resolving the target and remove its fragment."""
     try:
         parsed = urlsplit(url)
@@ -146,10 +148,6 @@ def normalize_public_url(url: str, *, allow_http: bool) -> tuple[str, str | None
         raise ObscuraClientError(
             FetchFailure.INVALID_URL, "validate", "malformed URL"
         ) from exc
-    if parsed.scheme not in ({"https", "http"} if allow_http else {"https"}):
-        raise ObscuraClientError(
-            FetchFailure.INVALID_URL, "validate", "URL scheme is not allowed"
-        )
     if parsed.username is not None or parsed.password is not None:
         raise ObscuraClientError(
             FetchFailure.INVALID_URL, "validate", "URL credentials are forbidden"
@@ -162,6 +160,13 @@ def normalize_public_url(url: str, *, allow_http: bool) -> tuple[str, str | None
         raise ObscuraClientError(
             FetchFailure.INVALID_URL, "validate", "URL host is invalid"
         ) from exc
+    if parsed.scheme not in {"http", "https"} or (
+        parsed.scheme == "http"
+        and not (allow_http or (allow_http_onion and host.endswith(".onion")))
+    ):
+        raise ObscuraClientError(
+            FetchFailure.INVALID_URL, "validate", "URL scheme is not allowed"
+        )
     if (
         host in INTERNAL_NAMES
         or "." not in host
@@ -597,6 +602,7 @@ async def fetch(
     allow_http: bool,
     body_limit: int,
     dom_limit: int,
+    allow_http_onion: bool = False,
     want: Literal["dom", "body", "both"] = "dom",
     event_timeout_seconds: float = 5.0,
     pre_navigation_timeout_seconds: float = PRE_NAVIGATION_TIMEOUT_SECONDS,
@@ -614,7 +620,11 @@ async def fetch(
     if not math.isfinite(request_timeout_seconds) or request_timeout_seconds <= 0:
         raise ValueError("request timeout must be positive and finite")
     wait_until = validate_wait_until(wait_until)
-    navigation_url, _fragment = normalize_public_url(url, allow_http=allow_http)
+    navigation_url, _fragment = normalize_public_url(
+        url,
+        allow_http=allow_http,
+        allow_http_onion=allow_http_onion,
+    )
     started = time.monotonic()
     diagnostic_id = uuid.uuid4().hex[:12]
     request_deadline = started + request_timeout_seconds
@@ -840,7 +850,11 @@ async def fetch(
                 FetchFailure.PROTOCOL, "events", "terminal document event set is incomplete"
             )
         final_url = str(frames[-1].get("url", ""))
-        normalize_public_url(final_url, allow_http=allow_http)
+        normalize_public_url(
+            final_url,
+            allow_http=allow_http,
+            allow_http_onion=allow_http_onion,
+        )
         status = int(response.get("status", 0))
         headers = _normalize_headers(response.get("headers", {}))
         content_type, charset = _content_type(headers)

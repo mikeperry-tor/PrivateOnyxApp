@@ -95,6 +95,14 @@ LLM-controlled route. The shared Playwright launcher sets `<-loopback>` as its
 proxy bypass value to disable Chromium's implicit direct loopback exception.
 Redirects and subresources remain final-hop policy decisions.
 
+The Tor egress Compose layer supplies `api_server` a strict internal capability
+that lets both crawler transports accept `http://` when the normalized host
+ends in `.onion`. The stock requests redirect validator and Playwright
+validator use the same rule; the shared direct-Obscura client applies it to the
+initial and terminal navigation URL. The final-hop policy separately requires
+the fixed native-Tor Unix socket before allowing such HTTP traffic. No onion
+address-format check is duplicated outside Tor.
+
 The stock path intentionally retains upstream behavior, including a
 possible second origin request when Chromium follows a qualifying requests
 failure and local Chromium's weaker containment inside `api_server`. Obscura

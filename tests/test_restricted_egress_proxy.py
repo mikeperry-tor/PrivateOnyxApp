@@ -212,6 +212,37 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
             public_module._plain_http_allowed("host.docker.internal", 3210)
         )
 
+    def test_plain_http_onion_requires_native_tor_socket(self) -> None:
+        direct_module = _load_module()
+        self.assertFalse(
+            direct_module._plain_http_allowed("service.subdomain.onion", 80)
+        )
+
+        proxy_module = _load_module(
+            env_overrides={
+                "EGRESS_UPSTREAM_PROXY_URL": "socks5h://proxy.example:1080"
+            }
+        )
+        self.assertFalse(
+            proxy_module._plain_http_allowed("service.subdomain.onion", 80)
+        )
+
+        tor_module = _load_module(
+            env_overrides={
+                "EGRESS_TOR_SOCKS_UNIX_PATH": "/run/tor-egress/socks"
+            }
+        )
+        for host in (
+            "service.onion",
+            "service.subdomain.onion",
+            "SERVICE.SUBDOMAIN.ONION.",
+        ):
+            with self.subTest(host=host):
+                self.assertTrue(tor_module._plain_http_allowed(host, 80))
+        for host in ("onion", "service.onion.example", "example.com"):
+            with self.subTest(host=host):
+                self.assertFalse(tor_module._plain_http_allowed(host, 80))
+
     async def test_default_host_port_policy_denies_before_dns(self) -> None:
         module = _load_module("host")
         resolver = AsyncMock()

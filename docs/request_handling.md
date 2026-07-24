@@ -2,19 +2,22 @@
 
 ## Optional Tor route
 
-Native Tor egress changes only the final clearnet route. The public and host
+Native Tor egress changes the selected final route. The public and host
 policy proxies connect through a private Unix SOCKS volume and delegate
-ordinary target-name resolution to Tor. Callers, URL validation,
-private-target and cleartext-HTTP policy, redirects, limits, browser lifecycle,
-and search-engine selection are unchanged. Internal/host/opt-in LAN exceptions
-remain direct.
+ordinary target-name resolution to Tor. Private-target policy, redirects,
+limits, browser lifecycle, and search-engine selection are unchanged.
+Internal/host/opt-in LAN exceptions remain direct. The one URL-policy addition
+is that `http://` is accepted when the normalized host ends in `.onion` and
+native Tor egress is selected. This does not enable clearnet HTTP.
 
 For Tor and every configured remote-DNS upstream, ordinary target names are
 never looked up by Docker, system, or Myst DNS, and returned address metadata
 is consumed only as protocol framing. It cannot be reused for a later direct
 connection. A missing socket, failed circuit, or malformed SOCKS response
-fails closed. General outbound `.onion` browsing has not been qualified and is
-unsupported; onion WebUI ingress is a separate inbound role.
+fails closed. The wrapper does not resolve or pre-validate onion names; it
+passes the complete hostname to Tor, which remains authoritative for onion-name
+validation and connection handling. Onion WebUI ingress is a separate inbound
+role.
 
 This document describes the wrapper-managed `web_search` and built-in Onyx
 Web Crawler `open_url` paths. Search always uses the pinned Obscura browser.
@@ -324,6 +327,9 @@ target DNS in the API container, creates a requests session with
 `trust_env=False`, ignores the Onyx Admin private-network setting for this
 LLM-controlled path, and supplies the exact public bridge proxy explicitly.
 The crawler's Playwright fallback receives the same scoped structural check.
+When the Tor egress layer is selected, that structural check accepts `http://`
+for any host ending in `.onion`; every initial URL and redirect still reaches
+the final-hop policy, which independently requires its fixed Tor Unix socket.
 All Onyx Playwright launches use an explicit proxy bypass value of
 `<-loopback>`, which disables Chromium's normal implicit loopback exception;
 the initial navigation, browser redirects, and subresources must therefore

@@ -166,6 +166,59 @@ class CrawlerEgressPatchTests(unittest.TestCase):
             ["https://example.com/start", "https://example.com/next"],
         )
 
+    def test_http_onion_and_redirect_require_tor_capability(self):
+        onion_url = "http://service.subdomain.onion/path"
+        disabled_session = FakeSession([])
+        with patch.dict(os.environ, self.env, clear=True):
+            with self.assertRaises(ValueError):
+                self.module._proxied_get(
+                    onion_url,
+                    _session_factory=lambda: disabled_session,
+                    _ssrf_exception_type=ValueError,
+                )
+        self.assertEqual(disabled_session.calls, [])
+
+        tor_env = dict(self.env, EGRESS_ALLOW_HTTP_ONION_URLS="true")
+        direct = FakeResponse()
+        direct_session = FakeSession([direct])
+        with patch.dict(os.environ, tor_env, clear=True):
+            self.assertIs(
+                self.module._proxied_get(
+                    onion_url,
+                    _session_factory=lambda: direct_session,
+                    _ssrf_exception_type=ValueError,
+                ),
+                direct,
+            )
+        self.assertEqual([call[0] for call in direct_session.calls], [onion_url])
+
+        redirect = FakeResponse(302, onion_url)
+        final = FakeResponse()
+        redirect_session = FakeSession([redirect, final])
+        with patch.dict(os.environ, tor_env, clear=True):
+            self.assertIs(
+                self.module._proxied_get(
+                    "https://example.com/start",
+                    _session_factory=lambda: redirect_session,
+                    _ssrf_exception_type=ValueError,
+                ),
+                final,
+            )
+        self.assertEqual(
+            [call[0] for call in redirect_session.calls],
+            ["https://example.com/start", onion_url],
+        )
+
+        clearnet_session = FakeSession([])
+        with patch.dict(os.environ, tor_env, clear=True):
+            with self.assertRaises(ValueError):
+                self.module._proxied_get(
+                    "http://example.com/",
+                    _session_factory=lambda: clearnet_session,
+                    _ssrf_exception_type=ValueError,
+                )
+        self.assertEqual(clearnet_session.calls, [])
+
     def test_http_requires_explicit_wrapper_opt_in(self):
         session = FakeSession([])
         with patch.dict(os.environ, self.env, clear=True):
@@ -176,6 +229,22 @@ class CrawlerEgressPatchTests(unittest.TestCase):
                     _ssrf_exception_type=ValueError,
                 )
         self.assertEqual(session.calls, [])
+
+    def test_http_onion_capability_is_strict(self):
+        for raw, expected in (("true", True), ("false", False)):
+            with self.subTest(raw=raw), patch.dict(
+                os.environ,
+                {"EGRESS_ALLOW_HTTP_ONION_URLS": raw},
+                clear=True,
+            ):
+                self.assertEqual(self.module._allow_http_onion(), expected)
+        with patch.dict(
+            os.environ,
+            {"EGRESS_ALLOW_HTTP_ONION_URLS": "yes"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "exactly true or false"):
+                self.module._allow_http_onion()
 
     def test_admin_private_allowance_cannot_widen_crawler_route(self):
         session = FakeSession([])

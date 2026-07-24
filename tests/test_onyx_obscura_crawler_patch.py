@@ -45,6 +45,22 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     self.module._parse_document_limit()
 
+    def test_http_onion_capability_is_strict(self):
+        for raw, expected in (("true", True), ("false", False)):
+            with self.subTest(raw=raw), patch.dict(
+                os.environ,
+                {"EGRESS_ALLOW_HTTP_ONION_URLS": raw},
+                clear=True,
+            ):
+                self.assertEqual(self.module._parse_allow_http_onion(), expected)
+        with patch.dict(
+            os.environ,
+            {"EGRESS_ALLOW_HTTP_ONION_URLS": "yes"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "exactly true or false"):
+                self.module._parse_allow_http_onion()
+
     def test_invocation_state_is_deadline_and_finalization_guard(self):
         live = self.module.InvocationState(time.monotonic() + 10)
         self.assertTrue(live.permits_navigation())

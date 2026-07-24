@@ -106,11 +106,10 @@ The following are deliberate design decisions:
   relay operation, arbitrary operator `torrc` fragments, a control-port host
   publication, and automatic onion-key backup are out of scope for the first
   implementation.
-- This plan concerns clearnet egress through Tor and inbound access to Onyx at
-  its onion address. Do not broaden URL policy or promise arbitrary outbound
-  `.onion` browsing as part of this work. If it already works through the
-  selected SOCKS path for an otherwise allowed URL, preserve that behavior,
-  but test and document it separately before calling it supported.
+- Outbound `.onion` browsing uses the selected SOCKS path. `http://` is
+  accepted for hosts ending in `.onion` only when Tor egress is selected;
+  caller validation and final-hop socket enforcement must remain aligned, and
+  Tor owns onion-name validation.
 - Generic configured-upstream endpoint classification and SOCKS framing
   hardening are a prerequisite phase with their own tests/review boundary.
   They remain in this plan so the related proxy behavior can be manually
@@ -1134,11 +1133,9 @@ Update behavior in place rather than leaving the plan as the only authority:
 - `docs/podman_suport.md`: state-bind ownership, named-volume ownership,
   Tor-only keep-id mapping, mount-only SOCKS admission, overlay,
   startup-health translation, engine-switch persistence, and live checklist;
-- `docs/request_handling.md`: Tor as an optional remote-DNS clearnet route,
-  Unix socket/failure ownership, the generic no-local-target-DNS/no-returned-IP
-  proxy invariant, unchanged URL/HTTP policy, explicit unsupported status of
-  general outbound `.onion` browsing, and any separately tested incidental
-  `.onion` behavior;
+- `docs/request_handling.md`: Tor as an optional remote-DNS route, Unix
+  socket/failure ownership, the generic no-local-target-DNS/no-returned-IP
+  proxy invariant, and the socket-gated HTTP `.onion` exception;
 - `docs/onyx_patches_upgrade.md`: add the Tor image/config contract and
   canonical-origin limitation to the component upgrade checklist; and
 - `AGENTS.md`: short orientation, new layer/target locations, and invariants.

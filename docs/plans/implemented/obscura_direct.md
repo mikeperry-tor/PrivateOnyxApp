@@ -476,8 +476,9 @@ may be zero/disabled. Set the shared client's post-command CDP event-barrier
 deadline to 5,000 ms. These are reviewed, non-user-facing implementation
 literals; do not add runtime parsing or validation code for them. Pass the
 resolved `EGRESS_ALLOW_HTTP_URLS` boolean to both `api_server` and
-`searxng-core`, so the
-shared client's local scheme gate and the public final-hop proxy enforce the
+`searxng-core`, and let the Tor egress layer separately grant `api_server` the
+HTTP `.onion` capability, so the shared client's local scheme gate and the
+public final-hop proxy enforce the
 same operator policy. Do not give either caller
 `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` or a host-capable browser route.
 
@@ -868,7 +869,9 @@ not silently replace either configured `waitUntil` value.
 Before connecting, perform syntax and obvious-literal validation without
 resolving the target hostname:
 
-- allow `https`, and allow `http` only when `EGRESS_ALLOW_HTTP_URLS=true`;
+- allow `https`; allow general `http` only when
+  `EGRESS_ALLOW_HTTP_URLS=true`; and allow `http` hosts ending in `.onion`
+  when the Tor egress capability is present;
 - reject URL credentials, malformed host/port forms, and unsupported schemes;
 - normalize IDNA and trailing dots consistently;
 - reject loopback, unspecified, link-local, multicast, private,
@@ -1910,7 +1913,7 @@ Add deterministic unit and effective-Compose tests for:
   of an address-level private-denial guarantee in upstream remote-DNS modes,
   and identical validated
   `EGRESS_ALLOW_HTTP_URLS` propagation to both direct-client callers and the
-  public final-hop policy;
+  public final-hop policy, plus the Tor-only HTTP `.onion` exception;
 - wrapper-owned query/header/body/cookie/credential redaction and
   stage-specific diagnostics without private content; characterized pinned
   Obscura multi-worker child-log loss and single-worker full-URL warning risk;
@@ -2018,7 +2021,8 @@ The migration is complete only when:
    documented as potentially making a second origin request.
 3. Obscura and SearXNG have no direct route, target DNS remains final-hop, and
    both direct-client callers receive the same validated
-   `EGRESS_ALLOW_HTTP_URLS` policy as the public final-hop proxy. Address-level
+   `EGRESS_ALLOW_HTTP_URLS` policy as the public final-hop proxy, with the
+   separate Tor-only HTTP `.onion` exception. Address-level
    private-target denial is asserted only for wrapper-resolved,
    address-pinned destinations; remote-DNS upstream mode carries the
    documented residual.

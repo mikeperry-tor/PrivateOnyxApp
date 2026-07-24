@@ -96,6 +96,18 @@ ALLOW_HTTP = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in {
 }
 
 
+def _parse_allow_http_onion() -> bool:
+    raw = os.environ.get("EGRESS_ALLOW_HTTP_ONION_URLS", "false").strip().lower()
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    raise RuntimeError("EGRESS_ALLOW_HTTP_ONION_URLS must be exactly true or false")
+
+
+ALLOW_HTTP_ONION = _parse_allow_http_onion()
+
+
 def _failure(url: str, reason: str):
     from onyx.tools.tool_implementations.open_url.models import WebContent
 
@@ -204,6 +216,7 @@ def _direct_fetch(url: str, state: InvocationState):
             cdp_url=CDP_URL,
             wait_until=WAIT_UNTIL,
             allow_http=ALLOW_HTTP,
+            allow_http_onion=ALLOW_HTTP_ONION,
             body_limit=DOCUMENT_LIMIT_BYTES,
             dom_limit=DOCUMENT_LIMIT_BYTES,
             want="both",

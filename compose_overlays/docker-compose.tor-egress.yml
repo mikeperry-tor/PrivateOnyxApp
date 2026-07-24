@@ -3,6 +3,10 @@ services:
     volumes:
       - tor-runtime:/run/tor-egress
 
+  api_server:
+    environment:
+      EGRESS_ALLOW_HTTP_ONION_URLS: "true"
+
   onyx-public-egress-proxy:
     environment:
       EGRESS_TOR_SOCKS_UNIX_PATH: /run/tor-egress/socks

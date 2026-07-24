@@ -18,6 +18,13 @@ through Docker, system, or Myst DNS. Bound-address metadata is discarded and
 cannot become input to a direct connection. Socket loss, protocol failure,
 bootstrap failure, or an unavailable selected exit has no direct fallback.
 
+Native Tor egress permits `http://` when the normalized target host ends in
+`.onion`, without enabling general clearnet HTTP. Caller-side `open_url`
+validation receives that capability only from the Tor egress Compose layer,
+and the final-hop proxy independently requires its fixed Tor Unix socket. The
+wrapper passes the complete hostname to Tor without pre-validating the onion
+address, so subdomains remain intact and Tor owns authoritative validation.
+
 Trusted internal targets, permitted exact `host.docker.internal` ports, and
 opt-in validated LAN integration routes retain direct exceptions. Denied host
 ports fail before DNS and never fall through to Tor. Configured
