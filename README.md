@@ -326,7 +326,7 @@ ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true
 
 As noted previously, network access is still restricted to public internet endpoints and routed through the Myst VPN/Tor/Proxy. Tor onion access is allowed with `TOR_EGRESS_ENABLED=true`. This tool is still prevented from accessing the host or LAN, regardless of any configuration setting.
 
-### Optional: Outbound Proxy (`EGRESS_UPSTREAM_PROXY_URL`)
+### Optional: Outbound Stack Proxy
 
 Set `EGRESS_UPSTREAM_PROXY_URL` in `.env.wrapper` to use an upstream proxy. This
 is orthogonal to Mysterium: if both are set, the upstream-proxy connection
