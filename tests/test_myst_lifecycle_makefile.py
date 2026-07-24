@@ -466,6 +466,104 @@ class MystLifecycleMakefileTests(unittest.TestCase):
                 "command$$model",
             )
 
+    def test_embedding_dollars_survive_export_and_recursive_make(self) -> None:
+        names = (
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL",
+            "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL",
+            "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings_file = root / "wrapper.env"
+            probe_makefile = root / "probe.mk"
+            probe_makefile.write_text(
+                f"include {ROOT / 'Makefile'}\n"
+                ".PHONY: probe probe-child\n"
+                "probe:\n"
+                f'\t@$(MAKE) --no-print-directory -f "{probe_makefile}" probe-child\n'
+                "probe-child:\n"
+                "\t@python3 -c 'import json, os; "
+                f"print(json.dumps([os.environ[name] for name in {json.dumps(names)}]))'\n",
+                encoding="utf-8",
+            )
+            clean_environment = dict(os.environ)
+            for name in names:
+                clean_environment.pop(name, None)
+
+            cases = (
+                (
+                    "file",
+                    (
+                        "http://host.docker.internal:8337/v1/embeddings?tag=$file",
+                        "file$model",
+                        "file$served",
+                    ),
+                    {},
+                    (),
+                ),
+                (
+                    "environment",
+                    (
+                        "http://host.docker.internal:8337/v1/embeddings?tag=$environment",
+                        "environment$model",
+                        "environment$served",
+                    ),
+                    {
+                        names[0]: (
+                            "http://host.docker.internal:8337/"
+                            "v1/embeddings?tag=$environment"
+                        ),
+                        names[1]: "environment$model",
+                        names[2]: "environment$served",
+                    },
+                    (),
+                ),
+                (
+                    "command line",
+                    (
+                        "http://host.docker.internal:8337/v1/embeddings?tag=$command",
+                        "command$model",
+                        "command$served",
+                    ),
+                    {},
+                    (
+                        f"{names[0]}=http://host.docker.internal:8337/"
+                        "v1/embeddings?tag=$command",
+                        f"{names[1]}=command$model",
+                        f"{names[2]}=command$served",
+                    ),
+                ),
+            )
+            for origin, expected, environment_overrides, assignments in cases:
+                with self.subTest(origin=origin):
+                    settings_file.write_text(
+                        "\n".join(
+                            f'{name}="{value}"'
+                            for name, value in zip(names, expected, strict=True)
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    environment = clean_environment | environment_overrides
+                    result = subprocess.run(
+                        [
+                            "make",
+                            "--no-print-directory",
+                            "-f",
+                            str(probe_makefile),
+                            "probe",
+                            f"ENV_FILE={settings_file}",
+                            *assignments,
+                        ],
+                        cwd=ROOT,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(tuple(json.loads(result.stdout)), expected)
+
     def test_lite_and_custom_embedding_skip_unused_host_manager(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         lite_prerequisites = next(

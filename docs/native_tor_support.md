@@ -58,8 +58,9 @@ containers mount it read-only. Applications, browsers, executors, ingress
 gateways, Myst, Teep, and Tailscale receive neither the volume nor a Tor
 network. Ordinary target names remain unresolved until the shared SOCKS state
 machine sends a domain-form `CONNECT`; socket, circuit, selector, and protocol
-failures have no direct fallback. Exact internal, permitted host ports, and
-explicitly allowed LAN integration routes retain direct semantics. An unlisted
+failures have no direct fallback. Exact internal destinations, permitted host
+ports, the exact configured local embedding authority, and explicitly allowed
+LAN integration routes retain direct semantics. An unlisted
 `host.docker.internal` port is denied before DNS and never falls through to
 Tor.
 

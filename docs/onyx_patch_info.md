@@ -217,9 +217,10 @@ embedding shim retain their public/host route-class selection. The exact
 internal Teep base is a startup-validated direct exception. Full-mode doc-drop
 uses its exact local gateway rather than a process-wide direct crawl.
 The Compose final-hop host policy separately restricts exact
-`host.docker.internal` by TCP port with operator default `none`; bundled-MLX
-full startup adds stack-owned 3210. This is wrapper policy, not an Onyx runtime
-patch.
+`host.docker.internal` by TCP port with operator default `none`. Full mode
+separately supplies only the exact configured embedding authority, and each
+policy process separately holds only its configured upstream-proxy authority.
+These are wrapper policies, not Onyx runtime patches.
 
 Onyx Playwright consumers retain explicit helper proxy routing with Chromium's
 implicit loopback bypass disabled. In direct Obscura mode this does not create
