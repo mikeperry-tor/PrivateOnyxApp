@@ -109,6 +109,44 @@ def _make_compose_files(
 
 
 class ComposeOverlayLayoutTests(unittest.TestCase):
+    def test_hidden_policy_options_keep_explicit_compose_defaults(self) -> None:
+        hidden_options = {
+            "MYST_VPN_WIREGUARD_MTU",
+            "ONYX_AGENT_PRESERVE_TOOL_RESULTS",
+            "ONYX_AGENT_USE_NATIVE_REASONING",
+            "ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS",
+        }
+        example = (ROOT / ".env.wrapper.example").read_text(encoding="utf-8")
+        for option_name in hidden_options:
+            with self.subTest(option_name=option_name):
+                self.assertNotRegex(
+                    example,
+                    rf"(?m)^{re.escape(option_name)}=",
+                )
+
+        for mode in ("lite", "full"):
+            with self.subTest(mode=mode):
+                services = _compose_model(mode)["services"]
+                self.assertEqual(
+                    services["myst-client"]["environment"][
+                        "MYST_VPN_WIREGUARD_MTU"
+                    ],
+                    "1280",
+                )
+                api_environment = services["api_server"]["environment"]
+                self.assertEqual(
+                    api_environment["ONYX_AGENT_PRESERVE_TOOL_RESULTS"], "true"
+                )
+                self.assertEqual(
+                    api_environment["ONYX_AGENT_USE_NATIVE_REASONING"], "true"
+                )
+                self.assertEqual(
+                    api_environment[
+                        "ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS"
+                    ],
+                    "true",
+                )
+
     def test_every_example_option_has_a_compose_or_host_default_owner(self) -> None:
         example_names = {
             line.split("=", 1)[0]

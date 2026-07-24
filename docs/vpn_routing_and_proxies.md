@@ -246,6 +246,10 @@ repeat the same operations. This reduces stable-state commands, netlink writes,
 and logs without weakening reconnect repair or changing route ownership; an
 event-driven replacement remains deferred.
 
+The wrapper defaults Mysterium WireGuard to the conservative 1280-byte MTU.
+`MYST_VPN_WIREGUARD_MTU` remains an advanced override for a diagnosed path-MTU
+requirement, but it is intentionally absent from the user-facing example.
+
 With the default `MYST_VPN_ENABLED=false`, the Myst daemon and its route-
 reconciliation loop are not started. The Myst container retains only an inert
 process so its existing healthcheck can act as a readiness sentinel for the
