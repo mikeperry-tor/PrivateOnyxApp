@@ -415,9 +415,10 @@ services:
       # override; when set, sitecustomize makes this win over stored DB and
       # provider-advertised context limits.
       GEN_AI_MAX_TOKENS: "${ONYX_AGENT_LLM_MAX_TOKENS:-}"
-      # Optional wrapper-level overrides for open_url content truncation.
-      # Leave empty to use Onyx defaults.
-      ONYX_OPEN_URL_MAX_CHARS_PER_URL: "${ONYX_OPEN_URL_MAX_CHARS_PER_URL:-}"
+      # Keep the inherited per-URL character cap effectively unlimited by
+      # default. The aggregate user-facing control remains independently
+      # configurable.
+      ONYX_OPEN_URL_MAX_CHARS_PER_URL: "${ONYX_OPEN_URL_MAX_CHARS_PER_URL:-0}"
       ONYX_OPEN_URL_MAX_TOTAL_CHARS: "${ONYX_OPEN_URL_MAX_TOTAL_CHARS:-}"
       ONYX_AGENT_USE_OBSCURA_BROWSER: "${ONYX_AGENT_USE_OBSCURA_BROWSER:-false}"
       ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB: "${ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB:-20}"

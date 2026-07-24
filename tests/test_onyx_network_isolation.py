@@ -1163,6 +1163,17 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         self.assertNotIn("onyx-obscura-control", services["background"]["networks"])
 
+    def test_open_url_character_defaults_are_unlimited(self) -> None:
+        for mode in ("lite", "full"):
+            with self.subTest(mode=mode):
+                environment = _compose_model(mode)["services"]["api_server"][
+                    "environment"
+                ]
+                self.assertEqual(
+                    environment["ONYX_OPEN_URL_MAX_CHARS_PER_URL"], "0"
+                )
+                self.assertEqual(environment["ONYX_OPEN_URL_MAX_TOTAL_CHARS"], "0")
+
     def test_obscura_mcp_and_shared_namespace_artifacts_are_absent(self) -> None:
         model = _compose_model("full")
         service_names = set(model["services"])
