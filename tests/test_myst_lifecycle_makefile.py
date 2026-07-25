@@ -85,6 +85,46 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self._simple_make_value(database, name), value)
 
+    def test_deterministic_make_goals_ignore_private_wrapper_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            private_wrapper = Path(directory) / "private.env"
+            private_wrapper.write_text(
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="
+                "http://host.docker.internal:8337/v1/embeddings\n"
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="
+                "neardirect:Qwen/Qwen3-Embedding-0.6B\n",
+                encoding="utf-8",
+            )
+            clean_environment = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("ONYX_RAG_EMBEDDING_")
+            }
+            for goal in ("test", "check"):
+                with self.subTest(goal=goal):
+                    result = subprocess.run(
+                        [
+                            "make",
+                            "-pn",
+                            goal,
+                            f"ENV_FILE={private_wrapper}",
+                        ],
+                        cwd=ROOT,
+                        env=clean_environment,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        self._simple_make_value(result.stdout, "ENV_FILE"),
+                        ".env.wrapper.example",
+                    )
+                    self.assertEqual(
+                        self._simple_make_value(result.stdout, "EMBEDSERV_MODE"),
+                        "bundled",
+                    )
+
     def test_connection_info_target_executes_myst_in_running_container(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fake_container = Path(directory) / "fake-container"

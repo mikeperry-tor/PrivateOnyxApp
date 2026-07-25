@@ -1,4 +1,10 @@
+# Deterministic checks must not parse or inherit selections from the operator's
+# private runtime configuration. Apply this before any settings are read.
+ifneq ($(strip $(filter test check,$(MAKECMDGOALS))),)
+override ENV_FILE := .env.wrapper.example
+else
 ENV_FILE ?= .env.wrapper
+endif
 VERSION_FILE ?= stack.versions.env
 WRAPPER_FILE := docker-compose.yaml
 COMPOSE_OVERLAY_DIR := compose_overlays
