@@ -223,7 +223,7 @@ are not duplicate enforcement.
   fail closed.
 - Full-mode embedding startup remains two-stage so a failed readiness request
   cannot replace a working API/background tier.
-- Podman serves the configured document source from a wrapper-owned host process
+- macOS Podman serves the configured document source from a wrapper-owned host process
   through a fixed, capability-free relay. The source is not copied into the VM.
 - The host server validates document-root confinement, refuses symlinks, rejects
   non-loopback peers before HTTP parsing, and bounds connections. The shared
@@ -258,7 +258,7 @@ are not duplicate enforcement.
   `myst/vpn_cli.py`, `myst/signup_guard.py`, and their deterministic
   identity/order/failure/long-pause tests. The integrated entrypoint performs
   no signup or order mutation.
-- Podman shared-state and host-document controls: Podman Compose overlays,
+- Podman shared-state and macOS host-document controls: Podman Compose overlays,
   `podman/shared_data_engine.py`, `podman/startup_health.py`, the shared host
   manager, and their deterministic tests.
 

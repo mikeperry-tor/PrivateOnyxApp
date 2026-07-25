@@ -47,18 +47,23 @@ boundary.
 ## End-To-End Flow
 
 1. Files are placed under `ONYX_RAG_DOC_SOURCE_DIR`, defaulting to `./doc-drop`.
-   Docker bind-mounts this host directory directly. Podman instead starts the
-   same read-only Python server on macOS without making a VM copy. The process
-   is PID tracked and identity validated by the Makefile. This applies equally
-   to the default directory and another configured local directory; it also
-   permits external mounts such as WebDAV when virtiofs cannot re-export them.
+   Full-mode startup creates that default directory when it is absent. A
+   configured custom path must already exist so a typo cannot silently create
+   and serve an unintended empty directory.
+   Docker and native Linux Podman bind-mount this host directory directly.
+   Podman on macOS instead starts the same read-only Python server on the host
+   without making a VM copy. The process is PID tracked and identity validated
+   by the Makefile. This applies equally to the default directory and another
+   configured local directory; it also permits external mounts such as WebDAV
+   when virtiofs cannot re-export them.
    The Podman host server resolves the configured root and rejects symbolic
    links rather than following them; configure the real collection directory
    and use ordinary files/directories below it.
-2. In Docker mode, `doc-drop-web` serves its read-only bind directly. In Podman
-   mode, a capability-free fixed `socat` relay forwards only the internal
-   origin to the host-local document server. It has no source bind or
-   persistent document volume, so source changes are visible immediately.
+2. In Docker and native Linux Podman modes, `doc-drop-web` serves its read-only
+   bind directly. In macOS Podman mode, a capability-free fixed `socat` relay
+   forwards only the internal origin to the host-local document server. It has
+   no source bind or persistent document volume, so source changes are visible
+   immediately.
 3. `doc-drop-web` serves the files on dedicated internal route and publisher
    networks. The host display origin is
    `http://localhost:${HOST_PORT_ONYX_RAG_DOC_WEB:-8091}/` by default.
@@ -406,7 +411,7 @@ loopback peers. The proxy rejects every non-loopback socket peer before request
 parsing or thread creation, caps active connection threads, and gives accepted
 sockets a 30-second idle timeout.
 This is a narrow trust boundary in Docker Desktop's userspace gateway, analogous
-to the Podman host document relay; it is not application-layer client
+to the macOS Podman host document relay; it is not application-layer client
 authentication. Rejected direct LAN sockets are closed without parsing enough
 HTTP to return an application response.
 
@@ -435,6 +440,14 @@ timeout. `make up-full` prints that it is waiting and the lifecycle log path;
 Ctrl-C remains the operator escape when a live child never becomes ready. A
 definite child exit, occupied child port, invalid configuration, or failed
 readiness inference still fails startup rather than being hidden.
+
+The staged full-mode start brings up Teep before this request, including its
+fixed host publisher when Teep is routed through Myst. This makes the
+documented `host.docker.internal:8337` Teep embedding endpoint available to the
+shim during readiness rather than only after the rest of the application graph
+starts. Teep is part of the final stack in every embedding mode; this changes
+only its startup order.
+
 The proxy writes to `embedserv/serve.log`. Automatic launch uses the absolute proxy-script path and
 an explicit detached process session so it survives the initiating shell. Its
 record contains a random per-launch ownership token and a fingerprint of every
@@ -504,8 +517,12 @@ ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B"
 Use the configured `HOST_PORT_TEEP` in the URL if it is not `8337`.
 `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL` does not select a Teep model; it only
 controls the bundled MLX download/server and serves as the shim's fallback
-model when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL` is unset. The shim reaches
-Teep through its fixed host publisher, not the internal `teep` service name.
+model when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL` is unset.
+The startup preflight rejects that fallback when the URL is the wrapper's Teep
+endpoint and reports the required explicit upstream-model setting before
+containers are created.
+The shim reaches Teep through its fixed host publisher, not the internal
+`teep` service name.
 
 Teep port 8337 (or the actual `HOST_PORT_TEEP`) is permitted automatically only
 because it is the exact configured embedding authority. An RFC1918 literal or

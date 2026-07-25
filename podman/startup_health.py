@@ -30,6 +30,11 @@ REQUIRED_UPDATE_FLAGS = {
 }
 PODMAN_OVERRIDE_XATTR = "user.containers.override_stat"
 POSTGRES_ENTRYPOINT = "/usr/local/bin/docker-entrypoint.sh"
+OPENSEARCH_READY_COMMAND = (
+    'curl --silent --fail --insecure '
+    '--user "admin:${OPENSEARCH_INITIAL_ADMIN_PASSWORD}" '
+    "https://localhost:9200/_cluster/health >/dev/null"
+)
 COMPOSE_CAPABILITY_MODEL = """\
 services:
   probe:
@@ -227,6 +232,148 @@ def initialize_postgres_data(
         result = "reused"
 
     prepare_shared_data(postgres=postgres_path)
+    return result
+
+
+def initialize_opensearch_data(
+    container_bin: str,
+    opensearch: str,
+    env_files: Sequence[str] = (),
+) -> str:
+    """Initialize an empty shared bind, or validate an existing OpenSearch node."""
+    _require_podman_binary(container_bin)
+    opensearch_path = os.path.abspath(opensearch)
+    nodes_path = os.path.join(opensearch_path, "nodes")
+
+    if not os.path.isdir(nodes_path):
+        if os.path.exists(opensearch_path):
+            if not os.path.isdir(opensearch_path):
+                raise ContractError("shared OpenSearch data path is not a directory")
+            try:
+                with os.scandir(opensearch_path) as entries:
+                    nonempty = next(entries, None) is not None
+            except OSError as exc:
+                raise ContractError(
+                    "could not inspect the shared OpenSearch data path"
+                ) from exc
+            if nonempty:
+                raise ContractError(
+                    "shared OpenSearch data is nonempty but not initialized; "
+                    "refusing to overwrite partial or unknown state"
+                )
+        else:
+            try:
+                os.makedirs(opensearch_path, exist_ok=False)
+            except OSError as exc:
+                raise ContractError(
+                    "could not create the shared OpenSearch data path"
+                ) from exc
+
+        compose_command = [container_bin, "compose"]
+        for env_file in env_files:
+            compose_command.extend(("--env-file", env_file))
+        suffix = uuid.uuid4().hex
+        init_volume = f"private-onyx-opensearch-init-{suffix}"
+        init_container = f"private-onyx-opensearch-init-{suffix}"
+        _run(
+            [
+                container_bin,
+                "volume",
+                "create",
+                "--label",
+                "io.private-onyx.role=opensearch-init",
+                init_volume,
+            ]
+        )
+        container_created = False
+        try:
+            _run(
+                [
+                    *compose_command,
+                    "run",
+                    "--detach",
+                    "--name",
+                    init_container,
+                    "--no-deps",
+                    "--volume",
+                    f"{init_volume}:/usr/share/opensearch/data",
+                    "opensearch",
+                ]
+            )
+            container_created = True
+            deadline = time.monotonic() + 240
+            while True:
+                ready = _run(
+                    [
+                        container_bin,
+                        "exec",
+                        init_container,
+                        "/bin/bash",
+                        "-ec",
+                        OPENSEARCH_READY_COMMAND,
+                    ],
+                    check=False,
+                )
+                if ready.returncode == 0:
+                    break
+                if time.monotonic() >= deadline:
+                    raise ContractError(
+                        "temporary OpenSearch initialization did not become ready "
+                        "within 240 seconds"
+                    )
+                time.sleep(1)
+            _run([container_bin, "stop", "--time", "60", init_container])
+            _run(
+                [
+                    *compose_command,
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "--volume",
+                    f"{init_volume}:/private-onyx-opensearch-init:ro",
+                    "--entrypoint",
+                    "/bin/bash",
+                    "opensearch",
+                    "-ec",
+                    "cp -a /private-onyx-opensearch-init/. "
+                    "/usr/share/opensearch/data/",
+                ]
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip()
+            suffix = f": {detail}" if detail else ""
+            raise ContractError(
+                "OpenSearch initialization container failed; partial bind data "
+                f"was left in place for diagnosis{suffix}"
+            ) from exc
+        finally:
+            container_removed = subprocess.CompletedProcess([], 0)
+            if container_created:
+                container_removed = _run(
+                    [container_bin, "rm", "--force", init_container],
+                    check=False,
+                )
+            removed = _run(
+                [container_bin, "volume", "rm", "--force", init_volume],
+                check=False,
+            )
+            if container_removed.returncode != 0:
+                raise ContractError(
+                    f"could not remove temporary OpenSearch container {init_container!r}"
+                )
+            if removed.returncode != 0:
+                raise ContractError(
+                    f"could not remove temporary OpenSearch volume {init_volume!r}"
+                )
+        if not os.path.isdir(nodes_path):
+            raise ContractError(
+                "OpenSearch initialization completed without creating nodes"
+            )
+        result = "initialized"
+    else:
+        result = "reused"
+
+    prepare_shared_data(opensearch=opensearch_path)
     return result
 
 
@@ -635,6 +782,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "check",
             "check-compose",
             "configure",
+            "initialize-opensearch",
             "initialize-postgres",
             "prepare-shared-data",
         ),
@@ -672,6 +820,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.container_bin, args.postgres, args.env_file
             )
             print(f"Podman PostgreSQL data {result} and prepared.")
+        elif args.action == "initialize-opensearch":
+            if args.opensearch is None:
+                raise ContractError(
+                    "--opensearch is required for initialize-opensearch"
+                )
+            result = initialize_opensearch_data(
+                args.container_bin, args.opensearch, args.env_file
+            )
+            print(f"Podman OpenSearch data {result} and prepared.")
         else:
             configure_project(
                 args.container_bin,

@@ -240,13 +240,24 @@ class MystLifecycleMakefileTests(unittest.TestCase):
     def test_full_start_stages_one_embedding_readiness_call(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         full_start = makefile.split("up-full:", 2)[2].split("\n\n", 1)[0]
-        self.assertIn("up -d --wait --wait-timeout 420 local-embedding-shim", full_start)
+        self.assertIn(
+            "up -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)",
+            full_start,
+        )
+        self.assertIn(
+            "EMBEDDING_STAGE_SERVICES := teep "
+            "$(TEEP_EMBEDDING_HOST_PUBLISHER) local-embedding-shim",
+            makefile,
+        )
+        self.assertIn(
+            "TEEP_EMBEDDING_HOST_PUBLISHER := host-teep-proxy", makefile
+        )
         self.assertIn("embedding-ready-once", full_start)
         self.assertTrue(
             full_start.rstrip().endswith("up -d --wait --wait-timeout 420")
         )
         self.assertLess(
-            full_start.index("local-embedding-shim"),
+            full_start.index("$(EMBEDDING_STAGE_SERVICES)"),
             full_start.index("embedding-ready-once"),
         )
         ready_recipe = makefile.split("embedding-ready-once:", 1)[1].split(
@@ -309,10 +320,12 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertEqual(full_start.count("startup_health.py configure"), 2)
         self.assertEqual(full_start.count("--skip-capability-check"), 2)
         self.assertEqual(lite_start.count("--skip-capability-check"), 1)
-        self.assertIn("create local-embedding-shim", full_start)
+        self.assertIn("create $(EMBEDDING_STAGE_SERVICES)", full_start)
         self.assertLess(
-            full_start.index("create local-embedding-shim"),
-            full_start.index("up -d --wait --wait-timeout 420 local-embedding-shim"),
+            full_start.index("create $(EMBEDDING_STAGE_SERVICES)"),
+            full_start.index(
+                "up -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)"
+            ),
         )
         self.assertEqual(lite_start.count("--wait-timeout 420"), 1)
         self.assertEqual(full_start.count("--wait-timeout 420"), 2)
@@ -385,6 +398,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[1].split(".PHONY:", 1)[0]
         self.assertIn("embedserv-start-if-installed", selection)
         self.assertIn("ifeq ($(PODMAN_SELECTED),true)", selection)
+        self.assertIn("ifeq ($(HOST_OS),Darwin)", selection)
         self.assertIn(
             "FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start", selection
         )
@@ -397,20 +411,33 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("--identity", start_target)
         self.assertIn("--fingerprint-file", start_target)
         self.assertIn("/_health", start_target)
+        self.assertIn('default_source_dir="$(abspath ./doc-drop)"', start_target)
+        self.assertIn('[ "$$source_dir" = "$$default_source_dir" ]', start_target)
+        self.assertLess(
+            start_target.index('mkdir -- "$$source_dir"'),
+            start_target.index(
+                'echo "ERROR: configured RAG document source is not a directory"'
+            ),
+        )
         self.assertIn("PODMAN_DOC_SERVER_PID_FILE", makefile)
         self.assertIn("podman-doc-server-stop-if-started", makefile)
         self.assertNotIn("stage-podman-full-docs", makefile)
         self.assertNotIn("PODMAN_RAG_DOC_VOLUME", makefile)
 
     def test_evaluated_host_process_selection_matches_engine(self) -> None:
-        selections: dict[str, str] = {}
-        for engine in ("docker", "podman"):
+        selections: dict[tuple[str, str], str] = {}
+        for engine, host_os in (
+            ("docker", "Darwin"),
+            ("podman", "Darwin"),
+            ("podman", "Linux"),
+        ):
             result = subprocess.run(
                 [
                     "make",
                     "-np",
                     "help",
                     f"CONTAINER_BIN={engine}",
+                    f"HOST_OS={host_os}",
                     "ENV_FILE=/dev/null",
                 ],
                 cwd=ROOT,
@@ -424,12 +451,18 @@ class MystLifecycleMakefileTests(unittest.TestCase):
                 for line in result.stdout.splitlines()
                 if line.startswith("FULL_MODE_HOST_PROCESS_TARGETS :=")
             )
-            selections[engine] = line.split(":=", 1)[1].strip()
+            selections[(engine, host_os)] = line.split(":=", 1)[1].strip()
 
-        self.assertEqual(selections["docker"], "embedserv-start-if-installed")
         self.assertEqual(
-            selections["podman"],
+            selections[("docker", "Darwin")], "embedserv-start-if-installed"
+        )
+        self.assertEqual(
+            selections[("podman", "Darwin")],
             "embedserv-start-if-installed podman-doc-server-start",
+        )
+        self.assertEqual(
+            selections[("podman", "Linux")],
+            "embedserv-start-if-installed podman-doc-server-stop-if-started",
         )
 
     def test_evaluated_embedding_selection_matrix_is_canonical(self) -> None:
@@ -631,7 +664,8 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         staged_start = next(
             line
             for line in full_lines
-            if "up -d --wait --wait-timeout 420 local-embedding-shim" in line
+            if "up -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)"
+            in line
         )
         readiness = next(
             line
@@ -678,7 +712,9 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             env_file = temporary / "wrapper.env"
             env_file.write_text(
                 "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="
-                "http://host.docker.internal:8337/v1/embeddings\n",
+                "http://host.docker.internal:8337/v1/embeddings\n"
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="
+                "neardirect:Qwen/Qwen3-Embedding-0.6B\n",
                 encoding="utf-8",
             )
             environment = dict(os.environ)
@@ -705,6 +741,46 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("custom upstream; not starting bundled MLX server", result.stdout)
+
+    def test_teep_embedding_requires_an_explicit_upstream_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            env_file = temporary / "wrapper.env"
+            env_file.write_text(
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="
+                "http://host.docker.internal:8337/v1/embeddings\n",
+                encoding="utf-8",
+            )
+            environment = dict(os.environ)
+            for name in (
+                "HOST_PORT_TEEP",
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL",
+                "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL",
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL",
+            ):
+                environment.pop(name, None)
+            result = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "embedserv-start-if-installed",
+                    f"ENV_FILE={env_file}",
+                    "HOST_PROCESS_MANAGER=/must/not/be/executed.py",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("Teep embedding is selected", output)
+        self.assertIn(
+            'ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="'
+            'neardirect:Qwen/Qwen3-Embedding-0.6B"',
+            output,
+        )
 
     def test_embedding_mutations_stop_at_malformed_wrapper_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -898,6 +974,11 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[1].split("\n\n", 1)[0]
         self.assertIn("initialize-postgres", postgres_preflight)
         self.assertIn("COMPOSE_FILE=$(PODMAN_START_FILES)", postgres_preflight)
+        opensearch_preflight = makefile.split(
+            "prepare-podman-opensearch-data:", 1
+        )[1].split("\n\n", 1)[0]
+        self.assertIn("initialize-opensearch", opensearch_preflight)
+        self.assertIn("COMPOSE_FILE=$(PODMAN_START_FILES)", opensearch_preflight)
 
     def test_podman_keep_id_containers_are_created_serially(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
@@ -917,7 +998,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         full_postgres = 'up --no-start --no-deps relational_db'
         full_opensearch = 'up --no-start --no-deps opensearch'
         full_tor = 'up --no-start --no-deps tor'
-        full_shim = 'create local-embedding-shim'
+        full_shim = 'create $(EMBEDDING_STAGE_SERVICES)'
         full_graph = 'compose $(ONYX_COMPOSE_ENV_FILES) create\n'
         self.assertLess(
             full_recipe.index(full_postgres), full_recipe.index(full_opensearch)

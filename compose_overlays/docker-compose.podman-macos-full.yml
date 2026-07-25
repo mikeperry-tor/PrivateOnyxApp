@@ -1,0 +1,31 @@
+## macOS-only Podman full-mode document-source override.
+##
+## macOS cannot re-export user-mounted WebDAV filesystems through the Podman
+## machine's virtiofs shares. The Makefile runs the read-only document server
+## directly on host loopback; this hardened fixed-destination relay preserves
+## the internal doc-drop origin without copying the collection into the VM.
+##
+## Native Linux does not select this overlay. It retains the ordinary
+## read-only bind-mounted Python document server from docker-compose.full.yml.
+
+services:
+  doc-drop-web:
+    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes: !reset []
+    command: !override
+      - tcp-listen:8091,fork,reuseaddr
+      - tcp-connect:host.containers.internal:${PODMAN_DOC_SERVER_PORT:?PODMAN_DOC_SERVER_PORT must be set}
+    networks: !override
+      doc-drop-route:
+        aliases: [doc-drop-origin]
+      doc-drop-publish: {}
+      podman-doc-host-uplink: {}
+
+networks:
+  # Only the capability-free fixed socat relay joins this non-internal edge.
+  # Application containers retain no direct host or Internet route.
+  podman-doc-host-uplink: {}

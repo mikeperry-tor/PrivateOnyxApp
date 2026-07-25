@@ -6,6 +6,7 @@ FULL_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.full.yml
 LITE_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.lite.yml
 PODMAN_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.podman.yml
 PODMAN_FULL_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.podman-full.yml
+PODMAN_MACOS_FULL_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.podman-macos-full.yml
 TOR_COMMON_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor.yml
 TOR_EGRESS_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-egress.yml
 TOR_ONION_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-onion.yml
@@ -160,17 +161,24 @@ endif
 
 PODMAN_COMPOSE_SUFFIX :=
 PODMAN_FULL_COMPOSE_SUFFIX :=
+PODMAN_MACOS_FULL_COMPOSE_SUFFIX :=
+HOST_OS ?= $(shell uname -s)
 ifneq ($(findstring podman,$(CONTAINER_BIN)),)
 PODMAN_COMPOSE_SUFFIX :=:$(PODMAN_OVERRIDE_FILE)
 PODMAN_FULL_COMPOSE_SUFFIX :=:$(PODMAN_FULL_OVERRIDE_FILE)
+ifeq ($(HOST_OS),Darwin)
+PODMAN_MACOS_FULL_COMPOSE_SUFFIX :=:$(PODMAN_MACOS_FULL_OVERRIDE_FILE)
+endif
 endif
 
 # Conditional routing overrides for teep and tailscale.
 # When true, a fixed Teep gateway joins the trusted routing namespace; the
 # Onyx caller and Teep service remain on explicit internal networks.
 TEEP_VPN_SUFFIX :=
+TEEP_EMBEDDING_HOST_PUBLISHER :=
 ifneq ($(filter true,$(TEEP_ROUTE_THROUGH_MYST_VPN)),)
 TEEP_VPN_SUFFIX :=:$(COMPOSE_OVERLAY_DIR)/docker-compose.teep-vpn.yml
+TEEP_EMBEDDING_HOST_PUBLISHER := host-teep-proxy
 endif
 
 # When true, Tailscale shares the trusted route namespace but still reaches
@@ -270,6 +278,10 @@ endif
 ONYX_RAG_DOC_SOURCE_DIR ?= $(call env_value,ONYX_RAG_DOC_SOURCE_DIR)
 ifeq ($(strip $(ONYX_RAG_DOC_SOURCE_DIR)),)
 ONYX_RAG_DOC_SOURCE_DIR := ./doc-drop
+endif
+HOST_PORT_TEEP ?= $(call env_value,HOST_PORT_TEEP)
+ifeq ($(strip $(HOST_PORT_TEEP)),)
+HOST_PORT_TEEP := 8337
 endif
 PODMAN_DOC_SERVER_PORT := 18091
 PODMAN_DOC_SERVER_STATE_DIR := docker-data/host-services
@@ -392,16 +404,21 @@ SEARXNG_REQUIREMENTS := searxng/requirements.txt
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_MACOS_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)
 LITE_DOWN_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)
-FULL_DOWN_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)
+FULL_DOWN_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_MACOS_FULL_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)
 
 # Lite mode has no wrapper-owned host services. Full mode always reconciles the
 # optional bundled MLX service, but selects the host document server only for
 # Podman; Docker serves documents from its container bind mount.
 FULL_MODE_HOST_PROCESS_TARGETS := embedserv-start-if-installed
+EMBEDDING_STAGE_SERVICES := teep $(TEEP_EMBEDDING_HOST_PUBLISHER) local-embedding-shim
 ifeq ($(PODMAN_SELECTED),true)
+ifeq ($(HOST_OS),Darwin)
 FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-start
+else
+FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-stop-if-started
+endif
 endif
 
 .PHONY: help test check test-patch-images test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
@@ -676,7 +693,11 @@ podman-doc-server-start:
 ifeq ($(PODMAN_SELECTED),true)
 	@set -eu; \
 	source_dir="$(abspath $(ONYX_RAG_DOC_SOURCE_DIR))"; \
+	default_source_dir="$(abspath ./doc-drop)"; \
 	server_script="$(CURDIR)/onyx/doc_drop_webserver.py"; \
+	if [ ! -e "$$source_dir" ] && [ "$$source_dir" = "$$default_source_dir" ]; then \
+		mkdir -- "$$source_dir"; \
+	fi; \
 	if [ ! -d "$$source_dir" ]; then \
 		echo "ERROR: configured RAG document source is not a directory"; \
 		exit 1; \
@@ -711,7 +732,8 @@ endif
 
 prepare-podman-opensearch-data:
 ifeq ($(PODMAN_SELECTED),true)
-	@python3 podman/startup_health.py prepare-shared-data --opensearch docker-data/opensearch
+	@COMPOSE_FILE=$(PODMAN_START_FILES) python3 podman/startup_health.py initialize-opensearch \
+		--container-bin "$(CONTAINER_BIN)" --opensearch docker-data/opensearch $(ONYX_COMPOSE_ENV_FILES)
 endif
 
 up-lite: wrapper-config-preflight check-container-health-capability claim-shared-data-engine ensure-onyx-config sync-onyx-env onyx-image-ready prepare-podman-postgres-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready
@@ -743,10 +765,10 @@ ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
 endif
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps netns-holder
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps --force-recreate onyx-host-egress-proxy onyx-host-egress-bridge
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create local-embedding-shim
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create $(EMBEDDING_STAGE_SERVICES)
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420 local-embedding-shim
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)
 ifeq ($(PODMAN_SELECTED),true)
 	@python3 podman/startup_health.py assert-healthy --container-bin "$(CONTAINER_BIN)" --project onyx \
 		--service onyx-host-egress-bridge
@@ -1040,6 +1062,12 @@ embedserv-start-if-installed:
 		exit 1; \
 	fi; \
 	if [ "$(EMBEDSERV_MODE)" = "custom" ]; then \
+		if [ "$$embeddings_url" = "http://host.docker.internal:$(HOST_PORT_TEEP)/v1/embeddings" ] && \
+		   [ "$$served_model" = "$$model_repo" ]; then \
+			echo "ERROR: Teep embedding is selected, but ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL is unset."; \
+			echo 'Set ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="neardirect:Qwen/Qwen3-Embedding-0.6B" in $(ENV_FILE).'; \
+			exit 1; \
+		fi; \
 		echo "Embedding shim uses a custom upstream; not starting bundled MLX server: $$embeddings_url"; \
 		exit 0; \
 	fi; \

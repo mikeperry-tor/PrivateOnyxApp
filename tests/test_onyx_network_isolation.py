@@ -233,6 +233,7 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
                     (
                         "docker-compose.podman.yml",
                         "docker-compose.podman-full.yml",
+                        "docker-compose.podman-macos-full.yml",
                     ),
                 ),
             )
@@ -304,6 +305,7 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             "docker-compose.full.yml",
             "docker-compose.lite.yml",
             "docker-compose.podman-full.yml",
+            "docker-compose.podman-macos-full.yml",
             "docker-compose.podman.yml",
             "docker-compose.tailscale-vpn.yml",
             "docker-compose.teep-vpn.yml",
@@ -600,9 +602,24 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         for mode in ("lite", "full"):
             extra = ["docker-compose.podman.yml"]
             if mode == "full":
-                extra.append("docker-compose.podman-full.yml")
+                extra.extend(
+                    (
+                        "docker-compose.podman-full.yml",
+                        "docker-compose.podman-macos-full.yml",
+                    )
+                )
             model = _compose_model(mode, *extra)
             services = model["services"]
+            self.assertEqual(
+                services["onyx-host-egress-proxy"]["environment"][
+                    "EGRESS_PODMAN_HOST_GATEWAY_IP"
+                ],
+                "169.254.1.2",
+            )
+            self.assertNotIn(
+                "EGRESS_PODMAN_HOST_GATEWAY_IP",
+                services["onyx-public-egress-proxy"]["environment"],
+            )
             postgres = services["relational_db"]
             self.assertEqual(postgres["userns_mode"], "keep-id:uid=70,gid=70")
             self.assertEqual(
@@ -663,12 +680,39 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 self.assertEqual(joined, {"doc-drop-web"})
                 self.assertNotIn("podman-rag-docs", model.get("volumes", {}))
 
-    def test_makefile_uses_only_the_two_core_podman_storage_overlays(self) -> None:
-        files = _make_compose_files(vpn_enabled=False, container_bin="podman")
-        self.assertIn("docker-compose.podman.yml", files)
-        self.assertIn("docker-compose.podman-full.yml", files)
-        self.assertNotIn("podman-docker-postgres", files)
-        self.assertNotIn("podman-docker-opensearch", files)
+    def test_makefile_scopes_podman_document_relay_to_macos(self) -> None:
+        linux_files = _make_compose_files(
+            vpn_enabled=False, container_bin="podman", HOST_OS="Linux"
+        )
+        macos_files = _make_compose_files(
+            vpn_enabled=False, container_bin="podman", HOST_OS="Darwin"
+        )
+        for files in (linux_files, macos_files):
+            self.assertIn("docker-compose.podman.yml", files)
+            self.assertIn("docker-compose.podman-full.yml", files)
+            self.assertNotIn("podman-docker-postgres", files)
+            self.assertNotIn("podman-docker-opensearch", files)
+        self.assertNotIn("docker-compose.podman-macos-full.yml", linux_files)
+        self.assertIn("docker-compose.podman-macos-full.yml", macos_files)
+
+        linux = _compose_model(
+            "full",
+            "docker-compose.podman.yml",
+            "docker-compose.podman-full.yml",
+        )
+        doc_server = linux["services"]["doc-drop-web"]
+        self.assertEqual(
+            doc_server["image"], "docker.io/library/python:3.12-alpine"
+        )
+        self.assertIn("/import/docs", doc_server["command"])
+        self.assertTrue(
+            any(
+                volume["target"] == "/import/docs" and volume["read_only"]
+                for volume in doc_server["volumes"]
+            )
+        )
+        self.assertNotIn("podman-doc-host-uplink", linux["networks"])
+
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertNotIn("PODMAN_SHARE_DOCKER_POSTGRES", makefile)
         self.assertNotIn("PODMAN_SHARE_DOCKER_OPENSEARCH", makefile)
@@ -749,6 +793,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 ROOT / "compose_overlays/docker-compose.lite.yml",
                 ROOT / "compose_overlays/docker-compose.podman.yml",
                 ROOT / "compose_overlays/docker-compose.podman-full.yml",
+                ROOT / "compose_overlays/docker-compose.podman-macos-full.yml",
             )
         )
         for forbidden in (

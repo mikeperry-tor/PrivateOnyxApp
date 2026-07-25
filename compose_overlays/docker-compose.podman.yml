@@ -40,3 +40,10 @@ services:
     depends_on:
       relational_db:
         condition: service_healthy
+
+  # Native rootless Podman maps its exact engine-host aliases to this fixed
+  # link-local gateway. Only the host policy may accept it, and only through
+  # the existing exact-name plus configured-port checks.
+  onyx-host-egress-proxy:
+    environment:
+      EGRESS_PODMAN_HOST_GATEWAY_IP: "169.254.1.2"

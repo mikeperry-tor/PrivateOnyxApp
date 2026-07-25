@@ -48,7 +48,7 @@ apply in every selected mode.
 | `obscura-cdp-gateway` | API-side control network and Obscura control network | none |
 | `obscura` | CDP control networks and its fixed browser bridge | shared public final-hop policy through `obscura-egress-bridge` |
 | enabled executor | executor service/control networks and its fixed bridge | shared public final-hop policy through `executor-egress-bridge` |
-| doc-drop and embedding components | their documented full-mode local networks; Podman relay has a dedicated host uplink | only their explicit fixed host/public route where configured |
+| doc-drop and embedding components | their documented full-mode local networks; the macOS Podman relay has a dedicated host uplink | only their explicit fixed host/public route where configured |
 | optional `tor` | `tor-ingress` only when onion ingress is enabled; private control tmpfs and optional SOCKS runtime volume are mounts, not networks | dedicated `tor-uplink`; applications never join it |
 | optional `tor-frontend-gateway` | spans only `tor-ingress` and `onyx-frontend`, with fixed nginx forwarding | none |
 
@@ -116,6 +116,13 @@ direct fallback. Allowed ports authorize whichever host process is listening,
 not a service identity. Enabling broad LAN access retains a possible known
 RFC1918 host-gateway path.
 
+Native rootless Podman maps its exact engine-host alias to the fixed
+link-local gateway `169.254.1.2`. The Podman overlay exposes only that one
+address to the host-capable policy's exact-host resolver. It remains usable
+only for `host.docker.internal` and an operator-selected host port or the exact
+configured embedding authority. Every other link-local address, including
+metadata ranges, remains denied; public policies receive no such exception.
+
 Saved Admin SSRF levels remain an independent route-selection layer. MCP uses
 the public route for `VALIDATE_ALL` and `VALIDATE_LLM`, and the host route for
 `ALLOW_PRIVATE_NETWORK` and `DISABLED`. Web Connector uses the public route
@@ -123,7 +130,7 @@ only for `VALIDATE_ALL`; its other three levels use the host route. The exact
 stack-owned `doc-drop-web:8091` authority remains separate. A host-port grant
 does not itself select either host-capable route.
 
-Podman full mode has one additional, narrow host boundary for local documents.
+macOS Podman full mode has one additional, narrow host boundary for local documents.
 The capability-free `doc-drop-web` relay alone joins a dedicated non-internal
 host uplink and can connect only to `host.containers.internal:18091`. The
 wrapper-managed macOS server accepts loopback peers, serves a resolved trusted
@@ -236,9 +243,10 @@ logging can also be incomplete.
   configured embedding/proxy authorities. Recreating the host policy restarts
   the dependent bridge so a warm invalid setting cannot reuse stale healthy
   state.
-- Under Podman, only the fixed doc-drop relay joins the host uplink; the host
-  server rejects non-loopback peers before thread creation, caps and
-  socket-bounds active connections, and the relay has no source mount.
+- Under macOS Podman, only the fixed doc-drop relay joins the host uplink; the
+  host server rejects non-loopback peers before thread creation, caps and
+  socket-bounds active connections, and the relay has no source mount. Native
+  Linux Podman retains the internal read-only bind-mounted server.
 - The bundled Docker Desktop embedding listener rejects non-loopback peers
   before thread creation, caps and socket-bounds active connections, and drains
   accepted requests before lifecycle shutdown.

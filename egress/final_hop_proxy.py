@@ -141,6 +141,14 @@ HOST_PORTS_ALLOW_ALL, OPERATOR_ALLOWED_HOST_PORTS = _parse_allowed_host_ports(
 CONFIGURED_EMBEDDING_URL = os.environ.get(
     "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL", ""
 ).strip()
+PODMAN_HOST_GATEWAY_IP = os.environ.get(
+    "EGRESS_PODMAN_HOST_GATEWAY_IP", ""
+).strip()
+if PODMAN_HOST_GATEWAY_IP not in {"", "169.254.1.2"}:
+    raise RuntimeError(
+        "EGRESS_PODMAN_HOST_GATEWAY_IP is an internal fixed setting and must "
+        "be empty or 169.254.1.2"
+    )
 
 # Upstream proxy (EGRESS_UPSTREAM_PROXY_URL from .env.wrapper). When set,
 # the proxy routes its own requests through this upstream. Supports:
@@ -757,10 +765,16 @@ async def _resolve_exact_docker_host(host: str, port: int) -> tuple[str, ...]:
         raise ConnectionError("Docker-host DNS resolution returned no addresses")
     for address in resolved:
         parsed = _parse_ip_literal(address)
+        allowed_podman_gateway = (
+            PODMAN_HOST_GATEWAY_IP != ""
+            and address == PODMAN_HOST_GATEWAY_IP
+            and parsed is not None
+            and parsed.is_link_local
+        )
         if (
             parsed is None
             or parsed.is_loopback
-            or parsed.is_link_local
+            or (parsed.is_link_local and not allowed_podman_gateway)
             or parsed.is_multicast
             or parsed.is_unspecified
             or parsed.is_reserved

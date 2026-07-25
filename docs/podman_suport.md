@@ -57,6 +57,12 @@ All external image references owned by this wrapper include an explicit
 Podman installations may intentionally have no unqualified-search registries,
 and changing that host-wide policy is not a stack prerequisite.
 
+Native rootless Podman resolves `host.docker.internal` to its fixed
+`169.254.1.2` link-local engine gateway. The Podman overlay supplies that exact
+address only to the host-capable final-hop policy. The exception remains
+restricted to the exact logical host name and the configured embedding or
+operator-selected port; all other link-local addresses remain blocked.
+
 Docker Compose 5.3.1 may otherwise honor the host's selected Docker Desktop
 context or Podman's SSH system connection. The Makefile therefore exports an
 exact `DOCKER_HOST=unix://...` value from the selected Podman engine whenever
@@ -135,7 +141,10 @@ The Makefile assembles the ordinary base/mode/optional layers first and adds
 the engine-specific layers when `CONTAINER_BIN` resolves to Podman:
 
 - `compose_overlays/docker-compose.podman.yml` applies to lite and full modes;
-- `compose_overlays/docker-compose.podman-full.yml` applies only to full mode.
+- `compose_overlays/docker-compose.podman-full.yml` applies only to full mode;
+  and
+- `compose_overlays/docker-compose.podman-macos-full.yml` applies only to
+  full mode on macOS.
 
 Keep Docker and Podman behavior separated in those override files. Preserve
 Compose `${VAR:?message}` checks and the Makefile-generated ephemeral secret
@@ -174,9 +183,21 @@ replaced.
 - makes `background` wait for PostgreSQL health;
 - always uses the same initialized `docker-data/opensearch` bind as Docker
   Desktop with the required `keep-id` mapping and a group-1000-only
-  `ping_group_range` that rootless crun can apply inside that mapping; and
+  `ping_group_range` that rootless crun can apply inside that mapping; a missing
+  or empty bind is initialized once through the pinned image in a uniquely
+  named disposable Podman volume, copied into the empty bind, and removed
+  before Compose creates the application graph.
+
+On native Linux, full mode retains the ordinary read-only document-source bind
+and containerized Python server from `docker-compose.full.yml`.
+
+### macOS full-mode override
+
+`compose_overlays/docker-compose.podman-macos-full.yml`:
+
 - replaces container-side document serving with a hardened fixed relay to the
-  wrapper-managed macOS document server.
+  wrapper-managed host document server. The default `doc-drop` source is
+  created when absent; a custom configured source must already be a directory.
 
 ### Shared Docker data
 
@@ -187,6 +208,8 @@ opt-out flags. For existing data, the startup preflight requires the expected
 initialization markers and does not inspect chats, tables, index names, or
 document contents. A genuinely missing or empty PostgreSQL bind is initialized;
 a nonempty bind without `PG_VERSION` fails closed as partial or unknown state.
+The same rule applies to OpenSearch: a genuinely missing or empty bind is
+initialized, while a nonempty bind without `nodes` is never overwritten.
 The ownership guard inspects both native engines without the Podman
 `DOCKER_HOST` compatibility override used by the external Compose provider, so
 repeated Podman claims cannot misclassify Podman writers as Docker writers.
@@ -274,7 +297,8 @@ are applied directly to that service; there is no administrative sidecar or
 successful-exit dependency to translate under Podman.
 The tested image can create and reuse its normal per-file Podman attributes;
 do not recursively delete them. `prepare-podman-opensearch-data` requires its
-initialized `nodes` directory before a full-mode create.
+initialized `nodes` directory before a full-mode create, initializing a
+genuinely empty bind through the pinned service image when necessary.
 
 On the verified rootless 5.8.1 server, Podman clamps the inherited unlimited
 OpenSearch memlock request to an 8 MiB soft/hard limit. OpenSearch consequently
@@ -324,8 +348,13 @@ Compose model is therefore necessary but not sufficient evidence.
   above. It removes the staging volume on every outcome and refuses nonempty
   bind data without `PG_VERSION`. The narrow mount-root xattr cleanup runs only
   on macOS; native Linux has no Docker Desktop ownership xattr to remove.
+- `initialize-opensearch` initializes a missing or empty OpenSearch bind through
+  the pinned service image and a disposable engine volume, waits for the
+  temporary node to become ready, stops it cleanly, copies the initialized
+  files into the shared bind, and removes its temporary container and volume on
+  every outcome. It refuses nonempty bind data without `nodes`.
 - `prepare-shared-data` validates an initialized database/index path and is
-  retained for the OpenSearch preflight and focused diagnostics.
+  retained as the common post-initialization check and for focused diagnostics.
 
 For each retained health check, `configure` converts the regular command to an
 equivalent shell-quoted command and installs it with the same timeout in
@@ -350,10 +379,11 @@ The Podman Makefile lifecycle is consequently create/configure/start:
 1. `check-container-health-capability` runs the Podman capability gate once,
    before shared-data or host-process mutation. Docker uses the same target for
    its separate native engine/Compose version check.
-2. The mode-appropriate database preflights initialize a genuinely empty
-   PostgreSQL bind, validate existing shared binds, and remove only the unsafe
-   PostgreSQL mount-root override when present. Full mode also starts or
-   validates the PID-tracked host document server.
+2. The mode-appropriate database preflights initialize genuinely empty
+   PostgreSQL and full-mode OpenSearch binds, validate existing shared binds,
+   and remove only the unsafe PostgreSQL mount-root override when present. Full
+   On macOS, full mode also starts or validates the PID-tracked host document
+   server.
 3. `podman compose create` creates stopped containers.
 4. `startup_health.py configure` installs and verifies native startup checks.
 5. `podman compose up -d --wait --wait-timeout 420` starts the verified graph.
@@ -440,12 +470,18 @@ not duplicated into Podman-native volumes.
 
 ## Host document server
 
-For every Podman full-mode source, including the default `./doc-drop`, the
-wrapper serves `ONYX_RAG_DOC_SOURCE_DIR` without mounting or copying it into
-the VM. This uniform path also supports externally mounted sources, including
-WebDAV mounts, that are fully readable on macOS yet absent at the Podman VM's
-`statfs` boundary. Ownership mappings, SELinux suffixes, and xattr cleanup
-cannot repair a path that virtiofs did not expose.
+For every macOS Podman full-mode source, including the default `./doc-drop`,
+the wrapper serves `ONYX_RAG_DOC_SOURCE_DIR` without mounting or copying it
+into the VM. This uniform path also supports externally mounted sources,
+including WebDAV mounts, that are fully readable on macOS yet absent at the
+Podman VM's `statfs` boundary. Ownership mappings, SELinux suffixes, and xattr
+cleanup cannot repair a path that virtiofs did not expose. Native Linux
+instead uses the ordinary read-only bind-mounted container server: its bridge
+connections do not arrive at a host process as loopback peers, and it does not
+need the macOS re-export workaround.
+Native Linux full-mode startup also runs the identity-checked host-server stop
+target so an older wrapper version cannot leave the obsolete macOS-style
+process listening after the containerized server takes ownership.
 
 `podman-doc-server-start` validates the source, rejects an unrelated listener
 on fixed host port 18091, and starts
@@ -460,13 +496,13 @@ records never authorize signaling an unrelated process.
 The same stdlib-only `embedserv/host_process_manager.py` used for the optional
 MLX proxy owns the common detached-launch, atomic record, readiness, and stop
 mechanics. Its location reflects the primary MLX use, but this document-server
-use is deliberately supported and tested. Only Podman full mode selects this
-host document target; lite mode does not, and Docker uses its containerized
+use is deliberately supported and tested. Only macOS Podman full mode selects
+this host document target; native Linux Podman and Docker use the containerized
 document server instead.
 The document server still owns its document-root confinement, loopback-peer
 restriction, HTTP handling, and connection bounds.
 
-The Podman `doc-drop-web` service is a non-root, read-only, capability-free
+The macOS Podman `doc-drop-web` service is a non-root, read-only, capability-free
 `socat` relay. It keeps the existing internal route and display networks but
 has no document mounts. Its only additional network is a dedicated
 non-internal host uplink, and its fixed command connects only
@@ -499,10 +535,10 @@ is deferred and should retain the current listing and Web Connector behavior.
 `make down-full` first removes the Compose graph and then calls
 `podman-doc-server-stop-if-started`. The stop path validates command identity,
 sends SIGTERM only to the recorded wrapper-owned server, waits for bounded
-exit, and removes the PID record. Docker full mode retains its ordinary
-read-only bind-mounted `doc-drop-web` container and never starts the host
-process. Request logging is suppressed because URLs can contain private file
-names; the server log contains lifecycle diagnostics only.
+exit, and removes the PID record. Docker and native Linux Podman full mode
+retain the ordinary read-only bind-mounted `doc-drop-web` container and never
+start the host process. Request logging is suppressed because URLs can contain
+private file names; the server log contains lifecycle diagnostics only.
 
 ## Networking differences
 
@@ -541,10 +577,10 @@ The primary Podman-specific tests are:
 - `tests/test_host_process_manager.py`: atomic ownership records, malformed
   record refusal, explicit operator-listener reuse, readiness enforcement, and
   reused-PID non-signaling.
-- `tests/test_onyx_network_isolation.py`: effective Podman overlay selection,
-  optional VPN behavior, tmpfs options, unconditional shared Docker
-  PostgreSQL/OpenSearch storage, database health dependencies, and the fixed
-  hardened host document relay.
+- `tests/test_onyx_network_isolation.py`: effective OS-specific Podman overlay
+  selection, optional VPN behavior, tmpfs options, unconditional shared Docker
+  PostgreSQL/OpenSearch storage, database health dependencies, native-Linux
+  document binds, and the fixed hardened macOS host document relay.
 - `tests/validate_tor_image.py`: the selected Tor image, one fresh engine-local
   SOCKS volume, keep-id/tmpfs modes, explicit state bind, authenticated private
   control path, and unprivileged read-only policy-container socket access.
@@ -584,10 +620,12 @@ direct inspection; do not mix Docker engine results into the evidence.
 4. Inspect `.Config.StartupHealthCheck` and `.Config.Healthcheck` separately.
    Observe fast startup probes followed by a ten-minute ordinary interval or
    Myst's one-minute interval; Compose rendering alone is not a pass.
-5. For full mode, confirm the host document server PID identity and readiness,
-   the absence of document mounts/volumes on the relay, internal and published
-   document access, immediate source visibility, and identity-safe shutdown.
-   Never print private document names or contents.
+5. For macOS full mode, confirm the host document server PID identity and
+   readiness, the absence of document mounts/volumes on the relay, internal and
+   published document access, immediate source visibility, and identity-safe
+   shutdown. On native Linux, confirm the read-only source bind and
+   containerized server instead. Never print private document names or
+   contents.
 6. Validate the shared Docker binds. Confirm the core Podman overlays,
    PostgreSQL direct entrypoint, `keep-id` mappings, initialization checks,
    mount-root xattr preflight, clean shutdown, and engine exclusivity.

@@ -193,6 +193,11 @@ Tailscale routing switches deliberately promote those processes into the same
 namespace. This is a routing boundary, not a sandbox between its residents.
 Onyx applications never join it.
 
+Full-mode embedding readiness starts Teep during the staged embedding phase.
+When Teep is VPN-routed, that phase also starts the fixed `host-teep-proxy`
+publisher before the shim validates the documented
+`host.docker.internal:8337` embedding URL.
+
 Repeated `make up-lite`/`make up-full` calls distinguish the standalone Myst
 signup project from the integrated `onyx` Compose project. They stop the
 former before stack startup but preserve an already-running integrated Myst

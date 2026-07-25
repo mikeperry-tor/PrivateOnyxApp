@@ -169,6 +169,43 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reason)
         self.assertEqual(addresses, ("192.168.65.2",))
 
+    async def test_exact_host_accepts_only_fixed_podman_link_local_gateway(
+        self,
+    ) -> None:
+        module = _load_module(
+            "host",
+            {
+                "EGRESS_PODMAN_HOST_GATEWAY_IP": "169.254.1.2",
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                    "http://host.docker.internal:8337/v1/embeddings"
+                ),
+            },
+        )
+        for address, expected_reason in (
+            ("169.254.1.2", None),
+            ("169.254.1.1", "Docker-host resolved to a forbidden address"),
+            ("169.254.169.254", "Docker-host resolved to a forbidden address"),
+        ):
+            with self.subTest(address=address), patch.object(
+                module,
+                "_resolve_system_host",
+                AsyncMock(return_value={address}),
+            ):
+                reason, addresses = await module._validate_destination(
+                    "host.docker.internal", 8337
+                )
+            self.assertEqual(reason, expected_reason)
+            self.assertEqual(addresses, (address,) if expected_reason is None else ())
+
+    def test_podman_host_gateway_setting_is_fixed(self) -> None:
+        for value in ("169.254.1.1", "192.168.1.2", "true"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                RuntimeError, "internal fixed setting"
+            ):
+                _load_module(
+                    "host", {"EGRESS_PODMAN_HOST_GATEWAY_IP": value}
+                )
+
     def test_plain_http_private_exceptions_are_host_route_only(self) -> None:
         host_module = _load_module(
             "host",
