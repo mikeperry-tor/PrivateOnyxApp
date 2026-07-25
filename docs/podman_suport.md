@@ -61,11 +61,16 @@ while the Unix socket also proves that the provider targets Podman's API rather
 than Docker Desktop.
 
 The macOS client and Linux VM server can have different versions. The wrapper
-requires:
+uses these version and capability rules:
 
-- a Linux Podman server version 5.8.1 or later;
+- a Linux Podman server, with 5.8.1 as the currently validated baseline;
 - a Compose provider version 2.20.2 or later; and
 - the native startup-health flags checked by `podman update --help`.
+
+An older Podman server prints a warning but is not rejected based on its version
+alone. It proceeds through the same image-store, Compose-provider, and native
+startup-health capability probes, and any missing required capability still
+fails before stack mutation.
 
 The currently verified guest baseline is the immutable official Podman
 machine-os v5.8.1 release image. On Apple silicon with libkrun, initialize it
@@ -277,8 +282,9 @@ Compose model is therefore necessary but not sufficient evidence.
 `podman/startup_health.py` provides strict startup-health and storage actions:
 
 - `check` validates that the selected binary is Podman, inspects the Linux
-  server version, probes the image store, checks the Compose provider, and
-  verifies the required native `podman update` flags.
+  server version, warns below the validated baseline, probes the image store,
+  checks the Compose provider, and verifies the required native `podman update`
+  flags.
 - `configure` renders the Makefile-selected effective Compose model, discovers
   all created containers by Compose project label, requires the complete
   retained-health set to match, validates each command, timeout, retry count,

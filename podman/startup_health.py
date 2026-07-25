@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import Any, Sequence
 
 
-MIN_PODMAN_VERSION = (5, 8, 1)
+VALIDATED_PODMAN_VERSION = (5, 8, 1)
 MIN_COMPOSE_VERSION = (2, 20, 2)
 STARTUP_INTERVAL_NS = 5_000_000_000
 MYST_INTERVAL_NS = 60_000_000_000
@@ -250,11 +250,13 @@ def check_capability(container_bin: str) -> str:
         raise ContractError(f"could not inspect the Podman server: {exc}") from exc
     if server_os != "linux":
         raise ContractError(f"Podman server must run Linux, found {server_os!r}")
-    if _version_tuple(server_version) < MIN_PODMAN_VERSION:
-        minimum = ".".join(str(part) for part in MIN_PODMAN_VERSION)
-        raise ContractError(
-            f"Podman server {minimum}+ is required for the validated "
-            f"startup-health contract; found {server_version}"
+    if _version_tuple(server_version) < VALIDATED_PODMAN_VERSION:
+        baseline = ".".join(str(part) for part in VALIDATED_PODMAN_VERSION)
+        print(
+            f"WARNING: Podman server {server_version} is older than the "
+            f"validated {baseline} baseline; continuing with explicit "
+            "capability checks.",
+            file=sys.stderr,
         )
 
     try:

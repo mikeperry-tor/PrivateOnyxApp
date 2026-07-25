@@ -299,16 +299,18 @@ Myst's one-minute recovery check. Origin services whose sole readiness value is
 already represented by a fixed gateway or publisher have their duplicate check
 disabled. Nginx is likewise the single WebUI boundary: its root check traverses
 `web_server`, while its separate API dependency preserves API startup
-validation. Docker Engine 25.0+ and Compose 2.20.2+ are required. With a Podman
-5.8.1+ server and Compose provider 2.20.2+, the Makefile first creates stopped
-containers, copies each regular command and timeout into Podman's native
-five-second startup health check, strictly inspects both cadences, and only then
-starts the services. A running container without that native configuration is
-rejected rather than modified in place. Podman Compose accepting or rendering
-`start_interval` alone is not treated as support because its compatibility API
-drops that field. Every Compose wait has an explicit 420-second outer timeout,
-so a service that remains in Podman's startup state fails stack launch instead
-of blocking indefinitely.
+validation. Docker Engine 25.0+ and Compose 2.20.2+ are required. With Podman
+and a Compose provider 2.20.2+, the Makefile first checks the concrete native
+startup-health capabilities, then creates stopped containers, copies each
+regular command and timeout into Podman's native five-second startup health
+check, strictly inspects both cadences, and only then starts the services.
+Podman 5.8.1 is the validated baseline; an older server warns and proceeds to
+those concrete checks instead of being rejected by version alone. A running
+container without that native configuration is rejected rather than modified
+in place. Podman Compose accepting or rendering `start_interval` alone is not
+treated as support because its compatibility API drops that field. Every
+Compose wait has an explicit 420-second outer timeout, so a service that remains
+in Podman's startup state fails stack launch instead of blocking indefinitely.
 
 Rootless Podman on macOS cannot reliably expose the Docker-compatible socket to
 stack containers, so its overlays omit code interpreter. Myst recovery does

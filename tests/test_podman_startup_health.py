@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import subprocess
 import tempfile
@@ -228,6 +230,28 @@ class PodmanStartupHealthTests(unittest.TestCase):
             subprocess.CompletedProcess([], 0, stdout=flags, stderr=""),
         ]
         self.assertEqual(startup_health.check_capability("podman"), "5.8.1")
+
+    @patch.object(startup_health, "_run")
+    def test_capability_gate_warns_but_tests_older_podman(self, run) -> None:
+        flags = "\n".join(sorted(startup_health.REQUIRED_UPDATE_FLAGS))
+        run.side_effect = [
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=json.dumps(
+                    {"Server": {"Version": "5.4.2", "Os": "linux"}}
+                ),
+                stderr="",
+            ),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="2.26.1\n", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout=flags, stderr=""),
+        ]
+        diagnostics = io.StringIO()
+        with contextlib.redirect_stderr(diagnostics):
+            self.assertEqual(startup_health.check_capability("podman"), "5.4.2")
+        self.assertIn("older than the validated 5.8.1 baseline", diagnostics.getvalue())
+        self.assertIn("continuing with explicit capability checks", diagnostics.getvalue())
 
     @patch.object(startup_health, "_run")
     def test_capability_gate_reports_unusable_image_store(self, run) -> None:

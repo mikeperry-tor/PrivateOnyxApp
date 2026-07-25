@@ -64,7 +64,9 @@ The Docker Compose files in this stack relies on the following components:
 
 ## Prerequisites
 
-- Docker Engine 25.0+ or rootless Podman 5.8.1+, with a Compose provider 2.20.2 or later.
+- Docker Engine 25.0+ or rootless Podman, with a Compose provider 2.20.2 or
+  later. Podman 5.8.1 is the currently validated baseline; older versions are
+  allowed to proceed when the startup capability checks pass.
 - `make`
 - `uv` for MLX embedding server installation and dependency-lock upgrades.
 
