@@ -270,6 +270,10 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[1].split("\n\n", 1)[0]
         self.assertIn("startup_health.py check-compose", capability_target)
         self.assertIn("startup_health.py check", capability_target)
+        self.assertIn('[ ! -S "$(DOCKER_SOCK_PATH)" ]', capability_target)
+        self.assertIn(
+            "systemctl --user enable --now podman.socket", capability_target
+        )
         self.assertNotIn("Podman startup-health has not passed", makefile)
         for target in ("up-lite:", "up-full:"):
             definitions = [

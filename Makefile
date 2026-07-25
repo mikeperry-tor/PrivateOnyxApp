@@ -37,7 +37,7 @@ endif
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
 TEEP_IMAGE ?= $(call env_value,TEEP_IMAGE)
 ifeq ($(strip $(TEEP_IMAGE)),)
-TEEP_IMAGE := 13rac1/teep:$(TEEP_REF)
+TEEP_IMAGE := docker.io/13rac1/teep:$(TEEP_REF)
 endif
 TEEP_IMAGE := $(TEEP_IMAGE)
 TAILSCALE_IMAGE ?= $(call env_value,TAILSCALE_IMAGE)
@@ -48,7 +48,7 @@ PYTHON_SLIM_IMAGE ?= $(call env_value,PYTHON_SLIM_IMAGE)
 PYTHON_ALPINE_IMAGE ?= $(call env_value,PYTHON_ALPINE_IMAGE)
 OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
 ifeq ($(strip $(OBSCURA_IMAGE)),)
-OBSCURA_IMAGE := h4ckf0r0day/obscura:0.1.10
+OBSCURA_IMAGE := docker.io/h4ckf0r0day/obscura:0.1.10
 endif
 CONTAINER_BIN ?= $(call env_value,CONTAINER_BIN)
 DOCKER_SOCK_PATH ?= $(call env_value,DOCKER_SOCK_PATH)
@@ -234,8 +234,8 @@ ONYX_IMAGE_TAG ?= $(call env_value,ONYX_IMAGE_TAG)
 ifeq ($(strip $(ONYX_IMAGE_TAG)),)
 $(error ONYX_IMAGE_TAG is not set. Add ONYX_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass ONYX_IMAGE_TAG=... on the make command line)
 endif
-ONYX_BACKEND_IMAGE ?= onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
-ONYX_WEB_SERVER_IMAGE ?= onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
+ONYX_BACKEND_IMAGE ?= docker.io/onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
+ONYX_WEB_SERVER_IMAGE ?= docker.io/onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
 SEARXNG_IMAGE_TAG ?= $(call env_value,SEARXNG_IMAGE_TAG)
 ifeq ($(strip $(SEARXNG_IMAGE_TAG)),)
 $(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass SEARXNG_IMAGE_TAG=... on the make command line)
@@ -306,7 +306,7 @@ ifeq ($(strip $(CODE_INTERPRETER_IMAGE_TAG)),)
 $(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass CODE_INTERPRETER_IMAGE_TAG=... on the make command line)
 endif
 CODE_INTERPRETER_IMAGE_TAG := $(CODE_INTERPRETER_IMAGE_TAG)
-CODE_INTERPRETER_IMAGE ?= onyxdotapp/code-interpreter:$(CODE_INTERPRETER_IMAGE_TAG)
+CODE_INTERPRETER_IMAGE ?= docker.io/onyxdotapp/code-interpreter:$(CODE_INTERPRETER_IMAGE_TAG)
 export CODE_INTERPRETER_IMAGE_TAG
 PYTHON_EXECUTOR_IMAGE_TAG ?= $(call env_value,PYTHON_EXECUTOR_IMAGE_TAG)
 ifeq ($(strip $(PYTHON_EXECUTOR_IMAGE_TAG)),)
@@ -660,6 +660,12 @@ check-container-health-capability:
 	python3 podman/startup_health.py check-compose --container-bin "$(CONTAINER_BIN)"; \
 	case "$(CONTAINER_BIN)" in \
 		*podman*) \
+			if [ -z "$(DOCKER_SOCK_PATH)" ] || [ ! -S "$(DOCKER_SOCK_PATH)" ]; then \
+				echo "ERROR: Podman Compose API socket is unavailable at $(DOCKER_SOCK_PATH)" >&2; \
+				echo "On native Linux, run: systemctl --user enable --now podman.socket" >&2; \
+				echo "On macOS, start the selected Podman machine." >&2; \
+				exit 1; \
+			fi; \
 			exec python3 podman/startup_health.py check --container-bin "$(CONTAINER_BIN)" \
 			;; \
 	esac; \

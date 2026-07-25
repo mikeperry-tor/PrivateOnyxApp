@@ -326,6 +326,17 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
 
 
 class OnyxNetworkIsolationComposeTests(unittest.TestCase):
+    def test_api_health_program_survives_podman_compatibility_api(self) -> None:
+        model = _compose_model("lite")
+        self.assertEqual(
+            model["services"]["api_server"]["healthcheck"]["test"],
+            [
+                "CMD-SHELL",
+                "python -c \"import urllib.request; "
+                "urllib.request.urlopen('http://localhost:8080/health')\"",
+            ],
+        )
+
     def test_canonical_origin_and_onion_gateway_contract(self) -> None:
         origin = "http://" + ("a" * 56) + ".onion"
         model = _compose_model(

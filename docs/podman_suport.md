@@ -52,6 +52,11 @@ the Podman API. This does not mean the Docker engine is being used. Do not run
 `docker` commands as a fallback, and use `podman version` or `podman info` when
 the selected engine must be proved.
 
+All external image references owned by this wrapper include an explicit
+`docker.io/` registry. Do not rely on Docker's implicit Docker Hub default:
+Podman installations may intentionally have no unqualified-search registries,
+and changing that host-wide policy is not a stack prerequisite.
+
 Docker Compose 5.3.1 may otherwise honor the host's selected Docker Desktop
 context or Podman's SSH system connection. The Makefile therefore exports an
 exact `DOCKER_HOST=unix://...` value from the selected Podman engine whenever
@@ -82,6 +87,18 @@ model tests also require Docker Compose 2.35.0+, where
 environment files. On native Linux, the Makefile obtains the rootless API
 socket from `podman info`; on macOS it first uses the forwarded socket reported
 by `podman machine inspect`.
+
+On native systemd Linux, the external provider requires the rootless Podman API
+socket:
+
+```bash
+systemctl --user enable --now podman.socket
+```
+
+The startup capability target verifies that `DOCKER_SOCK_PATH` names an active
+Unix socket before claiming shared data or creating containers. It does not
+enable a persistent host service automatically. On macOS, the equivalent
+socket is owned by the selected running Podman machine.
 
 The currently verified guest baseline is the immutable official Podman
 machine-os v5.8.1 release image. On Apple silicon with libkrun, initialize it
@@ -310,12 +327,16 @@ Compose model is therefore necessary but not sufficient evidence.
 - `prepare-shared-data` validates an initialized database/index path and is
   retained for the OpenSearch preflight and focused diagnostics.
 
-For each retained health check, `configure` copies the exact regular command
-and timeout into Podman's `StartupHealthCheck`, sets its interval to five
-seconds and success threshold to one, and disables startup-health-driven
-restart. It separately requires a ten-minute ordinary interval, except Myst's
-one-minute interval. A running container without the exact native startup
-configuration is rejected instead of being modified in place.
+For each retained health check, `configure` converts the regular command to an
+equivalent shell-quoted command and installs it with the same timeout in
+Podman's `StartupHealthCheck`. This is required because Podman 5.4's
+`podman update --health-startup-cmd` accepts one shell command rather than a
+Docker-style JSON exec array. The helper reinspects the exact transformed
+command, sets its interval to five seconds and success threshold to one, and
+disables startup-health-driven restart. It separately requires a ten-minute
+ordinary interval, except Myst's one-minute interval. A running container
+without the exact native startup configuration is rejected instead of being
+modified in place.
 
 The authoritative inspect fields are separate:
 

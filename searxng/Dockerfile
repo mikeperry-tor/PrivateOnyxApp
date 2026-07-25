@@ -1,6 +1,6 @@
 ARG SEARXNG_UPSTREAM_IMAGE=docker.io/searxng/searxng:2026.7.15-7b2199ecd
 
-FROM python:3.14-slim-bookworm AS python-runtime-deps
+FROM docker.io/library/python:3.14-slim-bookworm AS python-runtime-deps
 COPY searxng/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --no-deps --require-hashes \
     --target /opt/runtime-deps -r /tmp/requirements.txt

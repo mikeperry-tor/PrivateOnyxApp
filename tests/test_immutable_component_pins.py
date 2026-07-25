@@ -61,7 +61,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
         self.assertEqual(executor_tag, self.value("CODE_INTERPRETER_IMAGE_TAG"))
         self.assertRegex(
             self.value("PYTHON_EXECUTOR_UPSTREAM_IMAGE"),
-            r"^onyxdotapp/python-executor-sci:0\.4\.4@sha256:[0-9a-f]{64}$",
+            r"^docker\.io/onyxdotapp/python-executor-sci:0\.4\.4@sha256:[0-9a-f]{64}$",
         )
         self.assertIn(
             "PYTHON_EXECUTOR_UPSTREAM_IMAGE ?= $(call env_value,PYTHON_EXECUTOR_UPSTREAM_IMAGE)",
@@ -73,9 +73,56 @@ class ImmutableComponentPinTests(unittest.TestCase):
     def test_minio_release_records_its_image_source_revision(self) -> None:
         self.assertRegex(
             self.value("MINIO_IMAGE"),
-            r"^minio/minio:RELEASE\.[0-9TZ-]+-cpuv1$",
+            r"^docker\.io/minio/minio:RELEASE\.[0-9TZ-]+-cpuv1$",
         )
         self.assertRegex(self.value("MINIO_SOURCE_REF"), r"^[0-9a-f]{40}$")
+
+    def test_external_images_use_explicit_registries(self) -> None:
+        for name in (
+            "PYTHON_EXECUTOR_UPSTREAM_IMAGE",
+            "OBSCURA_IMAGE",
+            "TOR_BASE_IMAGE",
+            "NETNS_HOLDER_IMAGE",
+            "PYTHON_SLIM_IMAGE",
+            "PYTHON_ALPINE_IMAGE",
+            "SOCAT_IMAGE",
+            "TAILSCALE_IMAGE",
+            "MINIO_IMAGE",
+        ):
+            self.assertTrue(
+                self.value(name).startswith("docker.io/"),
+                f"{name} must not rely on a short-name registry default",
+            )
+
+        for path in (
+            "docker-compose.yaml",
+            "compose_overlays/docker-compose.full.yml",
+            "executor/Dockerfile",
+            "myst/build/Dockerfile",
+            "searxng/Dockerfile",
+            "teep/build/Dockerfile",
+        ):
+            contents = (ROOT / path).read_text(encoding="utf-8")
+            self.assertNotRegex(
+                contents,
+                r"(?m)^\s*(?:image:|FROM|ARG "
+                r"PYTHON_EXECUTOR_UPSTREAM_IMAGE=)\s*"
+                r"(?!docker\.io/|local/|\$\{)[a-z0-9][a-z0-9_.-]*/",
+                path,
+            )
+            for line in contents.splitlines():
+                if not line.startswith("FROM "):
+                    continue
+                fields = [
+                    field
+                    for field in line.removeprefix("FROM ").split()
+                    if not field.startswith("--")
+                ]
+                self.assertTrue(fields, path)
+                self.assertTrue(
+                    fields[0].startswith(("docker.io/", "${")),
+                    f"{path} has an unqualified FROM reference: {fields[0]}",
+                )
 
 
 if __name__ == "__main__":

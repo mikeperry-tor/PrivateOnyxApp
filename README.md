@@ -91,6 +91,16 @@ podman compose version --short
 podman compose config --help | grep -- --no-env-resolution
 ```
 
+Enable Podman's rootless API socket for that provider:
+
+```bash
+systemctl --user enable --now podman.socket
+```
+
+The stack preflight requires the reported path to be an active Unix socket and
+prints this command before making stack changes when native Linux socket
+activation is missing.
+
 ## Running the Stack
 
 The stack comes in two flavors: lite and full. This specifies the mode of the Onyx app. Lite mode provides Chat, Web, and Research only. Full mode also provides RAG, external app connectors, and groupware. Lite mode uses significantly less RAM (~1GB vs ~10GB).

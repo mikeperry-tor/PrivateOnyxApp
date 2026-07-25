@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 
@@ -15,7 +15,7 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w" -o /out/teep ./cmd/teep
 
-FROM alpine:3.22
+FROM docker.io/library/alpine:3.22
 
 ARG TEEP_REPO=https://github.com/13rac1/teep.git
 ARG TEEP_REF

@@ -6,7 +6,7 @@ services:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: background
-    image: onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
+    image: docker.io/onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
     build: !reset null
     networks: [onyx-backend, onyx-data, onyx-public-egress, onyx-host-egress, onyx-teep]
     # Use the same stack-owned internal-service bypasses as api_server.

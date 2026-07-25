@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26-alpine AS builder
 
 # Install packages
 RUN apk add --no-cache git bash gcc musl-dev make linux-headers
@@ -22,7 +22,7 @@ ARG TARGETOS TARGETARCH
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH BUILD_STATIC=1 bin/build
 
 
-FROM alpine:3.22
+FROM docker.io/library/alpine:3.22
 
 ARG MYST_NODE_REPO=https://github.com/mikeperry-tor/node.git
 ARG MYST_NODE_REF

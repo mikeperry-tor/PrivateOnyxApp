@@ -349,14 +349,14 @@ class PodmanStartupHealthTests(unittest.TestCase):
 
     def test_startup_contract_requires_exact_command_timing_and_success(self) -> None:
         expected = {
-            "Test": ["CMD", "true"],
+            "Test": ["CMD-SHELL", "true"],
             "Interval": startup_health.STARTUP_INTERVAL_NS,
             "Timeout": 5_000_000_000,
             "Successes": 1,
         }
         startup_health._verify_startup(_container(startup=expected))
         for key, value in (
-            ("Test", ["CMD", "false"]),
+            ("Test", ["CMD-SHELL", "false"]),
             ("Interval", 30_000_000_000),
             ("Timeout", 1_000_000_000),
             ("Successes", 2),
@@ -377,7 +377,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
         before = _container()
         after = _container(
             startup={
-                "Test": ["CMD", "true"],
+                "Test": ["CMD-SHELL", "true"],
                 "Interval": startup_health.STARTUP_INTERVAL_NS,
                 "Timeout": 5_000_000_000,
                 "Successes": 1,
@@ -387,7 +387,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
         self.assertEqual(startup_health.configure_project("podman", "onyx"), 1)
         command = run.call_args.args[0]
         self.assertEqual(command[0:2], ["podman", "update"])
-        self.assertIn('--health-startup-cmd=["CMD","true"]', command)
+        self.assertIn("--health-startup-cmd=true", command)
         self.assertIn("--health-startup-interval=5s", command)
         self.assertIn("--health-startup-retries=0", command)
 
@@ -408,7 +408,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
         self, capability, _expected_health, load_containers
     ) -> None:
         startup = {
-            "Test": ["CMD", "true"],
+            "Test": ["CMD-SHELL", "true"],
             "Interval": startup_health.STARTUP_INTERVAL_NS,
             "Timeout": 5_000_000_000,
             "Successes": 1,
@@ -422,6 +422,15 @@ class PodmanStartupHealthTests(unittest.TestCase):
             1,
         )
         capability.assert_not_called()
+
+    def test_exec_health_command_is_shell_quoted_for_podman_update(self) -> None:
+        regular = {
+            "Test": ["CMD", "python", "-c", "print('one two')"],
+        }
+        self.assertEqual(
+            startup_health._startup_test(regular),
+            ["CMD-SHELL", "python -c 'print('\"'\"'one two'\"'\"')'"],
+        )
 
     def test_missing_compose_health_check_fails_closed(self) -> None:
         container = _container()

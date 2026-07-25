@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -538,13 +539,28 @@ def _verify_regular(
                 )
 
 
+def _startup_test(regular: dict[str, Any]) -> list[str]:
+    test = regular.get("Test")
+    if not isinstance(test, list) or len(test) < 2:
+        raise ContractError("regular health command cannot become startup health")
+    if test[0] == "CMD-SHELL" and len(test) == 2 and isinstance(test[1], str):
+        command = test[1]
+    elif test[0] == "CMD" and all(isinstance(part, str) for part in test[1:]):
+        command = shlex.join(test[1:])
+    else:
+        raise ContractError(
+            f"unsupported regular health command form for startup health: {test!r}"
+        )
+    return ["CMD-SHELL", command]
+
+
 def _verify_startup(container: ContainerHealth) -> None:
     if container.regular is None:
         raise ContractError(f"{container.service}: regular health check is absent")
     startup = container.startup
     if not isinstance(startup, dict):
         raise ContractError(f"{container.service}: native startup health check is absent")
-    if startup.get("Test") != container.regular.get("Test"):
+    if startup.get("Test") != _startup_test(container.regular):
         raise ContractError(f"{container.service}: startup health command drifted")
     if startup.get("Interval") != STARTUP_INTERVAL_NS:
         raise ContractError(f"{container.service}: startup interval is not 5s")
@@ -577,15 +593,13 @@ def configure_project(
         if container.state == "running":
             _verify_startup(container)
             continue
-        command_json = json.dumps(
-            container.regular["Test"], separators=(",", ":"), ensure_ascii=True
-        )
+        startup_test = _startup_test(container.regular)
         timeout_ns = container.regular["Timeout"]
         _run(
             [
                 container_bin,
                 "update",
-                f"--health-startup-cmd={command_json}",
+                f"--health-startup-cmd={startup_test[1]}",
                 "--health-startup-interval=5s",
                 f"--health-startup-timeout={timeout_ns}ns",
                 "--health-startup-retries=0",
