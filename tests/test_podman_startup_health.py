@@ -249,9 +249,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
             subprocess.CompletedProcess(
                 [],
                 0,
-                stdout=json.dumps(
-                    {"Server": {"Version": "5.8.1", "Os": "linux"}}
-                ),
+                stdout="5.8.1\tlinux\n",
                 stderr="",
             ),
             subprocess.CompletedProcess([], 0, stdout="", stderr=""),
@@ -262,6 +260,15 @@ class PodmanStartupHealthTests(unittest.TestCase):
             subprocess.CompletedProcess([], 0, stdout=flags, stderr=""),
         ]
         self.assertEqual(startup_health.check_capability("podman"), "5.8.1")
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            [
+                "podman",
+                "version",
+                "--format",
+                "{{.Server.Version}}\t{{.Server.Os}}",
+            ],
+        )
 
     @patch.object(startup_health, "_run")
     def test_capability_gate_warns_but_tests_older_podman(self, run) -> None:
@@ -270,9 +277,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
             subprocess.CompletedProcess(
                 [],
                 0,
-                stdout=json.dumps(
-                    {"Server": {"Version": "5.4.2", "Os": "linux"}}
-                ),
+                stdout="5.4.2\tlinux\n",
                 stderr="",
             ),
             subprocess.CompletedProcess([], 0, stdout="", stderr=""),
@@ -326,9 +331,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
             subprocess.CompletedProcess(
                 [],
                 0,
-                stdout=json.dumps(
-                    {"Server": {"Version": "5.8.2", "Os": "linux"}}
-                ),
+                stdout="5.8.2\tlinux\n",
                 stderr="",
             ),
             subprocess.CalledProcessError(125, ["podman", "images"]),

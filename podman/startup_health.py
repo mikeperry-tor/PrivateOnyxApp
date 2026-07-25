@@ -307,12 +307,15 @@ def check_compose_capability(container_bin: str) -> str:
 def check_capability(container_bin: str) -> str:
     _require_podman_binary(container_bin)
     try:
-        version_data = json.loads(
-            _run([container_bin, "version", "--format", "json"]).stdout
-        )
-        server_version = version_data["Server"]["Version"]
-        server_os = version_data["Server"]["Os"]
-    except (KeyError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+        server_version, server_os = _run(
+            [
+                container_bin,
+                "version",
+                "--format",
+                "{{.Server.Version}}\t{{.Server.Os}}",
+            ]
+        ).stdout.strip().split("\t")
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
         raise ContractError(f"could not inspect the Podman server: {exc}") from exc
     if server_os != "linux":
         raise ContractError(f"Podman server must run Linux, found {server_os!r}")
