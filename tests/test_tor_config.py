@@ -362,7 +362,8 @@ class TorConfigTests(unittest.TestCase):
             settings_file.write_text(
                 "TOR_EGRESS_ENABLED=false\n"
                 "TOR_EGRESS_ENABLED='true' # last definition wins\n"
-                'TOR_ONION_SERVICE_ENABLED="false"\n',
+                'TOR_ONION_SERVICE_ENABLED="false"\n'
+                "WEBUI_CANONICAL_ORIGIN='https://linux.example'\n",
                 encoding="utf-8",
             )
             values = tor_config.settings_from_file_and_environment(settings_file)
@@ -394,6 +395,10 @@ class TorConfigTests(unittest.TestCase):
             )
             self.assertIn(
                 "compose_overlays/docker-compose.tor-egress.yml", full_files
+            )
+            self.assertIn(
+                "WEBUI_CANONICAL_ORIGIN := https://linux.example",
+                completed.stdout.splitlines(),
             )
 
     def test_empty_wrapper_uses_example_routing_defaults(self) -> None:
@@ -432,6 +437,51 @@ class TorConfigTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(tor_config.ConfigError, "one shell-style"):
                 tor_config.read_wrapper_settings(settings_file)
+
+    def test_preflight_requires_existing_settings_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing.env"
+            completed = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "wrapper-config-preflight",
+                    f"ENV_FILE={missing}",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("wrapper settings file does not exist", completed.stderr)
+
+    def test_preflight_validates_unselected_setting_syntax(self) -> None:
+        malformed_values = (
+            'HOST_PORT_ONYX_WEBUI="unterminated\n',
+            "HOST_PORT_ONYX_WEBUI=3000 extra\n",
+            "HOST_PORT_ONYX_WEBUI\n",
+            " HOST_PORT_ONYX_WEBUI=3000\n",
+            "host_port_onyx_webui=3000\n",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            settings_file = Path(temporary) / "wrapper.env"
+            for content in malformed_values:
+                with self.subTest(content=content):
+                    settings_file.write_text(content, encoding="utf-8")
+                    completed = subprocess.run(
+                        [
+                            "make",
+                            "--no-print-directory",
+                            "wrapper-config-preflight",
+                            f"ENV_FILE={settings_file}",
+                        ],
+                        cwd=ROOT,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn("ERROR:", completed.stderr)
 
     def test_atomic_failure_preserves_existing_config_and_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

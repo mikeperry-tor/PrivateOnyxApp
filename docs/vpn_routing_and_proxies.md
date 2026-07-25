@@ -47,9 +47,11 @@ restart-time embedding URL/model selection settings share one restricted
 single-line parser for Make selection and host-side configuration rendering.
 Values may be unquoted or shell-quoted;
 `$` is literal, an unquoted `#` starts a comment, later definitions win, and
-exported or Make command-line values take precedence. Validation belongs to
-stack startup and Tor address inspection, not shared-data ownership or Myst
-signup.
+exported or Make command-line values take precedence. Stack preflight requires
+the selected wrapper env file to exist and applies that restricted syntax to
+every assignment before any stack mutation, including settings not otherwise
+read by the host-side parser. Validation belongs to stack startup and Tor
+address inspection, not shared-data ownership or Myst signup.
 
 This stack keeps application containers off Internet-routed Docker networks.
 Traffic crosses fixed-destination bridges to final-hop policy proxies in the

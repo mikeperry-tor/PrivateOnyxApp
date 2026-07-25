@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SUPERVISOR = ROOT / "reference_repos/onyx/backend/supervisord.conf"
+SUPERVISOR = ROOT / "tests/fixtures/onyx_supervisord.conf"
 ENTRYPOINT = ROOT / "onyx/background_entrypoint.py"
 WATCHDOG = ROOT / "onyx/beat_liveness_watchdog.py"
 

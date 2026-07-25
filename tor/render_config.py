@@ -50,31 +50,62 @@ def _parse_env_value(value: str, *, line_number: int) -> str:
     return tokens[0]
 
 
-def read_wrapper_settings(path: Path) -> dict[str, str]:
-    """Read selected restart-time settings using the shared restricted grammar."""
+def read_wrapper_settings(
+    path: Path,
+    *,
+    require_file: bool = False,
+    validate_all: bool = False,
+) -> dict[str, str]:
+    """Read selected settings and optionally validate the complete wrapper file."""
     values: dict[str, str] = {}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
+        if require_file:
+            raise ConfigError(f"wrapper settings file does not exist: {path}") from None
         return values
     for line_number, line in enumerate(lines, 1):
-        if not line or line.lstrip().startswith("#") or "=" not in line:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "=" not in line:
+            if validate_all:
+                raise ConfigError(
+                    f"invalid wrapper setting on line {line_number}: "
+                    "expected NAME=VALUE"
+                )
             continue
         raw_name, value = line.split("=", 1)
         name = raw_name.strip()
-        if name not in SETTING_DEFAULTS:
+        if validate_all and (
+            raw_name != name or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
+        ):
+            raise ConfigError(f"invalid wrapper setting name on line {line_number}")
+        if name not in SETTING_DEFAULTS and not validate_all:
             continue
-        if raw_name != name or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+        if name in SETTING_DEFAULTS and (
+            raw_name != name or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
+        ):
             raise ConfigError(
                 f"invalid wrapper setting name on line {line_number}"
             )
-        values[name] = _parse_env_value(value, line_number=line_number)
+        parsed_value = _parse_env_value(value, line_number=line_number)
+        if name in SETTING_DEFAULTS:
+            values[name] = parsed_value
     return values
 
 
-def settings_from_file_and_environment(path: Path) -> dict[str, str]:
+def settings_from_file_and_environment(
+    path: Path,
+    *,
+    require_file: bool = False,
+    validate_all: bool = False,
+) -> dict[str, str]:
     """Apply Make's CLI/environment-over-file precedence without a shell."""
-    values = SETTING_DEFAULTS | read_wrapper_settings(path)
+    values = SETTING_DEFAULTS | read_wrapper_settings(
+        path,
+        require_file=require_file,
+        validate_all=validate_all,
+    )
     for name in SETTING_DEFAULTS:
         if name in os.environ:
             values[name] = os.environ[name]
@@ -256,7 +287,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        values = settings_from_file_and_environment(Path(args.settings_file))
+        values = settings_from_file_and_environment(
+            Path(args.settings_file),
+            require_file=args.action != "get",
+            validate_all=args.action != "get",
+        )
         if args.action == "get":
             if not args.name:
                 raise ConfigError("--name is required for get")

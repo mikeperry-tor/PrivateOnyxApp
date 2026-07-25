@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -294,7 +293,6 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
         self.assertTrue((ROOT / "docker-compose.yaml").is_file())
 
 
-@unittest.skipUnless(shutil.which("docker"), "docker compose is required")
 class OnyxNetworkIsolationComposeTests(unittest.TestCase):
     def test_canonical_origin_and_onion_gateway_contract(self) -> None:
         origin = "http://" + ("a" * 56) + ".onion"
