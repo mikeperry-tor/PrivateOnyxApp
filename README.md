@@ -65,7 +65,7 @@ The Docker Compose files in this stack relies on the following components:
 ## Prerequisites
 
 - Docker Engine API 1.44+ (Engine 25.0+) or rootless Podman, with Docker
-  Compose 2.35.0 or later as the Compose provider. Podman 5.8.1 is the
+  Compose 2.35.0 or later as the Compose provider. Podman 5.4.2 is the
   currently validated baseline; older versions are allowed to proceed when
   the startup capability checks pass.
 - `make`

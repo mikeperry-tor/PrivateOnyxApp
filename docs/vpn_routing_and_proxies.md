@@ -311,7 +311,7 @@ Podman, it then checks the concrete native startup-health capabilities, creates
 stopped containers, copies each
 regular command and timeout into Podman's native five-second startup health
 check, strictly inspects both cadences, and only then starts the services.
-Podman 5.8.1 is the validated baseline; an older server warns and proceeds to
+Podman 5.4.2 is the validated baseline; an older server warns and proceeds to
 those concrete checks instead of being rejected by version alone. A running
 container without that native configuration is rejected rather than modified
 in place. Podman Compose accepting or rendering `start_interval` alone is not

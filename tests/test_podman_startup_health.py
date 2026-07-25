@@ -358,7 +358,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
             subprocess.CompletedProcess(
                 [],
                 0,
-                stdout="5.8.1\tlinux\n",
+                stdout="5.4.2\tlinux\n",
                 stderr="",
             ),
             subprocess.CompletedProcess([], 0, stdout="", stderr=""),
@@ -368,7 +368,10 @@ class PodmanStartupHealthTests(unittest.TestCase):
             ),
             subprocess.CompletedProcess([], 0, stdout=flags, stderr=""),
         ]
-        self.assertEqual(startup_health.check_capability("podman"), "5.8.1")
+        diagnostics = io.StringIO()
+        with contextlib.redirect_stderr(diagnostics):
+            self.assertEqual(startup_health.check_capability("podman"), "5.4.2")
+        self.assertEqual(diagnostics.getvalue(), "")
         self.assertEqual(
             run.call_args_list[0].args[0],
             [
@@ -386,7 +389,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
             subprocess.CompletedProcess(
                 [],
                 0,
-                stdout="5.4.2\tlinux\n",
+                stdout="5.4.1\tlinux\n",
                 stderr="",
             ),
             subprocess.CompletedProcess([], 0, stdout="", stderr=""),
@@ -398,8 +401,8 @@ class PodmanStartupHealthTests(unittest.TestCase):
         ]
         diagnostics = io.StringIO()
         with contextlib.redirect_stderr(diagnostics):
-            self.assertEqual(startup_health.check_capability("podman"), "5.4.2")
-        self.assertIn("older than the validated 5.8.1 baseline", diagnostics.getvalue())
+            self.assertEqual(startup_health.check_capability("podman"), "5.4.1")
+        self.assertIn("older than the validated 5.4.2 baseline", diagnostics.getvalue())
         self.assertIn("continuing with explicit capability checks", diagnostics.getvalue())
 
     @patch.object(startup_health, "_run")

@@ -75,7 +75,7 @@ provider targets Podman's API rather than Docker Desktop.
 The client and Linux Podman server can have different versions. The wrapper
 uses these version and capability rules:
 
-- a Linux Podman server, with 5.8.1 as the currently validated baseline;
+- a Linux Podman server, with 5.4.2 as the currently validated baseline;
 - a Compose provider that preserves `gw_priority`, `!override`, and
   `start_interval` in a rendered probe model; and
 - the native startup-health flags checked by `podman update --help`.
