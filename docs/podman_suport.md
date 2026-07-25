@@ -125,8 +125,11 @@ replaced.
   options with Podman's `U` option. This use is limited to newly created tmpfs
   mounts, not host data. The service remains non-root and retains its other
   hardening.
-- PostgreSQL always uses the same initialized `docker-data/postgres` bind as
-  Docker Desktop, with the required `keep-id` mapping and direct entrypoint.
+- PostgreSQL uses the same `docker-data/postgres` bind as Docker Desktop, with
+  the required `keep-id` mapping and direct entrypoint. A missing or empty bind
+  is initialized once through the pinned image in a uniquely named disposable
+  Podman volume, copied into the empty bind, and removed before Compose creates
+  the application graph.
 - API startup waits for PostgreSQL to become healthy. Podman creates more of
   the graph concurrently and otherwise can expose database initialization
   races earlier than the Docker path.
@@ -147,8 +150,10 @@ replaced.
 The two core Podman overlays let Docker Desktop and Podman use the same stopped
 PostgreSQL cluster and OpenSearch index in place. This is unconditional: there
 are no additional database overlays, marker-selected storage branches, or
-opt-out flags. The startup preflight requires the expected initialization
-markers and does not inspect chats, tables, index names, or document contents.
+opt-out flags. For existing data, the startup preflight requires the expected
+initialization markers and does not inspect chats, tables, index names, or
+document contents. A genuinely missing or empty PostgreSQL bind is initialized;
+a nonempty bind without `PG_VERSION` fails closed as partial or unknown state.
 The ownership guard inspects both native engines without the Podman
 `DOCKER_HOST` compatibility override used by the external Compose provider, so
 repeated Podman claims cannot misclassify Podman writers as Docker writers.
@@ -265,7 +270,7 @@ The Compose provider accepts and renders `healthcheck.start_interval`, but the
 tested Podman compatibility API drops it when creating containers. A rendered
 Compose model is therefore necessary but not sufficient evidence.
 
-`podman/startup_health.py` provides three strict actions:
+`podman/startup_health.py` provides strict startup-health and storage actions:
 
 - `check` validates that the selected binary is Podman, inspects the Linux
   server version, probes the image store, checks the Compose provider, and
@@ -275,8 +280,13 @@ Compose model is therefore necessary but not sufficient evidence.
   retained-health set to match, validates each command, timeout, retry count,
   start period, and regular cadence, installs an exact native startup check on
   stopped containers, and reinspects the complete project.
-- `prepare-shared-data` validates an initialized Docker database/index path
-  and performs the narrow PostgreSQL mount-root xattr cleanup described above.
+- `initialize-postgres` initializes a missing or empty PostgreSQL bind through
+  the pinned service image and a disposable engine volume, or validates an
+  existing cluster, then performs the narrow mount-root xattr cleanup described
+  above. It removes the staging volume on every outcome and refuses nonempty
+  bind data without `PG_VERSION`.
+- `prepare-shared-data` validates an initialized database/index path and is
+  retained for the OpenSearch preflight and focused diagnostics.
 
 For each retained health check, `configure` copies the exact regular command
 and timeout into Podman's `StartupHealthCheck`, sets its interval to five
@@ -297,9 +307,10 @@ The Podman Makefile lifecycle is consequently create/configure/start:
 1. `check-container-health-capability` runs the Podman capability gate once,
    before shared-data or host-process mutation. Docker uses the same target for
    its separate native engine/Compose version check.
-2. The mode-appropriate database preflights validate the shared binds and
-   remove only the unsafe PostgreSQL mount-root override when present. Full
-   mode also starts or validates the PID-tracked host document server.
+2. The mode-appropriate database preflights initialize a genuinely empty
+   PostgreSQL bind, validate existing shared binds, and remove only the unsafe
+   PostgreSQL mount-root override when present. Full mode also starts or
+   validates the PID-tracked host document server.
 3. `podman compose create` creates stopped containers.
 4. `startup_health.py configure` installs and verifies native startup checks.
 5. `podman compose up -d --wait --wait-timeout 420` starts the verified graph.

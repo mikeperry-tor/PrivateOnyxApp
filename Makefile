@@ -649,6 +649,7 @@ executor-build:
 
 up-lite: ONYX_INSTALL_ARGS=--lite
 up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
+up-lite: PODMAN_START_FILES=$(LITE_FILES)
 check-container-health-capability:
 	@set -eu; \
 	case "$(CONTAINER_BIN)" in \
@@ -693,7 +694,8 @@ podman-doc-server-stop-if-started:
 
 prepare-podman-postgres-data:
 ifeq ($(PODMAN_SELECTED),true)
-	@python3 podman/startup_health.py prepare-shared-data --postgres docker-data/postgres
+	@COMPOSE_FILE=$(PODMAN_START_FILES) python3 podman/startup_health.py initialize-postgres \
+		--container-bin "$(CONTAINER_BIN)" --postgres docker-data/postgres $(ONYX_COMPOSE_ENV_FILES)
 endif
 
 prepare-podman-opensearch-data:
@@ -701,7 +703,7 @@ ifeq ($(PODMAN_SELECTED),true)
 	@python3 podman/startup_health.py prepare-shared-data --opensearch docker-data/opensearch
 endif
 
-up-lite: wrapper-config-preflight claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready
+up-lite: wrapper-config-preflight claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability onyx-image-ready prepare-podman-postgres-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
@@ -720,7 +722,8 @@ endif
 
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
-up-full: wrapper-config-preflight claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded onyx-image-ready $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
+up-full: PODMAN_START_FILES=$(FULL_FILES)
+up-full: wrapper-config-preflight claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability onyx-image-ready prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps opensearch

@@ -878,6 +878,21 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("prepare-podman-opensearch-data", full_prerequisites)
         self.assertNotIn("prepare-podman-opensearch-data", lite_prerequisites)
         self.assertNotIn("PODMAN_SHARE_DOCKER_", makefile)
+        self.assertLess(
+            lite_prerequisites.index("onyx-image-ready"),
+            lite_prerequisites.index("prepare-podman-postgres-data"),
+        )
+        self.assertLess(
+            full_prerequisites.index("onyx-image-ready"),
+            full_prerequisites.index("prepare-podman-postgres-data"),
+        )
+        self.assertIn("up-lite: PODMAN_START_FILES=$(LITE_FILES)", makefile)
+        self.assertIn("up-full: PODMAN_START_FILES=$(FULL_FILES)", makefile)
+        postgres_preflight = makefile.split(
+            "prepare-podman-postgres-data:", 1
+        )[1].split("\n\n", 1)[0]
+        self.assertIn("initialize-postgres", postgres_preflight)
+        self.assertIn("COMPOSE_FILE=$(PODMAN_START_FILES)", postgres_preflight)
 
     def test_podman_keep_id_containers_are_created_serially(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

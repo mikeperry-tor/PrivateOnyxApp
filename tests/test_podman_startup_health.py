@@ -47,6 +47,117 @@ def _expected(service: str = "api_server") -> dict[str, dict]:
 
 
 class PodmanStartupHealthTests(unittest.TestCase):
+    @patch.object(startup_health, "prepare_shared_data")
+    @patch.object(startup_health, "_run")
+    def test_initialize_postgres_initializes_an_empty_bind(
+        self, run, prepare
+    ) -> None:
+        with tempfile.TemporaryDirectory() as parent:
+            directory = Path(parent) / "postgres"
+
+            def initialize(command: list[str], *, check: bool = True):
+                if command[-2:] == [
+                    "-ec",
+                    "cp -a /private-onyx-postgres-init/. /var/lib/postgresql/data/",
+                ]:
+                    (directory / "PG_VERSION").write_text("15\n", encoding="ascii")
+                return subprocess.CompletedProcess(command, 0, stdout="")
+
+            run.side_effect = initialize
+            result = startup_health.initialize_postgres_data(
+                "podman", str(directory), ("one.env", "two.env")
+            )
+
+        self.assertEqual(result, "initialized")
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[0][0:3], ["podman", "volume", "create"])
+        self.assertEqual(
+            commands[1][0:7],
+            [
+                "podman",
+                "compose",
+                "--env-file",
+                "one.env",
+                "--env-file",
+                "two.env",
+                "run",
+            ],
+        )
+        self.assertIn(startup_health.POSTGRES_ENTRYPOINT, commands[1])
+        self.assertEqual(commands[1][-2:], ["relational_db", "postgres"])
+        self.assertEqual(commands[2][0:2], ["podman", "exec"])
+        self.assertEqual(commands[2][-1], "pg_isready")
+        self.assertEqual(commands[3][0:3], ["podman", "stop", "--time"])
+        self.assertEqual(
+            commands[4][-3:],
+            [
+                "relational_db",
+                "-ec",
+                "cp -a /private-onyx-postgres-init/. /var/lib/postgresql/data/",
+            ],
+        )
+        self.assertEqual(
+            commands[5][0:3], ["podman", "rm", "--force"]
+        )
+        self.assertEqual(
+            commands[6][0:4], ["podman", "volume", "rm", "--force"]
+        )
+        self.assertEqual(commands[0][-1], commands[6][-1])
+        prepare.assert_called_once_with(postgres=str(directory))
+
+    @patch.object(startup_health, "_run")
+    def test_initialize_postgres_refuses_partial_data(self, run) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "partial").write_text("unknown\n", encoding="ascii")
+            with self.assertRaisesRegex(
+                startup_health.ContractError, "nonempty but not initialized"
+            ):
+                startup_health.initialize_postgres_data("podman", directory)
+        run.assert_not_called()
+
+    @patch.object(startup_health.uuid, "uuid4")
+    @patch.object(startup_health, "_run")
+    def test_initialize_postgres_removes_staging_volume_after_failure(
+        self, run, uuid4
+    ) -> None:
+        uuid4.return_value.hex = "fixed"
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, stdout=""),
+            subprocess.CalledProcessError(
+                1, ["podman", "compose", "run"], stderr="init failed"
+            ),
+            subprocess.CompletedProcess([], 0, stdout=""),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                startup_health.ContractError, "init failed"
+            ):
+                startup_health.initialize_postgres_data("podman", directory)
+        self.assertEqual(
+            run.call_args_list[-1].args[0],
+            [
+                "podman",
+                "volume",
+                "rm",
+                "--force",
+                "private-onyx-postgres-init-fixed",
+            ],
+        )
+
+    @patch.object(startup_health, "prepare_shared_data")
+    @patch.object(startup_health, "_run")
+    def test_initialize_postgres_reuses_an_initialized_bind(
+        self, run, prepare
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "PG_VERSION").write_text("15\n", encoding="ascii")
+            self.assertEqual(
+                startup_health.initialize_postgres_data("podman", directory),
+                "reused",
+            )
+        run.assert_not_called()
+        prepare.assert_called_once_with(postgres=directory)
+
     @patch.object(startup_health, "_run")
     def test_prepare_shared_postgres_removes_only_mount_root_override(
         self, run

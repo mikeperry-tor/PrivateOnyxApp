@@ -9,6 +9,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Sequence
@@ -27,6 +29,7 @@ REQUIRED_UPDATE_FLAGS = {
     "--health-startup-timeout",
 }
 PODMAN_OVERRIDE_XATTR = "user.containers.override_stat"
+POSTGRES_ENTRYPOINT = "/usr/local/bin/docker-entrypoint.sh"
 
 
 class ContractError(RuntimeError):
@@ -71,6 +74,145 @@ def prepare_shared_data(
             raise ContractError("shared OpenSearch data is not initialized")
         prepared.append("OpenSearch")
     return prepared
+
+
+def initialize_postgres_data(
+    container_bin: str,
+    postgres: str,
+    env_files: Sequence[str] = (),
+) -> str:
+    """Initialize an empty shared bind, or prepare an existing PostgreSQL cluster."""
+    _require_podman_binary(container_bin)
+    postgres_path = os.path.abspath(postgres)
+    version_path = os.path.join(postgres_path, "PG_VERSION")
+
+    if not os.path.isfile(version_path):
+        if os.path.exists(postgres_path):
+            if not os.path.isdir(postgres_path):
+                raise ContractError("shared PostgreSQL data path is not a directory")
+            try:
+                with os.scandir(postgres_path) as entries:
+                    nonempty = next(entries, None) is not None
+            except OSError as exc:
+                raise ContractError(
+                    "could not inspect the shared PostgreSQL data path"
+                ) from exc
+            if nonempty:
+                raise ContractError(
+                    "shared PostgreSQL data is nonempty but not initialized; "
+                    "refusing to overwrite partial or unknown state"
+                )
+        else:
+            try:
+                os.makedirs(postgres_path, exist_ok=False)
+            except OSError as exc:
+                raise ContractError(
+                    "could not create the shared PostgreSQL data path"
+                ) from exc
+
+        compose_command = [container_bin, "compose"]
+        for env_file in env_files:
+            compose_command.extend(("--env-file", env_file))
+        suffix = uuid.uuid4().hex
+        init_volume = f"private-onyx-postgres-init-{suffix}"
+        init_container = f"private-onyx-postgres-init-{suffix}"
+        _run(
+            [
+                container_bin,
+                "volume",
+                "create",
+                "--label",
+                "io.private-onyx.role=postgres-init",
+                init_volume,
+            ]
+        )
+        container_created = False
+        try:
+            _run(
+                [
+                    *compose_command,
+                    "run",
+                    "--detach",
+                    "--name",
+                    init_container,
+                    "--no-deps",
+                    "--user",
+                    "0:0",
+                    "--volume",
+                    f"{init_volume}:/var/lib/postgresql/data",
+                    "--entrypoint",
+                    POSTGRES_ENTRYPOINT,
+                    "relational_db",
+                    "postgres",
+                ]
+            )
+            container_created = True
+            deadline = time.monotonic() + 120
+            while True:
+                ready = _run(
+                    [container_bin, "exec", init_container, "pg_isready"],
+                    check=False,
+                )
+                if ready.returncode == 0:
+                    break
+                if time.monotonic() >= deadline:
+                    raise ContractError(
+                        "temporary PostgreSQL initialization did not become ready "
+                        "within 120 seconds"
+                    )
+                time.sleep(1)
+            _run([container_bin, "stop", "--time", "30", init_container])
+            _run(
+                [
+                    *compose_command,
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "--volume",
+                    f"{init_volume}:/private-onyx-postgres-init:ro",
+                    "--entrypoint",
+                    "/bin/sh",
+                    "relational_db",
+                    "-ec",
+                    "cp -a /private-onyx-postgres-init/. /var/lib/postgresql/data/",
+                ]
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip()
+            suffix = f": {detail}" if detail else ""
+            raise ContractError(
+                "PostgreSQL initialization container failed; partial bind data "
+                f"was left in place for diagnosis{suffix}"
+            ) from exc
+        finally:
+            container_removed = subprocess.CompletedProcess([], 0)
+            if container_created:
+                container_removed = _run(
+                    [container_bin, "rm", "--force", init_container],
+                    check=False,
+                )
+            removed = _run(
+                [container_bin, "volume", "rm", "--force", init_volume],
+                check=False,
+            )
+            if container_removed.returncode != 0:
+                raise ContractError(
+                    f"could not remove temporary PostgreSQL container {init_container!r}"
+                )
+            if removed.returncode != 0:
+                raise ContractError(
+                    f"could not remove temporary PostgreSQL volume {init_volume!r}"
+                )
+        if not os.path.isfile(version_path):
+            raise ContractError(
+                "PostgreSQL initialization completed without creating PG_VERSION"
+            )
+        result = "initialized"
+    else:
+        result = "reused"
+
+    prepare_shared_data(postgres=postgres_path)
+    return result
 
 
 def _run(
@@ -413,7 +555,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "action",
-        choices=("assert-healthy", "check", "configure", "prepare-shared-data"),
+        choices=(
+            "assert-healthy",
+            "check",
+            "configure",
+            "initialize-postgres",
+            "prepare-shared-data",
+        ),
     )
     parser.add_argument("--container-bin", default="podman")
     parser.add_argument("--project", default="onyx")
@@ -438,6 +586,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 postgres=args.postgres, opensearch=args.opensearch
             )
             print("Prepared shared Docker data for Podman: " + ", ".join(prepared))
+        elif args.action == "initialize-postgres":
+            if args.postgres is None:
+                raise ContractError("--postgres is required for initialize-postgres")
+            result = initialize_postgres_data(
+                args.container_bin, args.postgres, args.env_file
+            )
+            print(f"Podman PostgreSQL data {result} and prepared.")
         else:
             configure_project(
                 args.container_bin,
