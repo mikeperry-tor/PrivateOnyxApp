@@ -436,10 +436,12 @@ If the default URL is selected without an installed server/model, startup fails
 immediately with setup guidance. Automatic startup waits only for the lifecycle
 proxy listener; the staged `/ready` request proves the actual model separately.
 That single readiness request is deliberately visible and has no short wrapper
-timeout. `make up-full` prints that it is waiting and the lifecycle log path;
-Ctrl-C remains the operator escape when a live child never becomes ready. A
-definite child exit, occupied child port, invalid configuration, or failed
-readiness inference still fails startup rather than being hidden.
+timeout. `make up-full` prints that it is waiting; when bundled MLX is selected,
+it also identifies the cold-start behavior and lifecycle log path. Custom
+upstreams receive only the transport-neutral readiness message. Ctrl-C remains
+the operator escape when an upstream never becomes ready. A definite child
+exit, occupied child port, invalid configuration, or failed readiness inference
+still fails startup rather than being hidden.
 
 The staged full-mode start brings up Teep before this request, including its
 fixed host publisher when Teep is routed through Myst. This makes the

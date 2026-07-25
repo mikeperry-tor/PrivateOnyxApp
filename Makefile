@@ -796,9 +796,13 @@ endif
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420
 
 embedding-ready-once:
-	@echo "Loading and validating the configured embedding upstream; bundled MLX cold starts can take several minutes."
+	@if [ "$(EMBEDSERV_MODE)" = "bundled" ]; then \
+		echo "Loading and validating the bundled MLX embedding upstream; cold starts can take several minutes."; \
+		echo "Bundled MLX startup details: $(EMBEDSERV_LOG)"; \
+	else \
+		echo "Loading and validating the configured custom embedding upstream."; \
+	fi
 	@echo "Full API/background startup will wait here. Press Ctrl-C to stop waiting."
-	@echo "Bundled MLX startup details, when selected: $(EMBEDSERV_LOG)"
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) exec -T local-embedding-shim \
 		python3 -c 'import urllib.request; response = urllib.request.urlopen("http://127.0.0.1:9101/ready", timeout=None); raise SystemExit(0 if response.status == 200 else 1)'
 	@echo "Configured embedding upstream is ready."

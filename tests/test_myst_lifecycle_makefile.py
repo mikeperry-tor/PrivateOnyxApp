@@ -307,11 +307,65 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertNotIn("while", ready_recipe)
         self.assertIn("timeout=None", ready_recipe)
         self.assertIn("can take several minutes", ready_recipe)
+        self.assertIn('[ "$(EMBEDSERV_MODE)" = "bundled" ]', ready_recipe)
+        self.assertIn(
+            "Loading and validating the configured custom embedding upstream.",
+            ready_recipe,
+        )
         self.assertIn("Press Ctrl-C to stop waiting", ready_recipe)
         self.assertNotIn("-T 35", ready_recipe)
         lite_start = makefile.split("up-lite:", 2)[2].split("\n\n", 1)[0]
         self.assertNotIn("embedding-ready-once", lite_start)
         self.assertNotIn("/ready", lite_start)
+
+    def test_embedding_readiness_message_matches_selected_upstream(self) -> None:
+        cases = (
+            (
+                "",
+                "Loading and validating the bundled MLX embedding upstream",
+                "Bundled MLX startup details:",
+                "configured custom embedding upstream",
+            ),
+            (
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL="
+                "http://host.docker.internal:8337/v1/embeddings\n"
+                "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL="
+                "neardirect:Qwen/Qwen3-Embedding-0.6B\n",
+                "Loading and validating the configured custom embedding upstream.",
+                "",
+                "bundled MLX embedding upstream",
+            ),
+        )
+        for contents, expected, additional_expected, unexpected in cases:
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                env_file = Path(directory) / "wrapper.env"
+                env_file.write_text(contents, encoding="utf-8")
+                environment = dict(os.environ)
+                for name in (
+                    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL",
+                    "ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL",
+                    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL",
+                ):
+                    environment.pop(name, None)
+                result = subprocess.run(
+                    [
+                        "make",
+                        "--no-print-directory",
+                        "embedding-ready-once",
+                        f"ENV_FILE={env_file}",
+                        "CONTAINER_BIN=true",
+                    ],
+                    cwd=ROOT,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(expected, result.stdout)
+            if additional_expected:
+                self.assertIn(additional_expected, result.stdout)
+            self.assertNotIn(unexpected, result.stdout)
 
     def test_container_capability_gate_is_a_start_prerequisite(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
