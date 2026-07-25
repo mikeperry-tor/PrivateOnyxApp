@@ -125,6 +125,116 @@ class SharedDataEngineTests(unittest.TestCase):
                 )
             stopped.assert_called_once_with("podman")
 
+    def test_first_podman_claim_skips_docker_client_with_absent_local_endpoint(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            with (
+                patch.object(
+                    shared_data_engine, "_available_command", return_value=True
+                ),
+                patch.object(
+                    shared_data_engine,
+                    "_running_shared_writers",
+                    side_effect=(
+                        shared_data_engine.GuardError("could not inspect docker"),
+                        set(),
+                    ),
+                ),
+                patch.object(
+                    shared_data_engine,
+                    "_docker_local_endpoint_is_absent",
+                    return_value="unix:///var/run/docker.sock",
+                ) as absent,
+            ):
+                self.assertEqual(
+                    shared_data_engine.claim(
+                        marker, "podman", inspect_commands=("docker", "podman")
+                    ),
+                    "podman",
+                )
+            absent.assert_called_once_with("docker")
+
+    def test_selected_docker_failure_is_not_excused_by_absent_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            with (
+                patch.object(
+                    shared_data_engine, "_available_command", return_value=True
+                ),
+                patch.object(
+                    shared_data_engine,
+                    "_running_shared_writers",
+                    side_effect=shared_data_engine.GuardError("could not inspect docker"),
+                ),
+                patch.object(
+                    shared_data_engine, "_docker_local_endpoint_is_absent"
+                ) as absent,
+            ):
+                with self.assertRaisesRegex(shared_data_engine.GuardError, "docker"):
+                    shared_data_engine.claim(
+                        marker, "docker", inspect_commands=("docker",)
+                    )
+            absent.assert_not_called()
+            self.assertFalse(marker.exists())
+
+    def test_absent_docker_endpoint_requires_missing_local_unix_socket(self) -> None:
+        inspected = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="unix:///var/run/docker.sock\n",
+            stderr="",
+        )
+        with (
+            patch.object(
+                shared_data_engine.subprocess, "run", return_value=inspected
+            ),
+            patch.object(
+                shared_data_engine.os.path, "lexists", return_value=False
+            ),
+        ):
+            self.assertEqual(
+                shared_data_engine._docker_local_endpoint_is_absent("docker"),
+                "unix:///var/run/docker.sock",
+            )
+
+        for returncode, endpoint in (
+            (1, ""),
+            (0, "tcp://127.0.0.1:2375"),
+            (0, "unix:///var/run/docker.sock\nunix:///tmp/other.sock"),
+        ):
+            with (
+                patch.object(
+                    shared_data_engine.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess(
+                        args=[],
+                        returncode=returncode,
+                        stdout=endpoint,
+                        stderr="",
+                    ),
+                ),
+                patch.object(
+                    shared_data_engine.os.path, "lexists", return_value=False
+                ),
+            ):
+                self.assertIsNone(
+                    shared_data_engine._docker_local_endpoint_is_absent("docker")
+                )
+
+        with (
+            patch.object(
+                shared_data_engine.subprocess, "run", return_value=inspected
+            ),
+            patch.object(
+                shared_data_engine.os.path, "lexists", return_value=True
+            ),
+        ):
+            self.assertIsNone(
+                shared_data_engine._docker_local_endpoint_is_absent("docker")
+            )
+
     def test_stopped_podman_machine_requires_exact_positive_state(self) -> None:
         with patch.object(
             shared_data_engine.subprocess,

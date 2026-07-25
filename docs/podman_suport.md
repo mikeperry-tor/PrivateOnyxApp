@@ -171,16 +171,20 @@ running Onyx PostgreSQL/OpenSearch writers and any integrated or standalone
 `myst-client-vpn`. Same-engine claims repeat this inspection so an out-of-band
 other-engine Myst daemon cannot be hidden by an existing marker. A writer owned by the other
 engine, or an installed engine that cannot be inspected, stops startup before
-the marker is created. The one narrow exception is an unselected Podman command
-whose default machine positively reports the `stopped` state; its expected API
-connection failure cannot conceal a running Podman writer and does not block a
-Docker start. This closes the upgrade window in which a running pre-marker
-Docker stack could otherwise be claimed by Podman without requiring an unused
-Podman VM to run alongside Docker Desktop.
+the marker is created. A Docker client or compatibility shim is not treated as
+an installed Docker engine when its selected endpoint is one absolute local
+Unix socket and that socket does not exist. The other narrow exception is an
+unselected Podman command whose default machine positively reports the
+`stopped` state; its expected API connection failure cannot conceal a running
+Podman writer and does not block a Docker start. Other failed, remote, malformed,
+or existing-socket endpoints remain ambiguous and fail closed. This closes the
+upgrade window in which a running pre-marker Docker stack could otherwise be
+claimed by Podman without requiring an unused client or Podman VM to have a
+running engine.
 
 A failed start deliberately retains its claim for a safe retry. If both engines
-are verifiably down but an unavailable engine command other than a positively
-stopped unselected Podman machine prevents first-use inspection,
+are verifiably down but an ambiguous unavailable engine prevents first-use
+inspection,
 `make adopt-shared-data-engine` is the explicit operator override;
 it seeds the absent marker for the selected `CONTAINER_BIN` without inspection.
 Do not use it to bypass a reported writer. If a machine failure leaves a stale

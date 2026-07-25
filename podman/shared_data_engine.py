@@ -10,6 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Iterable, Sequence
+from urllib.parse import unquote, urlsplit
 
 
 VALID_ENGINES = {"docker", "podman"}
@@ -109,6 +110,35 @@ def _podman_machine_is_stopped(command: str) -> bool:
     return inspected.returncode == 0 and states == {"stopped"}
 
 
+def _docker_local_endpoint_is_absent(command: str) -> str | None:
+    """Return an absent local Docker endpoint, or None when absence is unproved."""
+    inspected = subprocess.run(
+        [
+            command,
+            "context",
+            "inspect",
+            "--format",
+            "{{.Endpoints.docker.Host}}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    endpoints = [
+        line.strip() for line in inspected.stdout.splitlines() if line.strip()
+    ]
+    if inspected.returncode != 0 or len(endpoints) != 1:
+        return None
+    endpoint = endpoints[0]
+    parsed = urlsplit(endpoint)
+    if parsed.scheme != "unix" or parsed.netloc or not parsed.path:
+        return None
+    socket_path = unquote(parsed.path)
+    if not os.path.isabs(socket_path) or os.path.lexists(socket_path):
+        return None
+    return endpoint
+
+
 def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
     checked: set[tuple[str, str]] = set()
     for command in commands:
@@ -130,6 +160,14 @@ def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
             ):
                 print(f"Skipping stopped unselected Podman machine ({command}).")
                 continue
+            if command_engine != engine and command_engine == "docker":
+                absent_endpoint = _docker_local_endpoint_is_absent(command)
+                if absent_endpoint is not None:
+                    print(
+                        "Skipping unselected Docker client with absent local "
+                        f"endpoint ({command}: {absent_endpoint})."
+                    )
+                    continue
             raise
         if writers and command_engine != engine:
             names = ", ".join(sorted(writers))
