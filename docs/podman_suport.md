@@ -167,11 +167,14 @@ replaced.
   options with Podman's `U` option. This use is limited to newly created tmpfs
   mounts, not host data. The service remains non-root and retains its other
   hardening.
-- PostgreSQL uses the same `docker-data/postgres` bind as Docker Desktop, with
-  the required `keep-id` mapping and direct entrypoint. A missing or empty bind
-  is initialized once through the pinned image in a uniquely named disposable
+- PostgreSQL uses the same `docker-data/postgres` bind as Docker, with the
+  required `keep-id` mapping and direct entrypoint. A missing or empty bind is
+  initialized once through the pinned image in a uniquely named disposable
   Podman volume, copied into the empty bind, and removed before Compose creates
-  the application graph.
+  the application graph. Native Linux Docker runs PostgreSQL as the invoking
+  host uid/gid, including stock-entrypoint initialization of a fresh bind. This
+  prevents Docker from changing the mode-0700 tree to image uid 70 before a
+  switch to rootless Podman.
 - API startup waits for PostgreSQL to become healthy. Podman creates more of
   the graph concurrently and otherwise can expose database initialization
   races earlier than the Docker path.
@@ -201,15 +204,17 @@ and containerized Python server from `docker-compose.full.yml`.
 
 ### Shared Docker data
 
-The two core Podman overlays let Docker Desktop and Podman use the same stopped
-PostgreSQL cluster and OpenSearch index in place. This is unconditional: there
-are no additional database overlays, marker-selected storage branches, or
-opt-out flags. For existing data, the startup preflight requires the expected
-initialization markers and does not inspect chats, tables, index names, or
-document contents. A genuinely missing or empty PostgreSQL bind is initialized;
-a nonempty bind without `PG_VERSION` fails closed as partial or unknown state.
-The same rule applies to OpenSearch: a genuinely missing or empty bind is
-initialized, while a nonempty bind without `nodes` is never overwritten.
+The core engine overlays let Docker and Podman use the same stopped PostgreSQL
+cluster and OpenSearch index in place. This is unconditional: there are no
+marker-selected storage branches or opt-out flags. On native Linux, the
+Docker-only overlay keeps PostgreSQL owned by the invoking host user so the
+same mode-0700 tree is representable in rootless Podman's `keep-id` mapping.
+The stock Docker entrypoint initializes a fresh bind as that user and cannot
+perform its root-only ownership change. Podman's preflight initializes a
+genuinely missing or empty PostgreSQL bind and refuses a nonempty bind without
+`PG_VERSION` as partial or unknown state. The same rule applies to OpenSearch:
+a genuinely missing or empty bind is initialized, while a nonempty bind
+without `nodes` is never overwritten.
 The ownership guard inspects both native engines without the Podman
 `DOCKER_HOST` compatibility override used by the external Compose provider, so
 repeated Podman claims cannot misclassify Podman writers as Docker writers.
@@ -286,6 +291,15 @@ fails even though Docker's `com.docker.grpcfuse.ownership` metadata correctly
 records uid/gid 70. `prepare-podman-postgres-data` validates `PG_VERSION` and
 removes only that mount-root Podman override before Compose create. It leaves
 Docker's attribute and valid per-file Podman runtime attributes intact.
+
+On native Linux, Docker's ordinary root entrypoint instead changes the bind to
+host uid 70, which a rootless user namespace cannot represent or traverse.
+`docker-compose.docker-linux.yml` therefore runs both the stock entrypoint and
+the server as the invoking host uid/gid. The entrypoint can initialize a fresh
+host-owned bind but cannot perform its root-only ownership change, so Docker
+does not undo Podman's compatible ownership. The overlay is never selected on
+macOS, where Docker Desktop ownership metadata and the existing Podman xattr
+handling remain unchanged.
 
 OpenSearch uses `keep-id:uid=1000,gid=1000` and its ordinary image entrypoint.
 The Podman-only network namespace sets `net.ipv4.ping_group_range=1000 1000`:
@@ -626,9 +640,12 @@ direct inspection; do not mix Docker engine results into the evidence.
    shutdown. On native Linux, confirm the read-only source bind and
    containerized server instead. Never print private document names or
    contents.
-6. Validate the shared Docker binds. Confirm the core Podman overlays,
-   PostgreSQL direct entrypoint, `keep-id` mappings, initialization checks,
-   mount-root xattr preflight, clean shutdown, and engine exclusivity.
+6. Validate the shared Docker binds. Confirm the core Podman overlays, the
+   native-Linux Docker ownership overlay, Podman's PostgreSQL direct entrypoint,
+   `keep-id` mappings, initialization checks, macOS mount-root
+   xattr preflight, clean shutdown, and engine exclusivity. On native Linux,
+   exercise Docker-to-Podman-to-Docker switching and require the PostgreSQL
+   tree to remain owned by the invoking host uid/gid after every start.
 7. Verify socket-only code interpreter remains absent and Myst recovery has no
    socket mount or engine-specific overlay. If a future feature needs
    control-plane access, review its authority rather than exposing the rootless

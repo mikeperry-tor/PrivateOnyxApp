@@ -1,0 +1,6 @@
+services:
+  # Keep the shared PostgreSQL bind owned by the invoking Linux user so the
+  # same stopped cluster remains accessible to rootless Podman. The stock
+  # entrypoint initializes a fresh cluster as this user.
+  relational_db:
+    user: "${PRIVATE_ONYX_HOST_UID:?host uid is required}:${PRIVATE_ONYX_HOST_GID:?host gid is required}"
