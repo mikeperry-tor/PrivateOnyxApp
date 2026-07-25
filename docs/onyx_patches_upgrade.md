@@ -584,7 +584,9 @@ For support and source pins, require an immutable Tailscale digest, exact Myst
 and Teep Git revisions in both image labels and build arguments, and
 the MinIO source revision associated with its release image. Run
 `make health-inventory`, inspect effective startup/steady intervals, and verify
-Docker Engine 25+/Compose 2.20.2+ preserve `start_interval`. For Podman, verify
+Docker Engine API 1.44+ preserves `start_interval` after the shared Compose
+model probe has retained `start_interval`, `!override`, and `gw_priority`. For
+Podman, verify
 the wrapper's native `StartupHealthCheck` translation against the exact
 effective Compose health set and inspect the separate one- or ten-minute
 regular cadence; Compose rendering alone is not sufficient.

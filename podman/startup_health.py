@@ -17,7 +17,6 @@ from typing import Any, Sequence
 
 
 VALIDATED_PODMAN_VERSION = (5, 8, 1)
-MIN_COMPOSE_VERSION = (2, 20, 2)
 STARTUP_INTERVAL_NS = 5_000_000_000
 MYST_INTERVAL_NS = 60_000_000_000
 ORDINARY_INTERVAL_NS = 600_000_000_000
@@ -30,6 +29,20 @@ REQUIRED_UPDATE_FLAGS = {
 }
 PODMAN_OVERRIDE_XATTR = "user.containers.override_stat"
 POSTGRES_ENTRYPOINT = "/usr/local/bin/docker-entrypoint.sh"
+COMPOSE_CAPABILITY_MODEL = """\
+services:
+  probe:
+    image: scratch
+    volumes: !override []
+    healthcheck:
+      test: ["NONE"]
+      start_interval: 5s
+    networks:
+      default:
+        gw_priority: 1
+networks:
+  default: {}
+"""
 
 
 class ContractError(RuntimeError):
@@ -58,14 +71,15 @@ def prepare_shared_data(
         postgres_path = os.path.abspath(postgres)
         if not os.path.isfile(os.path.join(postgres_path, "PG_VERSION")):
             raise ContractError("shared PostgreSQL data is not initialized")
-        try:
-            attributes = _run(["xattr", postgres_path]).stdout.splitlines()
-            if PODMAN_OVERRIDE_XATTR in attributes:
-                _run(["xattr", "-d", PODMAN_OVERRIDE_XATTR, postgres_path])
-        except (OSError, subprocess.CalledProcessError) as exc:
-            raise ContractError(
-                "could not prepare the PostgreSQL mount ownership override"
-            ) from exc
+        if sys.platform == "darwin":
+            try:
+                attributes = _run(["xattr", postgres_path]).stdout.splitlines()
+                if PODMAN_OVERRIDE_XATTR in attributes:
+                    _run(["xattr", "-d", PODMAN_OVERRIDE_XATTR, postgres_path])
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise ContractError(
+                    "could not prepare the PostgreSQL mount ownership override"
+                ) from exc
         prepared.append("PostgreSQL")
 
     if opensearch is not None:
@@ -216,13 +230,14 @@ def initialize_postgres_data(
 
 
 def _run(
-    command: Sequence[str], *, check: bool = True
+    command: Sequence[str], *, check: bool = True, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command),
         check=check,
         capture_output=True,
         text=True,
+        input=input_text,
     )
 
 
@@ -236,6 +251,57 @@ def _require_podman_binary(container_bin: str) -> None:
         raise ContractError(
             f"Podman startup-health helper refuses non-Podman binary: {container_bin}"
         )
+
+
+def check_compose_capability(container_bin: str) -> str:
+    """Verify the Compose model features on which the stack's topology depends."""
+    try:
+        compose_version = _run(
+            [container_bin, "compose", "version", "--short"]
+        ).stdout.strip()
+        rendered = json.loads(
+            _run(
+                [
+                    container_bin,
+                    "compose",
+                    "-f",
+                    "-",
+                    "config",
+                    "--format",
+                    "json",
+                ],
+                input_text=COMPOSE_CAPABILITY_MODEL,
+            ).stdout
+        )
+        probe = rendered["services"]["probe"]
+        network = probe["networks"]["default"]
+        healthcheck = probe["healthcheck"]
+    except (
+        KeyError,
+        json.JSONDecodeError,
+        OSError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        raise ContractError(
+            "the Compose provider cannot render the stack's required model "
+            f"features (gw_priority, !override, and start_interval): {exc}"
+        ) from exc
+    missing: list[str] = []
+    if network.get("gw_priority") != 1:
+        missing.append("gw_priority")
+    if healthcheck.get("start_interval") != "5s":
+        missing.append("start_interval")
+    if probe.get("volumes") not in (None, []):
+        missing.append("!override")
+    if missing:
+        raise ContractError(
+            f"Compose provider {compose_version!r} silently drops or changes "
+            "required model features: "
+            + ", ".join(missing)
+            + ". Install a current Docker Compose provider (2.33.1+ implements "
+            "the routing-critical gw_priority interface)."
+        )
+    return compose_version
 
 
 def check_capability(container_bin: str) -> str:
@@ -268,17 +334,7 @@ def check_capability(container_bin: str) -> str:
             "currently verified 5.8.1 machine-os image"
         ) from exc
 
-    try:
-        compose_version = _run(
-            [container_bin, "compose", "version", "--short"]
-        ).stdout.strip()
-    except subprocess.CalledProcessError as exc:
-        raise ContractError(f"could not inspect the Podman Compose provider: {exc}") from exc
-    if _version_tuple(compose_version) < MIN_COMPOSE_VERSION:
-        minimum = ".".join(str(part) for part in MIN_COMPOSE_VERSION)
-        raise ContractError(
-            f"Podman Compose provider {minimum}+ is required; found {compose_version!r}"
-        )
+    check_compose_capability(container_bin)
 
     update_help = _run([container_bin, "update", "--help"]).stdout
     missing = sorted(flag for flag in REQUIRED_UPDATE_FLAGS if flag not in update_help)
@@ -560,6 +616,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         choices=(
             "assert-healthy",
             "check",
+            "check-compose",
             "configure",
             "initialize-postgres",
             "prepare-shared-data",
@@ -581,6 +638,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.action == "check":
             version = check_capability(args.container_bin)
             print(f"Podman {version} startup-health controls are available.")
+        elif args.action == "check-compose":
+            version = check_compose_capability(args.container_bin)
+            print(f"Compose {version} required model features are available.")
         elif args.action == "assert-healthy":
             assert_services_healthy(args.container_bin, args.project, args.service)
         elif args.action == "prepare-shared-data":

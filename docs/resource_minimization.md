@@ -55,8 +55,9 @@ fallbacks, retries, migrations, or weaker ownership checks.
   health.
 - Health checks perform local-only work. They do not run inference, public DNS,
   Internet requests, or storage migrations.
-- Docker requires Engine 25.0+ and Compose 2.20.2+ for native
-  `start_interval` support.
+- Docker requires Engine API 1.44+ for native `start_interval` support. The
+  shared Compose probe also requires the model to retain `start_interval`,
+  `!override`, and routing-critical `gw_priority`.
 - Podman validates its engine/image-store/Compose capability once before any
   shared-data or host-process mutation, creates stopped containers, installs
   native five-second startup checks, verifies the resulting container model,

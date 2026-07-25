@@ -64,11 +64,32 @@ The Docker Compose files in this stack relies on the following components:
 
 ## Prerequisites
 
-- Docker Engine 25.0+ or rootless Podman, with a Compose provider 2.20.2 or
-  later. Podman 5.8.1 is the currently validated baseline; older versions are
-  allowed to proceed when the startup capability checks pass.
+- Docker Engine API 1.44+ (Engine 25.0+) or rootless Podman, with Docker
+  Compose 2.35.0 or later as the Compose provider. Podman 5.8.1 is the
+  currently validated baseline; older versions are allowed to proceed when
+  the startup capability checks pass.
 - `make`
 - `uv` for MLX embedding server installation and dependency-lock upgrades.
+
+The Compose requirement is an interface requirement, not a validated-version
+gate. The stack requires `gw_priority` to keep the trusted routing namespace's
+default route on its uplink; providers older than 2.33.1 can silently discard
+that field. The deterministic model tests additionally use
+`config --no-env-resolution`, introduced in 2.35.0, so tests can inspect the
+model without reading service environment files.
+
+On a Podman-only Linux host, no Docker daemon is required. `podman compose`
+uses an external Compose provider against Podman's socket. If the distribution
+package is older, follow Docker's
+[manual plugin installation instructions](https://docs.docker.com/compose/install/linux/#install-the-plugin-manually)
+to install a current release for the active user in
+`~/.docker/cli-plugins/docker-compose`; Podman searches that location before
+system providers. Then verify the provider Podman actually selects:
+
+```bash
+podman compose version --short
+podman compose config --help | grep -- --no-env-resolution
+```
 
 ## Running the Stack
 

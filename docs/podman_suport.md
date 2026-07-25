@@ -54,23 +54,34 @@ the selected engine must be proved.
 
 Docker Compose 5.3.1 may otherwise honor the host's selected Docker Desktop
 context or Podman's SSH system connection. The Makefile therefore exports an
-exact `DOCKER_HOST=unix://...` value from the current machine's inspected
-forwarded socket whenever Podman is selected. Preserve this pin: the SSH path
-can inherit host proxy/SOCKS behavior and fail with `nc: connection failed`,
-while the Unix socket also proves that the provider targets Podman's API rather
-than Docker Desktop.
+exact `DOCKER_HOST=unix://...` value from the selected Podman engine whenever
+Podman is selected. It uses the machine's inspected forwarded socket on macOS
+and the rootless remote socket reported by `podman info` on native Linux.
+Preserve this pin: an SSH path can inherit host proxy/SOCKS behavior and fail
+with `nc: connection failed`, while the Unix socket also proves that the
+provider targets Podman's API rather than Docker Desktop.
 
-The macOS client and Linux VM server can have different versions. The wrapper
+The client and Linux Podman server can have different versions. The wrapper
 uses these version and capability rules:
 
 - a Linux Podman server, with 5.8.1 as the currently validated baseline;
-- a Compose provider version 2.20.2 or later; and
+- a Compose provider that preserves `gw_priority`, `!override`, and
+  `start_interval` in a rendered probe model; and
 - the native startup-health flags checked by `podman update --help`.
 
 An older Podman server prints a warning but is not rejected based on its version
 alone. It proceeds through the same image-store, Compose-provider, and native
 startup-health capability probes, and any missing required capability still
 fails before stack mutation.
+
+The Compose probe is a hard interface check rather than a version gate.
+`gw_priority` is routing-critical and was introduced in Docker Compose 2.33.1;
+older providers can accept the file while silently omitting it. Repository
+model tests also require Docker Compose 2.35.0+, where
+`config --no-env-resolution` became available, so tests never load service
+environment files. On native Linux, the Makefile obtains the rootless API
+socket from `podman info`; on macOS it first uses the forwarded socket reported
+by `podman machine inspect`.
 
 The currently verified guest baseline is the immutable official Podman
 machine-os v5.8.1 release image. On Apple silicon with libkrun, initialize it
@@ -294,7 +305,8 @@ Compose model is therefore necessary but not sufficient evidence.
   the pinned service image and a disposable engine volume, or validates an
   existing cluster, then performs the narrow mount-root xattr cleanup described
   above. It removes the staging volume on every outcome and refuses nonempty
-  bind data without `PG_VERSION`.
+  bind data without `PG_VERSION`. The narrow mount-root xattr cleanup runs only
+  on macOS; native Linux has no Docker Desktop ownership xattr to remove.
 - `prepare-shared-data` validates an initialized database/index path and is
   retained for the OpenSearch preflight and focused diagnostics.
 

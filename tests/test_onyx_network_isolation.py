@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -39,6 +41,37 @@ def _wrapper_neutral_environment() -> dict[str, str]:
     return env
 
 
+@lru_cache(maxsize=1)
+def _compose_command() -> tuple[str, ...]:
+    candidates = (
+        ("docker", "compose"),
+        ("podman", "compose"),
+        ("docker-compose",),
+    )
+    rejected: list[str] = []
+    for candidate in candidates:
+        if shutil.which(candidate[0]) is None:
+            continue
+        inspected = subprocess.run(
+            [*candidate, "config", "--help"],
+            cwd=ROOT,
+            env=_wrapper_neutral_environment(),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if inspected.returncode == 0 and "--no-env-resolution" in inspected.stdout:
+            return candidate
+        rejected.append(" ".join(candidate))
+    raise RuntimeError(
+        "no Compose frontend with `config --no-env-resolution` was found; "
+        "Docker Compose 2.35.0+ is required to render test models without "
+        "reading service env files (checked: "
+        + (", ".join(rejected) or "no installed frontends")
+        + ")"
+    )
+
+
 def _compose_model(
     mode: str,
     *extra_files: str,
@@ -47,8 +80,7 @@ def _compose_model(
     wrapper_env_file: str = ".env.wrapper.example",
 ) -> dict:
     command = [
-        "docker",
-        "compose",
+        *_compose_command(),
         "--env-file",
         "stack.versions.env",
         "--env-file",

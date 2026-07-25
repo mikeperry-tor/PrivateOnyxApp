@@ -134,7 +134,10 @@ SHARED_DATA_ENGINE_MARKER := docker-data/host-services/shared-data-engine
 SHARED_DATA_GUARD_ENV := $(if $(filter true,$(PODMAN_SELECTED)),env -u DOCKER_HOST,)
 ifeq ($(strip $(DOCKER_SOCK_PATH)),)
 ifneq ($(findstring podman,$(CONTAINER_BIN)),)
-DOCKER_SOCK_PATH := $(strip $(shell "$(CONTAINER_BIN)" machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | head -1))
+DOCKER_SOCK_PATH := $(strip $(shell "$(CONTAINER_BIN)" machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | sed -n '\|^/|{p;q;}'))
+ifeq ($(strip $(DOCKER_SOCK_PATH)),)
+DOCKER_SOCK_PATH := $(strip $(shell "$(CONTAINER_BIN)" info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null | sed -n '\|^/|{p;q;}'))
+endif
 endif
 endif
 export CONTAINER_BIN
@@ -142,9 +145,11 @@ export DOCKER_SOCK_PATH
 ifeq ($(PODMAN_SELECTED),true)
 # Docker Compose 5.3.x may otherwise honor the host's selected Docker context
 # or Podman's SSH system connection. Pin the external provider to the current
-# machine's forwarded compatibility socket; native engine commands still use
-# CONTAINER_BIN=podman.
+# selected engine's local compatibility socket; native engine commands still
+# use CONTAINER_BIN=podman.
+ifneq ($(strip $(DOCKER_SOCK_PATH)),)
 export DOCKER_HOST := unix://$(DOCKER_SOCK_PATH)
+endif
 endif
 export TEEP_IMAGE
 export WEBUI_CANONICAL_ORIGIN
@@ -652,14 +657,14 @@ up-lite: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
 up-lite: PODMAN_START_FILES=$(LITE_FILES)
 check-container-health-capability:
 	@set -eu; \
+	python3 podman/startup_health.py check-compose --container-bin "$(CONTAINER_BIN)"; \
 	case "$(CONTAINER_BIN)" in \
 		*podman*) \
 			exec python3 podman/startup_health.py check --container-bin "$(CONTAINER_BIN)" \
 			;; \
 	esac; \
-	engine_version="$$($(CONTAINER_BIN) version --format '{{.Server.Version}}')"; \
-	compose_version="$$($(CONTAINER_BIN) compose version --short)"; \
-	ENGINE_VERSION="$$engine_version" COMPOSE_VERSION="$$compose_version" python3 -c 'import os; from re import findall; parse=lambda v: tuple((list(map(int, findall(r"\d+", v)))+[0,0,0])[:3]); assert parse(os.environ["ENGINE_VERSION"]) >= (25,0,0), "Docker Engine 25.0+ is required for start_interval"; assert parse(os.environ["COMPOSE_VERSION"]) >= (2,20,2), "Docker Compose 2.20.2+ is required for start_interval"'
+	engine_api="$$($(CONTAINER_BIN) version --format '{{.Server.APIVersion}}')"; \
+	ENGINE_API="$$engine_api" python3 -c 'import os; from re import findall; parts=tuple((list(map(int, findall(r"\d+", os.environ["ENGINE_API"])))+[0,0])[:2]); assert parts >= (1,44), "Docker Engine API 1.44+ is required for start_interval"'
 
 podman-doc-server-start:
 ifeq ($(PODMAN_SELECTED),true)
@@ -703,7 +708,7 @@ ifeq ($(PODMAN_SELECTED),true)
 	@python3 podman/startup_health.py prepare-shared-data --opensearch docker-data/opensearch
 endif
 
-up-lite: wrapper-config-preflight claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability onyx-image-ready prepare-podman-postgres-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready
+up-lite: wrapper-config-preflight check-container-health-capability claim-shared-data-engine ensure-onyx-config sync-onyx-env onyx-image-ready prepare-podman-postgres-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
@@ -723,7 +728,7 @@ endif
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
 up-full: PODMAN_START_FILES=$(FULL_FILES)
-up-full: wrapper-config-preflight claim-shared-data-engine ensure-onyx-config sync-onyx-env check-container-health-capability onyx-image-ready prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
+up-full: wrapper-config-preflight check-container-health-capability claim-shared-data-engine ensure-onyx-config sync-onyx-env onyx-image-ready prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps opensearch

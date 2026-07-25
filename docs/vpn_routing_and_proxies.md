@@ -299,9 +299,11 @@ Myst's one-minute recovery check. Origin services whose sole readiness value is
 already represented by a fixed gateway or publisher have their duplicate check
 disabled. Nginx is likewise the single WebUI boundary: its root check traverses
 `web_server`, while its separate API dependency preserves API startup
-validation. Docker Engine 25.0+ and Compose 2.20.2+ are required. With Podman
-and a Compose provider 2.20.2+, the Makefile first checks the concrete native
-startup-health capabilities, then creates stopped containers, copies each
+validation. Docker Engine API 1.44+ is required. For either engine, the
+Makefile first renders a probe and requires the Compose provider to preserve
+`start_interval`, `!override`, and routing-critical `gw_priority`. With
+Podman, it then checks the concrete native startup-health capabilities, creates
+stopped containers, copies each
 regular command and timeout into Podman's native five-second startup health
 check, strictly inspects both cadences, and only then starts the services.
 Podman 5.8.1 is the validated baseline; an older server warns and proceeds to

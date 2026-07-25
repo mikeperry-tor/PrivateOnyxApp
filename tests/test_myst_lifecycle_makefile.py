@@ -221,9 +221,10 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[0]
         self.assertTrue(tor_build.rstrip().endswith("\t\ttor"))
 
-    def test_podman_compose_is_pinned_to_the_forwarded_unix_socket(self) -> None:
+    def test_podman_compose_is_pinned_to_the_selected_unix_socket(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn("export DOCKER_HOST := unix://$(DOCKER_SOCK_PATH)", makefile)
+        self.assertIn("info --format '{{.Host.RemoteSocket.Path}}'", makefile)
         self.assertIn("export CONTAINER_BIN", makefile)
 
     def test_stack_start_preserves_integrated_myst_container(self) -> None:
@@ -263,11 +264,11 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_container_capability_gate_is_a_start_prerequisite(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        self.assertIn("Docker Engine 25.0+", makefile)
-        self.assertIn("Docker Compose 2.20.2+", makefile)
+        self.assertIn("Docker Engine API 1.44+", makefile)
         capability_target = makefile.split(
             "check-container-health-capability:", 1
         )[1].split("\n\n", 1)[0]
+        self.assertIn("startup_health.py check-compose", capability_target)
         self.assertIn("startup_health.py check", capability_target)
         self.assertNotIn("Podman startup-health has not passed", makefile)
         for target in ("up-lite:", "up-full:"):

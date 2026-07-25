@@ -12,6 +12,22 @@ from unittest.mock import patch
 from podman import startup_health
 
 
+def _compose_capability_model(
+    *, gw_priority: int | None = 1
+) -> dict[str, object]:
+    network: dict[str, object] = {}
+    if gw_priority is not None:
+        network["gw_priority"] = gw_priority
+    return {
+        "services": {
+            "probe": {
+                "healthcheck": {"test": ["NONE"], "start_interval": "5s"},
+                "networks": {"default": network},
+            }
+        }
+    }
+
+
 def _container(
     *,
     service: str = "api_server",
@@ -160,6 +176,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
         run.assert_not_called()
         prepare.assert_called_once_with(postgres=directory)
 
+    @patch.object(startup_health.sys, "platform", "darwin")
     @patch.object(startup_health, "_run")
     def test_prepare_shared_postgres_removes_only_mount_root_override(
         self, run
@@ -183,6 +200,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
             ["xattr", "-d", startup_health.PODMAN_OVERRIDE_XATTR, directory],
         )
 
+    @patch.object(startup_health.sys, "platform", "darwin")
     @patch.object(startup_health, "_run")
     def test_prepare_shared_postgres_accepts_absent_override(self, run) -> None:
         run.return_value = subprocess.CompletedProcess(
@@ -192,6 +210,17 @@ class PodmanStartupHealthTests(unittest.TestCase):
             (Path(directory) / "PG_VERSION").write_text("15\n", encoding="ascii")
             startup_health.prepare_shared_data(postgres=directory)
         self.assertEqual(run.call_count, 1)
+
+    @patch.object(startup_health.sys, "platform", "linux")
+    @patch.object(startup_health, "_run")
+    def test_prepare_shared_postgres_skips_macos_xattr_on_linux(self, run) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "PG_VERSION").write_text("15\n", encoding="ascii")
+            self.assertEqual(
+                startup_health.prepare_shared_data(postgres=directory),
+                ["PostgreSQL"],
+            )
+        run.assert_not_called()
 
     def test_prepare_shared_opensearch_requires_initialized_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -227,6 +256,9 @@ class PodmanStartupHealthTests(unittest.TestCase):
             ),
             subprocess.CompletedProcess([], 0, stdout="", stderr=""),
             subprocess.CompletedProcess([], 0, stdout="5.1.4\n", stderr=""),
+            subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps(_compose_capability_model()), stderr=""
+            ),
             subprocess.CompletedProcess([], 0, stdout=flags, stderr=""),
         ]
         self.assertEqual(startup_health.check_capability("podman"), "5.8.1")
@@ -245,6 +277,9 @@ class PodmanStartupHealthTests(unittest.TestCase):
             ),
             subprocess.CompletedProcess([], 0, stdout="", stderr=""),
             subprocess.CompletedProcess([], 0, stdout="2.26.1\n", stderr=""),
+            subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps(_compose_capability_model()), stderr=""
+            ),
             subprocess.CompletedProcess([], 0, stdout=flags, stderr=""),
         ]
         diagnostics = io.StringIO()
@@ -252,6 +287,38 @@ class PodmanStartupHealthTests(unittest.TestCase):
             self.assertEqual(startup_health.check_capability("podman"), "5.4.2")
         self.assertIn("older than the validated 5.8.1 baseline", diagnostics.getvalue())
         self.assertIn("continuing with explicit capability checks", diagnostics.getvalue())
+
+    @patch.object(startup_health, "_run")
+    def test_compose_capability_gate_rejects_silently_dropped_gateway(self, run) -> None:
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, stdout="2.26.1\n", stderr=""),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=json.dumps(_compose_capability_model(gw_priority=None)),
+                stderr="",
+            ),
+        ]
+        with self.assertRaisesRegex(
+            startup_health.ContractError, "silently drops.*gw_priority"
+        ):
+            startup_health.check_compose_capability("podman")
+
+    @patch.object(startup_health, "_run")
+    def test_compose_capability_gate_passes_required_model(self, run) -> None:
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, stdout="2.35.0\n", stderr=""),
+            subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps(_compose_capability_model()), stderr=""
+            ),
+        ]
+        self.assertEqual(
+            startup_health.check_compose_capability("podman"), "2.35.0"
+        )
+        self.assertEqual(
+            run.call_args_list[1].kwargs["input_text"],
+            startup_health.COMPOSE_CAPABILITY_MODEL,
+        )
 
     @patch.object(startup_health, "_run")
     def test_capability_gate_reports_unusable_image_store(self, run) -> None:
