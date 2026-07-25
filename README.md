@@ -86,14 +86,11 @@ If the selected version is older than 2.35.0, install or update the
 [Docker Compose plugin](https://docs.docker.com/compose/install/linux/).
 The manual per-user installation places the binary at
 `~/.docker/cli-plugins/docker-compose`, where it can be used by either Docker
-or Podman. Manual installations do not update automatically.
+or Podman.
 
-A Podman-only Linux host does not need Docker installed. Enable Podman's
-rootless API socket before starting the stack:
-
-```bash
-systemctl --user enable --now podman.socket
-```
+A Podman-only Linux host does not need all of Docker installed, but it does
+need an official Docker docker-compose binary v2.35.0 or later. The Podman
+versions of compose lack key features required by this stack.
 
 ## Running the Stack
 
