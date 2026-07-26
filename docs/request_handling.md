@@ -113,31 +113,40 @@ implementation from `browser/obscura_client`. SearXNG connects on
 connect only through `obscura-cdp-gateway` on `onyx-obscura-control`. CDP is
 not published on the host or attached to an Onyx data/backend network.
 
-The client uses flattened CDP messages over the pinned WebSocket transport.
-At Obscura 0.1.10, attaching Playwright 1.58's public
-`new_cdp_session(page)` to an Obscura-created target reuses Obscura's session
-identifier and crashes the Playwright driver as a duplicate target. The
-audited raw transport avoids that incompatible second attachment while
-preserving the exact one-`Page.navigate` contract. The derived SearXNG image
-still pins the audited Playwright package and contains no browser binary.
+Obscura v0.1.11 gives every WebSocket connection its own browser context, HTTP
+client, cookie jar, targets, headers, User-Agent state, OS thread, and V8
+isolates. The wrapper uses one fresh connection and one target per navigation
+and does not issue `Network.clearBrowserCookies`; closing the connection
+destroys that request's browser state. The single Obscura process accepts at
+most 15 live WebSockets: ten direct `open_url` attempts plus one lease for each
+of the five search providers. Connections above the cap receive HTTP 503
+instead of entering a server queue.
+
+The client still uses flattened CDP messages over the pinned WebSocket
+transport. Attaching Playwright 1.58's public `new_cdp_session(page)` to an
+Obscura-created target reuses the already attached session identifier and
+crashes the Playwright driver as a duplicate target. The audited raw transport
+avoids that incompatible second attachment while preserving the exact
+one-`Page.navigate` contract. The derived SearXNG image pins the audited
+Playwright package for compatibility checks and contains no browser binary.
 
 ## Obscura one-navigation contract
 
 For each accepted target the shared client:
 
 1. validates the URL syntax and scheme without resolving the target;
-2. best-effort clears browser cookies on the connection;
-3. creates one fresh target, enables the required CDP domains, and registers
+2. creates one fresh target in the connection-isolated context, enables the
+   required CDP domains, and registers
    event observation before navigation;
-4. runs the caller's pre-navigation finalization guard;
-5. sends exactly one raw `Page.navigate`;
-6. waits for the matching main-frame completion event;
-7. identifies the terminal main-frame Document request across redirects and
+3. runs the caller's pre-navigation finalization guard;
+4. sends exactly one raw `Page.navigate`;
+5. waits for the matching main-frame completion event;
+6. identifies the terminal main-frame Document request across redirects and
    JavaScript navigation, retaining its actual request id, status, headers,
    final frame URL, and challenge state;
-8. obtains rendered DOM and, when Obscura retained it, that same navigation's
+7. obtains rendered DOM and, when Obscura retained it, that same navigation's
    response body;
-9. closes every IO stream, target, and WebSocket on success or failure.
+8. closes every IO stream, target, and WebSocket on success or failure.
 
 The client does not issue `HEAD`, `GET`, range, MIME-probe, CLI, normal
 SearXNG HTTP-client, or retry requests. It does not reconnect after a CDP
@@ -150,20 +159,15 @@ Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `load`). Built-in
 validated by the shared client. These are event conditions, not sleeps;
 Obscura also has a finite navigation deadline.
 
-Connection, cookie clearing, target creation, attachment, and CDP domain setup
-share one absolute 45-second pre-navigation deadline. It is not a fresh
-45-second allowance for each command. Expiry closes the connection, returns a
-typed `pre-navigation-timeout`, and leaves headroom beneath SearXNG's 60-second
+Connection, target creation, attachment, and CDP domain setup share one
+absolute 45-second pre-navigation deadline. It is not a fresh 45-second
+allowance for each command. Expiry closes the connection, returns a typed
+`pre-navigation-timeout`, and leaves headroom beneath SearXNG's 60-second
 engine deadline and Onyx's 120-second invocation deadline. Cleanup CDP commands
 have a separate five-second bound so an unresponsive renderer cannot retain a
-caller permit merely by blocking target or body-stream closure.
-
-Cookie clearing is best effort, not a user-isolation boundary. At the pinned
-server it may wait behind active work assigned to the same renderer, and the
-clear plus subsequent target creation is not atomic across clients. Targets
-on a worker share that worker's browser trust domain. Local storage and other
-non-cookie state are not claimed to be cleared. Five workers improve capacity,
-not per-user isolation.
+caller permit merely by blocking target or body-stream closure. Connection
+isolation is a browser-state boundary between requests, not an authorization
+boundary between the API and SearXNG callers that can both reach CDP.
 
 ## Body and content handling
 
@@ -173,12 +177,12 @@ an unconditional `IO.close`. Plain and base64 chunks are counted as actual
 bytes. The client closes an oversized stream immediately and returns a typed
 failure; it does not continue consuming attacker-controlled bytes.
 
-Obscura 0.1.10 has a pinned retained-body limitation. Its per-page response
-cache evicts the oldest entry after `OBSCURA_NETWORK_BODY_BUFFER_ENTRIES`
-(fixed at 16 here), but it does not protect the main Document entry. It creates
-the loader-id alias only after navigation and network collection complete. On
-a page with enough subresources, the main body can therefore be evicted before
-the alias is created and before any CDP client can call
+The pinned server's per-page response cache evicts the oldest entry after
+`OBSCURA_NETWORK_BODY_BUFFER_ENTRIES` (fixed at 16 here), but it does not
+protect the main Document entry. It creates the loader-id alias only after
+navigation and network collection complete. On a page with enough subresources,
+the main body can therefore be evicted before the alias is created and before
+any CDP client can call
 `Fetch.takeResponseBodyAsStream`; moving the client call earlier cannot repair
 this ordering.
 
@@ -225,16 +229,18 @@ the fresh crawler sibling. It drives the shared Obscura retention floors but
 does not cap exact-ID reads of previously indexed documents or configure RAG
 ingestion. SearXNG search DOM retains its independent fixed 20 MiB cap.
 Existing Onyx character budgets apply after parsing. Increasing the document
-limit increases potential memory use across five simultaneous API fetches and
-five browser workers.
+limit increases potential memory use across ten simultaneous direct API
+fetches and concurrent search connections.
 
 These limits do not bound Obscura's initial response or DOM allocation. The
 pinned server can read a complete response before applying retained-body
 limits. Its network retention limit is per body and may be amplified by entry
-count, base64 representation, and request/loader aliases. The IO stream store
-has separate aggregate accounting, but neither limit is an aggregate browser
-process-memory bound. In-process PDF parsing also has no complete CPU,
-transient-memory, or parser wall-time bound beyond the outer invocation.
+count, base64 representation, and request/loader aliases. Every isolated
+connection has one IO stream slot sized to the retention floor because the
+wrapper opens at most one stream on that connection. Neither limit is an
+aggregate browser process-memory bound. In-process PDF parsing also has no
+complete CPU, transient-memory, or parser wall-time bound beyond the outer
+invocation.
 
 ## Onyx `open_url`: Obscura mode
 
@@ -244,15 +250,16 @@ creates one absolute 120-second monotonic deadline and finalization object
 before outer parallel work begins. All nested crawler jobs receive that same
 state.
 
-Five process-global permits bound active API fetches. A job may wait for a
-permit only for its remaining invocation budget. It checks finalization before
-setup and again immediately before `Page.navigate`; finalized work cannot send
-a new origin request. A navigation already sent retains its permit through
-cleanup. Admission is process-local and non-FIFO, and waiting caller threads
-are not themselves a durable queue or a cross-process capacity reservation.
-The shared 45-second setup bound means a renderer blocked before navigation
-releases its caller-side permit within that budget; it does not retry or prove
-that the selected Obscura child cleaned up its own pre-dispatch state.
+Ten process-global permits bound active direct-Obscura API fetches. A job may
+wait for a permit only for its remaining invocation budget. It checks
+finalization before setup and again immediately before `Page.navigate`;
+finalized work cannot send a new origin request. A navigation already sent
+retains its permit through cleanup. Admission is process-local and non-FIFO,
+and waiting caller threads are not themselves a durable queue or a
+cross-process capacity reservation.
+The shared 45-second setup bound means a connection blocked before navigation
+releases its caller-side permit within that budget. The client does not retry;
+closing the connection tears down its isolated server-side context.
 
 Results remain ordered by requested URL. Failures and snippets are correlated
 with that requested URL even after redirects; successful content and citations
@@ -350,14 +357,11 @@ This preference never changes `web_search`. The custom SearXNG engines remain
 direct-Obscura clients with their one-navigation, scheduling, and failure
 contracts.
 
-Parallel `open_url` stress testing against the pinned Obscura 0.1.10 release
-found that the stock crawler was blocked less often and returned substantially
-more reliable results than the direct Obscura path. This is an empirical result
-for the current pin and tested sites, not a claim that requests/Chromium is
-universally less detectable. Keep the stock crawler as the default while that
-result persists. On each Obscura upgrade, repeat parallel blocked,
-empty-content, and timeout tests across the same URL set and reconsider the
-default if Obscura improves.
+The stock crawler remains the default reliability-oriented path. This is not a
+claim that requests/Chromium is universally less detectable. On each Obscura
+upgrade, repeat parallel blocked, empty-content, timeout, and successful-result
+tests across the same URL set and reconsider the default when the direct path
+meets the same reliability bar.
 
 ## SearXNG search
 
@@ -445,8 +449,7 @@ setup, terminal result, typed failure, and cleanup records include that ID plus
 elapsed time; timeout records identify the exact setup or cleanup stage without
 logging the target URL.
 The unmodified upstream Obscura image does not offer equivalent end-to-end
-redaction: single-worker debugging may log full URLs, and multi-worker child
-logs can be incomplete. Treat its logs as private browsing data.
+redaction and may log full URLs. Treat its logs as private browsing data.
 
 Obscura is run as UID/GID 65534, read-only, capability-free, without browser
 data or secret mounts, `--storage-dir`, or `--allow-file-access`. The shared
@@ -487,6 +490,6 @@ Relevant controls are documented in `.env.wrapper.example`:
 - `SEARXNG_ROUND_ROBIN`;
 - the VPN and upstream-proxy route settings.
 
-Obscura worker count, API fetch concurrency, browser navigation deadline, and
-the internal retention multipliers are fixed reviewed implementation values,
-not user-facing tuning controls.
+Obscura connection capacity, direct API fetch concurrency, browser navigation
+deadline, and the internal retention limits are fixed reviewed implementation
+values, not user-facing tuning controls.

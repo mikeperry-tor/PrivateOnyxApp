@@ -47,11 +47,10 @@ to the stock Onyx path. The API bootstrap installs exactly one of the two
 strict integrations below; an invalid setting or source-shape mismatch stops
 startup. This switch does not affect the SearXNG direct-Obscura engines.
 
-The stock path is the default because parallel testing against Obscura 0.1.10
-found it was blocked less often and was substantially more reliable. This is a
-pin-specific operational observation. Re-run the comparison when Obscura is
-upgraded and change the default if the direct browser path improves enough to
-justify its stronger containment and one-navigation behavior.
+The stock path remains the default reliability-oriented choice. Re-run
+comparable stock/direct batches on every Obscura upgrade and change the default
+only when the direct browser path's stronger containment and one-navigation
+behavior also meets the required reliability.
 
 ### Direct Obscura mode
 
@@ -64,7 +63,7 @@ built-in `OnyxWebCrawler` URL-fetch path. It imports the single client in
   fallback;
 - one absolute 120-second monotonic invocation deadline/finalization state,
   passed through the outer and nested crawler executors;
-- five process-global blocking permits acquired only for remaining budget,
+- ten process-global blocking permits acquired only for remaining budget,
   finalization checks before setup and immediately before navigation, and
   permit retention through cleanup for already-sent requests;
 - stable requested-URL ordering and failure/snippet correlation, with terminal
@@ -121,14 +120,16 @@ a batch also has rich successful results. It leaves all-success, all-failure,
 and timeout-only response forms unchanged, so the behavior is identical in
 stock and direct Obscura modes.
 
-The shared CDP client validates URL syntax without public DNS, tracks the
-terminal main-frame Document request, reads retained body streams with actual
-byte accounting, obtains rendered DOM, returns typed warning-level failures,
-redacts wrapper diagnostics, and cleans up streams, targets, sessions, and
-connections on every path. Obscura 0.1.10 can evict a subresource-heavy page's
-main body before creating its loader alias. The client maps that exact rejection
-to `body-unavailable`; Onyx may continue only with same-navigation HTML/XHTML
-DOM, while PDF/raw/binary paths remain strict. See
+The shared CDP client validates URL syntax without public DNS, opens one
+v0.1.11-isolated browser connection per request, tracks the terminal main-frame
+Document request, reads retained body streams with actual byte accounting,
+obtains rendered DOM, returns typed warning-level failures, redacts wrapper
+diagnostics, and cleans up streams, targets, sessions, and connections on every
+path. It relies on connection isolation instead of a non-atomic cookie-clear
+command. The pinned server can evict a subresource-heavy page's main body before
+creating its loader alias. The client maps that exact rejection to
+`body-unavailable`; Onyx may continue only with same-navigation HTML/XHTML DOM,
+while PDF/raw/binary paths remain strict. See
 [Request handling](request_handling.md).
 
 ## Lite-mode `open_url` availability
@@ -189,8 +190,8 @@ source-only change. Compose explicitly exposes the wrapper patch directory,
 the SearXNG application root, and the shared client directory to the embedded
 Python interpreter so patch or client import failure remains startup-visible.
 The runtime direct client uses pinned WebSockets because Playwright's public
-page session attachment is incompatible with Obscura 0.1.10's reused
-flattened session identifier.
+page session attachment is incompatible with the pinned Obscura server's
+reused flattened session identifier.
 
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are offline
 engines. `_obscura.py` owns one-navigation transport, exact terminal hosts,
@@ -549,12 +550,13 @@ background supervisor, so neither setting creates a bot process there.
 
 ## Compose wrapper changes
 
-The base wrapper adds the hardened five-worker Obscura service, direct control
-networks, API-only CDP gateway, derived SearXNG service, distinct fixed egress
-bridges, and shared public/host final-hop policies. Obscura runs read-only as
-65534:65534, without capabilities, storage, private mounts, or file-access
-permission. Application containers do not join the trusted VPN namespace or a
-direct public network.
+The base wrapper adds the hardened single-process Obscura service, direct
+control networks, API-only CDP gateway, derived SearXNG service, distinct fixed
+egress bridges, and shared public/host final-hop policies. Obscura v0.1.11
+isolates every live WebSocket browser context and rejects connections above the
+aggregate capacity of 15. It runs read-only as 65534:65534, without
+capabilities, storage, private mounts, or file-access permission. Application
+containers do not join the trusted VPN namespace or a direct public network.
 
 Lite and full overlays mount the same named API bootstrap. Full mode adds local
 RAG services; lite mode does not install an anonymous substitute bootstrap.

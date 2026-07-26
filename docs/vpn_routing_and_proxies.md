@@ -66,7 +66,7 @@ with `MYST_VPN_ENABLED=true`; an upstream proxy can be used in either mode.
 | Class | Callers | Fixed bridge | Policy |
 | --- | --- | --- | --- |
 | Public Onyx | generic helpers, saved public MCP/Web Connector traffic, optional stock `open_url` requests/local Chromium | `onyx-public-egress-bridge` | public destinations only |
-| Browser | Obscura workers | `obscura-egress-bridge` | same public listener and destination policy |
+| Browser | Obscura | `obscura-egress-bridge` | same public listener and destination policy |
 | Executor | enabled code-interpreter pods | `executor-egress-bridge` | same public listener and destination policy |
 | Host-capable Onyx | explicitly selected saved-level host routes, configured inference, embedding shim | `onyx-host-egress-bridge` | public plus exact documented host/RFC1918 exceptions |
 
@@ -126,10 +126,10 @@ validation without local target DNS; browser redirects and subresources cross
 the same public final-hop policy. This mode cannot select the host-capable
 listener and a broken bridge/proxy has no direct fallback.
 
-The stock route is the default because parallel testing found it was blocked
-less often than the direct crawler on Obscura 0.1.10. That observation does
-not change either route's egress policy. Re-run the comparison on Obscura
-upgrades and monitor whether the browser route becomes more reliable.
+The stock route is the default reliability-oriented choice. That does not
+change either route's egress policy. Re-run comparable stock/direct batches on
+every Obscura upgrade and reconsider the default when the direct browser meets
+the same reliability bar.
 
 ## DNS ownership
 

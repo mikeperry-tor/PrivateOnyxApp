@@ -52,24 +52,19 @@ apply in every selected mode.
 | optional `tor` | `tor-ingress` only when onion ingress is enabled; private control tmpfs and optional SOCKS runtime volume are mounts, not networks | dedicated `tor-uplink`; applications never join it |
 | optional `tor-frontend-gateway` | spans only `tor-ingress` and `onyx-frontend`, with fixed nginx forwarding | none |
 
-CDP is powerful browser authority. The API and SearXNG are mutually
-non-isolated with respect to the shared Obscura worker pool: either can create
-targets on a worker and concurrent connections do not create a user security
-boundary. The narrow API gateway prevents unrelated Onyx backend peers from
-gaining CDP reachability, but it is not an authorization protocol between the
-two intended callers.
+CDP is powerful browser authority. Obscura v0.1.11 gives every WebSocket its
+own browser context, HTTP client, cookie jar, targets, headers, User-Agent
+state, thread, and V8 isolates. The API and SearXNG therefore do not share
+browser state across their request connections, but they still share one
+process, one CDP endpoint, one 15-connection resource cap, and one failure
+domain. Connection isolation is not caller authentication. The narrow API
+gateway prevents unrelated Onyx backend peers from gaining CDP reachability,
+but it is not an authorization protocol between the two intended callers.
 
-Fresh targets and best-effort `Network.clearBrowserCookies` reduce accidental
-carryover; they do not provide per-user isolation. At Obscura 0.1.10 a clear
-may be deferred behind active work on a worker and is not atomic with the
-following target creation across clients. Non-cookie browser state is
-unverified and state is per worker. Capacity is fixed at five workers.
-
-The pinned server can retain a hidden blank target/session if concurrent
-connection arrival assigns work around an occupied or failed child. Cleanup
-is attempted by the client, but unreachable server-owned state can require a
-worker restart. This is an availability/resource limitation, not a safe retry
-signal; clients do not reconnect or navigate a second time.
+Each request uses a fresh connection and target and closes both on every path;
+there is no cookie-clear race to claim as an isolation mechanism. A cleanup
+failure remains an availability/resource event, not a safe retry signal.
+Clients do not reconnect or navigate a second time.
 
 ## Destination validation
 
@@ -189,16 +184,16 @@ favored upstream requests/Playwright despite that containment tradeoff;
 operators can select the more isolated direct Obscura crawler, and search
 continues in hardened Obscura either way.
 
-This containment tradeoff is currently accepted as the default because the
-stock crawler was blocked less often in parallel tests against Obscura 0.1.10.
-Treat that result as version-specific and re-evaluate both reliability and
-containment when Obscura is upgraded.
+The configured default treats the stock crawler as the reliability-oriented
+choice. Re-evaluate reliability and containment with comparable stock/direct
+batches on every Obscura upgrade.
 
 The browser's main-response retention limit applies per entry, not per
 process. Multiple retained entries, base64 representation, and request/loader
-aliases can multiply memory use. The distinct IO stream store has aggregate
-accounting. The API enforces the same configured ceiling independently on the
-rendered DOM and main body; SearXNG has its own fixed DOM ceiling.
+aliases can multiply memory use. Each isolated connection has a distinct
+one-entry IO stream store. The API enforces the same configured ceiling
+independently on the rendered DOM and main body; SearXNG has its own fixed DOM
+ceiling.
 Obscura may allocate the full initial response before any of those retained
 limits. None is a complete aggregate process-memory bound.
 

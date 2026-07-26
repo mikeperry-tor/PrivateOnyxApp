@@ -105,9 +105,9 @@ services:
     healthcheck: {disable: true}
 
   # ── Obscura stealth CDP browser ─────────────────────────────────────────
-  # Serves a Chrome DevTools Protocol WebSocket to SearXNG and the Onyx API.
-  # Release binaries include the stealth feature, so --stealth at runtime
-  # enables the full anti-fingerprint + tracker-blocking domain.
+  # Serves isolated concurrent Chrome DevTools Protocol connections to SearXNG
+  # and the Onyx API. Release binaries include the stealth feature, so
+  # --stealth enables the full anti-fingerprint + tracker-blocking domain.
   obscura:
     image: ${OBSCURA_IMAGE:?OBSCURA_IMAGE must be set}
     restart: unless-stopped
@@ -123,8 +123,10 @@ services:
       - "--port"
       - "9222"
       - "--stealth"
-      - "--workers"
-      - "5"
+      # Ten direct-open_url permits plus one lease for each of five search
+      # providers. Excess WebSockets are rejected rather than queued.
+      - "--max-connections"
+      - "15"
     environment:
       # Hard ceiling on a single Page.navigate. Obscura's default is 30s,
       # This leaves headroom for slower VPN or upstream-proxy paths while the
@@ -140,8 +142,10 @@ services:
       OBSCURA_FETCH_TIMEOUT_MS: "45000"
       OBSCURA_NETWORK_BODY_BUFFER_ENTRIES: "16"
       OBSCURA_NETWORK_BODY_BUFFER_BYTES: "${OBSCURA_RETENTION_FLOOR_BYTES:-52428800}"
-      OBSCURA_IO_STREAM_MAX_ENTRIES: "16"
-      OBSCURA_IO_STREAM_MAX_BYTES: "${OBSCURA_IO_STREAM_MAX_BYTES:-262144000}"
+      # Every v0.1.11 connection owns its IO store and the wrapper opens at
+      # most one response stream on that connection.
+      OBSCURA_IO_STREAM_MAX_ENTRIES: "1"
+      OBSCURA_IO_STREAM_MAX_BYTES: "${OBSCURA_IO_STREAM_MAX_BYTES:-52428800}"
       # Obscura's reqwest SSRF resolver also validates the configured proxy
       # hostname. Permit its private Docker address so requests can reach the
       # mandatory egress bridge. The browser remains confined to internal

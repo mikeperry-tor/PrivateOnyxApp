@@ -185,7 +185,7 @@ def normalize_public_url(
 
 
 def is_text_like_content_type(content_type: str | None) -> bool:
-    """Mirror Obscura v0.1.10 ``is_text_like_content_type`` exactly."""
+    """Mirror the pinned Obscura ``is_text_like_content_type`` exactly."""
     if content_type is None:
         return True
     essence = content_type.split(";", 1)[0].strip().lower()
@@ -465,10 +465,10 @@ async def _drain_body(
 class _RawCdp:
     """Minimal flattened CDP transport for the audited Obscura surface.
 
-    Obscura 0.1.10 reuses its target's attached session id. Playwright 1.58's
-    public ``new_cdp_session(page)`` asks for a second attachment with that
-    same id and its driver aborts on the duplicate. This transport keeps the
-    exact one-session protocol contract without a compatibility shim.
+    The pinned server reuses its target's attached session id. Playwright
+    1.58's public ``new_cdp_session(page)`` asks for a second attachment with
+    that same id and its driver aborts on the duplicate. This transport keeps
+    the exact one-session protocol contract without a compatibility shim.
     """
 
     def __init__(self, websocket):
@@ -733,9 +733,9 @@ async def fetch(
                 "Obscura did not complete connect before its deadline",
             ) from exc
         cdp = _RawCdp(websocket)
-        await _setup_send(
-            cdp, "Network.clearBrowserCookies", setup_stage="clear-browser-cookies"
-        )
+        # Obscura gives every WebSocket a fresh browser context. This request
+        # owns one connection and one target, so no cross-request cookie,
+        # header, target, or user-agent state exists to clear.
         created = await _setup_send(
             cdp,
             "Target.createTarget",
@@ -907,13 +907,13 @@ async def fetch(
                     command_timeout=_request_remaining,
                 )
             except ObscuraClientError as exc:
-                # Obscura 0.1.10 evicts the oldest retained response after a
-                # fixed entry count and creates the main-document loader alias
-                # only after navigation completes. Resource-heavy HTML pages
-                # can therefore lose their main body before the client can
-                # claim it. The rendered DOM is still the authoritative Onyx
-                # input for HTML, so preserve that same-navigation result. Raw
-                # and binary formats still fail closed because they require the
+                # The pinned server evicts the oldest retained response after
+                # a fixed entry count and creates the main-document loader
+                # alias only after navigation completes. Resource-heavy HTML
+                # pages can therefore lose their main body before the client
+                # can claim it. The rendered DOM is still the authoritative
+                # Onyx input for HTML, so preserve that same-navigation result.
+                # Raw and binary formats remain strict because they require the
                 # retained body.
                 if _can_preserve_html_dom_without_body(want, content_type, exc):
                     body_failure = exc.category

@@ -25,6 +25,7 @@ class ValidationMakefileTests(unittest.TestCase):
             "test",
             "check",
             "test-patch-images",
+            "test-obscura-image",
             "test-tor-image",
             "test-opensearch-image",
             "test-all-images",
@@ -39,6 +40,7 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertIn("./tests/validate_pinned_patch_images.sh", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory check", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory test-patch-images", MAKEFILE)
+        self.assertIn("$(MAKE) --no-print-directory test-obscura-image", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory test-tor-image", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory test-opensearch-image", MAKEFILE)
         self.assertIn("$(MAKE) --no-print-directory test-all-images", MAKEFILE)
@@ -47,6 +49,7 @@ class ValidationMakefileTests(unittest.TestCase):
             MAKEFILE,
             r"(?m)^test-all-images:\n"
             r"\t@\$\(MAKE\) --no-print-directory test-patch-images\n"
+            r"\t@\$\(MAKE\) --no-print-directory test-obscura-image\n"
             r"\t@\$\(MAKE\) --no-print-directory test-tor-image\n"
             r"\t@\$\(MAKE\) --no-print-directory test-opensearch-image$",
         )
@@ -57,6 +60,7 @@ class ValidationMakefileTests(unittest.TestCase):
             r"\t@\$\(MAKE\) --no-print-directory test-all-images$",
         )
         self.assertIn('tests/run_opensearch_image_validation.py', MAKEFILE)
+        self.assertIn('tests/validate_obscura_image.py', MAKEFILE)
         self.assertIn('tests/opensearch_runtime_validation.py', MAKEFILE)
         self.assertIn('tests/onyx_opensearch_runtime_validation.py', MAKEFILE)
 

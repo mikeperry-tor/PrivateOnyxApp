@@ -598,6 +598,10 @@ The primary Podman-specific tests are:
 - `tests/validate_tor_image.py`: the selected Tor image, one fresh engine-local
   SOCKS volume, keep-id/tmpfs modes, explicit state bind, authenticated private
   control path, and unprivileged read-only policy-container socket access.
+- `tests/validate_obscura_image.py`: the selected Obscura image on an
+  engine-local internal fixture network, including isolated connection state,
+  the live-connection cap, ten-way navigation concurrency, retained-body
+  behavior, and hardened runtime settings.
 - `tests/test_doc_drop_webserver.py`: the non-indexed host readiness endpoint
   and document-root/symlink confinement.
 - `tests/test_myst_readiness.py`: interface/route parsing that must remain
@@ -605,8 +609,9 @@ The primary Podman-specific tests are:
 
 Run `make check` after every Podman script, Makefile, or overlay change. For
 image/source pin or runtime-patch work, add only the focused image target for
-the affected family: `make test-patch-images`, `make test-tor-image`, or
-`make test-opensearch-image`. Use `make test-all-images` (or
+the affected family: `make test-patch-images`, `make test-obscura-image`,
+`make test-tor-image`, or `make test-opensearch-image`. Use
+`make test-all-images` (or
 `make check-upgrade`, which also runs `make check`) only for changes spanning
 multiple image families or broad release validation. Under Podman,
 `make test-patch-images`, `make test-all-images`, and `make check-upgrade` skip

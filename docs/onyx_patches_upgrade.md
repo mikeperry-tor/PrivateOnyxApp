@@ -38,8 +38,11 @@ contains read-only audit checkouts when present.
    local static checks, then runs `make test-all-images`: strict patch
    installation against the
    exact newly pinned local Onyx, code-interpreter, derived Python executor,
-   and derived SearXNG images. It also validates the selected local Tor wrapper
-   image, a fresh runtime socket volume, the state-bind override, private
+   and derived SearXNG images. It runs the selected Obscura image against an
+   internal fixture network to validate connection isolation/capacity,
+   concurrent navigation, content handling, retained-body behavior, and
+   cleanup. It also validates the selected local Tor wrapper image, a fresh
+   runtime socket volume, the state-bind override, private
    cookie-authenticated control path, and an unprivileged read-only policy
    consumer without pulling or rebuilding either Tor image.
    It also starts the exact pinned OpenSearch image with an isolated disposable
@@ -63,21 +66,23 @@ PDF extraction after changing bootstrap or process-isolation behavior.
 
 ## Direct Obscura audit
 
-Audit these Obscura 0.1.10 areas (or their new equivalents):
+Audit these Obscura v0.1.11 areas (or their new equivalents):
 
 - flattened Target attachment/session identifiers, target creation/closure,
-  multi-worker connection assignment, and concurrent hidden-page retention;
+  per-WebSocket context ownership, connection-thread cleanup, and the atomic
+  live-connection cap;
 - `Page.navigate` command-response/event ordering and lifecycle wait values;
 - Network request/response/loading events, redirect collapse, main-frame
   Document selection, JavaScript navigation, request-id/loader-id aliases,
   challenges, and terminal frame URL;
 - `Fetch.takeResponseBodyAsStream`, plain/base64 `IO.read`, `IO.close`, body
   eviction, content-type predicate, compressed/chunked/false-length behavior;
-- per-body network retention, entry/alias/base64 amplification, aggregate IO
-  stream accounting, and initial full-body allocation before retention;
-- `Network.clearBrowserCookies` deferral and cross-client non-atomicity;
-- the cumulative 45-second pre-navigation deadline across connect, cookie
-  clear, target creation, attachment, and domain setup; the separate bounded
+- per-body network retention, entry/alias/base64 amplification, per-connection
+  IO stream accounting, and initial full-body allocation before retention;
+- two-client isolation of cookies, HTTP clients, headers, User-Agent state,
+  targets, browser contexts, and V8 isolates without a cookie-clear command;
+- the cumulative 45-second pre-navigation deadline across connect, target
+  creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
 - caller-specific absolute attempt deadlines covering navigation, event wait,
   DOM commands, body-stream creation and reads; exact post-navigation expiry
@@ -96,7 +101,8 @@ Audit these Obscura 0.1.10 areas (or their new equivalents):
 Run tagged-image capability tests, not only fake CDP fixtures. Prove static and
 JS HTML, HTTP and JavaScript redirects, PDF, accepted raw text, unsupported and
 oversized content, challenge/status failures, one origin navigation, body/DOM
-byte limits, complete cleanup, and no reconnect/refetch.
+byte limits, ten-way direct `open_url` concurrency, simultaneous search
+capacity, connection-cap refusal, complete cleanup, and no reconnect/refetch.
 
 ### Pinned Obscura limitations and wrapper handling
 
@@ -104,8 +110,8 @@ Treat each item below as an explicit removal checkpoint on every Obscura pin
 change. Do not carry a workaround forward merely because its old fixture still
 passes:
 
-- **Main Document retained-body eviction.** In 0.1.10 the per-page response
-  store applies `OBSCURA_NETWORK_BODY_BUFFER_ENTRIES` to the main Document and
+- **Main Document retained-body eviction.** The per-page response store applies
+  `OBSCURA_NETWORK_BODY_BUFFER_ENTRIES` to the main Document and
   subresources alike. The internal main entry can be evicted before
   `emit_navigation_events` creates its loader-id alias; `Page.navigate` has not
   returned yet, so no client can claim the body first. The wrapper maps the
@@ -117,41 +123,33 @@ passes:
   configured entry count. Remove the HTML exception when the tagged image
   proves the main body remains retrievable. Do not substitute a larger entry
   count, which multiplies the per-entry memory bound.
-- **Flattened duplicate session IDs.** Obscura 0.1.10 reuses the attached
+- **Flattened duplicate session IDs.** The pinned server reuses the attached
   target session ID when Playwright 1.58 calls `new_cdp_session(page)`, causing
   the driver to reject a duplicate target. The shared client uses one minimal
   raw WebSocket CDP session. Re-test the high-level API on either pin change and
   remove the raw transport only if one navigation, event ordering, actual-body
   access, deadlines, redaction, and cleanup remain equivalent.
-- **Deferred, non-atomic cookie clearing.** `Network.clearBrowserCookies` can
-  wait behind work on the selected child, and another client can interleave
-  between the clear and navigation. The wrapper treats clearing as best effort
-  and makes no per-user isolation claim. Re-audit command dispatch, default
-  context sharing, and two-client interleavings; prefer an upstream isolated
-  context if one becomes complete and supported.
-- **Connection-arrival hidden page/session retention.** A connection assigned
-  during an active navigation can create pre-dispatch blank state that its
-  disconnect path does not reclaim. The wrapper bounds client commands and
-  closes its WebSocket but does not pretend that this reclaims inaccessible
-  server state; worker restart remains the eventual cleanup. Re-test connection
-  churn and worker memory.
-- **Renderer stalls and incomplete multi-worker diagnostics.** DOM and cleanup
-  commands can fail to answer, the multi-worker launcher discards child
-  stdout/stderr, and the single-worker path can log full URLs. Caller-owned
+- **Connection isolation.** The wrapper relies on v0.1.11 creating an isolated
+  browser context and HTTP client for every WebSocket and does not clear
+  cookies. Re-audit the immutable connection template, cookie-delta persistence
+  behavior, every state-bearing CDP domain, two-client interleavings, target
+  cleanup, and connection-thread exit before retaining this simplification.
+- **Renderer stalls and upstream diagnostics.** DOM and cleanup commands can
+  fail to answer, and upstream logs can contain full URLs. Caller-owned
   absolute setup/request/cleanup deadlines, opaque correlation IDs, sanitized
   stages, and warning-level typed failures provide the wrapper boundary.
-  Re-test a permanently blocked command, target/connection cleanup, child-log
-  forwarding, and URL redaction before removing any deadline or diagnostic.
+  Re-test a permanently blocked command, target/connection cleanup, server-log
+  visibility, and URL redaction before removing any deadline or diagnostic.
 - **Body-memory and classification gaps.** The server fully allocates a
   response before retention checks; the network byte limit is per entry and is
-  amplified by entry count, base64, and aliases; the IO store is separately
-  aggregate-bounded; and the stream API does not expose the internal
+  amplified by entry count, base64, and aliases; each connection's IO store is
+  separately bounded; and the stream API does not expose the internal
   text/binary decision. Retain strict limits and the mirrored
   `is_text_like_content_type` predicate until the tagged source and runtime
   tests provide authoritative aggregate accounting and classification.
 - **Local-file and health gaps.** Disabling `--allow-file-access` does not
-  repair the pinned ES-module local-file-read path, and the round-robin health
-  endpoint does not establish aggregate child health. Keep the container
+  repair the pinned ES-module local-file-read path, and the HTTP control-plane
+  health endpoint does not prove every live connection healthy. Keep the container
   unprivileged/read-only and free of private mounts, and keep request failures
   visible rather than adding public probes or a fallback browser. Re-audit both
   source paths on upgrade.
@@ -184,13 +182,11 @@ pre-validating its address, and the final-hop exception must require the fixed
 Tor Unix socket. Clearnet HTTP and non-Tor remote-DNS upstreams must remain
 denied when `EGRESS_ALLOW_HTTP_URLS=false`.
 
-The current default reflects parallel testing in which the stock crawler was
-blocked less often and was substantially more reliable than Obscura 0.1.10.
-Every Obscura pin upgrade must repeat comparable parallel URL batches and
-retries, recording blocked, empty-content, timeout, and successful results.
-Monitor upstream Obscura improvements and switch the default to `true` if the
-new pin reverses the reliability result while preserving the audited privacy,
-cleanup, body-retention, and concurrency properties.
+The stock crawler is the current reliability-oriented default. Every Obscura
+pin upgrade must repeat comparable parallel URL batches, recording blocked,
+empty-content, timeout, and successful results. Switch the default to `true`
+only if the direct path meets that reliability bar while preserving the audited
+privacy, cleanup, body-retention, and concurrency properties.
 
 Re-audit the pinned Onyx symbols for:
 
@@ -246,7 +242,7 @@ that can ambiguously replay a POST.
 Verify `sitecustomize_api_server` is the only API bootstrap in both modes,
 neutral shared helpers are imported rather than executed, and patch drift is
 startup-fatal. Test one shared 120-second monotonic invocation state through
-outer/nested jobs, five process-global permits, remaining-budget admission,
+outer/nested jobs, ten process-global permits, remaining-budget admission,
 finalization races before navigation, one release on every path, partial
 results, stable ordering, redirect correlation, content dispatch, limits, and
 external-provider non-interference. Do not add database/provider-row migration
@@ -331,8 +327,9 @@ Tailscale, Podman, and optional executor modes that changed. Verify:
 - VPN/upstream/no-VPN failures, internal targets, redirects, subresources,
   metadata, mixed answers, and framing errors fail closed;
 - long-lived CONNECT streams have no arbitrary total lifetime;
-- Obscura remains five workers, 65534:65534, read-only, capability-free,
-  secret/data-volume-free, and without storage/file-access flags;
+- Obscura remains one process with 15 isolated live-connection slots,
+  65534:65534, read-only, capability-free, secret/data-volume-free, and without
+  storage/file-access flags;
 - full local RAG, embedding, configured inference, Teep, hardened publishers,
   and optional Tailscale behavior remain intact.
 
@@ -689,13 +686,22 @@ make check-upgrade
 
 `make test` runs only the deterministic Python suite.
 `make test-patch-images` runs the strict Onyx, code-interpreter, executor, and
-SearXNG contracts plus the image-dependent SearXNG parser tests. The separate
-Tor and OpenSearch targets validate their own image families.
-`make test-all-images` aggregates all three focused image targets, and
+SearXNG contracts plus the image-dependent SearXNG parser tests.
+`make test-obscura-image` runs the selected tagged server in a networkless
+fixture network and proves connection isolation/capacity, concurrent
+navigation, static and JavaScript HTML, redirect, PDF/raw/binary handling,
+main-body eviction behavior, and cleanup. The separate Tor and OpenSearch
+targets validate their own image families.
+`make test-all-images` aggregates all four focused image targets, and
 `make check-upgrade` runs `make check` followed by that aggregate. Use the
 focused target for a focused upgrade; reserve the aggregate gates for broad
 `make upgrade`, multi-family changes, or release validation. None of these
 targets starts the application stack or performs the live matrix.
+
+For an Obscura-only pin change, pull only the selected Obscura image, rebuild
+the derived SearXNG image only when its embedded shared client changed, then run
+`make check`, `make test-obscura-image`, and `make test-patch-images`. Do not
+run the broad dependency-lock or unrelated component upgrade flow.
 
 Also inspect effective lite/full Compose models through the Makefile. Search
 current runtime files for removed service/env/path names and manually classify

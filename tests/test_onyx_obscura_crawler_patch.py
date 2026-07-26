@@ -100,6 +100,23 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
         self.assertIn("collection deadline", results[1].failure_reason)
         self.assertFalse(state.permits_navigation())
 
+    def test_result_collection_uses_ten_direct_obscura_workers(self):
+        state = self.module.InvocationState(time.monotonic() + 2)
+        barrier = threading.Barrier(10)
+
+        def fetch_one(url):
+            barrier.wait(timeout=1)
+            return f"result:{url}"
+
+        results = self.module._collect_url_results(
+            list(range(10)),
+            state,
+            fetch_one,
+            lambda url, reason: SimpleNamespace(url=url, failure_reason=reason),
+            headroom_seconds=0.1,
+        )
+        self.assertEqual(results, [f"result:{index}" for index in range(10)])
+
     def test_raw_text_decoding_is_strict_and_charset_bounded(self):
         result = SimpleNamespace(
             body=b"hello", body_classification=BodyClassification.TEXT, charset="utf-8"
@@ -138,7 +155,11 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
         self.assertEqual(source.count("fetch_rendered_html("), 1)
         self.assertNotIn("Firecrawl", source)
         self.assertIn('want="both"', source)
-        self.assertIn("ACTIVE_FETCHES = threading.BoundedSemaphore(5)", source)
+        self.assertIn("DIRECT_OBSCURA_MAX_WORKERS = 10", source)
+        self.assertIn(
+            "ACTIVE_FETCHES = threading.BoundedSemaphore(DIRECT_OBSCURA_MAX_WORKERS)",
+            source,
+        )
         self.assertIn(
             'FetchFailure.PRE_NAVIGATION_TIMEOUT: "browser setup timed out before navigation"',
             source,

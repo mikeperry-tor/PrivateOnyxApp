@@ -166,13 +166,18 @@ are not duplicate enforcement.
 ### SearXNG and browser search
 
 - The default search set contains only the five supported custom offline
-  engines: Google, Bing, Brave, Mojeek, and DuckDuckGo through the shared direct
-  Obscura path.
+  engines: Google, Brave, DuckDuckGo, Startpage, and Bing through the shared
+  direct Obscura path.
 - Inherited stock engines are removed rather than merely disabled one by one.
 - Optional SearXNG plugins are omitted, preventing unused hooks and mutable
   ClearURLs rule retrieval at cache startup.
 - Provider admission remains atomic before worker dispatch, with the existing
   per-provider concurrency/cooldown policy.
+- Obscura uses one process with isolated per-WebSocket browser state instead of
+  a process worker pool. Fifteen live connections cover ten direct `open_url`
+  attempts plus five independently leased search providers; excess connections
+  fail with HTTP 503 rather than queueing. Each connection has one response
+  stream slot.
 - Search DOM limits and the configured built-in `open_url` document limit remain
   separate because they bound different request paths.
 

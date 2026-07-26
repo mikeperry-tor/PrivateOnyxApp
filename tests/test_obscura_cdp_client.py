@@ -189,18 +189,25 @@ class ObscuraClientTests(unittest.TestCase):
         async def exercise():
             with self.assertRaises(ObscuraClientError) as raised:
                 await _RawCdp(WebSocket()).send(
-                    "Network.clearBrowserCookies",
+                    "Target.createTarget",
                     timeout_seconds=0.001,
                     timeout_category=FetchFailure.PRE_NAVIGATION_TIMEOUT,
-                    timeout_stage="clear-browser-cookies",
+                    timeout_stage="create-target",
                 )
             self.assertEqual(
                 raised.exception.category, FetchFailure.PRE_NAVIGATION_TIMEOUT
             )
-            self.assertEqual(raised.exception.stage, "clear-browser-cookies")
-            self.assertNotIn("Network.clearBrowserCookies", str(raised.exception))
+            self.assertEqual(raised.exception.stage, "create-target")
+            self.assertNotIn("Target.createTarget", str(raised.exception))
 
         asyncio.run(exercise())
+
+    def test_fetch_relies_on_connection_isolation_without_cookie_clear(self):
+        source = (
+            ROOT / "browser/obscura_client/private_onyx_obscura/client.py"
+        ).read_text()
+        self.assertNotIn('"Network.clearBrowserCookies"', source)
+        self.assertIn('"Target.createTarget"', source)
 
     def test_post_navigation_command_timeout_is_typed_and_stage_specific(self):
         class WebSocket:

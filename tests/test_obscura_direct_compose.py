@@ -31,11 +31,23 @@ class ObscuraDirectComposeTests(unittest.TestCase):
 
     def test_obscura_is_bounded_and_hardened(self):
         self.assertIn('user: "65534:65534"', self.compose)
-        self.assertIn('- "--workers"\n      - "5"', self.compose)
+        self.assertIn('- "--max-connections"\n      - "15"', self.compose)
+        self.assertNotIn("--workers", self.compose)
         self.assertIn('OBSCURA_NAV_TIMEOUT_MS: "90000"', self.compose)
         self.assertIn('OBSCURA_NETWORK_BODY_BUFFER_ENTRIES: "16"', self.compose)
+        self.assertIn('OBSCURA_IO_STREAM_MAX_ENTRIES: "1"', self.compose)
         self.assertNotIn("--storage-dir", self.compose)
         self.assertNotIn("--allow-file-access", self.compose)
+
+    def test_manifest_pins_obscura_0_1_11(self):
+        self.assertIn(
+            "OBSCURA_IMAGE=docker.io/h4ckf0r0day/obscura:0.1.11",
+            self.manifest,
+        )
+        self.assertIn(
+            "OBSCURA_IMAGE := docker.io/h4ckf0r0day/obscura:0.1.11",
+            self.makefile,
+        )
 
     def test_new_manifest_and_no_proxy_names(self):
         self.assertIn("SEARXNG_WRAPPER_IMAGE_REPOSITORY=", self.manifest)

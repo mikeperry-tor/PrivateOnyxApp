@@ -56,7 +56,7 @@ PYTHON_SLIM_IMAGE ?= $(call env_value,PYTHON_SLIM_IMAGE)
 PYTHON_ALPINE_IMAGE ?= $(call env_value,PYTHON_ALPINE_IMAGE)
 OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
 ifeq ($(strip $(OBSCURA_IMAGE)),)
-OBSCURA_IMAGE := docker.io/h4ckf0r0day/obscura:0.1.10
+OBSCURA_IMAGE := docker.io/h4ckf0r0day/obscura:0.1.11
 endif
 CONTAINER_BIN ?= $(call env_value,CONTAINER_BIN)
 DOCKER_SOCK_PATH ?= $(call env_value,DOCKER_SOCK_PATH)
@@ -305,7 +305,7 @@ export PODMAN_DOC_SERVER_PORT
 # The shared Obscura server must accommodate both the configurable built-in
 # open_url document limit and SearXNG's independent fixed 20 MiB DOM limit.
 OBSCURA_RETENTION_FLOOR_BYTES := $(shell python3 -c 'v=int("$(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)"); assert 0 < v <= ((1<<63)-1)//1048576; print(max(v*1048576,20971520))')
-OBSCURA_IO_STREAM_MAX_BYTES := $(shell python3 -c 'v=int("$(OBSCURA_RETENTION_FLOOR_BYTES)"); assert v <= ((1<<63)-1)//5; print(v*5)')
+OBSCURA_IO_STREAM_MAX_BYTES := $(OBSCURA_RETENTION_FLOOR_BYTES)
 export SEARXNG_WRAPPER_IMAGE
 export SEARXNG_WRAPPER_IMAGE_REPOSITORY
 export SEARXNG_WRAPPER_SOURCE_HASH
@@ -435,7 +435,7 @@ FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-stop-if-started
 endif
 endif
 
-.PHONY: help test check test-patch-images test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -528,6 +528,28 @@ test-patch-images:
 		SEARXNG_WRAPPER_IMAGE="$(SEARXNG_WRAPPER_IMAGE)" \
 		./tests/validate_pinned_patch_images.sh
 
+test-obscura-image:
+	@if ! "$(CONTAINER_BIN)" image inspect "$(OBSCURA_IMAGE)" >/dev/null 2>&1; then \
+		echo "ERROR: Obscura image is missing: $(OBSCURA_IMAGE)" >&2; \
+		echo "Run 'make obscura-image-ready CONTAINER_BIN=$(CONTAINER_BIN)' first." >&2; \
+		exit 1; \
+	fi
+	@if ! "$(CONTAINER_BIN)" image inspect "$(ONYX_BACKEND_IMAGE)" >/dev/null 2>&1; then \
+		echo "ERROR: Onyx backend image is missing: $(ONYX_BACKEND_IMAGE)" >&2; \
+		echo "Run 'make onyx-image-ready CONTAINER_BIN=$(CONTAINER_BIN)' first." >&2; \
+		exit 1; \
+	fi
+	@if ! "$(CONTAINER_BIN)" image inspect "$(PYTHON_ALPINE_IMAGE)" >/dev/null 2>&1; then \
+		echo "ERROR: fixture image is missing: $(PYTHON_ALPINE_IMAGE)" >&2; \
+		echo "Pull the pinned fixture image before validation." >&2; \
+		exit 1; \
+	fi
+	@python3 tests/validate_obscura_image.py \
+		--container-bin "$(CONTAINER_BIN)" \
+		--image "$(OBSCURA_IMAGE)" \
+		--client-image "$(ONYX_BACKEND_IMAGE)" \
+		--fixture-image "$(PYTHON_ALPINE_IMAGE)"
+
 test-tor-image:
 	@if ! "$(CONTAINER_BIN)" image inspect "$(TOR_IMAGE)" >/dev/null 2>&1; then \
 		echo "ERROR: Tor wrapper image is missing: $(TOR_IMAGE)" >&2; \
@@ -556,6 +578,7 @@ test-opensearch-image:
 
 test-all-images:
 	@$(MAKE) --no-print-directory test-patch-images
+	@$(MAKE) --no-print-directory test-obscura-image
 	@$(MAKE) --no-print-directory test-tor-image
 	@$(MAKE) --no-print-directory test-opensearch-image
 

@@ -21,7 +21,8 @@ from private_onyx_obscura import validate_wait_until
 OPEN_URL_TIMEOUT_SECONDS = 120
 BROWSER_ATTEMPT_TIMEOUT_SECONDS = 105.0
 RESULT_COLLECTION_HEADROOM_SECONDS = 5.0
-ACTIVE_FETCHES = threading.BoundedSemaphore(5)
+DIRECT_OBSCURA_MAX_WORKERS = 10
+ACTIVE_FETCHES = threading.BoundedSemaphore(DIRECT_OBSCURA_MAX_WORKERS)
 _STATE: contextvars.ContextVar["InvocationState | None"] = contextvars.ContextVar(
     "wrapper_open_url_invocation_state", default=None
 )
@@ -141,7 +142,7 @@ def _collect_url_results(
     fetch_one,
     failure_factory,
     *,
-    max_workers: int = 5,
+    max_workers: int = DIRECT_OBSCURA_MAX_WORKERS,
     headroom_seconds: float = RESULT_COLLECTION_HEADROOM_SECONDS,
 ):
     if not urls:
