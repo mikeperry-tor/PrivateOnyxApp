@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import importlib
 import inspect
 import json
 import os
@@ -3258,22 +3259,45 @@ def _is_code_interpreter_network_enabled() -> bool:
 
 
 def apply_python_file_link_prompt_patches() -> None:
-    """Require the Markdown link form that the WebUI safely rewrites.
+    """Make generated-file response links explicit, portable, and prominent.
 
-    The code-interpreter result currently uses ``WEB_DOMAIN`` when constructing
-    ``file_link`` values. An ordinary Markdown link whose label is an image
-    filename is recognized by the WebUI, reduced to its file ID, and rendered
-    from a relative same-origin URL. Markdown image syntax bypasses that
-    component and leaves the browser to load the absolute URL directly, which
-    is both incorrect for remote frontends and intentionally rejected by the
-    wrapper CSP.
+    Upstream constructs absolute ``file_link`` values from one canonical
+    ``WEB_DOMAIN``. The WebUI recognizes an ordinary Markdown link whose label
+    is an image filename, reduces it to its file ID, and renders it from a
+    relative same-origin URL. Returning the relative URL in the first place
+    also makes an accidental Markdown image work through any wrapper frontend
+    without adding a remote CSP source.
+
+    The rule is repeated in the function description, Python guidance,
+    post-execution reminder, and the result itself. The result supplies a
+    ready-to-copy ``response_markdown`` value so the model does not have to
+    reconstruct either the label or URL.
     """
     link_instruction = (
-        "Always reference a generated file using the exact ordinary Markdown "
-        "link `[filename](file_link)`, copying `file_link` exactly from the "
-        "execution result. Even for an image, never use Markdown image syntax "
-        "(`![filename](file_link)`) and never construct or hard-code a file URL."
+        "In the final answer, include every user-requested generated file by "
+        "copying its `response_markdown` value exactly. This is an ordinary "
+        "Markdown link `[filename](file_link)`. Never construct or hard-code a "
+        "file URL."
     )
+
+    try:
+        from onyx.tools.tool_implementations.python.python_tool import PythonTool
+
+        PythonTool.DESCRIPTION = _replace_or_warn(
+            owner_name="PythonTool.DESCRIPTION file-link instruction",
+            current=PythonTool.DESCRIPTION,
+            old="Execute Python code in an isolated sandbox environment.",
+            new=(
+                "Execute Python code in an isolated sandbox environment. "
+                + link_instruction
+            ),
+        )
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed to patch PythonTool.DESCRIPTION file links: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
 
     try:
         from onyx.prompts import tool_prompts
@@ -3287,7 +3311,10 @@ def apply_python_file_link_prompt_patches() -> None:
             ),
             new=(
                 "Use this to give the user a way to download the file or display "
-                "a generated image. " + link_instruction
+                "a generated image. "
+                + link_instruction
+                + " Even for an image, do not substitute Markdown image syntax "
+                "(`![filename](file_link)`) for the supplied ordinary link."
             ),
         )
     except Exception as e:  # pragma: no cover
@@ -3308,10 +3335,114 @@ def apply_python_file_link_prompt_patches() -> None:
                 "format [filename](file_link) with the file_link from the "
                 "execution result."
             ),
-            new=link_instruction,
+            new=(
+                "Do not omit a graph or other file the user requested. "
+                + link_instruction
+            ),
         )
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed to patch FILE_REMINDER: {e}", flush=True)
+        _raise_if_strict()
+
+    try:
+        file_utils = importlib.import_module("onyx.file_store.utils")
+        python_tool_module = importlib.import_module(
+            "onyx.tools.tool_implementations.python.python_tool"
+        )
+        PythonTool = python_tool_module.PythonTool
+
+        if (
+            python_tool_module.build_full_frontend_file_url
+            is not file_utils.build_full_frontend_file_url
+        ):
+            _warn_or_raise(
+                "PythonTool file-link helper did not match the expected "
+                "build_full_frontend_file_url import"
+            )
+
+        original_run = PythonTool.run
+        parameters = tuple(inspect.signature(original_run).parameters.values())
+        if (
+            tuple(parameter.name for parameter in parameters)
+            != ("self", "placement", "override_kwargs", "llm_kwargs")
+            or parameters[-1].kind is not inspect.Parameter.VAR_KEYWORD
+        ):
+            _warn_or_raise(
+                "PythonTool.run signature changed; cannot add generated-file "
+                "response_markdown safely"
+            )
+
+        python_tool_module.build_full_frontend_file_url = (
+            file_utils.build_frontend_file_url
+        )
+
+        @functools.wraps(original_run)
+        def _patched_run(self, *args, **kwargs):  # noqa: ANN001
+            response = original_run(self, *args, **kwargs)
+            parsed = json.loads(response.llm_facing_response)
+            generated_files = parsed.get("generated_files")
+            if not generated_files:
+                return response
+            if not isinstance(generated_files, list):
+                raise RuntimeError(
+                    "PythonTool generated_files result is not a list"
+                )
+
+            rich_files = getattr(response.rich_response, "generated_files", None)
+            if not isinstance(rich_files, list) or len(rich_files) != len(
+                generated_files
+            ):
+                raise RuntimeError(
+                    "PythonTool LLM and rich generated-file results disagree"
+                )
+
+            for index, generated_file in enumerate(generated_files):
+                if not isinstance(generated_file, dict):
+                    raise RuntimeError(
+                        "PythonTool generated-file result is not an object"
+                    )
+                filename = generated_file.get("filename")
+                file_link = generated_file.get("file_link")
+                if not isinstance(filename, str) or not filename:
+                    raise RuntimeError(
+                        "PythonTool generated-file result has no filename"
+                    )
+                if (
+                    not isinstance(file_link, str)
+                    or not file_link.startswith("/api/chat/file/")
+                ):
+                    raise RuntimeError(
+                        "PythonTool generated-file result has no relative "
+                        "same-origin file_link"
+                    )
+
+                label = (
+                    filename.replace("\\", "\\\\")
+                    .replace("[", "\\[")
+                    .replace("]", "\\]")
+                )
+                generated_file["response_markdown"] = f"[{label}]({file_link})"
+                rich_files[index].file_link = file_link
+
+            patched_json = json.dumps(parsed, separators=(",", ":"))
+            if hasattr(response, "model_copy"):
+                return response.model_copy(
+                    update={"llm_facing_response": patched_json}
+                )
+            response.llm_facing_response = patched_json
+            return response
+
+        _patched_run._wrapper_python_file_link_patch = True
+        PythonTool.run = _patched_run
+        print(
+            "sitecustomize: patched PythonTool generated-file result links",
+            flush=True,
+        )
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed to patch PythonTool generated-file results: {e}",
+            flush=True,
+        )
         _raise_if_strict()
 
 

@@ -318,14 +318,16 @@ per-response nonce in the Onyx/Next source and remove `'unsafe-inline'` only
 after login, React streaming, and lazy chunk loading pass in a real browser.
 
 Code-interpreter output does not need a `localhost` CSP exception. An
-unconditional strict API patch reinforces the pinned prompt's requirement to
-emit the ordinary-link form `[filename](file_link)`, even for images, and
-explicitly prohibits Markdown image syntax and constructed file URLs. For an
-image filename, the WebUI extracts the ID from the `/api/chat/file/` path and
-renders a new relative `/api/chat/file/{id}` URL, even if the original backend
-link used the default absolute `http://localhost:3000` origin. Custom prompts
-should retain that ordinary-link form and should not emit a hard-coded Markdown
-image URL.
+unconditional strict API patch changes generated-file links to relative
+same-origin `/api/chat/file/{id}` values, adds a ready-to-copy
+`response_markdown` ordinary link to each LLM-facing generated-file result, and
+requires every user-requested file in the Python function description, Python
+guidance, and post-execution reminder. For an image filename, the WebUI extracts
+the ID from the ordinary link and renders the relative endpoint. Accidental
+Markdown image syntax also remains same-origin, although prompts require the
+supplied ordinary link so Onyx can consistently recognize and retain the
+reference. Custom prompts should copy `response_markdown` rather than construct
+a file URL.
 
 The pinned Python tool renderer has an unsafe error fallback: if highlight.js
 throws, it passes raw model-emitted Python text to `dangerouslySetInnerHTML`.
@@ -459,14 +461,19 @@ startup builds the exact selected image before the API starts, and Compose sets
 `PYTHON_EXECUTOR_DOCKER_IMAGE` explicitly; the upstream bare reference cannot
 resolve to or pull mutable `latest` during API startup.
 
-An unconditional strict API patch advertises the wrapper-maintained package
-set, including SymPy, in both `PythonTool.DESCRIPTION` and
-`PYTHON_TOOL_GUIDANCE`. This capability text is independent of optional
-executor networking. Source drift in either upstream string stops API startup.
-The LLM-facing tool name is `run_python`; `Code Interpreter` remains the display
-name. The wrapper does not alias or accept another LLM-facing name. Pinned-image
-validation confirms the class, constant, built-in map, saved-row remapping, and
-prompt all use `run_python` after every wrapper patch is installed.
+Unconditional strict API patches advertise the wrapper-maintained package set,
+including SymPy, in both `PythonTool.DESCRIPTION` and
+`PYTHON_TOOL_GUIDANCE`, and put generated-file response requirements in the
+actual function description as well as the broader guidance. Each generated
+file uses a relative same-origin link and includes exact `response_markdown`
+for the final answer. This behavior is independent of optional executor
+networking. Source drift in the upstream description, guidance, helper import,
+or `PythonTool.run` signature stops API startup; malformed generated-file
+results fail visibly at execution. The LLM-facing tool name is `run_python`;
+`Code Interpreter` remains the display name. The wrapper does not alias or
+accept another LLM-facing name. Pinned-image validation confirms the class,
+constant, built-in map, saved-row remapping, prompt, relative-link helper, and
+run wrapper after every patch is installed.
 
 When optional executor networking is enabled, Compose uses upstream's native
 `PYTHON_EXECUTOR_DOCKER_NETWORK` and `PYTHON_EXECUTOR_DOCKER_RUN_ARGS` settings.

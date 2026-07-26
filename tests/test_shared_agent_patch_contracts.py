@@ -151,6 +151,17 @@ def _code_description_modules(
     python_description: str = "Execute Python code in an isolated sandbox environment.",
 ):
     onyx = _package("onyx")
+    file_store = _package("onyx.file_store")
+    file_utils = ModuleType("onyx.file_store.utils")
+
+    def build_frontend_file_url(file_id: str) -> str:
+        return f"/api/chat/file/{file_id}"
+
+    def build_full_frontend_file_url(file_id: str) -> str:
+        return f"http://localhost:3000/api/chat/file/{file_id}"
+
+    file_utils.build_frontend_file_url = build_frontend_file_url
+    file_utils.build_full_frontend_file_url = build_full_frontend_file_url
     tools = _package("onyx.tools")
     implementations = _package("onyx.tools.tool_implementations")
     python_package = _package("onyx.tools.tool_implementations.python")
@@ -159,6 +170,11 @@ def _code_description_modules(
     class PythonTool:
         DESCRIPTION = python_description
 
+        def run(self, placement, override_kwargs, **llm_kwargs):
+            del placement, override_kwargs, llm_kwargs
+            return self.response
+
+    python_tool.build_full_frontend_file_url = build_full_frontend_file_url
     python_tool.PythonTool = PythonTool
     bash_package = _package("onyx.tools.tool_implementations.bash")
     bash_tool = ModuleType("onyx.tools.tool_implementations.bash.bash_tool")
@@ -212,6 +228,8 @@ def _code_description_modules(
     return (
         {
             "onyx": onyx,
+            "onyx.file_store": file_store,
+            "onyx.file_store.utils": file_utils,
             "onyx.tools": tools,
             "onyx.tools.tool_implementations": implementations,
             "onyx.tools.tool_implementations.python": python_package,
@@ -273,7 +291,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
 
     def test_python_file_link_prompts_are_patched_without_network(self) -> None:
         wrapper = _load_wrapper()
-        modules, _, _, tool_prompts, chat_prompts, _, _ = (
+        modules, PythonTool, _, tool_prompts, chat_prompts, _, _ = (
             _code_description_modules()
         )
 
@@ -282,10 +300,79 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         ), patch.dict(sys.modules, modules):
             wrapper.apply_python_file_link_prompt_patches()
 
-        for prompt in (tool_prompts.PYTHON_TOOL_GUIDANCE, chat_prompts.FILE_REMINDER):
-            self.assertIn("exact ordinary Markdown link", prompt)
-            self.assertIn("never use Markdown image syntax", prompt)
-            self.assertIn("never construct or hard-code a file URL", prompt)
+        for prompt in (
+            PythonTool.DESCRIPTION,
+            tool_prompts.PYTHON_TOOL_GUIDANCE,
+            chat_prompts.FILE_REMINDER,
+        ):
+            self.assertIn("response_markdown", prompt)
+            self.assertIn("every user-requested generated file", prompt)
+            self.assertIn("Never construct or hard-code a file URL", prompt)
+        self.assertIn(
+            "do not substitute Markdown image syntax",
+            tool_prompts.PYTHON_TOOL_GUIDANCE,
+        )
+        self.assertIn("Do not omit a graph", chat_prompts.FILE_REMINDER)
+
+    def test_python_result_supplies_relative_ready_to_copy_markdown(self) -> None:
+        wrapper = _load_wrapper()
+        modules, PythonTool, *_ = _code_description_modules()
+        response = SimpleNamespace(
+            llm_facing_response=json.dumps(
+                {
+                    "generated_files": [
+                        {
+                            "filename": "requested [graph].png",
+                            "file_link": "/api/chat/file/file-id",
+                        }
+                    ]
+                }
+            ),
+            rich_response=SimpleNamespace(
+                generated_files=[
+                    SimpleNamespace(
+                        filename="requested [graph].png",
+                        file_link="/api/chat/file/file-id",
+                    )
+                ]
+            ),
+        )
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            wrapper.apply_python_file_link_prompt_patches()
+            tool = PythonTool()
+            tool.response = response
+            result = tool.run(None, None)
+
+        payload = json.loads(result.llm_facing_response)
+        generated_file = payload["generated_files"][0]
+        self.assertEqual(
+            generated_file["response_markdown"],
+            r"[requested \[graph\].png](/api/chat/file/file-id)",
+        )
+        self.assertEqual(
+            result.rich_response.generated_files[0].file_link,
+            "/api/chat/file/file-id",
+        )
+        python_tool = modules[
+            "onyx.tools.tool_implementations.python.python_tool"
+        ]
+        self.assertEqual(
+            python_tool.build_full_frontend_file_url("another-id"),
+            "/api/chat/file/another-id",
+        )
+
+    def test_python_file_link_description_drift_fails_strict(self) -> None:
+        wrapper = _load_wrapper()
+        modules, *_ = _code_description_modules("Upstream changed this description")
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(RuntimeError, "did not match"):
+                wrapper.apply_python_file_link_prompt_patches()
 
     def test_python_file_link_prompt_drift_fails_strict(self) -> None:
         wrapper = _load_wrapper()
@@ -387,7 +474,10 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             all("restricted HTTP/HTTPS proxy" in text for text in descriptions)
         )
         self.assertTrue(all("no network access" not in text for text in descriptions))
-        self.assertIn("never use Markdown image syntax", tool_prompts.PYTHON_TOOL_GUIDANCE)
+        self.assertIn(
+            "do not substitute Markdown image syntax",
+            tool_prompts.PYTHON_TOOL_GUIDANCE,
+        )
         self.assertIn("sympy", PythonTool.DESCRIPTION)
         self.assertIn("sympy", tool_prompts.PYTHON_TOOL_GUIDANCE)
 

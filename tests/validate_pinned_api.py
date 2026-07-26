@@ -22,9 +22,11 @@ def _install_wrapper_patches() -> None:
 
 
 def _validate_python_tool_identity() -> None:
+    from onyx.file_store.utils import build_frontend_file_url
     from onyx.prompts.tool_prompts import PYTHON_TOOL_GUIDANCE
     from onyx.tools import built_in_tools
     from onyx.tools.constants import PYTHON_TOOL_ID, PYTHON_TOOL_NAME
+    from onyx.tools.tool_implementations.python import python_tool
     from onyx.tools.tool_implementations.python.python_tool import PythonTool
 
     assert PYTHON_TOOL_NAME == "run_python"
@@ -35,6 +37,10 @@ def _validate_python_tool_identity() -> None:
     assert built_in_tools.llm_tool_name(PYTHON_TOOL_ID, "stale-db-name") == "run_python"
     assert "## run_python" in PYTHON_TOOL_GUIDANCE
     assert "Use the `run_python` tool" in PYTHON_TOOL_GUIDANCE
+    assert "response_markdown" in PythonTool.DESCRIPTION
+    assert "response_markdown" in PYTHON_TOOL_GUIDANCE
+    assert getattr(PythonTool.run, "_wrapper_python_file_link_patch", False)
+    assert python_tool.build_full_frontend_file_url is build_frontend_file_url
 
 
 def _validate_indexed_open_url_contract() -> None:

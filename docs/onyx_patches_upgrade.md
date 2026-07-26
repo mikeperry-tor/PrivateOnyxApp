@@ -444,11 +444,12 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
 
 - a remote Markdown image and the Google Web-result favicon must make no
   outbound browser request and must fail/fall back visibly;
-- a code-interpreter image emitted as `[filename](file_link)` must render from
-  the relative `/api/chat/file/{id}` endpoint even when `file_link` contains a
-  different configured `WEB_DOMAIN` origin; confirm the strict prompt patch
-  still rejects drift in both the ordinary-link instruction and its explicit
-  prohibition on `![filename](file_link)` and constructed file URLs;
+- a code-interpreter image must return a relative `/api/chat/file/{id}`
+  `file_link` plus exact `[filename](file_link)` `response_markdown`, and that
+  ordinary link must render from the relative endpoint through every frontend;
+  confirm the strict patch still rejects drift in the function description,
+  broader guidance, post-execution reminder, imported URL helper, and
+  `PythonTool.run` signature;
 - uploaded/local/background images, a `blob:` image preview, and an embedded
   `data:` DOCX image must still render;
 - login, chat hydration/streaming, same-origin fetches, voice HTTP/WebSockets,
