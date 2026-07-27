@@ -11,6 +11,16 @@ read-only/capability-free operation, private cookie-only control health,
 named-volume ownership, and that the state bind overrides the inherited
 volume.
 
+Reconcile every Tor or canonical-origin change with the
+[Tor change and validation map](native_tor_support.md#change-and-validation-map),
+[Tor security boundaries](internal_network_security.md#native-tor-and-onion-ingress-boundaries),
+[native-Tor final-hop policy](vpn_routing_and_proxies.md#native-tor-final-hop),
+[optional Tor lifecycle](resource_minimization.md#optional-tor-lifecycle),
+[Podman Tor contract](podman_suport.md#native-tor), and
+[request-path behavior](request_handling.md#optional-tor-route). Treat those
+documents as applicability and obsolescence checks, including when only a
+support image or Compose layer changes.
+
 Render all four Tor role models plus engine corrections and retest direct Tor
 egress, unavailable-selector failure, identity persistence, and simultaneous
 localhost/Tailscale/onion authentication and streaming.
@@ -56,8 +66,11 @@ contains read-only audit checkouts when present.
 5. Inspect effective Compose models and complete every practical live-matrix
    row available in the environment. Record rows blocked by credentials,
    funding, provider stability, private documents, or long runtimes.
-6. Update `docs/onyx_patch_info.md`, request/routing/security docs, README, and
-   AGENTS when behavior or topology changes.
+6. Complete the documentation applicability gate below for every component,
+   dependency, image, runtime, or Compose layer changed by the upgrade. Update
+   the living documents and their tests in the same change; do not add a
+   version history or preserve descriptions of removed behavior. README changes
+   must remain user-facing.
 7. Remove a wrapper patch only when the pinned upstream behavior provides the
    same strict, fail-closed semantics and tests prove it.
 
@@ -65,7 +78,42 @@ Keep API and background bootstrap diagnostics on stderr. Onyx isolated child
 processes reserve stdout for their pickled result; validate at least one real
 PDF extraction after changing bootstrap or process-isolation behavior.
 
+### Documentation applicability gate
+
+The stack documents are regression authorities, not post-upgrade release
+notes. For every changed row below, read the linked documents against the new
+source, effective Compose model, and live behavior. Validate that every
+documented function and boundary still exists, is still necessary, and still
+has adequate coverage. Remove obsolete implementation and documentation;
+revise insufficient controls and tests. A passing patch install does not
+satisfy this gate.
+
+| Changed component or dependency | Required stack-document validation |
+| --- | --- |
+| Onyx API, workers, connectors, agents, LiteLLM use, or WebUI | [Patch information](onyx_patch_info.md), [Request handling](request_handling.md), [Internal network security](internal_network_security.md), [Local document RAG search](local_docs_rag_search.md), [Resource minimization](resource_minimization.md), and the user-facing [README](../README.md) |
+| Obscura or its client/Playwright integration | [Request handling](request_handling.md), [Internal network security](internal_network_security.md), [VPN routing and restricted egress](vpn_routing_and_proxies.md), [Resource minimization](resource_minimization.md), and [Patch information](onyx_patch_info.md) |
+| SearXNG, custom engines, or search scheduling | [Request handling](request_handling.md), [Internal network security](internal_network_security.md), [VPN routing and restricted egress](vpn_routing_and_proxies.md), [Resource minimization](resource_minimization.md), [Patch information](onyx_patch_info.md), and the user-facing [README](../README.md) |
+| OpenSearch, document connectors, parsers, embedding model/server/shim, or local-document publisher | [Local document RAG search](local_docs_rag_search.md), [Internal network security](internal_network_security.md), [Resource minimization](resource_minimization.md), [Patch information](onyx_patch_info.md), and the user-facing [README](../README.md) |
+| Code interpreter, Python executor, Code Agent, or executor dependencies | [Internal network security](internal_network_security.md), [VPN routing and restricted egress](vpn_routing_and_proxies.md), [Resource minimization](resource_minimization.md), [Patch information](onyx_patch_info.md), and the user-facing [README](../README.md) |
+| Tor image, configuration, egress, onion ingress, or canonical origin | [Native Tor support](native_tor_support.md), [Internal network security](internal_network_security.md), [VPN routing and restricted egress](vpn_routing_and_proxies.md), [Request handling](request_handling.md), [Resource minimization](resource_minimization.md), [Podman support](podman_suport.md), and the user-facing [README](../README.md) |
+| Compose, container engine, network, proxy, VPN, Tailscale, gateway, publisher, health, or lifecycle layer | [Internal network security](internal_network_security.md), [VPN routing and restricted egress](vpn_routing_and_proxies.md), [Podman support](podman_suport.md), [Resource minimization](resource_minimization.md), [Native Tor support](native_tor_support.md) when applicable, and the user-facing [README](../README.md) |
+| Teep, Myst, MinIO, Tailscale, nginx, database/cache, or another support/source image | [Internal network security](internal_network_security.md), [VPN routing and restricted egress](vpn_routing_and_proxies.md), [Resource minimization](resource_minimization.md), [Podman support](podman_suport.md), any component-specific document above, and the user-facing [README](../README.md) |
+
+When one change crosses rows, apply the union rather than selecting the
+narrowest row. This includes runtime and base images such as Python, Alpine,
+nginx, and fixed proxy/bridge images. Update `AGENTS.md` if contributor
+instructions or validation commands change. Do not use implemented plans or
+reference checkouts as current behavior documentation.
+
 ## Direct Obscura audit
+
+Treat the [one-navigation contract](request_handling.md#obscura-one-navigation-contract),
+[body and content contract](request_handling.md#body-and-content-handling),
+[browser containment boundary](internal_network_security.md#browser-containment-and-residuals),
+[direct Obscura route](vpn_routing_and_proxies.md#direct-obscura-path), and
+[browser resource policy](resource_minimization.md#searxng-and-browser-search)
+as acceptance criteria whenever the Obscura image, client, Playwright
+integration, or bridge changes.
 
 Audit these Obscura v0.1.11 areas (or their new equivalents):
 
@@ -164,6 +212,16 @@ in the pinned-limitations list above.
 
 ## Onyx API patch audit
 
+Use [Patch information](onyx_patch_info.md) as the patch-family inventory.
+Revalidate the user-visible flows in [Request handling](request_handling.md),
+the trust and destination claims in
+[Internal network security](internal_network_security.md), the Onyx and RAG
+resource controls in [Resource minimization](resource_minimization.md), and the
+[local-document major-upgrade checklist](local_docs_rag_search.md#major-upgrade-checklist).
+Look for newly added network clients, API routes, callbacks, webhooks,
+document-push/export paths, automatic fetches, scheduled work, and credential
+or content transmission, not only drift in already patched symbols.
+
 Audit both values of `ONYX_AGENT_USE_OBSCURA_BROWSER`. The default `false` mode must
 retain the pinned stock requests and Playwright fallback while the narrow
 egress adapter still matches the crawler's imported `ssrf_safe_get` and
@@ -184,6 +242,20 @@ shared validator must accept any normalized host ending in `.onion` without
 pre-validating its address, and the final-hop exception must require the fixed
 Tor Unix socket. Clearnet HTTP and non-Tor remote-DNS upstreams must remain
 denied when `EGRESS_ALLOW_HTTP_URLS=false`.
+
+Re-derive the pinned Onyx SSRF levels and every consumer rather than assuming
+one global policy covers Web Connectors, `open_url`, MCP, OAuth, integrations,
+callbacks, and redirects. Inspect validation-time DNS, connection-time DNS,
+redirect handling, proxy environment use, and final-hop destination pinning,
+including DNS-rebinding/TOCTOU cases. Verify canonical CORS is not widened.
+Inventory new authenticated and unauthenticated APIs, provider exports,
+tracing, voice, Craft, mobile/SSO, and OpenAPI surfaces and their feature/auth
+gates. Keep `DOCUMENT_PUSH_ENDPOINT_URL` and `DOCUMENT_PUSH_API_KEY` blank in
+API and background unless document export is deliberately enabled. On every
+Onyx pin, re-audit stock activation and the exact text, metadata, identifiers,
+and credentials it transmits. Treat database-configurable tracing and provider
+exports as network egress even when no Compose environment variable enables
+them.
 
 The stock crawler is the current reliability-oriented default. Every Obscura
 pin upgrade must repeat comparable parallel URL batches, recording blocked,
@@ -242,6 +314,16 @@ indexing task failure handling, and the shim never retries a POST. The wrapper
 lifecycle proxy retains its separate five-minute post-readiness blocked-socket
 bound.
 
+Audit the exact LiteLLM dependency installed in the pinned Onyx image,
+including serialization, model metadata and cost-map loading, callbacks,
+telemetry, retries, timeouts, proxy behavior, and environment handling.
+Compare it with the matching source in `reference_repos/litellm` when
+available. Exercise reasoning/tool history and configured inference through
+the real Onyx call path; an isolated import or version comparison is
+insufficient. Carry a wrapper control forward only while the installed
+dependency still needs it, and add strict source-shape and behavioral coverage
+for each new reliance.
+
 Verify `sitecustomize_api_server` is the only API bootstrap in both modes,
 neutral shared helpers are imported rather than executed, and patch drift is
 startup-fatal. Confirm `OpenURLToolOverrideKwargs.max_urls` remains ten and
@@ -265,6 +347,14 @@ failure, queued work cannot navigate after collection finalization, and the
 blocked CDP operation expires at its exact logged stage and releases its permit.
 
 ## SearXNG audit
+
+Reconcile this section with the documented
+[SearXNG request flow](request_handling.md#searxng-search),
+[browser containment](internal_network_security.md#browser-containment-and-residuals),
+[direct Obscura route](vpn_routing_and_proxies.md#direct-obscura-path), and
+[search resource policy](resource_minimization.md#searxng-and-browser-search).
+Update the user-facing engine description in the [README](../README.md) if
+available providers or operator behavior changes.
 
 The current audited SearXNG pin is `2026.7.15-7b2199ecd`, sourced from commit
 `7b2199ecdf75a00981583fa2f392a785dfc4fcee`. Re-audit the pinned offline and
@@ -308,6 +398,15 @@ entrypoint logs every strict patch success and loads every custom engine.
 
 ## Routing and Compose audit
 
+Use [Internal network security](internal_network_security.md) as the
+reachability and compromise-boundary authority and
+[VPN routing and restricted egress](vpn_routing_and_proxies.md) as the route,
+DNS, and failure authority. Apply the engine-specific contracts in
+[Podman support](podman_suport.md), lifecycle and cadence contracts in
+[Resource minimization](resource_minimization.md), local full-mode topology in
+[Local document RAG search](local_docs_rag_search.md), and
+[Native Tor support](native_tor_support.md) for affected Tor layers.
+
 Render the exact Makefile layering for lite, full, VPN, no-VPN, upstream proxy,
 Tailscale, Podman, and optional executor modes that changed. Verify:
 
@@ -340,7 +439,33 @@ Tailscale, Podman, and optional executor modes that changed. Verify:
 - full local RAG, embedding, configured inference, Teep, hardened publishers,
   and optional Tailscale behavior remain intact.
 
+Inventory every added, removed, or renamed service, network, volume, mount,
+published port, API endpoint, health check, and environment-controlled route.
+Remove obsolete Compose files and layers rather than retaining compatibility
+aliases. Render every applicable mode before removal. Only the API and
+background may retain their deliberate public/host route selectors and direct
+data-service reachability; preserve single-purpose attachment for Obscura,
+SearXNG, executors, gateways, publishers, and final-hop bridges. Verify the
+code-interpreter controller's container-engine socket authority, socket-free
+executor children, and its intentional Podman omission.
+
+For each process, test effective network attachments and credentials, then
+reassess SSRF, redirects, DNS rebinding, proxy-environment use, host/LAN and
+metadata access, Unix sockets, and direct data-service access. Distinguish
+saved application route selection from what a compromised dual-homed process
+can reach at the container-network layer. Confirm new APIs, callbacks,
+document delivery, and background clients cannot leak prompts, documents,
+credentials, URLs, or telemetry outside the documented policy.
+
 ## OpenSearch single-node policy audit
+
+Treat [Local document RAG search](local_docs_rag_search.md) as the end-to-end
+indexing/search authority, [resource storage and indexing
+policy](resource_minimization.md#storage-and-indexing) as the heap, disk, and
+idle-work authority, and [internal network
+reachability](internal_network_security.md#reachability-and-trust-boundaries)
+as the data boundary whenever OpenSearch, its Onyx client, or a
+document/embedding component changes.
 
 Re-audit the static single-node policy whenever the pinned OpenSearch image or
 Onyx source changes. There is no runtime migration or administrative sidecar.
@@ -404,6 +529,14 @@ one engine does not substitute for the other engine's lifecycle validation.
 
 ## Privacy and WebUI CSP audit
 
+Reconcile all conclusions with the leak surfaces and browser boundaries in
+[Internal network security](internal_network_security.md), the
+[WebUI browser-egress contract](vpn_routing_and_proxies.md#webui-browser-egress),
+the [telemetry and WebUI patch contract](onyx_patch_info.md#telemetry-automatic-fetches-and-webui-egress),
+and the user-visible privacy claims in the [README](../README.md). Canonical
+origin or onion changes additionally require the corresponding checks in
+[Native Tor support](native_tor_support.md).
+
 Re-audit every privacy setting against the new Onyx source rather than carrying
 environment names forward by resemblance. Confirm:
 
@@ -427,6 +560,13 @@ environment names forward by resemblance. Confirm:
 - newly added tracing, analytics, crash-reporting, marketing, update-check,
   remote-config, favicon, font, image, video, CAPTCHA, billing, or CDN clients
   are either required operator-selected functionality or explicitly disabled.
+
+Whenever Onyx or LiteLLM changes, prove
+`LITELLM_LOCAL_MODEL_COST_MAP=true` still takes effect before LiteLLM import
+and that no mutable remote model map is fetched. Reconfirm canonical CORS,
+blank document-push configuration and payload semantics, database-configured
+trace/provider exports, and all new public or authenticated API surfaces
+against the security audit above.
 
 Inspect the pinned WebUI CSP implementation. Onyx emits a baseline policy
 unconditionally from `web/src/proxy.ts` and adds its broader default, script,
@@ -533,6 +673,19 @@ its user-visible behavior:
 - **Lite `open_url`, helper routes, embedding tokenizer/shim, privacy settings,
   and CSP:** retain their dedicated audits elsewhere in this checklist.
 
+For local-document, tokenizer, model-name compatibility, embedding shim,
+freshness, content-cap, and re-index avoidance changes, also complete the
+[Local document RAG major-upgrade checklist](local_docs_rag_search.md#major-upgrade-checklist).
+Prove each optimization still saves the documented work without suppressing a
+required parse, embedding, index update, or failure. Embedding validation must
+remain model-agnostic: accept arbitrary consistent dimensions and finite
+numeric values, and do not encode current model dimensions, prefix conventions,
+or batch behavior unless they are an explicitly configured contract. Test both
+internal-search caps at zero/unlimited and at positive values, including the
+aggregate total-content cap; a default of zero makes the limit dormant, not
+obsolete. Keep the [README](../README.md) description user-facing and accurate
+about the resulting re-indexing savings.
+
 `make check-upgrade` preserves the required order: deterministic checks first,
 then `make test-patch-images`, which strictly installs the API and PDF freshness
 patch families inside the pinned Onyx backend image, the executor patch inside
@@ -593,9 +746,21 @@ request workers retain all strict patch diagnostics. Treat any other Python
 `-c` command as an application process unless its role is separately audited
 and tested.
 
-For support and source pins, require an immutable Tailscale digest, exact Myst
-and Teep Git revisions in both image labels and build arguments, and
-the MinIO source revision associated with its release image. Run
+For support and source pins, apply the relevant current contracts rather than
+treating an image-start test as sufficient: Myst and netns-holder use
+[VPN lifecycle](vpn_routing_and_proxies.md#optional-vpn-and-default-no-vpn-lifecycle)
+and [Myst resource ownership](resource_minimization.md#optional-myst-routing);
+Tailscale, nginx, publishers, gateways, and proxy/bridge images use
+[Internal network security](internal_network_security.md) and
+[Podman support](podman_suport.md) where applicable; Teep and embedding images
+use [Local document RAG search](local_docs_rag_search.md); and MinIO,
+OpenSearch, Redis, PostgreSQL, and other data images use
+[storage and indexing policy](resource_minimization.md#storage-and-indexing)
+plus the documented reachability boundary.
+
+Require an immutable Tailscale digest, exact Myst and Teep Git revisions in
+both image labels and build arguments, and the MinIO source revision associated
+with its release image. Run
 `make health-inventory`, inspect effective startup/steady intervals, and verify
 Docker Engine API 1.44+ preserves `start_interval` after the shared Compose
 model probe has retained `start_interval`, `!override`, and `gw_priority`. For
@@ -618,6 +783,12 @@ daemon or route-reconciliation loop exists, and the unchanged healthcheck
 rejects a stale `myst0` or missing direct default route on both engines.
 
 ### Pinned Myst signup and payment CLI contracts
+
+Revalidate this subsection together with
+[VPN routing and restricted egress](vpn_routing_and_proxies.md),
+[optional Myst resource ownership](resource_minimization.md#optional-myst-routing),
+and [Podman support](podman_suport.md) on every Myst image, CLI, entrypoint,
+network, health, or container-engine change.
 
 The standalone signup container is a non-restarting, TequilAPI-only service.
 Its entrypoint performs no identity, registration, or order mutation; the
@@ -686,6 +857,33 @@ order-detail commands on both engines. Creating a real payment order remains
 an explicit external financial mutation; use an upstream sandbox if one is
 available rather than adding it to unattended validation.
 
+## Resource minimization audit
+
+Treat [Resource minimization](resource_minimization.md) as the acceptance
+contract whenever any application, support image, health check, scheduler,
+worker, model lifecycle, storage service, logging path, or Compose layer
+changes. Inventory new scheduled tasks, workers, queues, monitoring, logging,
+model loading, health activity, storage/indexing work, Craft processes, and
+automatic network work. Determine whether every retained wrapper control is
+still necessary and sufficient under the new upstream ownership; remove
+obsolete duplicate owners rather than preserving compatibility.
+
+For Onyx changes, re-audit the synchronous and asynchronous API database pool
+settings against the 20-connection startup warmup, the five-base/15-overflow
+contract, the read-only engine's two-base contract, and the 12-worker AnyIO
+limit. Verify API and background retain `LOG_TO_FILE=false`; do not add a log
+cleanup workflow or reduce the container engine's configured retention as a
+substitute. Confirm `MAX_CONCURRENT_PORT_ATTEMPTS=1` still leaves one of the
+two doc-processing slots available for ordinary indexing and that ownership
+of the `port` queue has not changed.
+
+Run the document's deterministic, pinned-image, lifecycle, and integration
+checks, including `make health-inventory`, effective lite/full Docker and
+Podman models where supported, idle process/PSS/thread inspection, a full
+doc-drop/index/`internal_search` workload, model idle/unload behavior, and
+relevant failure/restart tests. New consumption and lost controls are upgrade
+failures even when functional request tests pass.
+
 ## Minimum deterministic validation
 
 ```sh
@@ -714,6 +912,18 @@ focused target for a focused upgrade; reserve the aggregate gates for broad
 `make upgrade`, multi-family changes, or release validation. None of these
 targets starts the application stack or performs the live matrix.
 
+Passing these targets does not complete the documentation applicability gate.
+Run every affected checklist in [security verification](internal_network_security.md#verification-checklist),
+[RAG major-upgrade validation](local_docs_rag_search.md#major-upgrade-checklist),
+[resource regression protection](resource_minimization.md#regression-protection),
+[routing validation](vpn_routing_and_proxies.md#validation),
+[Podman live compatibility](podman_suport.md#live-compatibility-checklist), and
+the [Tor change map](native_tor_support.md#change-and-validation-map). For an
+Onyx upgrade, explicitly cover canonical CORS, disabled document push,
+LiteLLM's local cost map, API database/thread limits, API/background
+`LOG_TO_FILE=false`, the port-attempt limit, dual-homed API/background and
+data-network reachability, and positive aggregate internal-search cap behavior.
+
 For an Obscura-only pin change, update the tagged upstream image's
 multi-architecture manifest digest, release version, and both
 architecture-specific stealth-archive SHA-256 values in
@@ -731,6 +941,11 @@ historical implemented plans and read-only reference repositories rather than
 using an indiscriminate zero-match rule.
 
 ## Live validation matrix
+
+Use this matrix to prove the current-state documents, not merely container
+health. Resolve every affected functionality, applicability, necessity, and
+obsolescence question before accepting the upgrade; update or remove the
+implementation, tests, and documentation together.
 
 Where external dependencies are available, exercise lite/full with VPN,
 explicit no-VPN, and a documented remote-DNS upstream. For each practical row:
