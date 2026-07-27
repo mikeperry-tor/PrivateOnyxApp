@@ -947,9 +947,51 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertEqual(background["environment"]["ONYX_AGENT_SLACK_BOT"], "false")
         self.assertEqual(background["environment"]["ONYX_AGENT_DISCORD_BOT"], "false")
         self.assertEqual(
+            background["environment"]["MAX_CONCURRENT_PORT_ATTEMPTS"], "1"
+        )
+        self.assertEqual(background["environment"]["LOG_TO_FILE"], "false")
+        self.assertEqual(
             background["entrypoint"],
             ["python", "-S", "/app/wrapper-background-entrypoint.py"],
         )
+        podman_background = _compose_model(
+            "full",
+            "docker-compose.podman.yml",
+            "docker-compose.podman-full.yml",
+            "docker-compose.podman-macos-full.yml",
+        )["services"]["background"]
+        self.assertEqual(
+            podman_background["environment"]["MAX_CONCURRENT_PORT_ATTEMPTS"], "1"
+        )
+        self.assertEqual(podman_background["environment"]["LOG_TO_FILE"], "false")
+
+    def test_api_resource_defaults(self) -> None:
+        expected = {
+            "POSTGRES_API_SERVER_POOL_SIZE": "5",
+            "POSTGRES_API_SERVER_POOL_OVERFLOW": "15",
+            "POSTGRES_API_SERVER_READ_ONLY_POOL_SIZE": "2",
+            "ONYX_API_THREADPOOL_SIZE": "12",
+            "LOG_TO_FILE": "false",
+        }
+        models = {
+            "docker-lite": _compose_model("lite"),
+            "docker-full": _compose_model("full"),
+            "podman-lite": _compose_model(
+                "lite",
+                "docker-compose.podman.yml",
+            ),
+            "podman-macos-full": _compose_model(
+                "full",
+                "docker-compose.podman.yml",
+                "docker-compose.podman-full.yml",
+                "docker-compose.podman-macos-full.yml",
+            ),
+        }
+        for model_name, model in models.items():
+            with self.subTest(name=model_name):
+                environment = model["services"]["api_server"]["environment"]
+                for option_name, value in expected.items():
+                    self.assertEqual(environment[option_name], value)
 
     def test_document_push_export_is_disabled_in_effective_models(self) -> None:
         for mode in ("lite", "full"):

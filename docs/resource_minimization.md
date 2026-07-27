@@ -87,8 +87,9 @@ hour. Do not copy fixed counts into documentation.
   During `make up-full`, this wait stays in the foreground, prints the lifecycle
   log path, and can be cancelled with Ctrl-C.
 - Once the child is ready, each proxy-to-child request has a five-minute blocked
-  socket timeout. The embedding shim adds no second timeout and never retries a
-  POST.
+  socket timeout. The embedding shim has its own 540-second upstream request
+  timeout beneath Onyx's 600-second model-server read timeout and never retries
+  a POST.
 - A request arriving during idle unload waits for unload to finish and starts a
   new child. It is not dropped or replayed.
 - Normal proxy shutdown stops accepting new connections, drains accepted
@@ -118,8 +119,11 @@ hour. Do not copy fixed counts into documentation.
   minutes before discovery.
 - Housekeeping remains explicit: checkpoint cleanup hourly, index-attempt
   cleanup every 30 minutes, and hierarchy fetching hourly.
-- Monitoring, process-memory, Redis Beat-heartbeat, Craft cleanup/dispatch, and
-  unsupported scheduled-task producers are absent.
+- Monitoring, periodic process-memory logging, Redis Beat-heartbeat, Craft
+  cleanup/dispatch, and unsupported scheduled-task producers are absent. The
+  separate indexing-child memory observer and indexing allocation tracer remain
+  request-scoped upstream diagnostics and are no-ops under the wrapper's
+  default zero-valued limits.
 - The monitoring and scheduled-task workers are absent because no supported
   retained task targets those queues. Slack and Discord workers are default-off
   explicit options.
@@ -127,6 +131,9 @@ hour. Do not copy fixed counts into documentation.
   doc-processing 2, user-file-processing 1, and document-fetching 1. The
   doc-processing worker consumes both the live `docprocessing` queue and the
   secondary-index `port` queue.
+- Only one secondary-index port attempt may run concurrently. This preserves
+  one of the two doc-processing slots for ordinary indexing while a migration
+  is active; the discovery task does not create a second simultaneous attempt.
 - Retained Celery workers run without event heartbeat or gossip. Their upstream
   file-liveness bootstep is disabled.
 - Beat reloads the materialized schedule every five minutes. The upstream
@@ -145,6 +152,18 @@ hour. Do not copy fixed counts into documentation.
 The supervisor transformation and schedule transformation are both retained:
 one controls consumers/processes and the other controls task production. They
 are not duplicate enforcement.
+
+### Onyx API
+
+- The synchronous and asynchronous API database engines each use a base pool
+  of five with up to 15 overflow connections. This still accommodates Onyx's
+  20-connection startup warmup per engine, while overflow connections close
+  after warmup instead of leaving 40 idle connections resident.
+- The read-only database engine retains two base connections and its upstream
+  burst overflow behavior.
+- AnyIO's API thread pool is capped at 12 workers. This bounds synchronous
+  endpoint and streaming-generator concurrency without changing request
+  semantics or adding a queue outside AnyIO's normal limiter.
 
 ### Onyx Craft
 
@@ -193,6 +212,9 @@ are not duplicate enforcement.
 - These are static startup/current-volume settings. There is no administrative
   sidecar, runtime cluster mutation, or automatic existing-volume migration.
 - MinIO uses the `slowest` scanner profile.
+- API and background file logging is disabled. Their application logs use
+  container stdout/stderr and the existing bounded engine log policy instead
+  of also accumulating overlapping rotating files in `/var/log/onyx`.
 - The embedding shim `/health` is process-only and never loads a model. The
   staged `/ready` request owns startup inference validation.
 - Web Connector discovery may be delayed by the five-minute background cadence,
@@ -250,6 +272,9 @@ are not duplicate enforcement.
   `onyx/background_entrypoint.py`, `onyx/beat_liveness_watchdog.py`,
   `onyx/patches/sitecustomize_background/`, and
   `tests/validate_pinned_background.py`.
+- API database/thread pools and API/background file-log suppression:
+  `docker-compose.yaml`, `compose_overlays/docker-compose.full.yml`, and the
+  effective Compose resource tests.
 - Craft absence and its removed workers/schedules: `docker-compose.yaml`, the
   background bootstrap and pinned-image validation, and the Compose/background
   resource tests.

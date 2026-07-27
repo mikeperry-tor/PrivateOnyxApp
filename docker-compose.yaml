@@ -410,6 +410,14 @@ services:
       # Ordinary chat uses the standalone code-interpreter service. Craft's
       # persistent per-user sandbox environment is not supported by this wrapper.
       ENABLE_CRAFT: "false"
+      # Bound API process resources while preserving upstream's 20-connection
+      # startup warmup for both the synchronous and asynchronous engines.
+      POSTGRES_API_SERVER_POOL_SIZE: "5"
+      POSTGRES_API_SERVER_POOL_OVERFLOW: "15"
+      POSTGRES_API_SERVER_READ_ONLY_POOL_SIZE: "2"
+      ONYX_API_THREADPOOL_SIZE: "12"
+      # Container stdout/stderr is the single bounded application-log sink.
+      LOG_TO_FILE: "false"
       # Controls Web connector SSRF-style URL checks.
       OPEN_URL_VALIDATE_SSRF: "true"
       MCP_SERVER_ALLOW_PRIVATE_NETWORK: "true"
