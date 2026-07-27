@@ -54,10 +54,27 @@ $(error TAILSCALE_IMAGE is not set in $(VERSION_FILE))
 endif
 PYTHON_SLIM_IMAGE ?= $(call env_value,PYTHON_SLIM_IMAGE)
 PYTHON_ALPINE_IMAGE ?= $(call env_value,PYTHON_ALPINE_IMAGE)
-OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
-ifeq ($(strip $(OBSCURA_IMAGE)),)
-OBSCURA_IMAGE := docker.io/h4ckf0r0day/obscura:0.1.11
+OBSCURA_RELEASE_VERSION ?= $(call env_value,OBSCURA_RELEASE_VERSION)
+OBSCURA_RELEASE_AMD64_SHA256 ?= $(call env_value,OBSCURA_RELEASE_AMD64_SHA256)
+OBSCURA_RELEASE_ARM64_SHA256 ?= $(call env_value,OBSCURA_RELEASE_ARM64_SHA256)
+OBSCURA_UPSTREAM_IMAGE ?= $(call env_value,OBSCURA_UPSTREAM_IMAGE)
+OBSCURA_WRAPPER_IMAGE_REPOSITORY ?= $(call env_value,OBSCURA_WRAPPER_IMAGE_REPOSITORY)
+ifeq ($(strip $(OBSCURA_RELEASE_VERSION)),)
+$(error OBSCURA_RELEASE_VERSION is not set in $(VERSION_FILE))
 endif
+ifeq ($(strip $(OBSCURA_RELEASE_AMD64_SHA256)),)
+$(error OBSCURA_RELEASE_AMD64_SHA256 is not set in $(VERSION_FILE))
+endif
+ifeq ($(strip $(OBSCURA_RELEASE_ARM64_SHA256)),)
+$(error OBSCURA_RELEASE_ARM64_SHA256 is not set in $(VERSION_FILE))
+endif
+ifeq ($(strip $(OBSCURA_UPSTREAM_IMAGE)),)
+$(error OBSCURA_UPSTREAM_IMAGE is not set in $(VERSION_FILE))
+endif
+ifeq ($(strip $(OBSCURA_WRAPPER_IMAGE_REPOSITORY)),)
+$(error OBSCURA_WRAPPER_IMAGE_REPOSITORY is not set in $(VERSION_FILE))
+endif
+OBSCURA_DOCKERFILE ?= browser/obscura_image/Dockerfile
 CONTAINER_BIN ?= $(call env_value,CONTAINER_BIN)
 DOCKER_SOCK_PATH ?= $(call env_value,DOCKER_SOCK_PATH)
 TEEP_ROUTE_THROUGH_MYST_VPN ?= $(call env_value,TEEP_ROUTE_THROUGH_MYST_VPN)
@@ -285,6 +302,18 @@ endif
 # SEARXNG_IMAGE_TAG override also selects a distinct derived tag.
 SEARXNG_WRAPPER_IMAGE ?= $(SEARXNG_WRAPPER_IMAGE_REPOSITORY):$(SEARXNG_IMAGE_TAG)-$(SEARXNG_WRAPPER_SOURCE_HASH)
 SEARXNG_WRAPPER_IMAGE := $(SEARXNG_WRAPPER_IMAGE)
+OBSCURA_WRAPPER_BUILD_INPUTS := \
+	$(OBSCURA_DOCKERFILE) \
+	browser/obscura_image/fetch_release.py
+OBSCURA_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(); [h.update(v.encode()+b"\0") for v in sys.argv[1:4]]; [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[4:]]; print(h.hexdigest()[:12])' "$(OBSCURA_UPSTREAM_IMAGE)" "$(OBSCURA_RELEASE_AMD64_SHA256)" "$(OBSCURA_RELEASE_ARM64_SHA256)" $(OBSCURA_WRAPPER_BUILD_INPUTS))
+ifeq ($(strip $(OBSCURA_WRAPPER_SOURCE_HASH)),)
+$(error could not compute the Obscura wrapper source hash)
+endif
+OBSCURA_IMAGE ?= $(call env_value,OBSCURA_IMAGE)
+ifeq ($(strip $(OBSCURA_IMAGE)),)
+OBSCURA_IMAGE := $(OBSCURA_WRAPPER_IMAGE_REPOSITORY):$(OBSCURA_RELEASE_VERSION)-stealth-$(OBSCURA_WRAPPER_SOURCE_HASH)
+endif
+OBSCURA_IMAGE := $(OBSCURA_IMAGE)
 ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB ?= $(call env_value,ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)
 ifeq ($(strip $(ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB)),)
 ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB := 20
@@ -309,6 +338,8 @@ OBSCURA_IO_STREAM_MAX_BYTES := $(OBSCURA_RETENTION_FLOOR_BYTES)
 export SEARXNG_WRAPPER_IMAGE
 export SEARXNG_WRAPPER_IMAGE_REPOSITORY
 export SEARXNG_WRAPPER_SOURCE_HASH
+export OBSCURA_IMAGE
+export OBSCURA_WRAPPER_SOURCE_HASH
 export OBSCURA_RETENTION_FLOOR_BYTES
 export OBSCURA_IO_STREAM_MAX_BYTES
 export SEARXNG_IMAGE_TAG
@@ -435,7 +466,7 @@ FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-stop-if-started
 endif
 endif
 
-.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -630,8 +661,31 @@ tailscale-image-ready:
 	"$(CONTAINER_BIN)" pull "$(TAILSCALE_IMAGE)"
 
 obscura-image-ready:
-	@echo "Pulling obscura image: $(OBSCURA_IMAGE)"; \
-	"$(CONTAINER_BIN)" pull "$(OBSCURA_IMAGE)"
+	@if "$(CONTAINER_BIN)" image inspect "$(OBSCURA_IMAGE)" >/dev/null 2>&1; then \
+		echo "obscura stealth image already present: $(OBSCURA_IMAGE)"; \
+	else \
+		echo "obscura stealth image not found: $(OBSCURA_IMAGE). Building..."; \
+		$(MAKE) obscura-build OBSCURA_IMAGE="$(OBSCURA_IMAGE)"; \
+	fi
+
+obscura-build:
+	@echo "Building $(OBSCURA_IMAGE) from pinned Obscura $(OBSCURA_RELEASE_VERSION) stealth release..."
+	@set -eu; set --; \
+	[ -z "$${HTTP_PROXY:-}" ] || set -- "$$@" --build-arg HTTP_PROXY; \
+	[ -z "$${HTTPS_PROXY:-}" ] || set -- "$$@" --build-arg HTTPS_PROXY; \
+	[ -z "$${NO_PROXY:-}" ] || set -- "$$@" --build-arg NO_PROXY; \
+	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
+	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
+	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
+	"$(CONTAINER_BIN)" build "$$@" \
+		--file "$(OBSCURA_DOCKERFILE)" \
+		--build-arg PYTHON_ALPINE_IMAGE="$(PYTHON_ALPINE_IMAGE)" \
+		--build-arg OBSCURA_UPSTREAM_IMAGE="$(OBSCURA_UPSTREAM_IMAGE)" \
+		--build-arg OBSCURA_RELEASE_VERSION="$(OBSCURA_RELEASE_VERSION)" \
+		--build-arg OBSCURA_RELEASE_AMD64_SHA256="$(OBSCURA_RELEASE_AMD64_SHA256)" \
+		--build-arg OBSCURA_RELEASE_ARM64_SHA256="$(OBSCURA_RELEASE_ARM64_SHA256)" \
+		--tag "$(OBSCURA_IMAGE)" \
+		.
 
 wrapper-config-preflight:
 	@python3 tor/render_config.py validate \

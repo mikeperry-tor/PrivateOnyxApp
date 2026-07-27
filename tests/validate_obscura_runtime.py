@@ -78,7 +78,6 @@ async def validate_connection_isolation() -> None:
             cookie["name"] != "private-onyx-isolation"
             for cookie in second_cookies["cookies"]
         )
-
         first_targets = await first.send("Target.getTargets")
         second_targets = await second.send("Target.getTargets")
         assert [target["targetId"] for target in first_targets["targetInfos"]] == [
@@ -91,9 +90,43 @@ async def validate_connection_isolation() -> None:
         await first_ws.close()
         await second_ws.close()
 
+    # The stack supplies no --storage-dir, so a later connection must also
+    # start from Obscura's immutable empty template rather than inheriting the
+    # completed connection's cookie or target state.
+    third_ws = await connect(CDP_URL, proxy=None)
+    try:
+        third = _RawCdp(third_ws)
+        third_target, third_session = await create_target(third)
+        third_cookies = await third.send(
+            "Network.getCookies", session_id=third_session
+        )
+        assert all(
+            cookie["name"] != "private-onyx-isolation"
+            for cookie in third_cookies["cookies"]
+        )
+        third_targets = await third.send("Target.getTargets")
+        assert [target["targetId"] for target in third_targets["targetInfos"]] == [
+            third_target
+        ]
+    finally:
+        await third_ws.close()
+
 
 async def validate_connection_limit() -> None:
-    connections = [await connect(CDP_URL, proxy=None) for _ in range(15)]
+    async def open_used_connections() -> list:
+        connections = []
+        try:
+            for _index in range(15):
+                connection = await connect(CDP_URL, proxy=None)
+                await _RawCdp(connection).send("Target.getTargets")
+                connections.append(connection)
+        except Exception:
+            for connection in connections:
+                await connection.close()
+            raise
+        return connections
+
+    connections = await open_used_connections()
     try:
         try:
             await connect(CDP_URL, proxy=None)
@@ -106,6 +139,13 @@ async def validate_connection_limit() -> None:
     finally:
         for connection in connections:
             await connection.close()
+
+    # Closing all admitted clients must synchronously release enough server
+    # state for an immediate full replacement wave. The wrapper never retries
+    # a refused browser connection.
+    replacements = await open_used_connections()
+    for connection in replacements:
+        await connection.close()
 
 
 def validate_navigation_contracts() -> None:

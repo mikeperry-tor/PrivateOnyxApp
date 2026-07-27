@@ -164,6 +164,8 @@ def main() -> int:
             "OBSCURA_IO_STREAM_MAX_ENTRIES=1",
             "--env",
             "OBSCURA_IO_STREAM_MAX_BYTES=2097152",
+            "--env",
+            "RUST_LOG=info",
             args.image,
             "serve",
             "--host",
@@ -203,6 +205,11 @@ def main() -> int:
 
         logs = run(args.container_bin, "logs", obscura)
         assert "Headless Browser v0.1.11" in logs
+        assert (
+            "Stealth mode enabled "
+            "(TLS fingerprint impersonation + tracker blocking)"
+        ) in logs
+        assert "Stealth mode enabled (tracker blocking)\n" not in logs
         assert "refusing CDP connection: at --max-connections (15)" in logs
         assert "worker processes" not in logs
         print(output.rstrip())

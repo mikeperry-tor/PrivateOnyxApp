@@ -122,6 +122,14 @@ most 15 live WebSockets: ten direct `open_url` attempts plus one lease for each
 of the five search providers. Connections above the cap receive HTTP 503
 instead of entering a server queue.
 
+In the full-stealth build, upstream v0.1.11 accepts
+`Network.setExtraHTTPHeaders` and `Network.setUserAgentOverride` but applies
+them to the ordinary context HTTP client while navigation uses its separate
+wreq client, so those overrides do not reach the wire. The wrapper does not
+call either command; its isolation contract therefore covers the cookie jar,
+targets, contexts, V8 state, and connection cleanup actually used by this
+stack. Re-audit this upstream split before depending on either override.
+
 The client still uses flattened CDP messages over the pinned WebSocket
 transport. Attaching Playwright 1.58's public `new_cdp_session(page)` to an
 Obscura-created target reuses the already attached session identifier and
@@ -455,8 +463,13 @@ Each shared-client attempt has a random opaque correlation ID. Start, completed
 setup, terminal result, typed failure, and cleanup records include that ID plus
 elapsed time; timeout records identify the exact setup or cleanup stage without
 logging the target URL.
-The unmodified upstream Obscura image does not offer equivalent end-to-end
-redaction and may log full URLs. Treat its logs as private browsing data.
+The wrapper-selected image retains the upstream runtime but replaces the lean
+server binaries with the matching official, SHA-256-verified `-stealth`
+release binaries for both supported architectures. This is required for
+wreq/BoringSSL TLS fingerprint impersonation; the upstream tagged Docker image
+enables tracker blocking under `--stealth` but is built without that feature.
+Obscura does not offer equivalent end-to-end redaction and may log full URLs.
+Treat its logs as private browsing data.
 
 Obscura is run as UID/GID 65534, read-only, capability-free, without browser
 data or secret mounts, `--storage-dir`, or `--allow-file-access`. The shared

@@ -106,8 +106,8 @@ services:
 
   # ── Obscura stealth CDP browser ─────────────────────────────────────────
   # Serves isolated concurrent Chrome DevTools Protocol connections to SearXNG
-  # and the Onyx API. Release binaries include the stealth feature, so
-  # --stealth enables the full anti-fingerprint + tracker-blocking domain.
+  # and the Onyx API. The wrapper-selected image installs the digest-verified
+  # stealth release, so --stealth enables TLS impersonation and tracker blocking.
   obscura:
     image: ${OBSCURA_IMAGE:?OBSCURA_IMAGE must be set}
     restart: unless-stopped

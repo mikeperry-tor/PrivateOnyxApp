@@ -38,7 +38,8 @@ contains read-only audit checkouts when present.
    local static checks, then runs `make test-all-images`: strict patch
    installation against the
    exact newly pinned local Onyx, code-interpreter, derived Python executor,
-   and derived SearXNG images. It runs the selected Obscura image against an
+   and derived SearXNG images. It runs the selected derived Obscura stealth
+   image against an
    internal fixture network to validate connection isolation/capacity,
    concurrent navigation, content handling, retained-body behavior, and
    cleanup. It also validates the selected local Tor wrapper image, a fresh
@@ -79,8 +80,10 @@ Audit these Obscura v0.1.11 areas (or their new equivalents):
   eviction, content-type predicate, compressed/chunked/false-length behavior;
 - per-body network retention, entry/alias/base64 amplification, per-connection
   IO stream accounting, and initial full-body allocation before retention;
-- two-client isolation of cookies, HTTP clients, headers, User-Agent state,
-  targets, browser contexts, and V8 isolates without a cookie-clear command;
+- two-client isolation of cookies, HTTP clients, targets, browser contexts, and
+  V8 isolates without a cookie-clear command; also re-audit the v0.1.11
+  full-stealth split where accepted extra-header and User-Agent CDP overrides
+  update the ordinary HTTP client rather than the wreq navigation client;
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
@@ -694,7 +697,8 @@ SearXNG contracts plus the image-dependent SearXNG parser tests.
 `make test-obscura-image` runs the selected tagged server in a networkless
 fixture network and proves connection isolation/capacity, concurrent
 navigation, static and JavaScript HTML, redirect, PDF/raw/binary handling,
-main-body eviction behavior, and cleanup. The separate Tor and OpenSearch
+main-body eviction behavior, full TLS-impersonating stealth startup, and
+cleanup. The separate Tor and OpenSearch
 targets validate their own image families.
 `make test-all-images` aggregates all four focused image targets, and
 `make check-upgrade` runs `make check` followed by that aggregate. Use the
@@ -702,10 +706,16 @@ focused target for a focused upgrade; reserve the aggregate gates for broad
 `make upgrade`, multi-family changes, or release validation. None of these
 targets starts the application stack or performs the live matrix.
 
-For an Obscura-only pin change, pull only the selected Obscura image, rebuild
-the derived SearXNG image only when its embedded shared client changed, then run
-`make check`, `make test-obscura-image`, and `make test-patch-images`. Do not
-run the broad dependency-lock or unrelated component upgrade flow.
+For an Obscura-only pin change, update the tagged upstream image's
+multi-architecture manifest digest, release version, and both
+architecture-specific stealth-archive SHA-256 values in
+`stack.versions.env`; audit the official release archive names and the
+Dockerfile's lean/stealth feature selection; then run `make obscura-build`.
+Rebuild the derived SearXNG image only when its embedded shared client changed,
+then run `make check`, `make test-obscura-image`, and
+`make test-patch-images`. The image test must observe Obscura's full
+TLS-impersonation startup diagnostic, not its tracker-blocking-only diagnostic.
+Do not run the broad dependency-lock or unrelated component upgrade flow.
 
 Also inspect effective lite/full Compose models through the Makefile. Search
 current runtime files for removed service/env/path names and manually classify

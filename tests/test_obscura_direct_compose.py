@@ -16,6 +16,12 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         cls.manifest = (ROOT / "stack.versions.env").read_text()
         cls.no_proxy = (ROOT / "onyx/helper-egress.env").read_text()
         cls.searxng_dockerfile = (ROOT / "searxng/Dockerfile").read_text()
+        cls.obscura_dockerfile = (
+            ROOT / "browser/obscura_image/Dockerfile"
+        ).read_text()
+        cls.obscura_fetcher = (
+            ROOT / "browser/obscura_image/fetch_release.py"
+        ).read_text()
         cls.searxng_compose = (ROOT / "searxng/docker-compose.yml").read_text()
         cls.makefile = (ROOT / "Makefile").read_text()
 
@@ -41,13 +47,50 @@ class ObscuraDirectComposeTests(unittest.TestCase):
 
     def test_manifest_pins_obscura_0_1_11(self):
         self.assertIn(
-            "OBSCURA_IMAGE=docker.io/h4ckf0r0day/obscura:0.1.11",
+            "OBSCURA_RELEASE_VERSION=0.1.11",
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_IMAGE := docker.io/h4ckf0r0day/obscura:0.1.11",
+            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.1.11"
+            "@sha256:e5fd7b8032a5fedc6e8e27f9d4f2e35327ea08b2548ab1372775974add171547",
+            self.manifest,
+        )
+        self.assertIn(
+            "OBSCURA_WRAPPER_IMAGE_REPOSITORY=local/private-onyx-obscura",
+            self.manifest,
+        )
+        self.assertNotIn("\nOBSCURA_IMAGE=", self.manifest)
+        self.assertIn(
+            "OBSCURA_RELEASE_VERSION)-stealth-$(OBSCURA_WRAPPER_SOURCE_HASH)",
             self.makefile,
         )
+
+    def test_obscura_image_uses_verified_multi_arch_stealth_release(self):
+        for digest_name in (
+            "OBSCURA_RELEASE_AMD64_SHA256",
+            "OBSCURA_RELEASE_ARM64_SHA256",
+        ):
+            match = re.search(
+                rf"^{digest_name}=([0-9a-f]{{64}})$",
+                self.manifest,
+                re.MULTILINE,
+            )
+            self.assertIsNotNone(match)
+        self.assertIn("fetch_release.py", self.obscura_dockerfile)
+        self.assertIn(
+            "ARG OBSCURA_UPSTREAM_IMAGE="
+            "docker.io/h4ckf0r0day/obscura:0.1.11"
+            "@sha256:e5fd7b8032a5fedc6e8e27f9d4f2e35327ea08b2548ab1372775974add171547",
+            self.obscura_dockerfile,
+        )
+        self.assertIn("linux-stealth.tar.gz", self.obscura_fetcher)
+        self.assertIn("actual_digest != expected_digest", self.obscura_fetcher)
+        self.assertIn("set(members) != set(EXPECTED_FILES)", self.obscura_fetcher)
+        self.assertIn(
+            "browser/obscura_image/fetch_release.py",
+            self.makefile,
+        )
+        self.assertIn("obscura-build:", self.makefile)
 
     def test_new_manifest_and_no_proxy_names(self):
         self.assertIn("SEARXNG_WRAPPER_IMAGE_REPOSITORY=", self.manifest)

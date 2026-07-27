@@ -69,6 +69,10 @@ class ImmutableComponentPinTests(unittest.TestCase):
         )
         self.assertIn("TOR_WRAPPER_SOURCE_HASH", self.makefile)
         self.assertIn("$(TOR_BASE_IMAGE)", self.makefile)
+        self.assertRegex(
+            self.value("OBSCURA_UPSTREAM_IMAGE"),
+            r"^docker\.io/h4ckf0r0day/obscura:0\.1\.11@sha256:[0-9a-f]{64}$",
+        )
 
     def test_minio_release_records_its_image_source_revision(self) -> None:
         self.assertRegex(
@@ -80,7 +84,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
     def test_external_images_use_explicit_registries(self) -> None:
         for name in (
             "PYTHON_EXECUTOR_UPSTREAM_IMAGE",
-            "OBSCURA_IMAGE",
+            "OBSCURA_UPSTREAM_IMAGE",
             "TOR_BASE_IMAGE",
             "NETNS_HOLDER_IMAGE",
             "PYTHON_SLIM_IMAGE",
@@ -98,6 +102,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
             "docker-compose.yaml",
             "compose_overlays/docker-compose.full.yml",
             "executor/Dockerfile",
+            "browser/obscura_image/Dockerfile",
             "myst/build/Dockerfile",
             "searxng/Dockerfile",
             "teep/build/Dockerfile",

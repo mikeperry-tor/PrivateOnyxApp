@@ -601,7 +601,10 @@ The primary Podman-specific tests are:
 - `tests/validate_obscura_image.py`: the selected Obscura image on an
   engine-local internal fixture network, including isolated connection state,
   the live-connection cap, ten-way navigation concurrency, retained-body
-  behavior, and hardened runtime settings.
+  behavior, full stealth-feature startup, and hardened runtime settings. The
+  same `make obscura-build CONTAINER_BIN=podman` workflow derives this image
+  from the architecture-matched digest-verified release archive without
+  Docker-specific mounts or sockets.
 - `tests/test_doc_drop_webserver.py`: the non-indexed host readiness endpoint
   and document-root/symlink confinement.
 - `tests/test_myst_readiness.py`: interface/route parsing that must remain

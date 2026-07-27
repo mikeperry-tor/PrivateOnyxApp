@@ -103,6 +103,8 @@ Those bullets are only a map. Read the docs above before changing any runtime ne
 - Routing and component implementations:
   - `browser/obscura_client/` - shared direct-CDP client used by Onyx and
     SearXNG.
+  - `browser/obscura_image/` - verified multi-architecture wrapper that replaces
+    the upstream lean binaries with the matching official stealth release.
   - `egress/` - shared final-hop policy-proxy implementation.
   - `searxng/` - derived image, custom direct-Obscura offline engines, and
     SearXNG overlay.
@@ -180,6 +182,7 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   Onyx environment tags; it does not pull images.
 - `make upgrade-python-deps` - upgrade hashed Python lock files from the committed `requirements.in` inputs.
 - `make onyx-build`, `make executor-build`, `make searxng-build`,
+  `make obscura-build`,
   `make myst-build`, and `make teep-build` - image builds. The Docker-only
   executor image is derived from its pinned upstream release plus the hashed
   `executor/requirements.txt` lock.
