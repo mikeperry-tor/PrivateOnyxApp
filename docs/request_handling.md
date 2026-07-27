@@ -244,6 +244,13 @@ invocation.
 
 ## Onyx `open_url`: Obscura mode
 
+The tool definition tells the agent that one `open_url` call accepts at most
+ten URLs and includes the same `maxItems: 10` machine-readable constraint.
+Pinned Onyx otherwise logs and silently truncates a larger deduplicated list.
+The wrapper instead rejects the entire over-limit call before retrieval or
+navigation and returns model-visible guidance to split the URLs across
+additional calls; it does not hide which inputs were omitted.
+
 The API-only startup patch strictly replaces the built-in `OnyxWebCrawler`
 fetch path. Patch source-shape drift is startup-fatal. A crawler invocation
 creates one absolute 120-second monotonic deadline and finalization object

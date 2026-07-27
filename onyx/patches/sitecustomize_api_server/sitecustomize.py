@@ -35,6 +35,7 @@ def _install() -> None:
     from open_url_failure_reporting_patch import (
         install as install_open_url_failure_reporting,
     )
+    from open_url_limit_patch import install as install_open_url_limit
     from lite_open_url_availability_patch import (
         install as install_lite_open_url_availability,
     )
@@ -66,6 +67,7 @@ def _install() -> None:
         # this patch can validate the pinned upstream crawler/index contract.
         install_lite_open_url_availability()
     install_open_url_failure_reporting()
+    install_open_url_limit()
     if use_obscura_browser():
         from obscura_crawler_patch import install as install_obscura_crawler
 

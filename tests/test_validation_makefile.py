@@ -80,10 +80,11 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertTrue(os.access(IMAGE_SCRIPT_PATH, os.X_OK))
         self.assertIn('image inspect "$image"', IMAGE_SCRIPT)
         self.assertNotRegex(IMAGE_SCRIPT, r'(?m)^.*"\$container_bin" (pull|build)\b')
-        self.assertEqual(IMAGE_SCRIPT.count("--network none"), 8)
+        self.assertEqual(IMAGE_SCRIPT.count("--network none"), 9)
         self.assertIn("WRAPPER_PATCH_STRICT=true", IMAGE_SCRIPT)
         self.assertIn("PINNED_STOCK_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
+        self.assertIn("PINNED_OPEN_URL_LIMIT_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_EXECUTOR_SYMPY_OK", IMAGE_SCRIPT)
         self.assertIn(
             "validate_code_interpreter_executor_network.py", IMAGE_SCRIPT

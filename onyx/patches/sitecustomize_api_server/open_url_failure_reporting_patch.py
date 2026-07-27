@@ -101,6 +101,7 @@ def install() -> None:
 
     open_url_tool.OpenURLTool.run = _run
     open_url_tool.OpenURLTool._merge_indexed_and_crawled_results = _merge_results
+    open_url_tool.OpenURLTool._wrapper_failure_reporting_original_run = original_run
     open_url_tool.OpenURLTool._wrapper_failure_reporting_patch = True
     print(
         "sitecustomize_api_server: installed mixed-result open_url failure reporting",

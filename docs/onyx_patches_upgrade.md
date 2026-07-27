@@ -241,7 +241,11 @@ that can ambiguously replay a POST.
 
 Verify `sitecustomize_api_server` is the only API bootstrap in both modes,
 neutral shared helpers are imported rather than executed, and patch drift is
-startup-fatal. Test one shared 120-second monotonic invocation state through
+startup-fatal. Confirm `OpenURLToolOverrideKwargs.max_urls` remains ten and
+re-audit the tool definition and `OpenURLTool.run`: the schema must advertise
+`maxItems: 10`, ten deduplicated URLs must proceed, and an eleventh must produce
+model-visible split guidance before retrieval or navigation rather than being
+silently truncated. Test one shared 120-second monotonic invocation state through
 outer/nested jobs, ten process-global permits, remaining-budget admission,
 finalization races before navigation, one release on every path, partial
 results, stable ordering, redirect correlation, content dispatch, limits, and

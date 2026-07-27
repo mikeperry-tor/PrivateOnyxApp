@@ -82,6 +82,14 @@ echo "Validating direct-Obscura open_url crawler patch in $onyx_backend_image"
     "$onyx_backend_image" \
     -c "import importlib.util, sys; s=importlib.util.spec_from_file_location('obscura_crawler_patch_validation', '/api-patches/obscura_crawler_patch.py'); m=importlib.util.module_from_spec(s); sys.modules[s.name]=m; s.loader.exec_module(m); m.install(); assert m.DOCUMENT_LIMIT_BYTES == 7 * 1024 * 1024; from onyx.tools.tool_implementations.open_url.onyx_web_crawler import OnyxWebCrawler; assert OnyxWebCrawler.contents.__module__ == 'obscura_crawler_patch_validation'; print('PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK')"
 
+echo "Validating explicit open_url call limit in $onyx_backend_image"
+"$container_bin" run --rm \
+    --network none \
+    --entrypoint python \
+    -v "$repo_root/onyx/patches/sitecustomize_api_server:/api-patches:ro" \
+    "$onyx_backend_image" \
+    -c "import sys; sys.path.insert(0, '/api-patches'); import open_url_failure_reporting_patch as f, open_url_limit_patch as m; f.install(); m.install(); from onyx.tools.models import OpenURLToolOverrideKwargs, ToolCallException; from onyx.tools.tool_implementations.open_url.open_url_tool import OpenURLTool; t=object.__new__(OpenURLTool); d=t.tool_definition(); assert d['function']['parameters']['properties']['urls']['maxItems'] == 10; o=OpenURLToolOverrideKwargs(starting_citation_num=1, citation_mapping={}, url_snippet_map={}); u=[f'https://example.com/{i}' for i in range(11)]; caught=False; message=''; exec('try:\\n t.run(None, o, urls=u)\\nexcept ToolCallException as e:\\n caught=True\\n message=e.llm_facing_message'); assert caught and 'at most 10 URLs' in message and 'No URLs from this call were opened' in message; print('PINNED_OPEN_URL_LIMIT_CONTRACT_OK')"
+
 echo "Validating background PDF freshness contracts in $onyx_backend_image"
 "$container_bin" run --rm \
     --network none \

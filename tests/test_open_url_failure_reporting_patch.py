@@ -71,6 +71,10 @@ class OpenUrlFailureReportingPatchTests(unittest.TestCase):
         choice_index = source.index("if use_obscura_browser():")
         self.assertLess(report_index, choice_index)
 
+    def test_reporter_exposes_original_run_for_later_strict_patches(self):
+        source = MODULE_PATH.read_text()
+        self.assertIn("_wrapper_failure_reporting_original_run = original_run", source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -120,6 +120,15 @@ a batch also has rich successful results. It leaves all-success, all-failure,
 and timeout-only response forms unchanged, so the behavior is identical in
 stock and direct Obscura modes.
 
+Onyx accepts at most ten deduplicated URLs per `open_url` call but its pinned
+implementation advertises no schema maximum and silently truncates larger
+lists after writing only an operator log. The API bootstrap adds `maxItems: 10`
+and explicit split-across-calls guidance to the tool definition. If a caller
+still supplies more than ten, it rejects the whole call before any retrieval
+or navigation and gives the agent the same limit and split guidance. The
+startup patch validates the pinned default, truncation source shape, tool
+schema, and description before replacing that behavior.
+
 The shared CDP client validates URL syntax without public DNS, opens one
 v0.1.11-isolated browser connection per request, tracks the terminal main-frame
 Document request, reads retained body streams with actual byte accounting,
