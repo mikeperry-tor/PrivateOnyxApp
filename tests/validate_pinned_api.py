@@ -101,10 +101,19 @@ def _validate_lite_open_url_contract() -> None:
 
 
 def _validate_litellm_contract() -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import (
+        get_model_cost_map_source_info,
+    )
     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
     from litellm.types.utils import Message
 
     assert version("litellm") == "1.93.0"
+    assert get_model_cost_map_source_info() == {
+        "source": "local",
+        "url": None,
+        "is_env_forced": True,
+        "fallback_reason": None,
+    }
     expected_parameters = (
         "self",
         "model",
