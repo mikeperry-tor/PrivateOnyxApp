@@ -42,14 +42,8 @@ categories = ["general", "web"]
 paging = True
 max_page = 5
 time_range_support = False
-safesearch = True
+safesearch = False
 language_support = False
-
-_safesearch_map: dict[int, str] = {
-    0: "off",
-    1: "moderate",
-    2: "strict",
-}
 
 base_url = "https://www.bing.com"
 
@@ -117,7 +111,7 @@ def search(query: str, params: "RequestParams"):
     """Build the Bing search URL and navigate it once through Obscura."""
     query_args: dict[str, str | int] = {
         "q": query,
-        "adlt": _safesearch_map.get(params.get("safesearch", 0), "off"),
+        "adlt": "off",
         "setlang": "en",
     }
     if params["pageno"] > 1:

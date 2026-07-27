@@ -136,6 +136,22 @@ class SearxngObscuraEngineTests(unittest.TestCase):
             "https://example.com/",
         )
 
+    def test_bing_does_not_expose_or_enable_safesearch(self):
+        self.assertFalse(self.bing.safesearch)
+        result = """
+        <html><body><ol id='b_results'>
+          <li class='b_algo'><h2><a href='https://example.com/microsoft'>
+            Microsoft
+          </a></h2><p>Microsoft result.</p></li>
+        </ol></body></html>
+        """
+        with patch.object(self.obscura, "navigate", return_value=result) as navigate:
+            self.bing.search("Microsoft", {"pageno": 1, "safesearch": 2})
+        target = navigate.call_args.args[1]
+        self.assertIn("adlt=off", target)
+        self.assertNotIn("adlt=strict", target)
+        self.assertNotIn("adlt=moderate", target)
+
     def test_bing_rejects_structurally_valid_unrelated_results(self):
         unrelated = """
         <html><body><ol id='b_results'>

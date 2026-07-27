@@ -220,7 +220,10 @@ def _round_robin_selected_refs(
         if _is_last_resort_engine(name) and _is_processor_available(name)
     ]
     chosen, token = _reserve_round_robin_engine(available_regular)
-    if chosen is None:
+    # A regular provider that is not suspended but is merely busy or cooling
+    # must block last-resort selection. Otherwise concurrent requests spill
+    # into Bing before any regular provider has actually failed.
+    if chosen is None and not available_regular:
         chosen, token = _reserve_round_robin_engine(available_last_resort)
     if chosen is None or token is None:
         return [], {}
@@ -246,17 +249,25 @@ def _record_unavailable_round_robin_providers(
     _first_ref_by_name, selected_provider_order = _round_robin_ref_map(
         engineref_list
     )
-    for engine_name in selected_provider_order:
-        if engine_name not in exclude:
-            processor = PROCESSORS.get(engine_name)
-            if processor is not None and processor.extend_container_if_suspended(
-                result_container
-            ):
-                continue
-            result_container.add_unresponsive_engine(
-                engine_name,
-                "searx.exceptions.SearxEngineTooManyRequestsException",
-            )
+    candidate_provider_order = [
+        name for name in selected_provider_order if name not in exclude
+    ]
+    last_resort_eligible = not any(
+        not _is_last_resort_engine(name) and _is_processor_available(name)
+        for name in candidate_provider_order
+    )
+    for engine_name in candidate_provider_order:
+        if _is_last_resort_engine(engine_name) and not last_resort_eligible:
+            continue
+        processor = PROCESSORS.get(engine_name)
+        if processor is not None and processor.extend_container_if_suspended(
+            result_container
+        ):
+            continue
+        result_container.add_unresponsive_engine(
+            engine_name,
+            "searx.exceptions.SearxEngineTooManyRequestsException",
+        )
 
 
 def _has_untried_round_robin_provider(
@@ -402,7 +413,11 @@ def apply_round_robin_search_patch() -> None:
                 attempted_this_round=attempted_this_round,
             )
             if not failed_providers:
-                return True
+                # A completed provider attempt with no main result is a
+                # query-local failure. Try the next regular provider
+                # sequentially; last resort remains ineligible until every
+                # non-suspended regular provider has been attempted.
+                failed_providers = attempted_this_round
 
             if not _has_untried_round_robin_provider(
                 self.search_query.engineref_list,

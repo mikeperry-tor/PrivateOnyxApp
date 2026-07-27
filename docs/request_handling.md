@@ -439,12 +439,25 @@ It reports the selected providers as unavailable without creating their engine
 threads. The lease is retained through target cleanup.
 
 With `SEARXNG_ROUND_ROBIN=true` (default), the existing orchestration selects
-one available normal custom provider, removes the other selected engines from
-that attempt, and may try a different provider only after SearXNG records the
-first as unresponsive and the request has no main results. Last-resort scoring
-is retained. Blocking conditions flow through the ordinary offline processor
-and suspend the provider. SearXNG owns caller timeouts, late results,
-unresponsive-engine reporting, and suspension state.
+one available normal custom provider and removes the other selected engines
+from that attempt. A completed zero-result attempt or an unresponsive attempt
+with no main results advances sequentially to another normal provider. A
+normal provider that is merely active, reserved, or cooling remains eligible
+and prevents selection of a last-resort provider; the request does not spill
+into Bing merely because concurrent searches occupy the normal providers.
+Pre-execution unavailability reporting follows the same eligibility rule, so
+an unattempted Bing is not recorded as busy or rate-limited in engine
+statistics while a normal provider is merely occupied.
+Bing becomes eligible only after every selected non-suspended normal provider
+has failed in that request or the remaining normal providers are already
+suspended. Last-resort scoring is retained. Blocking conditions flow through
+the ordinary offline processor and suspend the provider. SearXNG owns caller
+timeouts, late results, unresponsive-engine reporting, and suspension state.
+
+The Bing engine does not advertise SearXNG SafeSearch support and always sends
+the explicit provider parameter `adlt=off`. It therefore has no engine-specific
+SafeSearch control in Preferences and cannot inherit a stricter global
+SafeSearch selection.
 
 With round robin disabled, ordinary selected-engine fan-out returns. That can
 disclose the same query concurrently to several providers and can leave one

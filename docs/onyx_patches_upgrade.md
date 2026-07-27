@@ -378,6 +378,11 @@ For every custom engine verify:
   interval, no queued busy-provider thread, no all-unavailable fan-out, and
   visible unresponsive records for pre-execution unavailability, and
   different-provider concurrency;
+- a busy, reserved, or cooling regular provider prevents last-resort
+  selection; zero-result regular attempts advance sequentially; Bing becomes
+  eligible only after every non-suspended regular provider has failed in that
+  request or the remaining regular providers are suspended; pre-execution
+  unavailability statistics do not name an ineligible last-resort provider;
 - CAPTCHA, rate-limit, and access-denied exceptions use the ordinary offline
   suspension path; non-blocking failures become unresponsive records;
 - Bing's visible `One last step` challenge is a typed CAPTCHA while the same
@@ -386,6 +391,7 @@ For every custom engine verify:
   of the query's bounded literal anchor terms occurs in the extracted rows;
 - Bing excludes dictionary/answer widget metadata and organic result
   attribution labels containing `dictionary`;
+- Bing does not advertise SafeSearch support and always requests `adlt=off`;
 - engines and the CDP client never retry or select another provider;
 - enabled round-robin normal/last-resort order and same-request retry, plus
   disabled-round-robin selected-engine fan-out and disclosure warning.
