@@ -415,6 +415,21 @@ script, style, template, or noscript content does not block a valid results
 page. This typed failure enters SearXNG's ordinary provider-suspension path
 instead of being reported as a parser crash.
 
+Bing can also return a coherent but unrelated set of ordinary `b_algo` cards
+while leaving the requested query in the page title and search box. This has no
+distinct challenge or dictionary-widget DOM shape. The engine therefore
+requires at least one of up to eight of the query's longest non-numeric terms
+of four or more characters to appear literally in the extracted titles,
+snippets, or URLs. A mismatch is an unresponsive parser failure, not an empty
+result, so round-robin search can try another provider without exposing the
+unrelated cards. Queries without a term long enough for a reliable lexical
+check retain the structural parser contract.
+
+Bing dictionary and answer results remain excluded from this research-oriented
+engine. The filter covers Bing's widget metadata and organic result attribution
+labels containing `dictionary`; ordinary non-dictionary organic results remain
+eligible for the query-coherence check.
+
 One Granian process owns scheduling. Each provider has one atomic pre-thread
 reservation, one active lease, and an exact 3.0-second minimum interval between
 navigation starts, with zero jitter. The engine thread must consume its exact

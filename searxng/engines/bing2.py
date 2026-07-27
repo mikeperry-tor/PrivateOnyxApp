@@ -12,7 +12,9 @@ Bing to confirm results found by other engines.
 from __future__ import annotations
 
 import base64
+import re
 import typing as t
+import unicodedata
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from lxml import html
@@ -106,6 +108,9 @@ _non_web_marker_condition = " or ".join(
 non_web_result_block_xpath = (
     f"self::*[{_non_web_marker_condition}] | .//*[{_non_web_marker_condition}]"
 )
+_query_word_re = re.compile(r"\w+", re.UNICODE)
+_query_anchor_limit = 8
+_minimum_query_anchor_length = 4
 
 
 def search(query: str, params: "RequestParams"):
@@ -124,7 +129,8 @@ def search(query: str, params: "RequestParams"):
             "bing2",
             target_url,
             params.get(_obscura.RESERVATION_PARAM),
-        )
+        ),
+        query,
     )
 
 
@@ -181,7 +187,7 @@ def _raise_if_captcha(dom) -> None:
 
 
 def _is_non_web_result_block(item) -> bool:
-    """Return True for Bing dictionary/answer widgets that mimic web results."""
+    """Return True for Bing dictionary/answer results excluded from research."""
     return bool(eval_xpath(item, non_web_result_block_xpath))
 
 
@@ -195,7 +201,42 @@ def _extract_content(item) -> str:
     return extract_text(content_els)
 
 
-def _parse_html(text: str) -> list[dict[str, t.Any]]:
+def _query_anchor_terms(query: str) -> tuple[str, ...]:
+    """Return a small set of distinctive literal terms for result validation."""
+    normalized = unicodedata.normalize("NFKC", query).casefold()
+    terms = {
+        term
+        for term in _query_word_re.findall(normalized)
+        if len(term) >= _minimum_query_anchor_length and not term.isdecimal()
+    }
+    return tuple(sorted(terms, key=lambda term: (-len(term), term))[:_query_anchor_limit])
+
+
+def _results_match_query(results: list[dict[str, t.Any]], query: str) -> bool:
+    """Reject Bing result sets that are structurally valid but unrelated.
+
+    Bing can return a coherent result set for a different topic while retaining
+    the requested query in the page title and search box.  The unrelated cards
+    use the same ``b_algo`` structure as real results and carry no challenge
+    marker, so require at least one of the query's longest literal terms to occur
+    in the extracted result set.  At most eight terms are checked so the
+    validation remains bounded.  Short queries have no reliable lexical anchor
+    and retain the ordinary structural validation.
+    """
+    anchors = _query_anchor_terms(query)
+    if not anchors:
+        return True
+    haystack = unicodedata.normalize(
+        "NFKC",
+        " ".join(
+            f"{result['title']} {result['content']} {result['url']}"
+            for result in results
+        ),
+    ).casefold()
+    return any(anchor in haystack for anchor in anchors)
+
+
+def _parse_html(text: str, query: str) -> list[dict[str, t.Any]]:
     if not text:
         _obscura.parser_mismatch("bing2", text, "empty DOM")
 
@@ -234,5 +275,7 @@ def _parse_html(text: str) -> list[dict[str, t.Any]]:
 
     if not results:
         _obscura.parser_mismatch("bing2", text, "no valid organic rows")
+    if not _results_match_query(results, query):
+        _obscura.parser_mismatch("bing2", text, "organic rows do not match query")
 
     return results

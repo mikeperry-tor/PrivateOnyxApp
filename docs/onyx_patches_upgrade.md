@@ -382,6 +382,10 @@ For every custom engine verify:
   suspension path; non-blocking failures become unresponsive records;
 - Bing's visible `One last step` challenge is a typed CAPTCHA while the same
   phrases in excluded script/style/template/noscript content are ignored;
+- Bing rejects structurally valid but unrelated organic result sets when none
+  of the query's bounded literal anchor terms occurs in the extracted rows;
+- Bing excludes dictionary/answer widget metadata and organic result
+  attribution labels containing `dictionary`;
 - engines and the CDP client never retry or select another provider;
 - enabled round-robin normal/last-resort order and same-request retry, plus
   disabled-round-robin selected-engine fan-out and disclosure warning.

@@ -122,7 +122,7 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         </body></html>
         """
         with self.assertRaisesRegex(RuntimeError, "verification page"):
-            self.bing._parse_html(challenge)
+            self.bing._parse_html(challenge, "example")
 
         script_only = """
         <html><body><ol id='b_results'>
@@ -132,8 +132,66 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         </body></html>
         """
         self.assertEqual(
-            self.bing._parse_html(script_only)[0]["url"],
+            self.bing._parse_html(script_only, "result")[0]["url"],
             "https://example.com/",
+        )
+
+    def test_bing_rejects_structurally_valid_unrelated_results(self):
+        unrelated = """
+        <html><body><ol id='b_results'>
+          <li class='b_algo'><h2><a href='https://example.com/beef'>
+            Beef Wellington Recipe
+          </a></h2><div class='b_caption'><p>
+            Wrap beef tenderloin and mushrooms in pastry.
+          </p></div></li>
+        </ol></body></html>
+        """
+        with self.assertRaisesRegex(ParserMismatch, "do not match query"):
+            self.bing._parse_html(unrelated, "Sveriges riksbank styrränta")
+
+    def test_bing_filters_dictionary_domain_labels(self):
+        result_and_dictionary = """
+        <html><body><ol id='b_results'>
+          <li class='b_algo'><h2><a href='https://dictionary.example/integritet'>
+            Integritet definition
+          </a></h2><a aria-label='dictionary.example'>Source</a>
+          <div class='b_caption'><p>A Swedish word.</p></div></li>
+          <li class='b_algo'><h2><a href='https://example.com/integritet'>
+            Integritet in privacy research
+          </a></h2><p>Integritet is relevant to this research.</p></li>
+        </ol></body></html>
+        """
+        self.assertEqual(
+            self.bing._parse_html(result_and_dictionary, "integritet research"),
+            [
+                {
+                    "url": "https://example.com/integritet",
+                    "title": "Integritet in privacy research",
+                    "content": "Integritet is relevant to this research.",
+                }
+            ],
+        )
+
+    def test_bing_still_filters_answer_widget_markers(self):
+        result_and_widget = """
+        <html><body><ol id='b_results'>
+          <li class='b_algo b_ans'><h2><a href='https://example.com/widget'>
+            Generic definition
+          </a></h2></li>
+          <li class='b_algo'><h2><a href='https://example.com/integrity'>
+            Integrity in engineering
+          </a></h2><p>Integrity protects the complete system.</p></li>
+        </ol></body></html>
+        """
+        self.assertEqual(
+            self.bing._parse_html(result_and_widget, "system integrity"),
+            [
+                {
+                    "url": "https://example.com/integrity",
+                    "title": "Integrity in engineering",
+                    "content": "Integrity protects the complete system.",
+                }
+            ],
         )
 
     def test_duckduckgo_anomaly_form_is_typed_captcha(self):
