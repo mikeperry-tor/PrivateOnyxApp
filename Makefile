@@ -1,6 +1,6 @@
 # Deterministic checks must not parse or inherit selections from the operator's
 # private runtime configuration. Apply this before any settings are read.
-ifneq ($(strip $(filter test check,$(MAKECMDGOALS))),)
+ifneq ($(strip $(filter test check check-upgrade,$(MAKECMDGOALS))),)
 override ENV_FILE := .env.wrapper.example
 else
 ENV_FILE ?= .env.wrapper
@@ -554,6 +554,7 @@ release-shared-data-engine:
 test-patch-images:
 	@CONTAINER_BIN="$(CONTAINER_BIN)" \
 		ONYX_BACKEND_IMAGE="$(ONYX_BACKEND_IMAGE)" \
+		ONYX_WEB_SERVER_IMAGE="$(ONYX_WEB_SERVER_IMAGE)" \
 		CODE_INTERPRETER_IMAGE="$(CODE_INTERPRETER_IMAGE)" \
 		PYTHON_EXECUTOR_IMAGE="$(PYTHON_EXECUTOR_IMAGE)" \
 		SEARXNG_WRAPPER_IMAGE="$(SEARXNG_WRAPPER_IMAGE)" \

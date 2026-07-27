@@ -36,9 +36,6 @@ def _install() -> None:
         install as install_open_url_failure_reporting,
     )
     from open_url_limit_patch import install as install_open_url_limit
-    from lite_open_url_availability_patch import (
-        install as install_lite_open_url_availability,
-    )
     from onyx_crawler_egress_patch import install as install_onyx_crawler
     from onyx_crawler_egress_patch import use_obscura_browser
 
@@ -60,12 +57,6 @@ def _install() -> None:
     apply_reasoning_content_preservation_patch()
     apply_coding_agent_final_answer_fallback_patch()
     apply_preserve_tool_results_patch()
-    if os.environ.get("ONYX_FORCE_OPEN_URL_AVAILABLE", "false").lower() in {
-        "1", "true", "yes", "on"
-    }:
-        # Install before the transport/failure-reporting patches wrap run(), so
-        # this patch can validate the pinned upstream crawler/index contract.
-        install_lite_open_url_availability()
     install_open_url_failure_reporting()
     install_open_url_limit()
     if use_obscura_browser():

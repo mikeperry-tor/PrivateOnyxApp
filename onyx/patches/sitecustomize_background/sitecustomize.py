@@ -47,10 +47,12 @@ _INDEXING_FRESHNESS_PARAMETERS = (
     "documents",
     "db_docs",
     "ignore_timestamp_gate",
+    "ignore_content_hash_gate",
 )
 _INDEXING_FRESHNESS_SOURCE_MARKERS = (
     "id_update_time_map",
     "ignore_timestamp_gate",
+    "ignore_content_hash_gate",
     "doc.content_hash()",
     "db_doc.content_hash",
 )
@@ -132,6 +134,7 @@ def _apply_sleepy_background_patch() -> None:
             "check-for-user-file-project-sync": timedelta(seconds=20),
             "check-for-user-file-delete": timedelta(seconds=20),
             "check-for-indexing": timedelta(seconds=15),
+            "check-for-port": timedelta(seconds=30),
             "check-for-connector-deletion": timedelta(seconds=20),
             "check-for-vespa-sync": timedelta(seconds=20),
             "check-for-pruning": timedelta(seconds=20),
@@ -852,6 +855,7 @@ def _apply_indexing_freshness_skip_patch() -> None:
         documents,
         db_docs,
         ignore_timestamp_gate=False,
+        ignore_content_hash_gate=False,
     ):
         passthrough_documents, skipped = _filter_freshness_sentinels(
             documents, db_docs
@@ -867,6 +871,7 @@ def _apply_indexing_freshness_skip_patch() -> None:
             passthrough_documents,
             db_docs,
             ignore_timestamp_gate=ignore_timestamp_gate,
+            ignore_content_hash_gate=ignore_content_hash_gate,
         )
 
     indexing_pipeline.get_docs_to_update = _patched_get_docs_to_update

@@ -495,10 +495,10 @@ mismatch, timeout, and suspension records. They must not become empty-success
 substitutes. For `open_url`, verify the API startup log contains either
 `installed strict direct Obscura crawler` (explicit Obscura mode) or
 `installed proxied stock Onyx crawler with public-only requests and Playwright
-fallback` (default stock mode). Lite mode must additionally log `installed
-lite-mode crawler-backed open_url availability`. A missing gateway, selected
-bridge, or final hop must fail the feature closed without moving an application
-onto a public network.
+fallback` (default stock mode). Lite mode uses Onyx's native crawl-only branch
+and must additionally log `installed mixed-result open_url failure reporting`.
+A missing gateway, selected bridge, or final hop must fail the feature closed
+without moving an application onto a public network.
 
 Relevant controls are documented in `.env.wrapper.example`:
 

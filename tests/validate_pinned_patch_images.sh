@@ -5,6 +5,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 container_bin=${CONTAINER_BIN:-docker}
 onyx_backend_image=${ONYX_BACKEND_IMAGE:?ONYX_BACKEND_IMAGE is required}
+onyx_web_server_image=${ONYX_WEB_SERVER_IMAGE:?ONYX_WEB_SERVER_IMAGE is required}
 code_interpreter_image=${CODE_INTERPRETER_IMAGE:-}
 python_executor_image=${PYTHON_EXECUTOR_IMAGE:-}
 searxng_wrapper_image=${SEARXNG_WRAPPER_IMAGE:?SEARXNG_WRAPPER_IMAGE is required}
@@ -25,6 +26,7 @@ require_image() {
 }
 
 require_image "$onyx_backend_image" "Run 'make onyx-build' before 'make test-patch-images'."
+require_image "$onyx_web_server_image" "Run 'make onyx-build' before 'make test-patch-images'."
 if [ "$validate_code_interpreter" = true ]; then
     [ -n "$code_interpreter_image" ] || {
         echo "ERROR: CODE_INTERPRETER_IMAGE is required for Docker validation" >&2
@@ -39,12 +41,20 @@ if [ "$validate_code_interpreter" = true ]; then
 fi
 require_image "$searxng_wrapper_image" "Run 'make searxng-build' before 'make test-patch-images'."
 
+echo "Validating WebUI build-time privacy controls in $onyx_web_server_image"
+"$container_bin" run --rm \
+    --network none \
+    --entrypoint node \
+    "$onyx_web_server_image" \
+    -e 'for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.4.4") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK");'
+
 echo "Validating API patch contracts in $onyx_backend_image"
 "$container_bin" run --rm \
     --network none \
     --entrypoint python \
     -e PYTHONPATH=/app:/wrapper \
     -e WRAPPER_PATCH_STRICT=true \
+    -e LITELLM_LOCAL_MODEL_COST_MAP=true \
     -e GEN_AI_MAX_TOKENS=131072 \
     -e ONYX_AGENT_USE_NATIVE_REASONING=true \
     -e ONYX_AGENT_PRESERVE_TOOL_RESULTS=true \

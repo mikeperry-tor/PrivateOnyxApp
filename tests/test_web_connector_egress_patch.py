@@ -24,10 +24,13 @@ MODULE_PATH = (
 
 
 def _compatible_get_docs_to_update(
-    documents, db_docs, ignore_timestamp_gate=False
+    documents,
+    db_docs,
+    ignore_timestamp_gate=False,
+    ignore_content_hash_gate=False,
 ):
     id_update_time_map = {}
-    if ignore_timestamp_gate:
+    if ignore_timestamp_gate or ignore_content_hash_gate:
         id_update_time_map = {doc.id: doc for doc in db_docs}
     for doc in documents:
         doc.content_hash()
@@ -170,10 +173,13 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             content_hash = None
 
         def get_docs_to_update(
-            documents, db_docs, ignore_timestamp_gate=False
+            documents,
+            db_docs,
+            ignore_timestamp_gate=False,
+            ignore_content_hash_gate=False,
         ):
             id_update_time_map = {doc.id: doc for doc in db_docs}
-            if ignore_timestamp_gate:
+            if ignore_timestamp_gate or ignore_content_hash_gate:
                 id_update_time_map.clear()
             for doc in documents:
                 doc.content_hash()
@@ -288,6 +294,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             "check-for-user-file-project-sync": timedelta(seconds=20),
             "check-for-user-file-delete": timedelta(seconds=20),
             "check-for-indexing": timedelta(seconds=15),
+            "check-for-port": timedelta(seconds=30),
             "check-for-connector-deletion": timedelta(seconds=20),
             "check-for-vespa-sync": timedelta(seconds=20),
             "check-for-pruning": timedelta(seconds=20),
@@ -425,6 +432,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             "check-for-user-file-project-sync",
             "check-for-user-file-delete",
             "check-for-indexing",
+            "check-for-port",
             "check-for-connector-deletion",
             "check-for-vespa-sync",
             "check-for-pruning",

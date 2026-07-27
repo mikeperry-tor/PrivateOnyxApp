@@ -30,7 +30,6 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - A more restrictive browser Content Security Policy now blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's selected Tor/VPN/proxy via the user's browser. Additionally, this policy blocks Onyx WebUI queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
 - Stock Onyx strips agent reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality. This has been patched.
 - Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results. This has been patched.
-- Stock Onyx disables `open_url()` in lite mode, which leaves lite mode unable to read web pages. This stack keeps crawler-backed web browsing available in lite mode.
 - The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
 - The "Deep Research" mode now also supports much longer research runs, and has been patched to execute all accepted tool calls when a research agent requests several different tools at once, rather than silently dropping some of them like stock Onyx does.
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.

@@ -20,6 +20,7 @@ class OnyxPrivacyConfigTests(unittest.TestCase):
                 'DISABLE_TELEMETRY: "true"',
                 'AUTO_LLM_CONFIG_URL: ""',
                 'DISPOSABLE_EMAIL_DOMAINS_URL: ""',
+                'LITELLM_LOCAL_MODEL_COST_MAP: "true"',
                 'SENTRY_DSN: ""',
                 'BRAINTRUST_API_KEY: ""',
                 'LANGFUSE_SECRET_KEY: ""',
@@ -56,8 +57,12 @@ class OnyxPrivacyConfigTests(unittest.TestCase):
             self.compose,
         )
 
-    def test_dead_strict_csp_switch_is_not_relied_on(self) -> None:
-        self.assertNotIn("WEB_STRICT_CSP_ENABLED", self.compose)
+    def test_upstream_and_wrapper_strict_csp_are_both_enabled(self) -> None:
+        self.assertIn('WEB_STRICT_CSP_ENABLED: "true"', self.compose)
+        self.assertIn(
+            "./onyx/nginx/webui-csp.conf:/etc/nginx/conf.d/webui-csp.conf:ro",
+            self.compose,
+        )
 
 
 if __name__ == "__main__":

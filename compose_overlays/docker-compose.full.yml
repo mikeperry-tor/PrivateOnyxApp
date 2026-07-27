@@ -20,6 +20,7 @@ services:
       # note polling remains enabled separately.
       AUTO_LLM_CONFIG_URL: ""
       DISPOSABLE_EMAIL_DOMAINS_URL: ""
+      LITELLM_LOCAL_MODEL_COST_MAP: "true"
       SENTRY_DSN: ""
       SENTRY_TRACES_SAMPLE_RATE: "0"
       SENTRY_CELERY_TRACES_SAMPLE_RATE: "0"

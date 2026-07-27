@@ -1290,7 +1290,7 @@ def apply_native_reasoning_detection_override_patch() -> None:
         return
 
     try:
-        from onyx.llm import utils as llm_utils
+        from onyx.llm import model_capabilities
     except Exception as e:  # pragma: no cover
         print(
             f"sitecustomize: failed importing reasoning detection utils: {e}",
@@ -1299,13 +1299,13 @@ def apply_native_reasoning_detection_override_patch() -> None:
         _raise_if_strict()
         return
 
-    original = llm_utils.model_is_reasoning_model
+    original = model_capabilities.model_is_reasoning_model
     if getattr(original, "_wrapper_native_reasoning_override", False):
         return
     signature = inspect.signature(original)
     if tuple(signature.parameters) != ("model_name", "model_provider"):
         _warn_or_raise(
-            "llm_utils.model_is_reasoning_model signature changed; "
+            "model_capabilities.model_is_reasoning_model signature changed; "
             f"found {signature}"
         )
         return
@@ -1317,7 +1317,7 @@ def apply_native_reasoning_detection_override_patch() -> None:
     for marker in ("get_model_map()", "_litellm_supports_reasoning"):
         if marker not in source:
             _warn_or_raise(
-                "llm_utils.model_is_reasoning_model source contract changed; "
+                "model_capabilities.model_is_reasoning_model source contract changed; "
                 f"missing {marker!r}"
             )
             return
@@ -1340,7 +1340,9 @@ def apply_native_reasoning_detection_override_patch() -> None:
         return True
 
     _model_is_reasoning_model_native_override._wrapper_native_reasoning_override = True
-    llm_utils.model_is_reasoning_model = _model_is_reasoning_model_native_override
+    model_capabilities.model_is_reasoning_model = (
+        _model_is_reasoning_model_native_override
+    )
     _update_bound_module_attr(
         original,
         _model_is_reasoning_model_native_override,
@@ -1360,13 +1362,13 @@ def apply_reasoning_mode_trace_patch() -> None:
         return
 
     try:
-        from onyx.llm import utils as llm_utils
+        from onyx.llm import model_capabilities
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed importing reasoning-mode utils: {e}", flush=True)
         _raise_if_strict()
         return
 
-    original_model_is_reasoning_model = llm_utils.model_is_reasoning_model
+    original_model_is_reasoning_model = model_capabilities.model_is_reasoning_model
     if not getattr(
         original_model_is_reasoning_model,
         "_wrapper_reasoning_mode_trace",
@@ -1386,7 +1388,9 @@ def apply_reasoning_mode_trace_patch() -> None:
             return result
 
         _model_is_reasoning_model_with_trace._wrapper_reasoning_mode_trace = True
-        llm_utils.model_is_reasoning_model = _model_is_reasoning_model_with_trace
+        model_capabilities.model_is_reasoning_model = (
+            _model_is_reasoning_model_with_trace
+        )
         _update_bound_module_attr(
             original_model_is_reasoning_model,
             _model_is_reasoning_model_with_trace,
@@ -2586,6 +2590,7 @@ def apply_internal_search_context_patches() -> None:
         "include_source_type",
         "include_link",
         "include_document_id",
+        "note",
     ):
         _warn_or_raise(
             "convert_inference_sections_to_llm_string signature changed; "
@@ -2600,7 +2605,7 @@ def apply_internal_search_context_patches() -> None:
             f"{e}"
         )
         return
-    for marker in ('result["content"]', 'json.dumps({"results": results}'):
+    for marker in ('result["content"]', 'payload["results"] = results'):
         if marker not in source:
             _warn_or_raise(
                 "convert_inference_sections_to_llm_string source contract "
@@ -3069,7 +3074,7 @@ def apply_mcp_egress_proxy_patch() -> None:
 
         from onyx.server.security.models import SSRFProtectionLevel
         from onyx.server.security.store import get_security_settings
-        from onyx.tools.tool_implementations.mcp import mcp_ssrf
+        from onyx.server.features.mcp import ssrf as mcp_ssrf
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed importing MCP egress patch deps: {e}", flush=True)
         _raise_if_strict()
@@ -3112,11 +3117,17 @@ def apply_mcp_egress_proxy_patch() -> None:
     mcp_ssrf.mcp_ssrf_httpx_client_factory = _patched_factory
     # The client module imports the factory by name; update it if source import
     # order caused it to be cached while applying this startup patch.
-    client_module = sys.modules.get(
-        "onyx.tools.tool_implementations.mcp.mcp_client"
-    )
-    if client_module is not None:
-        setattr(client_module, "mcp_ssrf_httpx_client_factory", _patched_factory)
+    for module_name in (
+        "onyx.server.features.mcp.client",
+        "onyx.server.features.mcp.oauth",
+    ):
+        cached_module = sys.modules.get(module_name)
+        if cached_module is not None:
+            setattr(
+                cached_module,
+                "mcp_ssrf_httpx_client_factory",
+                _patched_factory,
+            )
     print(
         "sitecustomize: routed MCP/OAuth HTTP through saved-level-selected fixed egress",
         flush=True,

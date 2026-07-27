@@ -374,6 +374,8 @@ services:
       # note polling remains enabled separately.
       AUTO_LLM_CONFIG_URL: ""
       DISPOSABLE_EMAIL_DOMAINS_URL: ""
+      # LiteLLM otherwise fetches its mutable model-cost/context map at import.
+      LITELLM_LOCAL_MODEL_COST_MAP: "true"
       SENTRY_DSN: ""
       SENTRY_TRACES_SAMPLE_RATE: "0"
       BRAINTRUST_API_KEY: ""
@@ -506,6 +508,9 @@ services:
       NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ""
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ""
+      # Enable upstream's runtime CSP as defense in depth. The tracked nginx
+      # header remains authoritative for its narrower remote-resource policy.
+      WEB_STRICT_CSP_ENABLED: "true"
       # Minimum password length enforced by the backend and surfaced in the UI.
       PASSWORD_MIN_LENGTH: "8"
     # Nginx's root probe traverses this service and is the externally consumed

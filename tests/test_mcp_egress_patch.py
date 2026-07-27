@@ -70,10 +70,11 @@ class MCPProxyPatchTests(unittest.TestCase):
         security = ModuleType("onyx.server.security")
         models = ModuleType("onyx.server.security.models")
         store = ModuleType("onyx.server.security.store")
-        tools = ModuleType("onyx.tools")
-        implementations = ModuleType("onyx.tools.tool_implementations")
-        mcp_package = ModuleType("onyx.tools.tool_implementations.mcp")
-        mcp_ssrf = ModuleType("onyx.tools.tool_implementations.mcp.mcp_ssrf")
+        features = ModuleType("onyx.server.features")
+        mcp_package = ModuleType("onyx.server.features.mcp")
+        mcp_ssrf = ModuleType("onyx.server.features.mcp.ssrf")
+        mcp_client = ModuleType("onyx.server.features.mcp.client")
+        mcp_oauth = ModuleType("onyx.server.features.mcp.oauth")
 
         models.SSRFProtectionLevel = SSRFProtectionLevel
         store.get_security_settings = lambda: SimpleNamespace(
@@ -93,18 +94,21 @@ class MCPProxyPatchTests(unittest.TestCase):
             )
         )
         mcp_package.mcp_ssrf = mcp_ssrf
+        mcp_client.mcp_ssrf_httpx_client_factory = original_factory
+        mcp_oauth.mcp_ssrf_httpx_client_factory = original_factory
 
         modules = {
             "httpx": httpx_module,
             "onyx": onyx,
             "onyx.server": server,
+            "onyx.server.features": features,
+            "onyx.server.features.mcp": mcp_package,
+            "onyx.server.features.mcp.ssrf": mcp_ssrf,
+            "onyx.server.features.mcp.client": mcp_client,
+            "onyx.server.features.mcp.oauth": mcp_oauth,
             "onyx.server.security": security,
             "onyx.server.security.models": models,
             "onyx.server.security.store": store,
-            "onyx.tools": tools,
-            "onyx.tools.tool_implementations": implementations,
-            "onyx.tools.tool_implementations.mcp": mcp_package,
-            "onyx.tools.tool_implementations.mcp.mcp_ssrf": mcp_ssrf,
         }
         return modules, mcp_ssrf, state, transports, clients, SSRFProtectionLevel
 
@@ -123,6 +127,18 @@ class MCPProxyPatchTests(unittest.TestCase):
         ):
             wrapper.apply_mcp_egress_proxy_patch()
             factory = mcp_ssrf.mcp_ssrf_httpx_client_factory
+            self.assertIs(
+                modules[
+                    "onyx.server.features.mcp.client"
+                ].mcp_ssrf_httpx_client_factory,
+                factory,
+            )
+            self.assertIs(
+                modules[
+                    "onyx.server.features.mcp.oauth"
+                ].mcp_ssrf_httpx_client_factory,
+                factory,
+            )
             client = factory(headers={"x-test": "1"}, auth="auth")
         return client, state, transports, clients, levels, mcp_ssrf
 

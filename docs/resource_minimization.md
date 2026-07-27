@@ -113,8 +113,9 @@ hour. Do not copy fixed counts into documentation.
 
 ### Onyx background work
 
-- Connector and user-file discovery schedules run every five minutes. Newly
-  eligible work can therefore wait roughly five minutes before discovery.
+- Connector, user-file, and secondary-index port-migration discovery schedules
+  run every five minutes. Newly eligible work can therefore wait roughly five
+  minutes before discovery.
 - Housekeeping remains explicit: checkpoint cleanup hourly, index-attempt
   cleanup every 30 minutes, and hierarchy fetching hourly.
 - Monitoring, process-memory, Redis Beat-heartbeat, Craft cleanup/dispatch, and
@@ -123,7 +124,9 @@ hour. Do not copy fixed counts into documentation.
   retained task targets those queues. Slack and Discord workers are default-off
   explicit options.
 - Retained worker concurrency is bounded: primary 2, light 4, heavy 2,
-  doc-processing 2, user-file-processing 1, and document-fetching 1.
+  doc-processing 2, user-file-processing 1, and document-fetching 1. The
+  doc-processing worker consumes both the live `docprocessing` queue and the
+  secondary-index `port` queue.
 - Retained Celery workers run without event heartbeat or gossip. Their upstream
   file-liveness bootstep is disabled.
 - Beat reloads the materialized schedule every five minutes. The upstream

@@ -143,30 +143,12 @@ while PDF/raw/binary paths remain strict. See
 
 ## Lite-mode `open_url` availability
 
-Stock Onyx makes `OpenURLTool.is_available()` return false whenever
-`DISABLE_VECTOR_DB=true`. That condition is too broad for this deployment's
-lite mode: exact-ID reuse of a connector document already indexed under the
-requested URL is unavailable without a vector database, but the independent
-built-in crawler can still open and read public web pages. This reuse occurs
-only while executing the chat-time `open_url` tool; it does not ingest the URL
-or run semantic `internal_search`. If left unchanged, Onyx hides `open_url`
-from user-visible built-in skills and skips it while constructing an Agent's
-tools, leaving lite mode with search results but no tool for opening their
-pages.
-
-The lite overlay therefore sets the stack-owned
-`ONYX_FORCE_OPEN_URL_AVAILABLE=true`. The API bootstrap installs
-`sitecustomize_api_server/lite_open_url_availability_patch.py`, which overrides
-only `OpenURLTool.is_available()` and only when `DISABLE_VECTOR_DB=true`. Full
-mode does not set the switch and retains upstream availability behavior.
-
-The installer strictly validates both sides of the contract before exposing
-the tool: upstream must still disable it specifically because of
-`DISABLE_VECTOR_DB`, and `OpenURLTool.run()` must still execute indexed
-retrieval and crawling as failure-tolerant siblings while converting an index
-failure into an empty indexed result. Lite mode consequently returns crawler
-content while its `DisabledDocumentIndex` continues to fail loudly if called;
-the patch does not restore RAG or indexed retrieval.
+Onyx exposes `OpenURLTool` in both modes. With `DISABLE_VECTOR_DB=true`, its
+native crawl-only branch skips indexed and link-based retrieval, runs the
+configured content provider under the normal timeout, and represents indexed
+content as an empty result. Full mode retains parallel ACL-filtered indexed
+retrieval and crawling. Pinned-image validation checks this separation so lite
+mode cannot accidentally invoke its disabled document index or restore RAG.
 
 `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` controls only the built-in crawler. In
 stock mode it applies to requests-fetched PDF/HTML and rendered Chromium HTML;
@@ -178,11 +160,9 @@ after merge. The Makefile's derived Obscura retention floors are shared browser
 memory settings, not document-indexing limits, and SearXNG retains its separate
 fixed 20 MiB search-DOM ceiling.
 
-Remove this patch and its Compose switch when upstream makes crawler-backed
-`open_url` available with the vector database disabled. Until then, every
-Onyx upgrade must verify the availability gate, crawler/index failure
-separation, user-visible skill listing, Agent tool construction, and a real
-lite-mode `open_url` request.
+Every Onyx upgrade must verify native availability, crawler/index separation,
+user-visible skill listing, Agent tool construction, and a real lite-mode
+`open_url` request.
 
 ## SearXNG overlay
 
@@ -258,8 +238,8 @@ disabled in both the backend and WebUI. The current reCAPTCHA Enterprise
 project, API-key, site-key, and hostname settings are explicitly empty; the
 obsolete `RECAPTCHA_SECRET_KEY` name is not treated as a current control.
 
-Two pinned backend defaults make third-party requests independently of
-`DISABLE_TELEMETRY`. The wrapper sets both to an explicit empty value:
+Pinned backend defaults make third-party requests independently of
+`DISABLE_TELEMETRY`. The wrapper disables them explicitly:
 
 - `AUTO_LLM_CONFIG_URL` disables the periodic recommended-model configuration
   download from the Onyx GitHub repository. Model configuration is therefore
@@ -268,6 +248,9 @@ Two pinned backend defaults make third-party requests independently of
   list download. Disposable-address filtering is consequently unavailable;
   ordinary authentication and the configured valid-domain controls are
   unchanged.
+- `LITELLM_LOCAL_MODEL_COST_MAP=true` makes LiteLLM use its packaged
+  model-cost and context-window map instead of fetching the mutable map from
+  GitHub during import.
 
 Release-note refreshes remain enabled by design. They fetch the Onyx
 documentation changelog through the fixed public Onyx egress route and cache
@@ -356,9 +339,12 @@ and the backend route policy remains authoritative for server-side traffic.
 The policy intentionally makes Stripe Elements, GTM, reCAPTCHA, third-party
 Sentry/PostHog clients, remote Craft previews/media, and the custom injected
 analytics-script feature inoperable even if accidentally configured. Local
-administrative analytics do not depend on those clients. The generated
-upstream environment template mentions `WEB_STRICT_CSP_ENABLED`, but the
-pinned WebUI does not read it; the wrapper does not rely on that dead switch.
+administrative analytics do not depend on those clients. The WebUI reads
+`WEB_STRICT_CSP_ENABLED` at runtime, and the wrapper enables it as defense in
+depth. Its allowlist still admits remote HTTPS images, Google Tag Manager,
+Google Fonts, optional Sentry, and Onyx CDN media, so it is not a replacement
+for the narrower tracked nginx policy. Browsers enforce both CSP headers
+together.
 
 ## Background Web connector PDF freshness
 
@@ -377,6 +363,8 @@ source operations of `WebConnector._do_scrape()` and
 Only an unreadable sentinel or an unchanged sentinel whose HTTP validators
 still match the database record is removed before indexing. A stale or
 malformed sentinel falls through to normal indexing, including forced reindex.
+The wrapper forwards both upstream bypass controls, including the independent
+content-hash bypass used for secondary-index port migrations.
 
 `tests/test_web_connector_egress_patch.py` covers installed unchanged, changed,
 missing-validator, terminal-error, and non-allowlisted HEAD paths; matching,
@@ -513,7 +501,7 @@ from the native executor settings.
 
 Other retained behavior has its own focused tests and upgrade checks:
 
-- lite-mode `open_url` availability;
+- native lite-mode crawl-only `open_url` separation;
 - local doc-drop behavior;
 - local embedding shim model-name/query-prefix behavior, including the exact
   fake-nomic v23-to-v1 tokenizer-only alias that preserves Onyx feature gates;

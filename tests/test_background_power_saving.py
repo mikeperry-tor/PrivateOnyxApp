@@ -54,6 +54,10 @@ class BackgroundSupervisorTests(unittest.TestCase):
             command = config.get(section, "command")
             self.assertEqual(command.count("--without-heartbeat"), 1)
             self.assertEqual(command.count("--without-gossip"), 1)
+        self.assertIn(
+            "-Q docprocessing,port",
+            config.get("program:celery_worker_docprocessing", "command"),
+        )
 
         logs = config.get("program:log-redirect-handler", "command")
         self.assertNotIn("celery_worker_monitoring.log", logs)

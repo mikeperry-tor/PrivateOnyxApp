@@ -26,6 +26,26 @@ RETAINED_WORKERS = tuple(
     worker for worker in WORKERS
     if worker not in {"celery_worker_scheduled_tasks", "celery_worker_monitoring"}
 )
+WORKER_QUEUES = {
+    "celery_worker_primary": "celery",
+    "celery_worker_light": (
+        "vespa_metadata_sync,connector_deletion,doc_permissions_upsert,"
+        "checkpoint_cleanup,index_attempt_cleanup,opensearch_migration,"
+        "chat_ttl_deletion"
+    ),
+    "celery_worker_heavy": (
+        "connector_pruning,connector_doc_permissions_sync,"
+        "connector_external_group_sync,csv_generation,sandbox,"
+        "connector_hierarchy_fetching"
+    ),
+    "celery_worker_docprocessing": "docprocessing,port",
+    "celery_worker_user_file_processing": (
+        "user_file_processing,user_file_project_sync,user_file_delete"
+    ),
+    "celery_worker_scheduled_tasks": "scheduled_tasks",
+    "celery_worker_docfetching": "connector_doc_fetching",
+    "celery_worker_monitoring": "monitoring",
+}
 REQUIRED_PROGRAMS = WORKERS + (
     "celery_beat",
     "supervisord_watchdog_celery_beat",
@@ -65,6 +85,11 @@ def derive_config(source: Path = SOURCE_CONFIG) -> configparser.RawConfigParser:
         expected = f"celery -A onyx.background.celery.versioned_apps.{worker.removeprefix('celery_worker_')} worker"
         if not command.startswith(expected + "\n"):
             raise RuntimeError(f"unexpected {worker} command")
+        queue_lines = [
+            line for line in command.splitlines() if line.startswith("-Q ")
+        ]
+        if queue_lines != [f"-Q {WORKER_QUEUES[worker]}"]:
+            raise RuntimeError(f"unexpected {worker} queues")
         if "--without-heartbeat" in command or "--without-gossip" in command:
             raise RuntimeError(f"{worker} already contains wrapper event flags")
 

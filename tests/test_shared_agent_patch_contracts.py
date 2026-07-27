@@ -55,6 +55,7 @@ def _internal_search_formatter(
     include_source_type=True,
     include_link=False,
     include_document_id=False,
+    note=None,
 ):
     del citation_start, limit, include_source_type, include_link, include_document_id
     results = []
@@ -62,7 +63,11 @@ def _internal_search_formatter(
         result = {"document": index}
         result["content"] = content
         results.append(result)
-    return json.dumps({"results": results}, indent=2), {1: "doc"}
+    payload = {}
+    payload["results"] = results
+    if note:
+        payload["note"] = note
+    return json.dumps(payload, indent=2), {1: "doc"}
 
 
 def _configured_max(model_configuration):
@@ -563,25 +568,64 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         )
         onyx = _package("onyx")
         llm = _package("onyx.llm")
-        utils = ModuleType("onyx.llm.utils")
-        utils.model_is_reasoning_model = _reasoning_detector
-        llm.utils = utils
+        model_capabilities = ModuleType("onyx.llm.model_capabilities")
+        model_capabilities.model_is_reasoning_model = _reasoning_detector
+        llm.model_capabilities = model_capabilities
         onyx.llm = llm
-        modules = {"onyx": onyx, "onyx.llm": llm, "onyx.llm.utils": utils}
+        modules = {
+            "onyx": onyx,
+            "onyx.llm": llm,
+            "onyx.llm.model_capabilities": model_capabilities,
+        }
 
         with patch.dict(os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True), patch.dict(
             sys.modules, modules
         ):
             wrapper.apply_native_reasoning_detection_override_patch()
 
-        self.assertTrue(utils.model_is_reasoning_model("unknown", "openai"))
+        self.assertTrue(
+            model_capabilities.model_is_reasoning_model("unknown", "openai")
+        )
 
-        utils.model_is_reasoning_model = _drifted_reasoning_detector
+        model_capabilities.model_is_reasoning_model = _drifted_reasoning_detector
         with patch.dict(os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True), patch.dict(
             sys.modules, modules
         ):
             with self.assertRaisesRegex(RuntimeError, "signature changed"):
                 wrapper.apply_native_reasoning_detection_override_patch()
+
+    def test_reasoning_trace_wraps_model_capabilities_detector(self) -> None:
+        wrapper = _load_wrapper()
+        wrapper._REASONING_MODE_TRACE = True
+        traces = []
+        wrapper._trace_reasoning_mode = lambda event, **fields: traces.append(
+            (event, fields)
+        )
+
+        onyx = _package("onyx")
+        llm = _package("onyx.llm")
+        model_capabilities = ModuleType("onyx.llm.model_capabilities")
+        model_capabilities.model_is_reasoning_model = (
+            lambda model_name, model_provider: bool(model_name and model_provider)
+        )
+        llm.model_capabilities = model_capabilities
+        onyx.llm = llm
+        modules = {
+            "onyx": onyx,
+            "onyx.llm": llm,
+            "onyx.llm.model_capabilities": model_capabilities,
+        }
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "false"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            wrapper.apply_reasoning_mode_trace_patch()
+            self.assertTrue(
+                model_capabilities.model_is_reasoning_model("model", "provider")
+            )
+
+        self.assertEqual(traces[0][0], "model_detection")
+        self.assertTrue(traces[0][1]["supports_reasoning"])
 
     def test_internal_search_caps_validate_and_limit_payload(self) -> None:
         wrapper = _load_wrapper()
@@ -611,9 +655,12 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             wrapper.apply_internal_search_context_patches()
 
         payload, citations = tool_utils.convert_inference_sections_to_llm_string(
-            ["a" * 200, "b" * 200]
+            ["a" * 200, "b" * 200],
+            note="Search note",
         )
-        results = json.loads(payload)["results"]
+        parsed_payload = json.loads(payload)
+        results = parsed_payload["results"]
+        self.assertEqual(parsed_payload["note"], "Search note")
         self.assertEqual(citations, {1: "doc"})
         self.assertLessEqual(len(results[0]["content"]), 80)
         self.assertLessEqual(len(results[1]["content"]), 40)

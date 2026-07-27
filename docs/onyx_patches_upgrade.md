@@ -193,13 +193,11 @@ privacy, cleanup, body-retention, and concurrency properties.
 
 Re-audit the pinned Onyx symbols for:
 
-- lite-mode `OpenURLTool.is_available`, including its
-  `DISABLE_VECTOR_DB` gate; the crawler/index parallel call; and the indexed
-  retrieval exception-to-empty-result path. Confirm the strict availability
-  patch installs only in lite mode, `open_url` remains visible in the user
-  skill list and constructed Agent tools, and a real crawler request succeeds
-  without restoring indexed retrieval. Remove the patch if upstream makes
-  crawler-backed `open_url` natively available without a vector database;
+- lite-mode `OpenURLTool.is_available` and its native `DISABLE_VECTOR_DB`
+  crawl-only branch. Confirm `open_url` remains visible in the user skill list
+  and constructed Agent tools, no indexed or link-based retrieval runs in lite
+  mode, and a real crawler request succeeds without restoring indexed
+  retrieval;
 - chat-time indexed reuse: URL normalization must resolve only to an existing
   connector document ID, `id_based_retrieval` must remain ACL-filtered, and
   fresh crawling must not ingest content or become `internal_search`. Confirm
@@ -414,6 +412,8 @@ environment names forward by resemblance. Confirm:
 - `AUTO_LLM_CONFIG_URL=""` still removes the recommended-model beat/poller
   work and performs no fetch, and `DISPOSABLE_EMAIL_DOMAINS_URL=""` still
   skips the public domain-list fetch;
+- `LITELLM_LOCAL_MODEL_COST_MAP=true` still selects LiteLLM's packaged map
+  before import and prevents its mutable GitHub cost/context-map fetch;
 - the current reCAPTCHA client and Enterprise backend variable names remain
   empty and `CAPTCHA_ENABLED=false` remains authoritative;
 - cloud, paid-EE, Stripe, GTM, Sentry, PostHog, and reCAPTCHA build/runtime
@@ -426,13 +426,15 @@ environment names forward by resemblance. Confirm:
   remote-config, favicon, font, image, video, CAPTCHA, billing, or CDN clients
   are either required operator-selected functionality or explicitly disabled.
 
-Inspect the pinned WebUI CSP implementation. Onyx emits
-a policy unconditionally from `web/src/proxy.ts`; the documented
-`WEB_STRICT_CSP_ENABLED` environment name has no implementation and must not be
-counted as a defense. Keep the tracked nginx policy as a second CSP header so
-the browser intersects it with upstream policy. If upstream implements an
-equivalent restrictive policy, remove the wrapper header only after testing the
-effective combined response.
+Inspect the pinned WebUI CSP implementation. Onyx emits a baseline policy
+unconditionally from `web/src/proxy.ts` and adds its broader default, script,
+connection, image, media, worker, and frame directives when
+`WEB_STRICT_CSP_ENABLED=true`. Confirm Compose enables that runtime switch.
+Keep the tracked nginx policy as a second CSP header so the browser intersects
+it with upstream policy; the upstream policy is not equivalent while it admits
+remote image, analytics, font, Sentry, or CDN origins. Remove the wrapper
+header only after source and real-browser testing prove the upstream policy is
+equally restrictive.
 
 The wrapper's current `script-src 'self' 'unsafe-inline'` is an intentional
 no-rebuild compatibility exception for Next.js bootstrap and React stream

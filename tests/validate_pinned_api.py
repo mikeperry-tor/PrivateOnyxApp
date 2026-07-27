@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from importlib.metadata import version
 
 import wrapper_env_patches as patches
 
@@ -84,12 +85,70 @@ def _validate_indexed_open_url_contract() -> None:
     run_source = inspect.getsource(open_url_tool.OpenURLTool.run)
     assert "run_functions_tuples_in_parallel" in run_source
     assert "(_retrieve_indexed_with_filters, (all_requests,))" in run_source
-    assert "(self._fetch_web_content, (urls, override_kwargs.url_snippet_map))" in run_source
+    assert "self._fetch_web_content," in run_source
+    assert "(urls, override_kwargs.url_snippet_map)," in run_source
     assert "allow_failures=True" in run_source
+
+
+def _validate_lite_open_url_contract() -> None:
+    from onyx.tools.tool_implementations.open_url import open_url_tool
+
+    assert open_url_tool.OpenURLTool.is_available(None) is True
+    run_source = inspect.getsource(open_url_tool.OpenURLTool.run)
+    assert "if DISABLE_VECTOR_DB:" in run_source
+    assert "IndexedRetrievalResult(" in run_source
+    assert "self._fetch_web_content" in run_source
+
+
+def _validate_litellm_contract() -> None:
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+    from litellm.types.utils import Message
+
+    assert version("litellm") == "1.93.0"
+    expected_parameters = (
+        "self",
+        "model",
+        "messages",
+        "optional_params",
+        "litellm_params",
+        "headers",
+    )
+    assert tuple(
+        inspect.signature(OpenAIGPTConfig.transform_request).parameters
+    ) == expected_parameters
+    assert tuple(
+        inspect.signature(OpenAIGPTConfig.async_transform_request).parameters
+    ) == expected_parameters
+    assert "reasoning_content" in Message.model_fields
+
+    transformed = OpenAIGPTConfig().transform_request(
+        "wrapper-contract-model",
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "retained reasoning",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "tool", "arguments": "{}"},
+                    }
+                ],
+            }
+        ],
+        {},
+        {},
+        {},
+    )
+    assert transformed["messages"][0]["reasoning_content"] == "retained reasoning"
+    assert transformed["messages"][0]["tool_calls"][0]["id"] == "call-1"
 
 
 if __name__ == "__main__":
     _install_wrapper_patches()
     _validate_python_tool_identity()
     _validate_indexed_open_url_contract()
+    _validate_lite_open_url_contract()
+    _validate_litellm_contract()
     print("PINNED_API_PATCH_CONTRACTS_OK")

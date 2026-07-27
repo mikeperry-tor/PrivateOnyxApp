@@ -31,6 +31,7 @@ def _validate_schedules(background_patch, original_tick) -> None:
         "check-for-user-file-project-sync",
         "check-for-user-file-delete",
         "check-for-indexing",
+        "check-for-port",
         "check-for-connector-deletion",
         "check-for-vespa-sync",
         "check-for-pruning",
