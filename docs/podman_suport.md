@@ -295,11 +295,14 @@ Docker's attribute and valid per-file Podman runtime attributes intact.
 On native Linux, Docker's ordinary root entrypoint instead changes the bind to
 host uid 70, which a rootless user namespace cannot represent or traverse.
 `docker-compose.docker-linux.yml` therefore runs both the stock entrypoint and
-the server as the invoking host uid/gid. The entrypoint can initialize a fresh
-host-owned bind but cannot perform its root-only ownership change, so Docker
-does not undo Podman's compatible ownership. The overlay is never selected on
-macOS, where Docker Desktop ownership metadata and the existing Podman xattr
-handling remain unchanged.
+the server as the invoking host uid/gid. Before either engine creates a
+container, the common startup preflight creates every selected mode's host bind
+root as the invoking user; native Docker must not create a missing PostgreSQL
+source as root. The entrypoint can then initialize the fresh host-owned bind
+but cannot perform its root-only ownership change, so Docker does not undo
+Podman's compatible ownership. The overlay is never selected on macOS, where
+Docker Desktop ownership metadata and the existing Podman xattr handling
+remain unchanged.
 
 OpenSearch uses `keep-id:uid=1000,gid=1000` and its ordinary image entrypoint.
 The Podman-only network namespace sets `net.ipv4.ping_group_range=1000 1000`:

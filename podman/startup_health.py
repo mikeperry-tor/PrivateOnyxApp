@@ -21,6 +21,13 @@ VALIDATED_PODMAN_VERSION = (5, 4, 2)
 STARTUP_INTERVAL_NS = 5_000_000_000
 MYST_INTERVAL_NS = 60_000_000_000
 ORDINARY_INTERVAL_NS = 600_000_000_000
+COMMON_HOST_BIND_DIRS = (
+    "postgres",
+    "file-system",
+    "searxng-cache",
+    "myst-data",
+)
+FULL_HOST_BIND_DIRS = ("opensearch", "minio", "model-cache")
 REQUIRED_UPDATE_FLAGS = {
     "--health-startup-cmd",
     "--health-startup-interval",
@@ -63,6 +70,54 @@ class ContainerHealth:
     regular: dict[str, Any] | None
     startup: dict[str, Any] | None
     health_status: str | None = None
+
+
+def prepare_host_directories(
+    data_root: str,
+    *,
+    full: bool,
+    doc_source: str | None = None,
+    default_doc_source: str | None = None,
+) -> list[str]:
+    """Create host bind roots before a container engine can create them as root."""
+    data_root_path = os.path.abspath(data_root)
+    names = COMMON_HOST_BIND_DIRS + (FULL_HOST_BIND_DIRS if full else ())
+    prepared: list[str] = []
+
+    for name in names:
+        path = os.path.join(data_root_path, name)
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError as exc:
+            raise ContractError(f"could not create host data directory {path!r}") from exc
+        if not os.path.isdir(path):
+            raise ContractError(f"host data path is not a directory: {path!r}")
+        prepared.append(path)
+
+    if full:
+        if doc_source is None or default_doc_source is None:
+            raise ContractError(
+                "full host-data preparation requires document source paths"
+            )
+        source_path = os.path.abspath(doc_source)
+        default_path = os.path.abspath(default_doc_source)
+        if not os.path.exists(source_path):
+            if source_path != default_path:
+                raise ContractError(
+                    "configured RAG document source does not exist; "
+                    "refusing to create a custom path"
+                )
+            try:
+                os.makedirs(source_path, exist_ok=False)
+            except OSError as exc:
+                raise ContractError(
+                    "could not create the default RAG document source"
+                ) from exc
+        if not os.path.isdir(source_path):
+            raise ContractError("configured RAG document source is not a directory")
+        prepared.append(source_path)
+
+    return prepared
 
 
 def prepare_shared_data(
@@ -784,6 +839,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "configure",
             "initialize-opensearch",
             "initialize-postgres",
+            "prepare-host-directories",
             "prepare-shared-data",
         ),
     )
@@ -793,6 +849,10 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--skip-capability-check", action="store_true")
     parser.add_argument("--postgres")
     parser.add_argument("--opensearch")
+    parser.add_argument("--data-root")
+    parser.add_argument("--mode", choices=("lite", "full"))
+    parser.add_argument("--doc-source")
+    parser.add_argument("--default-doc-source")
     parser.add_argument("--service", action="append", default=[])
     return parser.parse_args(argv)
 
@@ -813,6 +873,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 postgres=args.postgres, opensearch=args.opensearch
             )
             print("Prepared shared Docker data for Podman: " + ", ".join(prepared))
+        elif args.action == "prepare-host-directories":
+            if args.data_root is None or args.mode is None:
+                raise ContractError(
+                    "--data-root and --mode are required for host-data preparation"
+                )
+            prepared = prepare_host_directories(
+                args.data_root,
+                full=args.mode == "full",
+                doc_source=args.doc_source,
+                default_doc_source=args.default_doc_source,
+            )
+            suffix = "y" if len(prepared) == 1 else "ies"
+            print(f"Prepared {len(prepared)} host bind director{suffix}.")
         elif args.action == "initialize-postgres":
             if args.postgres is None:
                 raise ContractError("--postgres is required for initialize-postgres")

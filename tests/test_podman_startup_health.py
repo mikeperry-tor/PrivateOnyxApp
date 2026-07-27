@@ -65,6 +65,70 @@ def _expected(service: str = "api_server") -> dict[str, dict]:
 
 
 class PodmanStartupHealthTests(unittest.TestCase):
+    def test_prepare_lite_host_directories_creates_bind_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as parent:
+            data_root = Path(parent) / "docker-data"
+            prepared = startup_health.prepare_host_directories(
+                str(data_root), full=False
+            )
+
+            self.assertEqual(
+                {Path(path).name for path in prepared},
+                set(startup_health.COMMON_HOST_BIND_DIRS),
+            )
+            for name in startup_health.COMMON_HOST_BIND_DIRS:
+                self.assertTrue((data_root / name).is_dir())
+
+    def test_prepare_full_host_directories_creates_default_doc_source(self) -> None:
+        with tempfile.TemporaryDirectory() as parent:
+            data_root = Path(parent) / "docker-data"
+            doc_source = Path(parent) / "doc-drop"
+            prepared = startup_health.prepare_host_directories(
+                str(data_root),
+                full=True,
+                doc_source=str(doc_source),
+                default_doc_source=str(doc_source),
+            )
+
+            expected = set(
+                startup_health.COMMON_HOST_BIND_DIRS
+                + startup_health.FULL_HOST_BIND_DIRS
+            )
+            self.assertEqual(
+                {Path(path).name for path in prepared[:-1]},
+                expected,
+            )
+            self.assertEqual(Path(prepared[-1]), doc_source)
+            self.assertTrue(doc_source.is_dir())
+
+    def test_prepare_full_host_directories_refuses_missing_custom_doc_source(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as parent:
+            with self.assertRaisesRegex(
+                startup_health.ContractError,
+                "configured RAG document source does not exist",
+            ):
+                startup_health.prepare_host_directories(
+                    str(Path(parent) / "docker-data"),
+                    full=True,
+                    doc_source=str(Path(parent) / "custom-docs"),
+                    default_doc_source=str(Path(parent) / "doc-drop"),
+                )
+
+    def test_prepare_host_directories_refuses_file_bind_root(self) -> None:
+        with tempfile.TemporaryDirectory() as parent:
+            data_root = Path(parent) / "docker-data"
+            data_root.mkdir()
+            (data_root / "postgres").write_text("not a directory", encoding="utf-8")
+            with self.assertRaisesRegex(
+                startup_health.ContractError,
+                "could not create host data directory",
+            ):
+                startup_health.prepare_host_directories(
+                    str(data_root), full=False
+                )
+
     @patch.object(startup_health, "prepare_shared_data")
     @patch.object(startup_health, "_run")
     def test_initialize_postgres_initializes_an_empty_bind(

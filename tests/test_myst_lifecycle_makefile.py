@@ -1074,6 +1074,50 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("initialize-opensearch", opensearch_preflight)
         self.assertIn("COMPOSE_FILE=$(PODMAN_START_FILES)", opensearch_preflight)
 
+    def test_host_bind_roots_are_prepared_before_image_or_compose_mutation(
+        self,
+    ) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        lite_prerequisites = next(
+            line
+            for line in makefile.splitlines()
+            if line.startswith("up-lite: wrapper-config-preflight")
+        )
+        full_prerequisites = next(
+            line
+            for line in makefile.splitlines()
+            if line.startswith("up-full: wrapper-config-preflight")
+        )
+
+        self.assertLess(
+            lite_prerequisites.index("claim-shared-data-engine"),
+            lite_prerequisites.index("prepare-lite-host-data"),
+        )
+        self.assertLess(
+            lite_prerequisites.index("prepare-lite-host-data"),
+            lite_prerequisites.index("onyx-image-ready"),
+        )
+        self.assertLess(
+            full_prerequisites.index("claim-shared-data-engine"),
+            full_prerequisites.index("prepare-full-host-data"),
+        )
+        self.assertLess(
+            full_prerequisites.index("prepare-full-host-data"),
+            full_prerequisites.index("onyx-image-ready"),
+        )
+
+        lite_target = makefile.split("prepare-lite-host-data:", 1)[1].split(
+            "\n\n", 1
+        )[0]
+        full_target = makefile.split("prepare-full-host-data:", 1)[1].split(
+            "\n\n", 1
+        )[0]
+        self.assertIn("prepare-host-directories", lite_target)
+        self.assertIn("--mode lite", lite_target)
+        self.assertIn("prepare-host-directories", full_target)
+        self.assertIn("--mode full", full_target)
+        self.assertIn('--doc-source "$(ONYX_RAG_DOC_SOURCE_DIR)"', full_target)
+
     def test_podman_keep_id_containers_are_created_serially(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         lite_recipe = makefile.split(
