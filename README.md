@@ -232,14 +232,6 @@ In either case, Docker Compose network-namespace routing restricts egress to the
 
 Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Search, is supported. Connections to these services use the selected Tor/VPN/proxy route, but these external providers perform their accesses from their own IP address space. None of these providers offer ZDR policies to consumer end users, so your API key and account on these services will be associated with your usage activity, and this data will be stored, trained on, and/or sold by these providers. A nice rant about this situation can be found at the [end of this README](#the-anti-bot-landscape-is-also-anti-privacy).
 
-### Onyx Font Color Issues
-
-If you are using Tor Browser, Mullvad Browser, or another browser with anti-fingerprinting defenses, font colorization may end up black-on-green and be hard to read.
-
-To fix this, go to the Onyx **_User Settings_** (the icon **below** the Admin settings gear). Nagivate to **Settings → General → Appearance → Color Mode**. Select **Dark** explicitly in this dropdown. This switches Onyx's text, menus, inputs, and page surfaces to their coordinated dark palette, which renders nicely on the default background.
-
-Alternatively, you can try different background themes. The Clouds and Hills backgrounds will be readable in light mode.
-
 ## Optional Configurations
 
 The following sections detail optional feature configuration, including native Tor, remote access via Tailscale Funnel, an outbound proxy, Myst VPN, and RAG document search.
@@ -308,11 +300,6 @@ work (they likely will not).
 Tailscale, onion, and localhost host-side access can be used simultaneously, but
 each hostname has separate browser cookies, storage, and login sessions. Logout
 on one hostname does not log out the others.
-
-When accessing the onion service from Tor Browser, Onyx may render chat text in black
-over a dark background image. Tor Browser users will need to set their Onyx theme
-explicitly to Dark Mode. See the [Onyx Font Color Issues](#onyx-font-color-issues)
-section for instructions.
 
 ### Optional: Tailscale Funnel
 
