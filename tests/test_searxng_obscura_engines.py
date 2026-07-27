@@ -82,6 +82,8 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         cls.google = _load_engine("google2")
         cls.brave = _load_engine("brave2")
         cls.bing = _load_engine("bing2")
+        cls.duckduckgo = _load_engine("duckduckgo2")
+        cls.startpage = _load_engine("startpage2")
 
     def test_google_sanitized_result_and_no_results(self):
         html = """<html><body><div class='g'><a href='/url?q=https%3A%2F%2Fexample.com%2Fa'><h3>Example</h3></a><div class='VwiC3b'>Snippet</div></div></body></html>"""
@@ -133,6 +135,47 @@ class SearxngObscuraEngineTests(unittest.TestCase):
             self.bing._parse_html(script_only)[0]["url"],
             "https://example.com/",
         )
+
+    def test_duckduckgo_anomaly_form_is_typed_captcha(self):
+        challenge = """
+        <html><head><title>DuckDuckGo</title></head><body>
+          <form action="//duckduckgo.com/anomaly.js?sv=html&amp;cc=botnet">
+            <p>Unfortunately, bots use DuckDuckGo too.</p>
+          </form>
+        </body></html>
+        """
+        with self.assertRaisesRegex(RuntimeError, "verification challenge"):
+            self.duckduckgo._parse_html(challenge)
+
+        result = """
+        <html><body><div class="result results_links web-result">
+          <a class="result__a"
+             href="/l/?uddg=https%3A%2F%2Fexample.com%2F">Example</a>
+          <a class="result__snippet">Snippet</a>
+        </div></body></html>
+        """
+        self.assertEqual(
+            self.duckduckgo._parse_html(result),
+            [{"url": "https://example.com/", "title": "Example", "content": "Snippet"}],
+        )
+
+    def test_startpage_sanitized_result_and_captcha(self):
+        result = """
+        <html><body><div class="result css-test">
+          <a data-testid="gl-title-link" href="https://example.com/">
+            <style>.hidden { color: red }</style><h2>Example</h2>
+          </a>
+          <div class="description">Snippet</div>
+        </div></body></html>
+        """
+        self.assertEqual(
+            self.startpage._parse_html(result),
+            [{"url": "https://example.com/", "title": "Example", "content": "Snippet"}],
+        )
+        with self.assertRaisesRegex(RuntimeError, "captcha page"):
+            self.startpage._parse_html(
+                '<html><body><form action="/sp/captcha"></form></body></html>'
+            )
 
     def test_every_custom_engine_declares_offline_contract(self):
         for path in sorted((ROOT / "searxng/engines").glob("*2.py")):

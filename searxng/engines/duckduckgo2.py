@@ -12,6 +12,7 @@ from urllib.parse import urlencode, unquote
 
 from lxml import html
 
+from searx.exceptions import SearxEngineCaptchaException
 from searx.utils import eval_xpath, eval_xpath_list, extract_text
 
 from searx.engines import _obscura  # type: ignore  # noqa: E402
@@ -42,6 +43,13 @@ results_xpath = '//div[contains(@class, "result") and contains(@class, "web-resu
 no_results_xpath = '//*[contains(concat(" ", normalize-space(@class), " "), " no-results ")]'
 link_xpath = './/a[contains(@class, "result__a")]'
 snippet_xpath = './/a[contains(@class, "result__snippet")] | .//*[contains(@class, "result__snippet")]'
+captcha_xpath = (
+    '//form[contains(translate(@action, '
+    '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), '
+    '"duckduckgo.com/anomaly.js") '
+    'or contains(translate(@action, '
+    '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "cc=botnet")]'
+)
 
 
 def search(query: str, params: "RequestParams"):
@@ -79,6 +87,10 @@ def _parse_html(text: str):
 
     results = []
     dom = html.fromstring(text)
+    if eval_xpath(dom, captcha_xpath):
+        raise SearxEngineCaptchaException(
+            message="duckduckgo2: DuckDuckGo returned a verification challenge",
+        )
 
     result_nodes = eval_xpath_list(dom, results_xpath)
     if not result_nodes:
