@@ -32,7 +32,7 @@ Onyx fork:
   PDF freshness, exact crawl routing, saved-level external routing, and
   display-only source-link rewriting.
 - The API `sitecustomize` bootstrap invokes the shared optional internal-search
-  content-cap patch so selected chunks do not overwhelm the answering model.
+  content-cap patch so configured limits bound selected model-facing chunks.
 - `local-embedding-shim` implements the subset of Onyx's model-server HTTP API
   that indexing and search need for embeddings, then forwards the actual
   embedding work to an OpenAI-compatible `/v1/embeddings` endpoint.
@@ -81,9 +81,8 @@ boundary.
    OpenAI-compatible embedding requests and sends them to `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
 8. During chat/search, `api_server` uses the same shim path to embed the query
    before Onyx runs hybrid search against the indexed documents.
-9. If configured, the wrapper applies per-result and aggregate character caps
-   after Onyx has selected and serialized internal-search results for the
-   answering model.
+9. When a positive cap is configured, the wrapper limits per-result or combined
+   internal-search content after Onyx selects and serializes the results.
 
 Stored document IDs and freshness requests retain the internal crawl origin.
 Only links returned for display are rewritten to the host origin. Existing Web
@@ -163,7 +162,7 @@ Implementation:
 - `onyx/patches/sitecustomize_background/sitecustomize.py`
 - Internal environment:
   `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED=true` and
-  `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS=localhost,127.0.0.1,::1`
+  `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS=doc-drop-web`
 
 This section keeps the operational behavior in one place. The detailed patch
 rationale is in
@@ -177,11 +176,23 @@ public websites often emit unreliable validators. That is sensible for the
 general internet, but wasteful for a local document-drop server where the file
 metadata is trusted and stable.
 
-The background patch changes that only for allowlisted local hosts. For PDFs
-served from `localhost`, `127.0.0.1`, or `::1` by default, it uses HTTP `HEAD`
-metadata such as `Last-Modified` and `Content-Length` to skip full download and
-PDF parsing when the source has not changed. It stores wrapper metadata on the
-Onyx document record so later syncs can make the same decision.
+The background patch changes that only for the allowlisted internal
+`doc-drop-web` origin. It uses HTTP `HEAD` metadata such as `Last-Modified` and
+`Content-Length` to skip full download and PDF parsing when the source has not
+changed. It stores wrapper metadata on the Onyx document record so later syncs
+can make the same decision.
+
+This is a pre-download and pre-parse optimization. Onyx independently computes
+a content hash after parsing and skips chunking, embedding, and vector writes
+when indexed content is unchanged. Removing this wrapper patch would therefore
+restore repeated PDF download and parsing, not repeated embedding of every
+unchanged document.
+
+The trusted validator is only as strong as the metadata supplied by
+`doc-drop-web`. A same-size replacement with an unchanged second-resolution
+modification time cannot be distinguished by this fast path. Files should be
+replaced with an updated modification time; a crawl with changed validators
+falls through to normal parsing and native content-hash handling.
 
 This patch is tied to Onyx internals. During a major Onyx upgrade, verify that
 the Web connector still has the same scrape path, that connector `Document`
@@ -198,32 +209,31 @@ Implementation:
 - Runtime patch: `onyx/patches/shared/wrapper_env_patches.py`, installed by the
   API bootstrap
 - User-facing env:
-  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`, and
+  `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT` and
   `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`
 
 Onyx's internal search path is chunk-oriented, not excerpt-oriented. The
-`internal_search` tool and the `/search` API serialize the selected
-section's full `content` into the model-facing tool result. Onyx may also merge
-nearby matching chunks and expand a selected section with adjacent chunks before
-formatting the result. That is useful for answer quality, but local document
-sets can produce enough text to fill small or medium model context windows.
+`internal_search` tool and the `/search` API serialize each selected section's
+full `content` into the model-facing result. Nearby matching chunks may also be
+merged or expanded before formatting, which can consume a substantial model
+context window.
 
-Full mode therefore exposes optional wrapper-level character caps:
+Full mode therefore supports optional wrapper-level character caps:
 
 ```env
 ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT=0
 ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=0
 ```
 
-Empty or `0` means no wrapper cap. Positive values cap the serialized result
-text after Onyx's own retrieval, LLM section selection, context expansion, and
-section merging have already run. The first value limits each result's
-`content`; the second limits total returned `content` across all results.
+Empty or `0` disables the corresponding cap; in that state the patch is
+installed but makes no change. A positive first value limits each result's
+`content`, while a positive second value limits combined `content` across all
+results. Both apply after Onyx retrieval, section selection, context expansion,
+and merging, without limiting ingestion or retrieval itself.
 
-Set these values when internal search is consuming too much of the model
-window. Leave them empty or `0` when relying on a large, correctly configured
-chat context window. Changes require recreating `api_server` because the base
-`sitecustomize` patch runs at Python startup.
+Set a positive value when internal search is consuming too much of the answer
+model's context window. Recreate `api_server` after changing either value
+because the patch reads them at Python startup.
 
 ## Embedding Shim
 
@@ -276,6 +286,19 @@ to `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`, which must be an OpenAI-compatible
 {"embeddings": [[0.1, 0.2]]}
 ```
 
+The OpenAI-compatible response must contain exactly one indexed vector for
+every input. The shim restores input order from the response indices and
+rejects missing or duplicate indices, empty vectors, non-numeric or non-finite
+values, and inconsistent dimensions within a response. It deliberately does
+not require a particular dimension; Onyx's saved dimension remains an
+operator-selected property of the configured embedding model.
+
+Inbound request bodies, upstream response bodies, active handler threads,
+upstream-pool waits, and idle request sockets are bounded. Upstream HTTP error
+bodies and transport details are not returned to Onyx or written to shim logs.
+The shim forwards an accepted embedding request exactly once and does not retry
+a POST.
+
 The 501 stubs are deliberate. This shim is an embedding bridge, not a reranker
 or query-analysis model server. If Onyx starts requiring reranking or
 query-analysis for the workflows you use, route those calls to a real Onyx
@@ -314,17 +337,16 @@ by internal model-server assumptions:
 - Some high-quality asymmetric embedding models need different query and
   passage handling, but Onyx's generic provider configuration does not reliably
   provide the needed query prefix for all local/custom setups.
-- Onyx has special hardcoded behavior for the `nomic-ai` local embedding model
-  family, so the recommended UI setup uses `nomic-ai/nomic-embed-text-v23` as
-  the model type while the shim maps requests to the actual upstream model.
+- The saved model name gives Onyx an offline tokenizer identity while the shim
+  maps requests to the actual upstream model.
 
-The `v23` name is intentionally synthetic. It must remain saved in Onyx so
-the `nomic-ai` feature gates stay enabled. The API and background startup
+The `v23` name is intentionally synthetic. The API and background startup
 patches map only tokenizer construction for that exact name to the tokenizer
 already bundled as `nomic-ai/nomic-embed-text-v1`; they do not rewrite the
 saved model name or the model name sent to the embedding shim. This avoids an
-attempt to download the nonexistent `v23` tokenizer and preserves the same
-the tokenizer contract expected by Onyx's `nomic-ai` feature path.
+attempt to download a nonexistent tokenizer. In Onyx, the `nomic-ai` name
+prefix additionally permits large chunks only when multipass indexing is
+enabled; it has no name-based retrieval effect while multipass is disabled.
 
 The shim preserves Onyx's internal contract and moves the OpenAI-compatible
 translation to a small local service that can be updated independently during
@@ -400,10 +422,10 @@ crash is returned as an error instead of replaying an embedding batch. Cold
 startup has no wrapper deadline while the owned child remains alive. After the
 child advertises the exact expected model, the one proxy-to-MLX request uses a
 five-minute blocked-socket timeout. This is not a five-minute end-to-end
-deadline: request parsing, lifecycle admission, cold loading, and shim
-concurrency-slot waits occur outside it, and a response that continues making
-socket progress may take longer. The shim adds no independent upstream timeout
-and performs no POST retry.
+deadline: request parsing, lifecycle admission, and cold loading occur outside
+it, and a response that continues making socket progress may take longer. The
+shim independently limits an upstream socket operation to 540 seconds and
+performs no POST retry.
 
 Docker Desktop's host gateway requires the lifecycle proxy to listen on the
 host wildcard address, but gateway connections arrive at the macOS listener as
@@ -616,8 +638,8 @@ for upstream requests regardless of the `model_name` sent by Onyx. When it is
 unset, the shim uses `ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL`. This lets Onyx use
 the UI/model-type behavior it needs while the shim targets the real local model.
 Do not replace the synthetic `nomic-ai/nomic-embed-text-v23` Admin value with
-the real upstream model unless the corresponding Onyx feature gates have been
-re-audited.
+the real upstream model unless its offline tokenizer availability and the
+resulting index migration have been validated.
 
 Changing embedding model, dimensionality, or prefix policy after documents are
 indexed can require rebuilding the index. Mixed embeddings from different
@@ -638,22 +660,21 @@ Look for these shim messages:
 - `embed_success`: upstream embeddings returned successfully. Check `dim` for
   the expected vector size.
 - `embed_http_error`: the upstream embedding server returned an HTTP error.
+- `embed_invalid_upstream_response`: the service returned malformed,
+  misordered, non-finite, empty, or inconsistent embedding data.
 - `embed_upstream_unreachable`: the shim could not connect to
   `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
 - `rerank_stub_called` or `query_analysis_stub_called`: Onyx used an endpoint
   this shim intentionally does not implement.
 
-The pinned Onyx embedding client does not impose its own request timeout.
-Passage embedding retries explicit request/HTTP failures three times with five
-seconds between attempts; query embedding does not. Consequently, the bundled
-proxy's five-minute blocked-socket timeout can make a repeatedly wedged passage
-batch take roughly fifteen minutes plus retry delays before Onyx receives the
-final error. Explicit failures do reach the indexing task machinery and can
-eventually mark the attempt failed, but Onyx's independent 30-second indexing
-heartbeat continues while a document-processing thread is blocked. It is not
-an embedding watchdog and will not expose an upstream that waits forever.
-The wrapper therefore owns the five-minute runtime wedge bound, while leaving
-potentially long model loads outside that bound.
+Onyx applies a 30-second model-server connect timeout and a 600-second read
+timeout to each request. The shim permits at most 30 seconds waiting for one of
+its upstream slots and bounds a silent upstream socket wait at 540 seconds, so
+it releases capacity before the caller's corresponding timeout. Passage
+embedding retries qualifying request/HTTP failures up to three times with five
+seconds between attempts; query embedding does not retry. The bundled lifecycle
+proxy retains its separate five-minute blocked-socket limit once a request
+reaches the MLX child.
 
 Common failure modes:
 
@@ -672,8 +693,9 @@ Common failure modes:
   logs, embedding dimension, model identity, and whether old documents were
   indexed with a different model or prefix.
 - Internal search returns relevant documents but fills the model context:
-  set `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT` or
-  `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`, then recreate `api_server`.
+  configure a positive `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT`
+  or `ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS`, then recreate
+  `api_server`.
 - Onyx reports reranker or query-analysis failures: either disable those Onyx
   features for this local path or provide real implementations instead of the
   shim stubs.
@@ -693,21 +715,22 @@ these assumptions:
   embeddings through the model-server env vars pointed at the shim.
 - Onyx's embedding request and response shape still matches the shim, including
   the fields used for query/passage prefixing.
+- The internal-search formatter signature and result/content JSON construction
+  still match the strict optional content-cap patch.
+- OpenAI-compatible responses still provide one indexed vector per input; test
+  ordering, count, numeric finiteness, consistent arbitrary dimensions, body
+  limits, timeouts, and scrubbed errors.
 - Reranking and query-analysis are still optional for this local path, or the
   shim has been extended to support them.
-- The `internal_search` formatter still flows through the patched
-  `SearchToolOverrideKwargs` defaults and
-  `convert_inference_sections_to_llm_string()` helper, or the context-limit
-  patch has been updated for the new search path.
 - The Web connector scrape path and document model fields used by the PDF
   freshness patch still exist.
 - The Security Hardening env-to-UI mapping matches the posture documented in
   [Internal network security](internal_network_security.md).
 - The recommended Admin model type and embedding dimension still match the
   current Onyx UI behavior and the selected local model.
-- The exact synthetic `nomic-ai/nomic-embed-text-v23` name still activates the
-  intended Onyx RAG behavior, and `HuggingFaceTokenizer.__init__` still has the
-  source shape validated by the exact v23-to-v1 tokenizer-only alias.
+- `HuggingFaceTokenizer.__init__` still has the source shape validated by the
+  exact synthetic v23-to-v1 tokenizer-only alias, and any intended large-chunk
+  behavior is tested with multipass indexing enabled.
 
 If Onyx gains a first-class OpenAI-compatible embedding provider that handles
 query/document prefixes correctly in both indexing and query-time search, prefer

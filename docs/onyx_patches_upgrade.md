@@ -223,22 +223,24 @@ Re-audit the pinned Onyx symbols for:
 - any new requests, local-browser, Firecrawl, parser, or generic fallback.
 
 Re-audit the exact fake embedding model contract. The saved
-`nomic-ai/nomic-embed-text-v23` value must continue to activate the intended
-Onyx `nomic-ai` RAG feature gates, while only tokenizer construction is mapped
-to the bundled `nomic-ai/nomic-embed-text-v1` tokenizer. Confirm the strict
+`nomic-ai/nomic-embed-text-v23` value maps only tokenizer construction to the
+bundled `nomic-ai/nomic-embed-text-v1` tokenizer. Confirm the strict
 `HuggingFaceTokenizer.__init__` source-shape check, both API and background
 installation points, no Hugging Face lookup for v23, and unchanged behavior
-for every other tokenizer model.
+for every other tokenizer model. The `nomic-ai` name prefix permits large
+chunks only when multipass indexing is enabled; test that condition explicitly
+if it is intended.
 
 Re-audit Onyx's embedding caller failure contract on every pin. The wrapper
 currently relies on query embedding making one request, passage embedding
-retrying explicit request/HTTP failures three times with fixed five-second
-waits, and neither path supplying its own `requests` timeout. Confirm document
-processing still propagates terminal embedding exceptions into indexing task
-failure handling, and do not mistake its independent heartbeat thread for a
-blocked-embedding watchdog. The wrapper lifecycle proxy owns the five-minute
-post-readiness blocked-socket bound; the shim must not add a timeout or retry
-that can ambiguously replay a POST.
+retrying qualifying request/HTTP failures three times with fixed five-second
+waits, and the model-server client retaining its 30-second connect and
+600-second read timeouts. Confirm the shim's 30-second pool wait and shorter
+540-second silent upstream-socket timeout release capacity before the caller
+abandons a request, document processing propagates terminal exceptions into
+indexing task failure handling, and the shim never retries a POST. The wrapper
+lifecycle proxy retains its separate five-minute post-readiness blocked-socket
+bound.
 
 Verify `sitecustomize_api_server` is the only API bootstrap in both modes,
 neutral shared helpers are imported rather than executed, and patch drift is
@@ -510,6 +512,10 @@ its user-visible behavior:
   and result shapes. Exercise unchanged, changed, missing-validator, 401/403/404,
   non-PDF, non-allowlisted, normal sync, and forced-reindex cases. Only a
   matching unchanged or terminal-unreadable sentinel may skip indexing.
+- **Embedding shim:** validate one indexed vector per input, response
+  reordering, duplicate/missing/out-of-range indices, arbitrary consistent
+  dimensions, finite numeric values, request/response limits, active-handler
+  bounds, upstream timeout, error scrubbing, and single-attempt forwarding.
 - **Executor networking:** validate the exact code-interpreter command-builder
   signature/source, one `docker run`, one native network argument, and the
   native run-argument setting containing exactly eight proxy variables.
@@ -739,7 +745,8 @@ explicit no-VPN, and a documented remote-DNS upstream. For each practical row:
   and `open_url`/helpers/executors remain outside search scheduling;
 - interrupt Myst, Obscura, gateway, and the final hop and confirm no stale
   connection reuse, direct fallback, or application restart storm;
-- test full doc-drop crawl/freshness/reindex, embedding and `internal_search`;
+- test full doc-drop crawl/freshness/native content-hash skip, embedding, and
+  `internal_search`;
 - test disabled/enabled executor network paths and LLM-facing descriptions;
 - exercise configured inference, Teep, WebUI/authentication/MinIO, host
   publishers, and optional Tailscale where configured.

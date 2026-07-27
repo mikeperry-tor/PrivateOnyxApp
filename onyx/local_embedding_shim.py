@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import http.client
 import json
+import math
 import os
 import ssl
-import threading
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -34,6 +35,24 @@ def parse_positive_int_env(var_name: str, default: int) -> int:
     return value
 
 
+def parse_positive_float_env(var_name: str, default: float) -> float:
+    raw = os.environ.get(var_name)
+    if raw is None or raw == "":
+        return default
+
+    try:
+        value = float(raw)
+    except ValueError as e:
+        log_line(f"fatal_config {var_name} must be a number")
+        raise ValueError(f"{var_name} must be a number") from e
+
+    if not math.isfinite(value) or value <= 0:
+        log_line(f"fatal_config {var_name} must be finite and > 0")
+        raise ValueError(f"{var_name} must be finite and > 0")
+
+    return value
+
+
 HOST = "0.0.0.0"
 PORT = 9101
 EMBEDDINGS_URL = os.environ.get(
@@ -52,9 +71,22 @@ UPSTREAM_PROXY_URL = os.environ.get(
 DEFAULT_QUERY_PREFIX = os.environ.get("SHIM_QUERY_PREFIX", "")
 DEFAULT_PASSAGE_PREFIX = os.environ.get("SHIM_PASSAGE_PREFIX", "")
 
-HTTP_TIMEOUT_SECONDS = None
+HTTP_TIMEOUT_SECONDS = parse_positive_float_env("SHIM_UPSTREAM_TIMEOUT_SECONDS", 540.0)
+POOL_WAIT_TIMEOUT_SECONDS = parse_positive_float_env(
+    "SHIM_POOL_WAIT_TIMEOUT_SECONDS", 30.0
+)
 UPSTREAM_POOL_SIZE = parse_positive_int_env("SHIM_UPSTREAM_POOL_SIZE", 8)
 METRICS_LOG_EVERY = parse_positive_int_env("SHIM_METRICS_LOG_EVERY", 50)
+MAX_ACTIVE_REQUESTS = parse_positive_int_env("SHIM_MAX_ACTIVE_REQUESTS", 32)
+MAX_REQUEST_BODY_BYTES = parse_positive_int_env(
+    "SHIM_MAX_REQUEST_BODY_BYTES", 16 * 1024 * 1024
+)
+MAX_UPSTREAM_RESPONSE_BYTES = parse_positive_int_env(
+    "SHIM_MAX_UPSTREAM_RESPONSE_BYTES", 64 * 1024 * 1024
+)
+REQUEST_SOCKET_TIMEOUT_SECONDS = parse_positive_float_env(
+    "SHIM_REQUEST_SOCKET_TIMEOUT_SECONDS", 30.0
+)
 GPU_AVAILABLE = True
 
 
@@ -62,15 +94,24 @@ class UpstreamHTTPError(Exception):
     def __init__(
         self,
         status: int,
-        detail: str,
         pool_wait_ms: float | None = None,
         upstream_ms: float | None = None,
     ):
+        super().__init__(f"upstream returned HTTP {status}")
+        self.status = status
+        self.pool_wait_ms = pool_wait_ms
+        self.upstream_ms = upstream_ms
+
+
+class UpstreamResponseError(Exception):
+    pass
+
+
+class ClientRequestError(Exception):
+    def __init__(self, status: int, detail: str):
         super().__init__(detail)
         self.status = status
         self.detail = detail
-        self.pool_wait_ms = pool_wait_ms
-        self.upstream_ms = upstream_ms
 
 
 class ShimMetrics:
@@ -139,6 +180,7 @@ class UpstreamConnectionPool:
         url: str,
         pool_size: int,
         timeout_seconds: float | None,
+        pool_wait_timeout_seconds: float,
         proxy_url: str,
     ):
         parsed = urlparse(url)
@@ -181,6 +223,7 @@ class UpstreamConnectionPool:
         self.proxy_port = proxy.port
 
         self.timeout_seconds = timeout_seconds
+        self.pool_wait_timeout_seconds = pool_wait_timeout_seconds
         self._slots = threading.BoundedSemaphore(pool_size)
 
     def _new_connection(self) -> http.client.HTTPConnection:
@@ -203,7 +246,8 @@ class UpstreamConnectionPool:
         self, method: str, body: bytes, headers: dict[str, str]
     ) -> tuple[int, str, float, float]:
         wait_start = time.monotonic()
-        self._slots.acquire()
+        if not self._slots.acquire(timeout=self.pool_wait_timeout_seconds):
+            raise TimeoutError("embedding upstream pool wait timed out")
         pool_wait_ms = (time.monotonic() - wait_start) * 1000.0
         connection: http.client.HTTPConnection | None = None
         try:
@@ -214,16 +258,25 @@ class UpstreamConnectionPool:
             )
             connection.request(method, request_target, body=body, headers=headers)
             response = connection.getresponse()
-            raw = response.read().decode("utf-8")
+            raw_bytes = response.read(MAX_UPSTREAM_RESPONSE_BYTES + 1)
             upstream_ms = (time.monotonic() - upstream_start) * 1000.0
             status = response.status
             if status >= 400:
                 raise UpstreamHTTPError(
                     status=status,
-                    detail=raw,
                     pool_wait_ms=pool_wait_ms,
                     upstream_ms=upstream_ms,
                 )
+            if len(raw_bytes) > MAX_UPSTREAM_RESPONSE_BYTES:
+                raise UpstreamResponseError(
+                    "upstream embedding response exceeded the configured size limit"
+                )
+            try:
+                raw = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise UpstreamResponseError(
+                    "upstream embedding response was not valid UTF-8"
+                ) from e
             return status, raw, pool_wait_ms, upstream_ms
         finally:
             if connection is not None:
@@ -236,11 +289,13 @@ try:
         url=EMBEDDINGS_URL,
         pool_size=UPSTREAM_POOL_SIZE,
         timeout_seconds=HTTP_TIMEOUT_SECONDS,
+        pool_wait_timeout_seconds=POOL_WAIT_TIMEOUT_SECONDS,
         proxy_url=UPSTREAM_PROXY_URL,
     )
 except Exception as e:
     log_line(
-        f"fatal_config failed to initialize upstream embedding pool url={EMBEDDINGS_URL!r} error={e}"
+        "fatal_config failed to initialize upstream embedding pool"
+        f" reason_type={type(e).__name__}"
     )
     raise
 SHIM_METRICS = ShimMetrics()
@@ -253,10 +308,21 @@ def normalize_prefix(prefix: str | None) -> str:
     return prefix.replace("\\n", "\n")
 
 
+def is_finite_json_number(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
+
+
 def apply_prefixes(payload: dict) -> tuple[list[str], str, int]:
     texts = payload.get("texts")
     if not isinstance(texts, list) or not all(isinstance(t, str) for t in texts):
         raise ValueError("Invalid 'texts' field; expected list[str]")
+    if not texts or not all(texts):
+        raise ValueError("Invalid 'texts' field; empty inputs are not allowed")
 
     text_type = str(payload.get("text_type", "")).upper()
     manual_query_prefix = payload.get("manual_query_prefix")
@@ -304,19 +370,63 @@ def request_local_embeddings(
     _, raw, pool_wait_ms, upstream_ms = UPSTREAM_POOL.request(
         method="POST", body=data, headers=headers
     )
-    parsed = json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise UpstreamResponseError(
+            "upstream embedding response was not valid JSON"
+        ) from e
+    if not isinstance(parsed, dict):
+        raise UpstreamResponseError("upstream embedding response must be a JSON object")
 
     items = parsed.get("data")
     if not isinstance(items, list):
-        raise ValueError("Embedding response missing 'data' list")
+        raise UpstreamResponseError("upstream embedding response missing 'data' list")
+    if len(items) != len(texts):
+        raise UpstreamResponseError(
+            "upstream embedding response count did not match the input count"
+        )
 
-    embeddings: list[list[float]] = []
+    indexed_embeddings: dict[int, list[float]] = {}
+    vector_dimension: int | None = None
     for item in items:
-        embedding = item.get("embedding") if isinstance(item, dict) else None
+        if not isinstance(item, dict):
+            raise UpstreamResponseError(
+                "upstream embedding response item must be an object"
+            )
+        index = item.get("index")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or index < 0
+            or index >= len(texts)
+            or index in indexed_embeddings
+        ):
+            raise UpstreamResponseError(
+                "upstream embedding response contained an invalid or duplicate index"
+            )
+        embedding = item.get("embedding")
         if not isinstance(embedding, list):
-            raise ValueError("Embedding response item missing 'embedding' vector")
-        embeddings.append(embedding)
+            raise UpstreamResponseError(
+                "upstream embedding response item missing 'embedding' vector"
+            )
+        if not embedding:
+            raise UpstreamResponseError(
+                "upstream embedding response contained an empty vector"
+            )
+        if not all(is_finite_json_number(value) for value in embedding):
+            raise UpstreamResponseError(
+                "upstream embedding response contained a non-finite or non-numeric value"
+            )
+        if vector_dimension is None:
+            vector_dimension = len(embedding)
+        elif len(embedding) != vector_dimension:
+            raise UpstreamResponseError(
+                "upstream embedding response contained inconsistent vector dimensions"
+            )
+        indexed_embeddings[index] = embedding
 
+    embeddings = [indexed_embeddings[index] for index in range(len(texts))]
     return embeddings, pool_wait_ms, upstream_ms
 
 
@@ -332,6 +442,32 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         # Keep concise stdout logs for container visibility.
         log_line(f"shim {self.address_string()} - {format % args}")
+
+    def _read_json_body(self) -> tuple[dict, int]:
+        if self.headers.get("Transfer-Encoding"):
+            raise ClientRequestError(400, "Transfer-Encoding is not supported")
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            raise ClientRequestError(411, "Content-Length is required")
+        try:
+            content_length = int(raw_length)
+        except ValueError as e:
+            raise ClientRequestError(400, "Content-Length must be an integer") from e
+        if content_length <= 0:
+            raise ClientRequestError(400, "Request body must not be empty")
+        if content_length > MAX_REQUEST_BODY_BYTES:
+            raise ClientRequestError(413, "Request body exceeds the configured size limit")
+
+        body_raw = self.rfile.read(content_length)
+        if len(body_raw) != content_length:
+            raise ClientRequestError(400, "Request body ended before Content-Length")
+        try:
+            payload = json.loads(body_raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            raise ClientRequestError(400, "Request body must be valid UTF-8 JSON") from e
+        if not isinstance(payload, dict):
+            raise ClientRequestError(400, "Request body must be a JSON object")
+        return payload, content_length
 
     def do_GET(self) -> None:
         if self.path == "/health":
@@ -369,28 +505,33 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(404, {"detail": "Not found"})
 
     def do_POST(self) -> None:
-        if self.path == "/encoder/cross-encoder-scores":
-            content_length = int(self.headers.get("Content-Length", "0"))
-            body_raw = self.rfile.read(content_length)
-            payload: dict = {}
-            if body_raw:
-                try:
-                    payload = json.loads(body_raw.decode("utf-8"))
-                except Exception:
-                    payload = {}
+        if self.path not in {
+            "/encoder/bi-encoder-embed",
+            "/encoder/cross-encoder-scores",
+            "/custom/query-analysis",
+        }:
+            self._send_json(404, {"detail": "Not found"})
+            return
 
-            passages = payload.get("passages")
-            passage_count = len(passages) if isinstance(passages, list) else 0
+        try:
+            payload, content_length = self._read_json_body()
+        except ClientRequestError as e:
+            self._send_json(e.status, {"detail": e.detail})
+            return
+
+        if self.path == "/encoder/cross-encoder-scores":
+            documents = payload.get("documents")
+            document_count = len(documents) if isinstance(documents, list) else 0
             query = payload.get("query")
             query_len = len(query) if isinstance(query, str) else 0
-            payload_keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+            payload_keys = sorted(payload.keys())
 
             log_line(
                 "rerank_stub_called"
                 f" remote={self.client_address[0]}"
                 f" path={self.path}"
                 f" query_len={query_len}"
-                f" passages={passage_count}"
+                f" documents={document_count}"
                 f" body_bytes={content_length}"
                 f" payload_keys={payload_keys}"
             )
@@ -407,19 +548,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/custom/query-analysis":
-            content_length = int(self.headers.get("Content-Length", "0"))
-            body_raw = self.rfile.read(content_length)
-            payload: dict = {}
-            if body_raw:
-                try:
-                    payload = json.loads(body_raw.decode("utf-8"))
-                except Exception:
-                    payload = {}
-
             user_query = payload.get("query")
             query_len = len(user_query) if isinstance(user_query, str) else 0
             has_history = isinstance(payload.get("history"), list)
-            payload_keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+            payload_keys = sorted(payload.keys())
 
             log_line(
                 "query_analysis_stub_called"
@@ -442,17 +574,9 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        if self.path != "/encoder/bi-encoder-embed":
-            self._send_json(404, {"detail": "Not found"})
-            return
-
         request_start = time.monotonic()
         input_count = 0
         try:
-            content_length = int(self.headers.get("Content-Length", "0"))
-            body_raw = self.rfile.read(content_length)
-            payload = json.loads(body_raw.decode("utf-8"))
-
             requested_model = str(payload.get("model_name") or "").strip() or DEFAULT_MODEL
             if not requested_model:
                 raise ValueError(
@@ -513,7 +637,6 @@ class Handler(BaseHTTPRequestHandler):
                 f" pool_wait_ms={pool_wait_ms:.2f}"
                 f" upstream_ms={upstream_ms:.2f}"
                 f" total_ms={total_ms:.2f}"
-                f" detail={e.detail[:200]}"
             )
             SHIM_METRICS.observe(
                 success=False,
@@ -523,15 +646,33 @@ class Handler(BaseHTTPRequestHandler):
                 pool_wait_ms=e.pool_wait_ms,
                 upstream_ms=e.upstream_ms,
             )
-            self._send_json(e.status, {"detail": e.detail})
+            self._send_json(
+                e.status,
+                {"detail": f"Upstream embedding service returned HTTP {e.status}"},
+            )
+        except UpstreamResponseError as e:
+            total_ms = (time.monotonic() - request_start) * 1000.0
+            log_line(
+                "embed_invalid_upstream_response"
+                f" total_ms={total_ms:.2f}"
+                f" reason={e}"
+            )
+            SHIM_METRICS.observe(
+                success=False,
+                upstream_error=True,
+                total_ms=total_ms,
+                input_count=input_count,
+                pool_wait_ms=None,
+                upstream_ms=None,
+            )
+            self._send_json(502, {"detail": "Invalid response from embedding service"})
         except (OSError, TimeoutError, http.client.HTTPException) as e:
             # Common path for connect/reset/timeout failures to upstream.
-            reason = str(e)
             total_ms = (time.monotonic() - request_start) * 1000.0
             log_line(
                 "embed_upstream_unreachable"
                 f" total_ms={total_ms:.2f}"
-                f" reason={reason}"
+                f" reason_type={type(e).__name__}"
             )
             SHIM_METRICS.observe(
                 success=False,
@@ -543,15 +684,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             self._send_json(
                 502,
-                {
-                    "detail": (
-                        f"Failed to reach local embeddings endpoint at {EMBEDDINGS_URL}: {reason}"
-                    )
-                },
+                {"detail": "Failed to reach embedding service"},
             )
-        except Exception as e:
+        except ValueError as e:
             total_ms = (time.monotonic() - request_start) * 1000.0
-            log_line(f"embed_error total_ms={total_ms:.2f} detail={e}")
+            log_line(f"embed_client_error total_ms={total_ms:.2f} detail={e}")
             SHIM_METRICS.observe(
                 success=False,
                 upstream_error=False,
@@ -561,11 +698,67 @@ class Handler(BaseHTTPRequestHandler):
                 upstream_ms=None,
             )
             self._send_json(400, {"detail": str(e)})
+        except Exception as e:
+            total_ms = (time.monotonic() - request_start) * 1000.0
+            log_line(
+                "embed_internal_error"
+                f" total_ms={total_ms:.2f}"
+                f" reason_type={type(e).__name__}"
+            )
+            SHIM_METRICS.observe(
+                success=False,
+                upstream_error=False,
+                total_ms=total_ms,
+                input_count=input_count,
+                pool_wait_ms=None,
+                upstream_ms=None,
+            )
+            self._send_json(500, {"detail": "Embedding shim internal error"})
+
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(
+        self,
+        server_address,
+        request_handler_class,
+        *,
+        max_active_requests: int = MAX_ACTIVE_REQUESTS,
+    ) -> None:
+        if max_active_requests < 1:
+            raise ValueError("max_active_requests must be positive")
+        self._request_slots = threading.BoundedSemaphore(max_active_requests)
+        super().__init__(server_address, request_handler_class)
+
+    def process_request(self, request, client_address) -> None:
+        request.settimeout(REQUEST_SOCKET_TIMEOUT_SECONDS)
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 if __name__ == "__main__":
     log_line(
-        f"Starting local embedding shim on {HOST}:{PORT}, upstream={EMBEDDINGS_URL}, upstream_pool_size={UPSTREAM_POOL_SIZE}, metrics_log_every={METRICS_LOG_EVERY}, gpu_available={GPU_AVAILABLE}"
+        "Starting local embedding shim"
+        f" on {HOST}:{PORT}"
+        f" upstream_pool_size={UPSTREAM_POOL_SIZE}"
+        f" upstream_timeout_seconds={HTTP_TIMEOUT_SECONDS:g}"
+        f" pool_wait_timeout_seconds={POOL_WAIT_TIMEOUT_SECONDS:g}"
+        f" max_active_requests={MAX_ACTIVE_REQUESTS}"
+        f" metrics_log_every={METRICS_LOG_EVERY}"
+        f" gpu_available={GPU_AVAILABLE}"
     )
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = BoundedThreadingHTTPServer((HOST, PORT), Handler)
     server.serve_forever()

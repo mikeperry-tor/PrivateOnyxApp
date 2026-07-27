@@ -294,6 +294,8 @@ services:
       ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL: "${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL:-majentik/harrier-oss-v1-0.6b-MLX-8bit}"
       SHIM_QUERY_PREFIX: "${ONYX_RAG_EMBEDDING_QUERY_PREFIX:-Instruct: Given a document query, retrieve the most relevant chunk. Query: }"
       SHIM_PASSAGE_PREFIX: "${ONYX_RAG_EMBEDDING_PASSAGE_PREFIX:-}"
+      SHIM_UPSTREAM_TIMEOUT_SECONDS: "540"
+      SHIM_POOL_WAIT_TIMEOUT_SECONDS: "30"
       ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
     volumes:
       - ./onyx/local_embedding_shim.py:/app/local_embedding_shim.py:ro

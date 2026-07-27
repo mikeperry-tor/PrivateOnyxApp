@@ -354,6 +354,12 @@ stable HTTP metadata such as `Last-Modified` and `Content-Length` to skip a full
 download and PDF parse when a document has not changed. It stores the wrapper
 freshness metadata on the Onyx document record for later syncs.
 
+This is a pre-download optimization. Onyx's indexing pipeline independently
+hashes parsed indexable content and skips chunking, embedding, and vector writes
+when that content is unchanged. The wrapper fast path avoids the work required
+to reach that native hash gate. Its HTTP validator cannot detect a same-size
+replacement whose second-resolution modification time is unchanged.
+
 The behavior is deliberately limited to configured local origins; ordinary
 external Web connector PDFs retain upstream Onyx behavior. Before changing
 either method, patch installation validates the exact signatures and critical
@@ -431,8 +437,10 @@ successful tool evidence.
 
 The configured LLM context override validates both upstream token-limit lookup
 functions before making `GEN_AI_MAX_TOKENS` authoritative. The internal-search
-patch validates the complete formatter signature and its result/content JSON
-construction before applying per-result and aggregate character caps. The
+patch validates the complete formatter signature and result/content JSON
+construction before applying optional per-result and aggregate character caps.
+With empty or zero settings it is inert; positive settings cap only the
+model-facing serialization after retrieval and section selection. The
 `open_url`/web-search patch validates the positional defaults it changes, and
 the repository-download patch validates the downloader signature and defaults
 before aligning it with the code-interpreter upload receiver.
@@ -442,11 +450,9 @@ to an inference section. Exact-ID indexed sections bypass it. The aggregate cap
 is applied after indexed/crawled merge and therefore limits both representations
 in the LLM-facing string without limiting retrieval or ingestion itself.
 
-Focused tests cover each configured value and drift boundary. They also cover
-small internal-search budgets: if the human-readable truncation notice cannot
-fit, raw content is cut at the exact cap instead of allowing the notice itself
-to exceed the configured total. Remove these patches when upstream exposes
-equivalent settings at the same preflight/post-format boundaries.
+Focused tests cover the configured values and drift boundaries. Remove these
+patches when upstream exposes equivalent settings at the same preflight/post-
+format boundaries.
 
 ## Code-interpreter executor networking
 
@@ -503,12 +509,13 @@ Other retained behavior has its own focused tests and upgrade checks:
 
 - native lite-mode crawl-only `open_url` separation;
 - local doc-drop behavior;
-- local embedding shim model-name/query-prefix behavior, including the exact
-  fake-nomic v23-to-v1 tokenizer-only alias that preserves Onyx feature gates;
+- local embedding shim model-name/query-prefix behavior, generic indexed-vector
+  validation, bounded requests/responses/threads/timeouts, scrubbed failures,
+  and the exact fake-nomic v23-to-v1 tokenizer-only alias;
 - bundled host embedding lifecycle ownership, pre-thread non-loopback peer
   rejection, socket-bounded connection threads, unbounded live-child cold
-  startup, five-minute proxy-to-child blocked-socket timeout, single-attempt
-  shim forwarding, and accepted-request shutdown draining;
+  startup, five-minute proxy-to-child blocked-socket timeout, bounded
+  single-attempt shim forwarding, and accepted-request shutdown draining;
 - static single-node OpenSearch policy: 512 MiB fixed heap,
   `node.processors=4`, disabled Performance Analyzer and Query Insights top-N
   collection, monthly body-free audit initialization, and zero replicas for
