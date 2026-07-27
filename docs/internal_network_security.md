@@ -25,6 +25,9 @@ Browser state and host-only cookies are separate per hostname, so each needs
 its own login and logout is independent. `WEBUI_CANONICAL_ORIGIN` maps to one
 internal `WEB_DOMAIN`. OAuth/federated callbacks, generated links, voice
 WebSockets, and other origin-sensitive behavior are guaranteed only there.
+The API CORS allowlist is the same single canonical origin; ordinary WebUI API
+requests remain same-origin on every frontend, while other sites cannot read
+even credentialless public API responses through wildcard CORS.
 Its scheme chooses cookie security globally: an HTTPS canonical origin can
 prevent login cookies from working over a secondary HTTP origin, while an HTTP
 canonical origin leaves cookies without `Secure` even on a secondary HTTPS
@@ -43,7 +46,8 @@ apply in every selected mode.
 
 | Component | Internal reachability | Internet path |
 | --- | --- | --- |
-| `api_server` | Onyx backend/data services; API-only `obscura-cdp-gateway`; Teep | fixed public or saved-level host-capable Onyx bridge; optional stock crawler uses only the public bridge |
+| `api_server` | Onyx frontend/backend/data services; API-only `obscura-cdp-gateway`; Teep | fixed public and host-capable Onyx bridges; reviewed adapters select the intended route, and the optional stock crawler uses only the public bridge |
+| `background` | Onyx backend/data services; Teep | fixed public and host-capable Onyx bridges; reviewed connector adapters select the intended route |
 | `searxng-core` | SearX service gateway; direct Obscura CDP control | none except browser activity performed by Obscura |
 | `obscura-cdp-gateway` | API-side control network and Obscura control network | none |
 | `obscura` | CDP control networks and its fixed browser bridge | shared public final-hop policy through `obscura-egress-bridge` |
@@ -90,10 +94,23 @@ the wrapper can validate the public-looking hostname but cannot see or pin the
 upstream's answer. A malicious or misconfigured upstream can resolve it
 privately unless that upstream enforces equivalent policy.
 
-Onyx's own SSRF setting remains an application-layer control for MCP, Web
-Connector, and configured provider choices. It does not replace final-hop
-policy. Saved Admin settings select the public or host-capable route; they do
-not grant browser or executor access to the host listener.
+Onyx's SSRF setting remains an application-layer control. `VALIDATE_ALL` and
+`VALIDATE_LLM` reject private, loopback, link-local, reserved, and similar
+destinations for the operations they validate. `ALLOW_PRIVATE_NETWORK` permits
+RFC1918 MCP/OAuth destinations while retaining the loopback and link-local
+floor. `DISABLED` permits private and loopback destinations, but still rejects
+link-local targets. Web Connector validates only at `VALIDATE_ALL`;
+LLM-controlled `open_url` validates at every level except `DISABLED`, where it
+retains the loopback/link-local floor. This validation does not replace
+final-hop policy.
+
+For HTTPS, upstream Onyx validates one DNS answer and then lets the HTTP client
+resolve the hostname again, leaving a DNS time-of-check/time-of-use window.
+The wrapper's direct-DNS final hops close that window by resolving, validating,
+and pinning the address used for the connection. Its MCP transport deliberately
+delegates redirect, OAuth-discovery, registration, token, and request
+destination authority to that same final hop rather than relying on the
+upstream transport's earlier DNS result.
 
 `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` adds validated RFC1918 LAN
 destinations only to the host-capable route used by configured MCP/Web
@@ -125,6 +142,19 @@ only for `VALIDATE_ALL`; its other three levels use the host route. The exact
 stack-owned `doc-drop-web:8091` authority remains separate. A host-port grant
 does not itself select either host-capable route.
 
+That selection is an adapter contract, not process isolation. `api_server` and
+`background` intentionally join both the public and host-capable caller
+networks. Compromise of either process can address either bridge directly,
+irrespective of the saved SSRF level. Obscura, SearXNG, and executor callers
+remain single-homed and cannot acquire that choice.
+
+The two Onyx processes also join `onyx-data` directly and carry stack-owned
+`NO_PROXY` entries for trusted backend dependencies. A request path that
+ignores the reviewed proxy adapters, or that accepts one of those internal
+service names, is not mediated by the final-hop proxy. Application
+authorization and URL validation therefore remain required; process
+compromise already crosses the data-service boundary.
+
 macOS Podman full mode has one additional, narrow host boundary for local documents.
 The capability-free `doc-drop-web` relay alone joins a dedicated non-internal
 host uplink and can connect only to `host.containers.internal:18091`. The
@@ -155,6 +185,23 @@ pattern and Query Insights controls are static node settings, the tracked
 body-free `audit.yml` seeds clean Security configuration, and Onyx receives a
 zero-replica index-creation default. No administrative certificate, password,
 or additional OpenSearch network authority is granted to another service.
+
+Onyx's document-push endpoint and API key are explicitly blank in both API and
+background services. This prevents the optional all-editions feature from
+copying the complete text and metadata of each newly indexed public document
+to an external endpoint.
+
+Environment-configured Braintrust and Langfuse tracing is also blank, but a
+full administrator can configure and enable tracing in the database. An
+enabled provider can export LLM inputs, outputs, reasoning, tool calls, and
+associated metadata; `DISABLE_TELEMETRY` does not disable this deliberate
+trace export. Image, voice, connector, OAuth, and inference providers likewise
+receive the data inherent in their explicitly configured functions. Custom
+provider and tracing clients do not all use Onyx's SSRF validator or the
+wrapper's reviewed adapters. On an internal-only application network, clients
+without a working proxy fail closed for public Internet access, but they can
+still address reachable internal service names. Full administrators are
+therefore trusted data-export and network-configuration principals.
 
 By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` means the LLM-controlled
 stock crawler does not inherit that Admin private-network allowance. Its
@@ -200,8 +247,20 @@ limits. None is a complete aggregate process-memory bound.
 The public Onyx, browser, and executor bridges share a final-hop proxy process,
 so that proxy is a failure/contention domain. Their networks and allowed-peer
 checks remain separate. Host-capable policy is a different listener and
-bridge. A compromised caller cannot select another bridge merely by choosing
-a proxy address.
+bridge. Single-homed Obscura and executor callers cannot select another bridge
+merely by choosing a proxy address; the dual-homed API and background
+processes can, as described above.
+
+The Docker code-interpreter controller has a writable engine socket so it can
+create short-lived executor containers. Those children receive the fixed
+executor network and do not receive the socket, but compromise of the
+controller grants container-engine and therefore host-level authority. The
+Podman topology omits this socket-dependent service.
+
+Myst, the final-hop policy processes, and `netns-holder` are trusted
+network-namespace peers when the selected routing mode co-locates them.
+Caller gateways constrain application ingress; they do not isolate those
+co-resident trusted processes from one another.
 
 The end-user browser is outside these container networks. As defense in depth,
 nginx supplies a separate restrictive CSP that limits external scripts to
@@ -225,6 +284,8 @@ logging can also be incomplete.
 - Only API/gateway join `onyx-obscura-control`; SearXNG joins browser control.
 - Onyx, browser, executor, and host-capable bridges and caller networks remain
   distinct and have fixed destinations.
+- Only API and background are dual-homed public/host route selectors; their
+  direct data-network and stack-owned `NO_PROXY` trust is explicit.
 - Obscura and SearXNG have no direct Internet route.
 - Initial, redirected, subresource, internal, metadata, and mixed-answer
   destinations fail according to the selected DNS mode.
@@ -234,6 +295,13 @@ logging can also be incomplete.
   handler attributes, and eval are blocked while login hydration, same-origin
   APIs/WebSockets, and local previews work.
 - Full-mode doc-drop remains a local path and does not gain browser/CDP access.
+- Document push remains explicitly blank. Tracing has no enabled provider
+  unless a full administrator deliberately configures that sensitive export.
+- OpenAPI/docs remain unregistered, and tracing, provider, voice, Craft,
+  mobile/SSO, and other expanded routes retain their intended authentication
+  and feature gates.
+- Docker executor children receive neither the engine socket nor an alternate
+  route; the socket-bearing controller is absent from the Podman topology.
 - Exact Docker-host allow/deny tests cover the default, numeric, `all`, and
   configured embedding/proxy authorities. Recreating the host policy restarts
   the dependent bridge so a warm invalid setting cannot reuse stale healthy

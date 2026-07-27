@@ -25,6 +25,8 @@ class OnyxPrivacyConfigTests(unittest.TestCase):
                 'BRAINTRUST_API_KEY: ""',
                 'LANGFUSE_SECRET_KEY: ""',
                 'LANGFUSE_PUBLIC_KEY: ""',
+                'DOCUMENT_PUSH_ENDPOINT_URL: ""',
+                'DOCUMENT_PUSH_API_KEY: ""',
                 'HUBSPOT_TRACKING_URL: ""',
                 'POSTHOG_API_KEY: ""',
                 'MARKETING_POSTHOG_API_KEY: ""',

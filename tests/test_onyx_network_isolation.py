@@ -14,10 +14,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SECRET_ENV = {
     # Production Make invocations export the content-derived image name before
-    # Compose interpolation. Direct Compose-model tests supply a inert value.
+    # Compose interpolation. Direct Compose-model tests supply an inert value.
     "SEARXNG_WRAPPER_IMAGE": "local/private-onyx-searxng:test-model",
     "PYTHON_EXECUTOR_IMAGE": "local/private-onyx-python-executor:test-model",
     "TOR_IMAGE": "local/private-onyx-tor:test-model",
+    "OBSCURA_IMAGE": "local/private-onyx-obscura:test-model",
     "SEARXNG_SECRET": "test",
     "USER_AUTH_SECRET": "test",
     "MINIO_ROOT_USER": "test",
@@ -350,6 +351,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         self.assertEqual(
             model["services"]["api_server"]["environment"]["WEB_DOMAIN"], origin
+        )
+        self.assertEqual(
+            model["services"]["api_server"]["environment"]["CORS_ALLOWED_ORIGIN"],
+            origin,
         )
         self.assertEqual(
             model["services"]["web_server"]["environment"]["WEB_DOMAIN"], origin
@@ -945,6 +950,18 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             background["entrypoint"],
             ["python", "-S", "/app/wrapper-background-entrypoint.py"],
         )
+
+    def test_document_push_export_is_disabled_in_effective_models(self) -> None:
+        for mode in ("lite", "full"):
+            with self.subTest(mode=mode):
+                services = _compose_model(mode)["services"]
+                exporters = ["api_server"]
+                if mode == "full":
+                    exporters.append("background")
+                for service_name in exporters:
+                    environment = services[service_name]["environment"]
+                    self.assertEqual(environment["DOCUMENT_PUSH_ENDPOINT_URL"], "")
+                    self.assertEqual(environment["DOCUMENT_PUSH_API_KEY"], "")
 
     def test_bot_options_are_full_mode_only(self) -> None:
         lite = _compose_model("lite")
