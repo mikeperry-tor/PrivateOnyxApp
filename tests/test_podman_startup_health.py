@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -247,6 +248,8 @@ class PodmanStartupHealthTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as parent:
             directory = Path(parent) / "opensearch"
+            audit_config = Path(parent) / "audit.yml"
+            audit_config.write_text("tracked\n", encoding="utf-8")
 
             def initialize(command: list[str], *, check: bool = True):
                 if command[-3:] == [
@@ -260,7 +263,10 @@ class PodmanStartupHealthTests(unittest.TestCase):
 
             run.side_effect = initialize
             result = startup_health.initialize_opensearch_data(
-                "podman", str(directory), ("one.env", "two.env")
+                "podman",
+                str(directory),
+                str(audit_config),
+                ("one.env", "two.env"),
             )
 
         self.assertEqual(result, "initialized")
@@ -279,11 +285,20 @@ class PodmanStartupHealthTests(unittest.TestCase):
             ],
         )
         self.assertEqual(commands[1][-1], "opensearch")
+        self.assertIn(
+            f"{os.path.abspath(audit_config)}:"
+            "/usr/share/opensearch/config/opensearch-security/audit.yml:ro",
+            commands[1],
+        )
         self.assertEqual(commands[2][0:2], ["podman", "exec"])
         self.assertEqual(commands[2][-1], startup_health.OPENSEARCH_READY_COMMAND)
-        self.assertEqual(commands[3][0:3], ["podman", "stop", "--time"])
+        self.assertEqual(commands[3][0:2], ["podman", "exec"])
         self.assertEqual(
-            commands[4][-3:],
+            commands[3][-1], startup_health.OPENSEARCH_AUDIT_BOOTSTRAP_COMMAND
+        )
+        self.assertEqual(commands[4][0:3], ["podman", "stop", "--time"])
+        self.assertEqual(
+            commands[5][-3:],
             [
                 "opensearch",
                 "-ec",
@@ -291,19 +306,39 @@ class PodmanStartupHealthTests(unittest.TestCase):
                 "/usr/share/opensearch/data/",
             ],
         )
-        self.assertEqual(commands[5][0:3], ["podman", "rm", "--force"])
-        self.assertEqual(commands[6][0:4], ["podman", "volume", "rm", "--force"])
-        self.assertEqual(commands[0][-1], commands[6][-1])
+        self.assertEqual(commands[6][0:3], ["podman", "rm", "--force"])
+        self.assertEqual(commands[7][0:4], ["podman", "volume", "rm", "--force"])
+        self.assertEqual(commands[0][-1], commands[7][-1])
         prepare.assert_called_once_with(opensearch=str(directory))
 
     @patch.object(startup_health, "_run")
+    def test_initialize_opensearch_requires_tracked_audit_config(self, run) -> None:
+        with tempfile.TemporaryDirectory() as parent:
+            with self.assertRaisesRegex(
+                startup_health.ContractError,
+                "tracked OpenSearch audit config is not a regular file",
+            ):
+                startup_health.initialize_opensearch_data(
+                    "podman",
+                    str(Path(parent) / "opensearch"),
+                    str(Path(parent) / "missing-audit.yml"),
+                )
+        run.assert_not_called()
+
+    @patch.object(startup_health, "_run")
     def test_initialize_opensearch_refuses_partial_data(self, run) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            (Path(directory) / "partial").write_text("unknown\n", encoding="ascii")
+        with tempfile.TemporaryDirectory() as parent:
+            directory = Path(parent) / "opensearch"
+            directory.mkdir()
+            (directory / "partial").write_text("unknown\n", encoding="ascii")
+            audit_config = Path(parent) / "audit.yml"
+            audit_config.write_text("tracked\n", encoding="utf-8")
             with self.assertRaisesRegex(
                 startup_health.ContractError, "nonempty but not initialized"
             ):
-                startup_health.initialize_opensearch_data("podman", directory)
+                startup_health.initialize_opensearch_data(
+                    "podman", str(directory), str(audit_config)
+                )
         run.assert_not_called()
 
     @patch.object(startup_health.uuid, "uuid4")
@@ -319,11 +354,16 @@ class PodmanStartupHealthTests(unittest.TestCase):
             ),
             subprocess.CompletedProcess([], 0, stdout=""),
         ]
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as parent:
+            directory = Path(parent) / "opensearch"
+            audit_config = Path(parent) / "audit.yml"
+            audit_config.write_text("tracked\n", encoding="utf-8")
             with self.assertRaisesRegex(
                 startup_health.ContractError, "init failed"
             ):
-                startup_health.initialize_opensearch_data("podman", directory)
+                startup_health.initialize_opensearch_data(
+                    "podman", str(directory), str(audit_config)
+                )
         self.assertEqual(
             run.call_args_list[-1].args[0],
             [
@@ -340,14 +380,19 @@ class PodmanStartupHealthTests(unittest.TestCase):
     def test_initialize_opensearch_reuses_an_initialized_bind(
         self, run, prepare
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            (Path(directory) / "nodes").mkdir()
+        with tempfile.TemporaryDirectory() as parent:
+            directory = Path(parent) / "opensearch"
+            (directory / "nodes").mkdir(parents=True)
+            audit_config = Path(parent) / "audit.yml"
+            audit_config.write_text("tracked\n", encoding="utf-8")
             self.assertEqual(
-                startup_health.initialize_opensearch_data("podman", directory),
+                startup_health.initialize_opensearch_data(
+                    "podman", str(directory), str(audit_config)
+                ),
                 "reused",
             )
         run.assert_not_called()
-        prepare.assert_called_once_with(opensearch=directory)
+        prepare.assert_called_once_with(opensearch=str(directory))
 
     @patch.object(startup_health.sys, "platform", "darwin")
     @patch.object(startup_health, "_run")

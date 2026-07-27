@@ -67,10 +67,16 @@ The Docker Compose files in this stack relies on the following components:
   the currently validated baseline; older versions may work when the startup
   checks pass.
 - Docker Compose 2.35.0 or later. This is required with both Docker and Podman.
-- `make`
+- `make` and `python`
 - `uv` when using the optional local MLX embedding server on macOS.
 
-Linux distributions may provide an older Compose version or no Compose binary.
+The Docker Compose version is most important. Many Linux distributions ship
+with a docker-compose that is too old, and podman's podman-compose lacks key
+features required by this stack.
+
+Podman-only host does not need all of Docker installed, but it does
+need an official Docker docker-compose binary v2.35.0 or later.
+
 Check the version selected for your container engine:
 
 ```bash
@@ -87,9 +93,12 @@ The manual per-user installation places the binary at
 `~/.docker/cli-plugins/docker-compose`, where it can be used by either Docker
 or Podman.
 
-A Podman-only Linux host does not need all of Docker installed, but it does
-need an official Docker docker-compose binary v2.35.0 or later. The Podman
-versions of compose lack key features required by this stack.
+If you use podman on Linux, ensure that you enable Podman's rootless API
+socket before starting the stack:
+
+```bash
+systemctl --user enable --now podman.socket
+```
 
 ## Running the Stack
 

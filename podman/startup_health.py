@@ -42,6 +42,33 @@ OPENSEARCH_READY_COMMAND = (
     '--user "admin:${OPENSEARCH_INITIAL_ADMIN_PASSWORD}" '
     "https://localhost:9200/_cluster/health >/dev/null"
 )
+OPENSEARCH_AUDIT_BOOTSTRAP_COMMAND = """\
+/usr/share/opensearch/plugins/opensearch-security/tools/securityadmin.sh \
+  -f /usr/share/opensearch/config/opensearch-security/audit.yml \
+  -t audit -icl -nhnv \
+  -cacert /usr/share/opensearch/config/root-ca.pem \
+  -cert /usr/share/opensearch/config/kirk.pem \
+  -key /usr/share/opensearch/config/kirk-key.pem
+deadline=$((SECONDS + 30))
+while true; do
+  audit="$(
+    curl --silent --fail --insecure \
+      --user "admin:${OPENSEARCH_INITIAL_ADMIN_PASSWORD}" \
+      https://localhost:9200/_plugins/_security/api/audit
+  )"
+  if printf '%s' "$audit" |
+      grep -Eq '"log_request_body"[[:space:]]*:[[:space:]]*false' &&
+    printf '%s' "$audit" |
+      grep -Eq '"exclude_sensitive_headers"[[:space:]]*:[[:space:]]*true'; then
+    break
+  fi
+  if ((SECONDS >= deadline)); then
+    printf '%s\n' "tracked OpenSearch audit policy did not become active" >&2
+    exit 1
+  fi
+  sleep 1
+done
+"""
 COMPOSE_CAPABILITY_MODEL = """\
 services:
   probe:
@@ -293,11 +320,15 @@ def initialize_postgres_data(
 def initialize_opensearch_data(
     container_bin: str,
     opensearch: str,
+    audit_config: str,
     env_files: Sequence[str] = (),
 ) -> str:
     """Initialize an empty shared bind, or validate an existing OpenSearch node."""
     _require_podman_binary(container_bin)
     opensearch_path = os.path.abspath(opensearch)
+    audit_config_path = os.path.abspath(audit_config)
+    if not os.path.isfile(audit_config_path):
+        raise ContractError("tracked OpenSearch audit config is not a regular file")
     nodes_path = os.path.join(opensearch_path, "nodes")
 
     if not os.path.isdir(nodes_path):
@@ -352,6 +383,9 @@ def initialize_opensearch_data(
                     "--no-deps",
                     "--volume",
                     f"{init_volume}:/usr/share/opensearch/data",
+                    "--volume",
+                    f"{audit_config_path}:"
+                    "/usr/share/opensearch/config/opensearch-security/audit.yml:ro",
                     "opensearch",
                 ]
             )
@@ -377,6 +411,24 @@ def initialize_opensearch_data(
                         "within 240 seconds"
                     )
                 time.sleep(1)
+            try:
+                _run(
+                    [
+                        container_bin,
+                        "exec",
+                        init_container,
+                        "/bin/bash",
+                        "-ec",
+                        OPENSEARCH_AUDIT_BOOTSTRAP_COMMAND,
+                    ]
+                )
+            except subprocess.CalledProcessError as exc:
+                detail = ((exc.stderr or exc.stdout) or "").strip()
+                suffix = f": {detail}" if detail else ""
+                raise ContractError(
+                    "temporary OpenSearch audit-policy bootstrap or verification "
+                    f"failed{suffix}"
+                ) from exc
             _run([container_bin, "stop", "--time", "60", init_container])
             _run(
                 [
@@ -849,6 +901,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--skip-capability-check", action="store_true")
     parser.add_argument("--postgres")
     parser.add_argument("--opensearch")
+    parser.add_argument("--audit-config")
     parser.add_argument("--data-root")
     parser.add_argument("--mode", choices=("lite", "full"))
     parser.add_argument("--doc-source")
@@ -894,12 +947,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(f"Podman PostgreSQL data {result} and prepared.")
         elif args.action == "initialize-opensearch":
-            if args.opensearch is None:
+            if args.opensearch is None or args.audit_config is None:
                 raise ContractError(
-                    "--opensearch is required for initialize-opensearch"
+                    "--opensearch and --audit-config are required for "
+                    "initialize-opensearch"
                 )
             result = initialize_opensearch_data(
-                args.container_bin, args.opensearch, args.env_file
+                args.container_bin,
+                args.opensearch,
+                args.audit_config,
+                args.env_file,
             )
             print(f"Podman OpenSearch data {result} and prepared.")
         else:

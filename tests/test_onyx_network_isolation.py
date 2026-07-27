@@ -303,6 +303,7 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
     def test_wrapper_overlays_are_colocated_below_the_root_base(self) -> None:
         expected = {
             "docker-compose.code-interpreter-network.yml",
+            "docker-compose.docker-linux-full.yml",
             "docker-compose.docker-linux.yml",
             "docker-compose.full.yml",
             "docker-compose.lite.yml",
@@ -694,7 +695,9 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             vpn_enabled=False, container_bin="docker", HOST_OS="Darwin"
         )
         self.assertIn("docker-compose.docker-linux.yml", linux_files)
+        self.assertIn("docker-compose.docker-linux-full.yml", linux_files)
         self.assertNotIn("docker-compose.docker-linux.yml", macos_files)
+        self.assertNotIn("docker-compose.docker-linux-full.yml", macos_files)
 
         model = _compose_model(
             "lite",
@@ -708,6 +711,19 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertEqual(postgres["user"], "1234:1235")
         self.assertIsNone(postgres["entrypoint"])
         self.assertNotIn("userns_mode", postgres)
+
+        full_model = _compose_model(
+            "full",
+            "docker-compose.docker-linux.yml",
+            "docker-compose.docker-linux-full.yml",
+            env_overrides={
+                "PRIVATE_ONYX_HOST_UID": "1234",
+                "PRIVATE_ONYX_HOST_GID": "1235",
+            },
+        )
+        minio = full_model["services"]["minio"]
+        self.assertEqual(minio["user"], "1234:1235")
+        self.assertNotIn("userns_mode", minio)
 
     def test_makefile_scopes_podman_document_relay_to_macos(self) -> None:
         linux_files = _make_compose_files(

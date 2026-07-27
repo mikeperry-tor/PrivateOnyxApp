@@ -205,16 +205,16 @@ and containerized Python server from `docker-compose.full.yml`.
 ### Shared Docker data
 
 The core engine overlays let Docker and Podman use the same stopped PostgreSQL
-cluster and OpenSearch index in place. This is unconditional: there are no
-marker-selected storage branches or opt-out flags. On native Linux, the
-Docker-only overlay keeps PostgreSQL owned by the invoking host user so the
-same mode-0700 tree is representable in rootless Podman's `keep-id` mapping.
-The stock Docker entrypoint initializes a fresh bind as that user and cannot
-perform its root-only ownership change. Podman's preflight initializes a
-genuinely missing or empty PostgreSQL bind and refuses a nonempty bind without
-`PG_VERSION` as partial or unknown state. The same rule applies to OpenSearch:
-a genuinely missing or empty bind is initialized, while a nonempty bind
-without `nodes` is never overwritten.
+cluster, OpenSearch index, and full-mode MinIO object store in place. This is
+unconditional: there are no marker-selected storage branches or opt-out flags.
+On native Linux, the Docker-only overlay keeps PostgreSQL and MinIO owned by
+the invoking host user so their persistent files remain writable after a
+switch to rootless Podman. The stock PostgreSQL entrypoint initializes a fresh
+bind as that user and cannot perform its root-only ownership change. Podman's
+preflight initializes a genuinely missing or empty PostgreSQL bind and refuses
+a nonempty bind without `PG_VERSION` as partial or unknown state. The same rule
+applies to OpenSearch: a genuinely missing or empty bind is initialized, while
+a nonempty bind without `nodes` is never overwritten.
 The ownership guard inspects both native engines without the Podman
 `DOCKER_HOST` compatibility override used by the external Compose provider, so
 repeated Podman claims cannot misclassify Podman writers as Docker writers.
@@ -295,14 +295,16 @@ Docker's attribute and valid per-file Podman runtime attributes intact.
 On native Linux, Docker's ordinary root entrypoint instead changes the bind to
 host uid 70, which a rootless user namespace cannot represent or traverse.
 `docker-compose.docker-linux.yml` therefore runs both the stock entrypoint and
-the server as the invoking host uid/gid. Before either engine creates a
-container, the common startup preflight creates every selected mode's host bind
-root as the invoking user; native Docker must not create a missing PostgreSQL
-source as root. The entrypoint can then initialize the fresh host-owned bind
-but cannot perform its root-only ownership change, so Docker does not undo
-Podman's compatible ownership. The overlay is never selected on macOS, where
-Docker Desktop ownership metadata and the existing Podman xattr handling
-remain unchanged.
+the server as the invoking host uid/gid. The full-mode-only
+`docker-compose.docker-linux-full.yml` does the same for MinIO so it does not
+leave root-owned object-store files that rootless Podman cannot rename. Before
+either engine creates a container, the common startup preflight creates every
+selected mode's host bind root as the invoking user; native Docker must not
+create a missing PostgreSQL source as root. The entrypoint can then initialize
+the fresh host-owned bind but cannot perform its root-only ownership change, so
+Docker does not undo Podman's compatible ownership. These overlays are never
+selected on macOS, where Docker Desktop ownership metadata and the existing
+Podman xattr handling remain unchanged.
 
 OpenSearch uses `keep-id:uid=1000,gid=1000` and its ordinary image entrypoint.
 The Podman-only network namespace sets `net.ipv4.ping_group_range=1000 1000`:
@@ -367,9 +369,10 @@ Compose model is therefore necessary but not sufficient evidence.
   on macOS; native Linux has no Docker Desktop ownership xattr to remove.
 - `initialize-opensearch` initializes a missing or empty OpenSearch bind through
   the pinned service image and a disposable engine volume, waits for the
-  temporary node to become ready, stops it cleanly, copies the initialized
-  files into the shared bind, and removes its temporary container and volume on
-  every outcome. It refuses nonempty bind data without `nodes`.
+  temporary node to become ready, explicitly loads and verifies the tracked
+  audit policy, stops it cleanly, copies the initialized files into the shared
+  bind, and removes its temporary container and volume on every outcome. It
+  refuses nonempty bind data without `nodes`.
 - `prepare-shared-data` validates an initialized database/index path and is
   retained as the common post-initialization check and for focused diagnostics.
 
@@ -652,11 +655,13 @@ direct inspection; do not mix Docker engine results into the evidence.
    containerized server instead. Never print private document names or
    contents.
 6. Validate the shared Docker binds. Confirm the core Podman overlays, the
-   native-Linux Docker ownership overlay, Podman's PostgreSQL direct entrypoint,
-   `keep-id` mappings, initialization checks, macOS mount-root
-   xattr preflight, clean shutdown, and engine exclusivity. On native Linux,
-   exercise Docker-to-Podman-to-Docker switching and require the PostgreSQL
-   tree to remain owned by the invoking host uid/gid after every start.
+   native-Linux Docker ownership overlays, Podman's PostgreSQL direct
+   entrypoint, `keep-id` mappings, initialization checks, tracked OpenSearch
+   audit-policy bootstrap, macOS mount-root xattr preflight, clean shutdown,
+   and engine exclusivity. On native Linux, exercise clean creation and
+   Docker-to-Podman plus Podman-to-Docker switching with persistent
+   PostgreSQL, OpenSearch, and MinIO records. Require the PostgreSQL and MinIO
+   trees to remain owned by the invoking host uid/gid after every Docker start.
 7. Verify socket-only code interpreter remains absent and Myst recovery has no
    socket mount or engine-specific overlay. If a future feature needs
    control-plane access, review its authority rather than exposing the rootless

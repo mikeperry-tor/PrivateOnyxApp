@@ -1073,6 +1073,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[1].split("\n\n", 1)[0]
         self.assertIn("initialize-opensearch", opensearch_preflight)
         self.assertIn("COMPOSE_FILE=$(PODMAN_START_FILES)", opensearch_preflight)
+        self.assertIn("--audit-config onyx/opensearch/audit.yml", opensearch_preflight)
 
     def test_host_bind_roots_are_prepared_before_image_or_compose_mutation(
         self,

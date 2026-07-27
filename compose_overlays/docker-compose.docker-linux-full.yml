@@ -1,0 +1,6 @@
+services:
+  # MinIO otherwise writes its persistent bind as host root under Docker.
+  # Rootless Podman maps container root to the invoking user and cannot update
+  # those files after an engine switch.
+  minio:
+    user: "${PRIVATE_ONYX_HOST_UID:?host uid is required}:${PRIVATE_ONYX_HOST_GID:?host gid is required}"
