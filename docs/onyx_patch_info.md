@@ -193,6 +193,13 @@ parsing, provider-specific challenge checks, result normalization, and explicit
 no-results detection. Parser mismatch is an unresponsive failure, not empty
 success.
 
+`duckduckgo2` uses DuckDuckGo's JavaScript-rendered No-AI search surface at
+`noai.duckduckgo.com`, not the CAPTCHA-prone HTML endpoint. Search navigation
+defaults to `networkidle2` so its `d.js` payload can hydrate organic semantic
+rows. The engine unwraps only recognized DuckDuckGo `/l/?uddg=...` redirects,
+decodes the destination once, and treats an unfinished deep-result preload as
+a verification failure.
+
 The adapter uses one lazy event-loop thread for five independently retained
 provider connections. It creates and closes a fresh target for every query and
 retains each provider's native context until one hour after its last attempt.

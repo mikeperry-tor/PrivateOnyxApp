@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""DuckDuckGo HTML engine backed by one direct Obscura navigation.
+"""DuckDuckGo No-AI engine backed by one direct Obscura navigation.
 
 The stock ``duckduckgo`` engine hits captchas on most exit IPs.  This stub uses
-DuckDuckGo's lightweight HTML endpoint (``html.duckduckgo.com/html/``) rendered
-through Obscura. The HTML endpoint is server-side rendered, while the browser
-path retains the wrapper's fingerprint and routing policy.
+DuckDuckGo's JavaScript-rendered No-AI endpoint (``noai.duckduckgo.com``)
+through Obscura.  No-AI still loads web results from DuckDuckGo's ``d.js``
+endpoint, so this engine waits for network idle before parsing the hydrated
+organic-result DOM.
 """
 
 import typing as t
@@ -32,35 +33,49 @@ about = {
 }
 
 categories = ["general", "web"]
-paging = True
-max_page = 5
+paging = False
 time_range_support = False
 safesearch = False
 language_support = False
 
-# DDG HTML endpoint result cards: <div class="result results_links ... web-result">
-results_xpath = '//div[contains(@class, "result") and contains(@class, "web-result")]'
-no_results_xpath = '//*[contains(concat(" ", normalize-space(@class), " "), " no-results ")]'
-link_xpath = './/a[contains(@class, "result__a")]'
-snippet_xpath = './/a[contains(@class, "result__snippet")] | .//*[contains(@class, "result__snippet")]'
+# No-AI uses DuckDuckGo's React result DOM.  Select only organic rows and stable
+# semantic attributes; its generated class names are intentionally not part of
+# the parser contract.
+results_xpath = '//li[@data-layout="organic"]'
+no_results_xpath = (
+    '//*[@data-testid="no-results" or @data-layout="no-results"]'
+    ' | //*[contains(concat(" ", normalize-space(@class), " "), " no-results ")]'
+)
+link_xpath = './/a[@data-testid="result-title-a"]'
+snippet_xpath = './/*[@data-result="snippet"]'
 captcha_xpath = (
-    '//form[contains(translate(@action, '
+    '//form[@id="challenge-form" or contains(translate(@action, '
     '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), '
     '"duckduckgo.com/anomaly.js") '
     'or contains(translate(@action, '
-    '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "cc=botnet")] '
+    '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "cc=botnet")]'
     '| //*[contains(concat(" ", normalize-space(@class), " "), '
     '" anomaly-modal__modal ")]'
+)
+unfinished_deep_load_xpath = (
+    '//link[@id="deep_preload_link" and contains(@href, "links.duckduckgo.com/d.js")]'
+    ' | //script[@id="deep_preload_script"'
+    ' and contains(@src, "links.duckduckgo.com/d.js")]'
+)
+redirect_hosts = frozenset(
+    {
+        "duckduckgo.com",
+        "www.duckduckgo.com",
+        "noai.duckduckgo.com",
+        "links.duckduckgo.com",
+    }
 )
 
 
 def search(query: str, params: "RequestParams"):
-    """Build the DuckDuckGo HTML search URL and navigate it once."""
-    query_args: t.Dict[str, str] = {"q": query}
-    # DDG HTML endpoint paginates via the next page form, not a clean param;
-    # we pass the query and let pageno>1 be a best-effort no-op (DDG HTML
-    # returns ~30 results on the first page, enough for SearXNG aggregation).
-    target_url = "https://html.duckduckgo.com/html/?" + urlencode(query_args)
+    """Build the DuckDuckGo No-AI web URL and navigate it once."""
+    query_args: t.Dict[str, str] = {"q": query, "ia": "web"}
+    target_url = "https://noai.duckduckgo.com/?" + urlencode(query_args)
     return _parse_html(
         _obscura.navigate(
             "duckduckgo2",
@@ -72,8 +87,19 @@ def search(query: str, params: "RequestParams"):
 
 def _strip_ddg_redirect(href: str) -> str:
     """DuckDuckGo wraps result links in ``/l/?uddg=<encoded>``.  Unwrap them."""
-    if "uddg=" in href:
-        parsed = urlparse(href)
+    parsed = urlparse(href)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    is_relative_wrapper = (
+        not parsed.scheme
+        and not parsed.netloc
+        and parsed.path.rstrip("/") == "/l"
+    )
+    is_ddg_wrapper = (
+        host in redirect_hosts
+        and parsed.path.rstrip("/") == "/l"
+        and parsed.scheme in {"", "http", "https"}
+    )
+    if is_relative_wrapper or is_ddg_wrapper:
         qs = parse_qs(parsed.query)
         uddg = qs.get("uddg", [None])[0]
         if uddg:
@@ -99,6 +125,13 @@ def _parse_html(text: str):
     if not result_nodes:
         if eval_xpath(dom, no_results_xpath):
             return []
+        if eval_xpath(dom, unfinished_deep_load_xpath):
+            raise SearxEngineCaptchaException(
+                message=(
+                    "duckduckgo2: DuckDuckGo did not complete its "
+                    "JavaScript result verification"
+                ),
+            )
         _obscura.parser_mismatch("duckduckgo2", text, "zero result cards")
 
     for result in result_nodes:
@@ -109,7 +142,8 @@ def _parse_html(text: str):
         if not raw_url:
             continue
         url = _strip_ddg_redirect(raw_url)
-        if not url.startswith("http"):
+        parsed_url = urlparse(url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
             continue
 
         title = extract_text(link_nodes[0])

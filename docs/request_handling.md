@@ -174,11 +174,15 @@ disables WebSocket keepalive pings, clears completed-target CDP events, and is
 discarded after a client failure, body-stream cleanup failure, target-close
 failure, or negative target-close acknowledgement.
 
-Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `load`). Built-in
-`open_url` uses `OBSCURA_BROWSER_WAIT_UNTIL_WEB` (default
+Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `networkidle2`) so
+JavaScript result payloads have time to hydrate after the page load event.
+Built-in `open_url` uses `OBSCURA_BROWSER_WAIT_UNTIL_WEB` (default
 `domcontentloaded`). Accepted values are the finite Obscura lifecycle values
 validated by the shared client. These are event conditions, not sleeps;
-Obscura also has a finite navigation deadline.
+Obscura also has a finite navigation deadline. Lowering the search wait to
+`load` or `domcontentloaded` can capture DuckDuckGo No-AI's shell before its
+organic rows exist; `networkidle0` waits more strictly and can add substantial
+latency.
 
 Connection, target creation, attachment, and CDP domain setup share one
 absolute 45-second pre-navigation deadline. It is not a fresh 45-second
@@ -425,13 +429,19 @@ structure is an unresponsive parser mismatch. The engines cannot call
 SearXNG's normal HTTP transport, retry internally, or choose another provider.
 
 Provider result URLs retain their complete query strings and fragments.
-DuckDuckGo's `uddg` result wrapper is decoded exactly once by query parsing;
+`duckduckgo2` navigates
+`https://noai.duckduckgo.com/?q=...&ia=web`, admits only that exact terminal
+host, waits for the JavaScript `d.js` result payload, and parses organic
+`data-layout` / `data-testid` rows rather than generated class names.
+DuckDuckGo's `/l/` `uddg` result wrapper is unwrapped only on a relative link
+or a recognized DuckDuckGo host and is decoded exactly once by query parsing;
 the resulting URL is not decoded again, because its remaining escapes can be
 meaningful nested URL values, signatures, or encoded separators. SearXNG's
 optional tracker-remover plugin remains disabled and does not rewrite results.
-DuckDuckGo's rendered `anomaly-modal__modal` verification page is a typed
-CAPTCHA failure, alongside its form-based anomaly markers, so it enters the
-ordinary one-hour blocking suspension instead of surfacing as parser drift.
+DuckDuckGo's form-based and rendered `anomaly-modal__modal` verification pages,
+and an unfinished `deep_preload_link` after the network-idle wait, are typed
+CAPTCHA failures. They enter the ordinary one-hour blocking suspension instead
+of surfacing as parser drift.
 
 Bing's rendered `One last step` / `solve the challenge below to continue`
 interstitial is a CAPTCHA failure, even when it contains none of Bing's older

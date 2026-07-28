@@ -25,7 +25,7 @@ CDP_URL = os.environ.get(
     "SEARXNG_OBSCURA_CDP_URL", "ws://obscura:9222/devtools/browser"
 )
 WAIT_UNTIL = validate_wait_until(
-    os.environ.get("OBSCURA_BROWSER_WAIT_UNTIL_SEARCH", "load")
+    os.environ.get("OBSCURA_BROWSER_WAIT_UNTIL_SEARCH", "networkidle2")
 )
 ALLOW_HTTP = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in {
     "1", "true", "yes", "on"
@@ -40,7 +40,7 @@ PRE_NAVIGATION_GUARD_PARAM = "_wrapper_obscura_pre_navigation_guard"
 TERMINAL_HOSTS = {
     "google2": frozenset({"www.google.com", "google.com", "consent.google.com"}),
     "bing2": frozenset({"www.bing.com", "bing.com"}),
-    "duckduckgo2": frozenset({"html.duckduckgo.com", "www.duckduckgo.com", "duckduckgo.com"}),
+    "duckduckgo2": frozenset({"noai.duckduckgo.com"}),
     "brave2": frozenset({"search.brave.com"}),
     "startpage2": frozenset({"www.startpage.com", "startpage.com"}),
 }

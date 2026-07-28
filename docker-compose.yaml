@@ -90,7 +90,7 @@ services:
       # already suspended or unavailable.
       SEARXNG_ROUND_ROBIN: "${SEARXNG_ROUND_ROBIN:-true}"
       SEARXNG_OBSCURA_CDP_URL: "ws://obscura:9222/devtools/browser"
-      OBSCURA_BROWSER_WAIT_UNTIL_SEARCH: "${OBSCURA_BROWSER_WAIT_UNTIL_SEARCH:-load}"
+      OBSCURA_BROWSER_WAIT_UNTIL_SEARCH: "${OBSCURA_BROWSER_WAIT_UNTIL_SEARCH:-networkidle2}"
       EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
       GRANIAN_WORKERS: "1"
       WRAPPER_PATCH_STRICT: "true"

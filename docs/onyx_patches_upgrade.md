@@ -380,7 +380,12 @@ For every custom engine verify:
 - URL/query/locale/safe-search/time/page construction;
 - sanitized selector fixtures, normalization, explicit no-results marker,
   parser mismatch, exact terminal hosts, and shared block markers;
+- DuckDuckGo No-AI query construction (`noai.duckduckgo.com`, `ia=web`),
+  semantic organic-row/title/snippet selectors, the `networkidle2` search
+  default, and unfinished deep-result preloads mapping to verification
+  suspension;
 - complete result query/fragment preservation; DuckDuckGo `uddg` wrapper
+  admission only for relative or recognized DuckDuckGo `/l/` links and
   decoding exactly once without decoding nested URL values, signatures, or
   encoded separators a second time;
 - DuckDuckGo form-based and rendered `anomaly-modal__modal` verification

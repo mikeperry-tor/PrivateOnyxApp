@@ -236,16 +236,58 @@ class SearxngObscuraEngineTests(unittest.TestCase):
             self.duckduckgo._parse_html(anomaly_modal)
 
         result = """
-        <html><body><div class="result results_links web-result">
-          <a class="result__a"
-             href="/l/?uddg=https%3A%2F%2Fexample.com%2F">Example</a>
-          <a class="result__snippet">Snippet</a>
-        </div></body></html>
+        <html><body><ol class="react-results--main">
+          <li data-layout="organic">
+            <article data-testid="result">
+              <a data-testid="result-title-a"
+                 href="/l/?uddg=https%3A%2F%2Fexample.com%2F">Example</a>
+              <div data-result="snippet">Snippet</div>
+            </article>
+          </li>
+        </ol></body></html>
         """
         self.assertEqual(
             self.duckduckgo._parse_html(result),
             [{"url": "https://example.com/", "title": "Example", "content": "Snippet"}],
         )
+
+    def test_duckduckgo_noai_query_and_no_results_contract(self):
+        no_results = """
+        <html><body><section data-testid="mainline">
+          <div data-testid="no-results">No results found.</div>
+        </section></body></html>
+        """
+        self.assertEqual(self.duckduckgo._parse_html(no_results), [])
+
+        with patch.object(self.obscura, "navigate", return_value=no_results) as navigate:
+            self.duckduckgo.search(
+                "private query",
+                {
+                    "pageno": 1,
+                    self.obscura.PRE_NAVIGATION_GUARD_PARAM: None,
+                },
+            )
+        navigate.assert_called_once()
+        engine, target, guard = navigate.call_args.args
+        self.assertEqual(engine, "duckduckgo2")
+        self.assertEqual(
+            target,
+            "https://noai.duckduckgo.com/?q=private+query&ia=web",
+        )
+        self.assertIsNone(guard)
+        self.assertFalse(self.duckduckgo.paging)
+
+    def test_duckduckgo_unfinished_deep_verification_is_typed_captcha(self):
+        challenge = """
+        <html><head>
+          <link id="deep_preload_link" rel="preload" as="script"
+                href="https://links.duckduckgo.com/d.js?q=example&amp;a=noai">
+        </head><body>
+          <section data-testid="mainline"><ol class="react-results--main"></ol></section>
+        </body></html>
+        """
+        with self.assertRaisesRegex(RuntimeError, "JavaScript result verification"):
+            self.duckduckgo._parse_html(challenge)
 
     def test_duckduckgo_redirect_preserves_result_query_and_fragment(self):
         destination = (
@@ -255,6 +297,21 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         wrapped = "/l/?uddg=" + quote(destination, safe="")
         self.assertEqual(
             self.duckduckgo._strip_ddg_redirect(wrapped),
+            destination,
+        )
+
+        absolute = "https://noai.duckduckgo.com/l/?uddg=" + quote(
+            destination, safe=""
+        )
+        self.assertEqual(
+            self.duckduckgo._strip_ddg_redirect(absolute),
+            destination,
+        )
+        scheme_relative = "//duckduckgo.com/l/?uddg=" + quote(
+            destination, safe=""
+        )
+        self.assertEqual(
+            self.duckduckgo._strip_ddg_redirect(scheme_relative),
             destination,
         )
 
@@ -268,6 +325,18 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         self.assertEqual(
             self.duckduckgo._strip_ddg_redirect(wrapped),
             destination,
+        )
+        untrusted_wrapper = "https://example.net/l/?uddg=" + quote(
+            destination, safe=""
+        )
+        self.assertEqual(
+            self.duckduckgo._strip_ddg_redirect(untrusted_wrapper),
+            untrusted_wrapper,
+        )
+        non_web_wrapper = "javascript:/l?uddg=" + quote(destination, safe="")
+        self.assertEqual(
+            self.duckduckgo._strip_ddg_redirect(non_web_wrapper),
+            non_web_wrapper,
         )
 
     def test_startpage_sanitized_result_and_captcha(self):
