@@ -65,10 +65,14 @@ domain. Connection isolation is not caller authentication. The narrow API
 gateway prevents unrelated Onyx backend peers from gaining CDP reachability,
 but it is not an authorization protocol between the two intended callers.
 
-Each request uses a fresh connection and target and closes both on every path;
-there is no cookie-clear race to claim as an isolation mechanism. A cleanup
-failure remains an availability/resource event, not a safe retry signal.
-Clients do not reconnect or navigate a second time.
+Each direct `open_url` request uses and closes a fresh connection and target.
+SearXNG partitions one lazy connection per exact provider, creates and closes a
+fresh target for every query, and closes the connection after one hour idle.
+Provider connections retain their native cookie jar and HTTP client only
+within that provider boundary. There is no cookie-clear race to claim as an
+isolation mechanism. A cleanup failure discards the affected connection and
+remains an availability/resource event, not a safe retry signal. Clients do
+not reconnect or navigate a second time within an attempt.
 
 ## Destination validation
 
@@ -277,6 +281,12 @@ Wrapper logs redact query strings, bodies, cookies, credentials, and response
 content. Upstream Obscura does not provide the same guarantee and may expose
 full URLs in some logging modes; its logs are private data. Multi-worker child
 logging can also be incomplete.
+
+Provider browser state is process-local but not principal-local. All searches
+handled by one SearXNG process can contribute to the same provider's retained
+session. It never crosses providers or reaches Onyx applications, but it can
+correlate users of a multi-user deployment. The supported private deployment
+accepts this only under its single-user trust assumption.
 
 ## Verification checklist
 

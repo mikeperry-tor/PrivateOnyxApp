@@ -65,6 +65,31 @@ class Handler(BaseHTTPRequestHandler):
                 content_type="text/html; charset=utf-8",
             )
             return
+        if path == "/session/set":
+            self._send(
+                b"<html><body><main id='session'>set</main></body></html>",
+                content_type="text/html; charset=utf-8",
+                headers={
+                    "Set-Cookie": (
+                        "private-onyx-provider-session=retained; "
+                        "Path=/; HttpOnly; SameSite=Lax"
+                    )
+                },
+            )
+            return
+        if path == "/session/check":
+            retained = (
+                "private-onyx-provider-session=retained"
+                in self.headers.get("Cookie", "")
+            )
+            state = "retained" if retained else "missing"
+            self._send(
+                (
+                    f"<html><body><main id='session'>{state}</main></body></html>"
+                ).encode(),
+                content_type="text/html; charset=utf-8",
+            )
+            return
         if path == "/redirect":
             self._send(
                 b"",

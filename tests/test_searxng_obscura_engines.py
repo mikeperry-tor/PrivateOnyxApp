@@ -72,6 +72,7 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         obscura = types.ModuleType("searx.engines._obscura")
         obscura.navigate = lambda *_args: ""
         obscura.RESERVATION_PARAM = "_wrapper_obscura_reservation_token"
+        obscura.PRE_NAVIGATION_GUARD_PARAM = "_wrapper_obscura_pre_navigation_guard"
 
         def mismatch(engine, _text, reason):
             raise ParserMismatch(f"{engine}: {reason}")
@@ -109,10 +110,10 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         with patch.object(self.obscura, "navigate", return_value=dom) as navigate:
             self.brave.search("private query", {"pageno": 1, "time_range": None})
         navigate.assert_called_once()
-        engine, target, reservation = navigate.call_args.args
+        engine, target, guard = navigate.call_args.args
         self.assertEqual(engine, "brave2")
         self.assertIn("q=private+query", target)
-        self.assertIsNone(reservation)
+        self.assertIsNone(guard)
 
     def test_bing_visible_one_last_step_is_typed_captcha(self):
         challenge = """

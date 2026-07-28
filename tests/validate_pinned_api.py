@@ -20,6 +20,7 @@ def _install_wrapper_patches() -> None:
     patches.apply_reasoning_content_preservation_patch()
     patches.apply_coding_agent_final_answer_fallback_patch()
     patches.apply_preserve_tool_results_patch()
+    patches.apply_searxng_single_attempt_patch()
 
 
 def _validate_python_tool_identity() -> None:
@@ -100,6 +101,40 @@ def _validate_lite_open_url_contract() -> None:
     assert "self._fetch_web_content" in run_source
 
 
+def _validate_web_search_timeout_contract() -> None:
+    from onyx.tools import tool_runner
+    from onyx.tools.tool_implementations.web_search.clients.searxng_client import (
+        SearXNGClient,
+    )
+
+    assert tool_runner.TOOL_EXECUTION_TIMEOUT_SECONDS == 10 * 60
+    search_source = inspect.getsource(SearXNGClient.search)
+    # inspect.getsource() reports the original decorated definition even after
+    # the runtime callable has been unwrapped.  Callable metadata, not source
+    # text, is authoritative for whether retry wrappers remain installed.
+    assert "@retry_builder(tries=3, delay=1, backoff=2)" in search_source
+    assert not hasattr(SearXNGClient.search, "__wrapped__")
+    assert "requests.post(" in search_source
+    assert "timeout=" not in search_source
+
+
+def _validate_web_search_concurrency_contract() -> None:
+    from onyx.tools import tool_runner
+    from onyx.tools.tool_implementations.web_search.web_search_tool import (
+        QUERIES_FIELD,
+        WebSearchTool,
+    )
+
+    assert tool_runner.MERGEABLE_TOOL_FIELDS[WebSearchTool.NAME] == QUERIES_FIELD
+    definition_source = inspect.getsource(WebSearchTool.tool_definition)
+    assert '"type": "array"' in definition_source
+    assert '"maxItems"' not in definition_source
+    run_source = inspect.getsource(WebSearchTool.run)
+    assert "for query in queries" in run_source
+    assert "run_functions_tuples_in_parallel(" in run_source
+    assert "max_workers=" not in run_source
+
+
 def _validate_litellm_contract() -> None:
     from litellm.litellm_core_utils.get_model_cost_map import (
         get_model_cost_map_source_info,
@@ -159,5 +194,7 @@ if __name__ == "__main__":
     _validate_python_tool_identity()
     _validate_indexed_open_url_contract()
     _validate_lite_open_url_contract()
+    _validate_web_search_timeout_contract()
+    _validate_web_search_concurrency_contract()
     _validate_litellm_contract()
     print("PINNED_API_PATCH_CONTRACTS_OK")

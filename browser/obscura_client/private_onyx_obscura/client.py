@@ -383,6 +383,7 @@ async def _drain_body(
     diagnostic_id: str,
     cleanup_command_timeout_seconds: float,
     command_timeout: Callable[[str], float],
+    cleanup_failure: Callable[[], None] | None = None,
 ) -> bytes:
     handle: str | None = None
     data = bytearray()
@@ -450,6 +451,8 @@ async def _drain_body(
                     timeout_stage="cleanup-body-close",
                 )
             except Exception as exc:
+                if cleanup_failure is not None:
+                    cleanup_failure()
                 category = (
                     exc.category.value
                     if isinstance(exc, ObscuraClientError)
@@ -583,6 +586,65 @@ class _RawCdp:
         return await asyncio.wait_for(_wait(), timeout=timeout)
 
 
+class ObscuraSession:
+    """One reusable, connection-isolated Obscura browser context.
+
+    Callers remain responsible for serializing use.  A session never retries
+    or reconnects during one navigation; after an ambiguous client failure the
+    connection is discarded and a later navigation may create a fresh one.
+    """
+
+    def __init__(self) -> None:
+        self.websocket = None
+        self.cdp: _RawCdp | None = None
+        self.cdp_url: str | None = None
+        self.max_size = 0
+
+    async def ensure_connected(
+        self,
+        *,
+        cdp_url: str,
+        max_size: int,
+        open_timeout: float,
+        close_timeout: float,
+    ) -> _RawCdp:
+        if self.websocket is not None:
+            if self.cdp is None or self.cdp_url != cdp_url or self.max_size < max_size:
+                raise ObscuraClientError(
+                    FetchFailure.PROTOCOL,
+                    "connect",
+                    "reusable Obscura session parameters changed",
+                )
+            return self.cdp
+
+        from websockets.asyncio.client import connect
+
+        websocket = await connect(
+            cdp_url,
+            proxy=None,
+            open_timeout=open_timeout,
+            close_timeout=close_timeout,
+            max_size=max_size,
+            # Provider sessions are idle-expired by their owner.  Do not add a
+            # periodic internal ping to an otherwise quiet stack.
+            ping_interval=None,
+        )
+        self.websocket = websocket
+        self.cdp = _RawCdp(websocket)
+        self.cdp_url = cdp_url
+        self.max_size = max_size
+        return self.cdp
+
+    async def close(self) -> None:
+        websocket = self.websocket
+        self.websocket = None
+        self.cdp = None
+        self.cdp_url = None
+        self.max_size = 0
+        if websocket is not None:
+            await websocket.close()
+
+
 class _Session:
     def __init__(self, cdp: _RawCdp, session_id: str):
         self.cdp = cdp
@@ -609,6 +671,7 @@ async def fetch(
     cleanup_command_timeout_seconds: float = CLEANUP_COMMAND_TIMEOUT_SECONDS,
     request_timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     pre_navigation_guard: Callable[[], bool] | None = None,
+    session_owner: ObscuraSession | None = None,
 ) -> FetchResult:
     """Perform exactly one Obscura navigation and consume only its output."""
     if body_limit <= 0 or dom_limit <= 0:
@@ -635,6 +698,11 @@ async def fetch(
     target_id: str | None = None
     stream_started = started
     stage = "connect"
+    reusable = True
+
+    def _discard_connection() -> None:
+        nonlocal reusable
+        reusable = False
 
     def _setup_remaining(next_stage: str) -> float:
         nonlocal stage
@@ -716,26 +784,44 @@ async def fetch(
         request_timeout_seconds,
     )
     try:
-        from websockets.asyncio.client import connect
-
         try:
-            websocket = await connect(
-                cdp_url,
-                proxy=None,
-                open_timeout=min(10.0, _setup_remaining("connect")),
-                close_timeout=cleanup_command_timeout_seconds,
-                max_size=max(body_limit, dom_limit) + (1 << 20),
-            )
+            if session_owner is None:
+                from websockets.asyncio.client import connect
+
+                websocket = await connect(
+                    cdp_url,
+                    proxy=None,
+                    open_timeout=min(10.0, _setup_remaining("connect")),
+                    close_timeout=cleanup_command_timeout_seconds,
+                    max_size=max(body_limit, dom_limit) + (1 << 20),
+                )
+                cdp = _RawCdp(websocket)
+            else:
+                cdp = await session_owner.ensure_connected(
+                    cdp_url=cdp_url,
+                    max_size=max(body_limit, dom_limit) + (1 << 20),
+                    open_timeout=min(10.0, _setup_remaining("connect")),
+                    close_timeout=cleanup_command_timeout_seconds,
+                )
+                websocket = session_owner.websocket
         except asyncio.TimeoutError as exc:
             raise ObscuraClientError(
                 FetchFailure.PRE_NAVIGATION_TIMEOUT,
                 "connect",
                 "Obscura did not complete connect before its deadline",
             ) from exc
-        cdp = _RawCdp(websocket)
-        # Obscura gives every WebSocket a fresh browser context. This request
-        # owns one connection and one target, so no cross-request cookie,
-        # header, target, or user-agent state exists to clear.
+        if cdp is None:
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL, "connect", "Obscura connection is incomplete"
+            )
+        # A reusable connection has one event buffer.  Every target and frame id
+        # is unique, but dropping completed-attempt events also keeps the buffer
+        # bounded across a busy provider session.
+        cdp.events.clear()
+        # Obscura gives every WebSocket a private browser context. A default
+        # caller owns a fresh connection; an explicit provider session reuses
+        # its native cookie jar and HTTP client while this request still owns
+        # exactly one fresh target. Neither mode has state to clear here.
         created = await _setup_send(
             cdp,
             "Target.createTarget",
@@ -905,6 +991,7 @@ async def fetch(
                     diagnostic_id=diagnostic_id,
                     cleanup_command_timeout_seconds=cleanup_command_timeout_seconds,
                     command_timeout=_request_remaining,
+                    cleanup_failure=_discard_connection,
                 )
             except ObscuraClientError as exc:
                 # The pinned server evicts the oldest retained response after
@@ -983,16 +1070,25 @@ async def fetch(
             body_read_seconds=time.monotonic() - stream_started,
             challenge=challenge,
         )
+    except asyncio.CancelledError:
+        # Cancellation can interrupt an in-flight CDP exchange after its
+        # command was sent.  Even if target cleanup succeeds, do not retain a
+        # connection with ambiguous protocol state for the next provider call.
+        reusable = False
+        raise
     except ObscuraClientError as exc:
+        reusable = False
         _log_failure(exc)
         raise
     except asyncio.TimeoutError as exc:
+        reusable = False
         mapped = ObscuraClientError(
             FetchFailure.TRANSPORT, "event-barrier", "Obscura event barrier timed out"
         )
         _log_failure(mapped)
         raise mapped from exc
     except Exception as exc:
+        reusable = False
         message = str(exc).lower()
         category = (
             FetchFailure.POLICY_DENIED
@@ -1007,13 +1103,23 @@ async def fetch(
     finally:
         if cdp is not None and target_id:
             try:
-                await cdp.send(
+                closed = await cdp.send(
                     "Target.closeTarget",
                     {"targetId": target_id},
                     timeout_seconds=cleanup_command_timeout_seconds,
                     timeout_stage="cleanup-target-close",
                 )
+                if closed.get("success") is not True:
+                    reusable = False
+                    LOGGER.warning(
+                        "obscura cleanup failed request_id=%s stage=target-close "
+                        "category=%s elapsed_seconds=%.3f",
+                        diagnostic_id,
+                        FetchFailure.PROTOCOL.value,
+                        time.monotonic() - started,
+                    )
             except Exception as exc:
+                reusable = False
                 category = (
                     exc.category.value
                     if isinstance(exc, ObscuraClientError)
@@ -1026,7 +1132,17 @@ async def fetch(
                     category,
                     time.monotonic() - started,
                 )
-        if websocket is not None:
+        if session_owner is not None and not reusable:
+            try:
+                await session_owner.close()
+            except Exception:
+                LOGGER.warning(
+                    "obscura cleanup failed request_id=%s stage=connection-close "
+                    "elapsed_seconds=%.3f",
+                    diagnostic_id,
+                    time.monotonic() - started,
+                )
+        elif session_owner is None and websocket is not None:
             try:
                 await websocket.close()
             except Exception:
@@ -1036,6 +1152,8 @@ async def fetch(
                     diagnostic_id,
                     time.monotonic() - started,
                 )
+        if cdp is not None:
+            cdp.events.clear()
         LOGGER.info(
             "obscura cleanup completed request_id=%s elapsed_seconds=%.3f",
             diagnostic_id,

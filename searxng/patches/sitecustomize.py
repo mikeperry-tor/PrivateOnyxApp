@@ -125,21 +125,40 @@ def apply_offline_block_suspension_patch() -> None:
 
         reservation_token = params.get(_obscura.RESERVATION_PARAM)
         try:
-            search_results = self.engine.search(query, params)
-            self.extend_container(result_container, start_time, search_results)
-        except ValueError as exc:
-            self.logger.exception("engine %s: invalid input: %s", self.engine.name, exc)
-        except (
-            SearxEngineCaptchaException,
-            SearxEngineTooManyRequestsException,
-            SearxEngineAccessDeniedException,
-        ) as exc:
-            self.handle_exception(result_container, exc, suspend=True)
-            self.logger.exception("engine %s: provider blocked", self.engine.name)
-        except Exception as exc:
-            self.handle_exception(result_container, exc)
-            self.logger.exception("engine %s: exception: %s", self.engine.name, exc.__class__.__name__)
+            # SearXNG must retain provider ownership until it has classified and
+            # recorded the complete engine outcome. Releasing after the CDP
+            # navigation but before parser/CAPTCHA handling creates a window in
+            # which a concurrent search can reserve a provider that is about to
+            # be suspended. The shared CDP client deliberately owns no provider
+            # scheduling or round-robin state; this lease belongs here at the
+            # SearXNG engine-processing boundary.
+            with _obscura.provider_lease(
+                self.engine.name, reservation_token
+            ) as pre_navigation_guard:
+                params[_obscura.PRE_NAVIGATION_GUARD_PARAM] = pre_navigation_guard
+                try:
+                    search_results = self.engine.search(query, params)
+                    self.extend_container(result_container, start_time, search_results)
+                except ValueError as exc:
+                    self.logger.exception("engine %s: invalid input: %s", self.engine.name, exc)
+                except (
+                    SearxEngineCaptchaException,
+                    SearxEngineTooManyRequestsException,
+                    SearxEngineAccessDeniedException,
+                ) as exc:
+                    self.handle_exception(result_container, exc, suspend=True)
+                    self.logger.exception("engine %s: provider blocked", self.engine.name)
+                except Exception as exc:
+                    self.handle_exception(result_container, exc)
+                    self.logger.exception(
+                        "engine %s: exception: %s",
+                        self.engine.name,
+                        exc.__class__.__name__,
+                    )
         finally:
+            params.pop(_obscura.PRE_NAVIGATION_GUARD_PARAM, None)
+            # This is normally already consumed by provider_lease. Retain the
+            # exact-token cleanup for a failed lease entry.
             _obscura.release_provider_reservation(
                 self.engine.name, reservation_token
             )
@@ -195,6 +214,7 @@ def _round_robin_selected_refs(
     engineref_list: list[object],
     *,
     exclude: set[str] | None = None,
+    wait_for_capacity: bool = False,
 ) -> tuple[list[object], dict[str, str]]:
     first_ref_by_name, selected_provider_order = _round_robin_ref_map(
         engineref_list
@@ -209,26 +229,33 @@ def _round_robin_selected_refs(
     if not candidate_provider_order:
         return [], {}
 
-    available_regular = [
-        name
-        for name in candidate_provider_order
-        if not _is_last_resort_engine(name) and _is_processor_available(name)
-    ]
-    available_last_resort = [
-        name
-        for name in candidate_provider_order
-        if _is_last_resort_engine(name) and _is_processor_available(name)
-    ]
-    chosen, token = _reserve_round_robin_engine(available_regular)
-    # A regular provider that is not suspended but is merely busy or cooling
-    # must block last-resort selection. Otherwise concurrent requests spill
-    # into Bing before any regular provider has actually failed.
-    if chosen is None and not available_regular:
-        chosen, token = _reserve_round_robin_engine(available_last_resort)
-    if chosen is None or token is None:
-        return [], {}
+    from searx.engines import _obscura
 
-    return [first_ref_by_name[chosen]], {chosen: token}
+    while True:
+        generation = _obscura.provider_capacity_generation()
+        available_regular = [
+            name
+            for name in candidate_provider_order
+            if not _is_last_resort_engine(name) and _is_processor_available(name)
+        ]
+        available_last_resort = [
+            name
+            for name in candidate_provider_order
+            if _is_last_resort_engine(name) and _is_processor_available(name)
+        ]
+        chosen, token = _reserve_round_robin_engine(available_regular)
+        # A regular provider that is not suspended but is merely busy or
+        # cooling must block last-resort selection. Wait for regular capacity
+        # instead of returning an empty result or spilling into Bing.
+        if chosen is None and not available_regular:
+            chosen, token = _reserve_round_robin_engine(available_last_resort)
+        if chosen is not None and token is not None:
+            return [first_ref_by_name[chosen]], {chosen: token}
+
+        wait_names = tuple(available_regular or available_last_resort)
+        if not wait_for_capacity or not wait_names:
+            return [], {}
+        _obscura.wait_for_provider_capacity_change(generation, wait_names)
 
 
 def _has_round_robin_provider_pool(engineref_list: list[object]) -> bool:
@@ -284,20 +311,6 @@ def _has_main_results(result_container: object) -> bool:
     return bool(getattr(result_container, "main_results_map", {}))
 
 
-def _new_unresponsive_provider_names(
-    *,
-    result_container: object,
-    before: set[object],
-    attempted_this_round: set[str],
-) -> set[str]:
-    after = set(getattr(result_container, "unresponsive_engines", set()))
-    return {
-        getattr(item, "engine", "")
-        for item in after - before
-        if getattr(item, "engine", "") in attempted_this_round
-    }
-
-
 def apply_round_robin_search_patch() -> None:
     """Optionally schedule one direct-Obscura web provider per SearXNG request."""
 
@@ -306,6 +319,7 @@ def apply_round_robin_search_patch() -> None:
 
     try:
         import searx.search as search_mod
+        from searx.search.processors.abstract import EngineProcessor
     except Exception as exc:  # pragma: no cover
         print(
             f"sitecustomize: failed importing SearXNG search modules: {exc}",
@@ -335,6 +349,25 @@ def apply_round_robin_search_patch() -> None:
             "self.search_multiple_requests(requests)",
         ),
     )
+    _require_source(
+        "searx.search.Search.search_multiple_requests",
+        search_mod.Search.search_multiple_requests,
+        (
+            "th._timeout = False",
+            "th.join(remaining_time)",
+            "th._timeout = True",
+            "self.result_container.add_unresponsive_engine(th._engine_name, 'timeout')",
+        ),
+    )
+    _require_source(
+        "searx.search.processors.abstract.EngineProcessor.extend_container",
+        EngineProcessor.extend_container,
+        (
+            "if getattr(threading.current_thread(), '_timeout', False):",
+            "self.handle_exception(result_container, 'timeout', False)",
+            "self._extend_container_basic(result_container, start_time, search_results)",
+        ),
+    )
 
     original_get_requests = search_mod.Search._get_requests
     original_search_standard = search_mod.Search.search_standard
@@ -345,6 +378,7 @@ def apply_round_robin_search_patch() -> None:
         selected_refs, reservations = _round_robin_selected_refs(
             original_refs,
             exclude=excluded,
+            wait_for_capacity=True,
         )
         if selected_refs is original_refs:
             return original_get_requests(self)
@@ -399,26 +433,30 @@ def apply_round_robin_search_patch() -> None:
                 engine_name for engine_name, _query, _params in requests
             }
             attempted.update(attempted_this_round)
-            before_unresponsive = set(self.result_container.unresponsive_engines)
 
-            self.start_time = search_mod.default_timer()
-            self.search_multiple_requests(requests)
+            try:
+                # Each selected provider is one independent SearXNG engine
+                # attempt and receives the configured timeout in full. Provider
+                # capacity waiting happens before this clock starts.
+                self.start_time = search_mod.default_timer()
+                self.search_multiple_requests(requests)
+            except Exception:
+                from searx.engines import _obscura
+
+                for engine_name, _query, params in requests:
+                    _obscura.release_provider_reservation(
+                        engine_name,
+                        params.get(_obscura.RESERVATION_PARAM),
+                    )
+                raise
 
             if _has_main_results(self.result_container):
                 return True
 
-            failed_providers = _new_unresponsive_provider_names(
-                result_container=self.result_container,
-                before=before_unresponsive,
-                attempted_this_round=attempted_this_round,
-            )
-            if not failed_providers:
-                # A completed provider attempt with no main result is a
-                # query-local failure. Try the next regular provider
-                # sequentially; last resort remains ineligible until every
-                # non-suspended regular provider has been attempted.
-                failed_providers = attempted_this_round
-
+            # Any attempt without a main result advances to another provider.
+            # This covers explicit zero results, parser/navigation failures,
+            # blocking responses, and timeouts without needing to classify the
+            # result container a second time.
             if not _has_untried_round_robin_provider(
                 self.search_query.engineref_list,
                 attempted,
@@ -430,7 +468,7 @@ def apply_round_robin_search_patch() -> None:
     search_mod.Search._wrapper_round_robin_patch = True
 
     print(
-        "sitecustomize: patched SearXNG round-robin search provider scheduling and retry",
+        "sitecustomize: patched SearXNG round-robin provider scheduling and rotation",
         flush=True,
     )
 

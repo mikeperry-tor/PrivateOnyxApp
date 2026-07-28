@@ -1248,12 +1248,12 @@ orchestration patch:
 
 The pinned `OfflineProcessor` handles `ValueError` as invalid engine input: it
 logs the invalid-input condition but does not add an unresponsive-engine
-record, suspend the provider, or make the round-robin patch eligible to retry
-another provider. Preserve that contract rather than raising
+record, suspend the provider, or permit next-provider rotation. Preserve that
+contract rather than raising
 `SearxParameterException`, which the pinned offline processor catches as a
 generic engine failure. Keep the `ValueError` message bounded and omit the
 query text and other secret-bearing values. Tests must prove invalid input
-does not trigger provider fallback or query disclosure.
+does not trigger next-provider rotation or query disclosure.
 
 Do not infer “no results” merely from zero parsed result cards. Each engine must
 commit a narrow `no_results_xpath` backed by a captured sanitized fixture; if
@@ -1639,7 +1639,7 @@ Update each owner document as follows:
   so deliberately selected external Onyx providers remain upstream-owned;
   update the SearXNG section for offline engines, explicit
   blocking-condition suspension through the ordinary processor, pre-thread
-  provider reservation, preservation of the current round-robin retry and
+  provider reservation, preservation of the current round-robin rotation and
   last-resort scoring patches, disabled-round-robin fan-out, stock timeout and
   late-result handling, and the derived image. Delete
   CRW/shim patch descriptions while retaining and
@@ -1853,10 +1853,10 @@ Add deterministic unit and effective-Compose tests for:
   mismatch versus explicit no-results selectors, every blocking exception's
   ordinary offline-processor `suspend=True` path, non-blocking engine failures
   reaching the unresponsive-engine path, invalid input using the pinned
-  `ValueError` contract without an unresponsive record, suspension, fallback,
-  or query disclosure, current round-robin/last-resort scoring, no retry/provider
-  selection in an engine or CDP client, and absence of the normal SearXNG HTTP
-  path;
+  `ValueError` contract without an unresponsive record, suspension,
+  next-provider rotation, or query disclosure, current round-robin/last-resort
+  scoring, no retry/provider selection in an engine or CDP client, and absence
+  of the normal SearXNG HTTP path;
 - SearXNG provider serialization by stable identity, an exact monotonic
   3.0-second minimum start interval with zero jitter, redirect accounting,
   different-provider concurrency, retained leases and eventual target cleanup,

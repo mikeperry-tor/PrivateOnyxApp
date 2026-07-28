@@ -159,6 +159,9 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         )
         self.assertNotIn("${PYTHONPATH:-}", self.searxng_compose)
 
+    def test_searxng_provider_capacity_requires_one_request_worker(self):
+        self.assertIn('GRANIAN_WORKERS: "1"', self.compose)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,7 +65,7 @@ def search(query: str, params: "RequestParams"):
         _obscura.navigate(
             "brave2",
             target_url,
-            params.get(_obscura.RESERVATION_PARAM),
+            params.get(_obscura.PRE_NAVIGATION_GUARD_PARAM),
         )
     )
 

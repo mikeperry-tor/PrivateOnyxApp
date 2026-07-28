@@ -31,6 +31,7 @@ def _install() -> None:
     from wrapper_env_patches import apply_python_package_capability_patches
     from wrapper_env_patches import apply_reasoning_content_preservation_patch
     from wrapper_env_patches import apply_reasoning_mode_trace_patch
+    from wrapper_env_patches import apply_searxng_single_attempt_patch
     from wrapper_env_patches import apply_vllm_glm_auto_tool_choice_patch
     from open_url_failure_reporting_patch import (
         install as install_open_url_failure_reporting,
@@ -57,6 +58,7 @@ def _install() -> None:
     apply_reasoning_content_preservation_patch()
     apply_coding_agent_final_answer_fallback_patch()
     apply_preserve_tool_results_patch()
+    apply_searxng_single_attempt_patch()
     install_open_url_failure_reporting()
     install_open_url_limit()
     if use_obscura_browser():

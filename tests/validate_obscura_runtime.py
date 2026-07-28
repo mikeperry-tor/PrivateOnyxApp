@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from private_onyx_obscura import BodyClassification
 from private_onyx_obscura import FetchFailure
+from private_onyx_obscura import ObscuraSession
+from private_onyx_obscura import fetch as fetch_async
 from private_onyx_obscura import fetch_sync
 from private_onyx_obscura.client import _RawCdp
 from websockets.asyncio.client import connect
@@ -148,6 +150,85 @@ async def validate_connection_limit() -> None:
         await connection.close()
 
 
+async def validate_reusable_provider_session() -> None:
+    async def navigate(path: str, session: ObscuraSession):
+        return await fetch_async(
+            f"{BASE_URL}{path}",
+            cdp_url=CDP_URL,
+            wait_until="load",
+            allow_http=True,
+            body_limit=LIMIT,
+            dom_limit=LIMIT,
+            want="dom",
+            request_timeout_seconds=20,
+            session_owner=session,
+        )
+
+    first = ObscuraSession()
+    try:
+        await navigate("/session/set", first)
+        retained = await navigate("/session/check", first)
+        assert 'id="session">retained<' in (retained.rendered_html or "")
+    finally:
+        await first.close()
+
+    second = ObscuraSession()
+    try:
+        isolated = await navigate("/session/check", second)
+        assert 'id="session">missing<' in (isolated.rendered_html or "")
+    finally:
+        await second.close()
+
+
+async def validate_mixed_retained_and_request_scoped_capacity() -> None:
+    """Prove the stack's five-search plus ten-open_url connection model."""
+
+    async def navigate(path: str, session: ObscuraSession):
+        return await fetch_async(
+            f"{BASE_URL}{path}",
+            cdp_url=CDP_URL,
+            wait_until="load",
+            allow_http=True,
+            body_limit=LIMIT,
+            dom_limit=LIMIT,
+            want="dom",
+            request_timeout_seconds=20,
+            session_owner=session,
+        )
+
+    retained = [ObscuraSession() for _ in range(5)]
+    try:
+        await asyncio.gather(
+            *(navigate("/session/set", session) for session in retained)
+        )
+
+        # Onyx merges web_search calls but executes every query in the merged
+        # list concurrently. It can also execute that web_search tool beside one
+        # direct open_url call, whose process-global permit pool admits at most
+        # ten fresh connections. Five retained provider connections plus those
+        # ten request-scoped connections are therefore the real mixed maximum.
+        fresh = await asyncio.gather(
+            *(
+                asyncio.to_thread(fetch, f"/stress/{index}", want="dom")
+                for index in range(10)
+            )
+        )
+        assert all("parallel-ten" in (result.rendered_html or "") for result in fresh)
+
+        continuity = await asyncio.gather(
+            *(navigate("/session/check", session) for session in retained)
+        )
+        assert all(
+            'id="session">retained<' in (result.rendered_html or "")
+            for result in continuity
+        )
+    finally:
+        await asyncio.gather(
+            *(session.close() for session in retained),
+            return_exceptions=True,
+        )
+
+
 def validate_navigation_contracts() -> None:
     static = fetch("/static")
     assert static.status == 200
@@ -216,6 +297,8 @@ def validate_navigation_contracts() -> None:
 def main() -> None:
     asyncio.run(validate_connection_isolation())
     asyncio.run(validate_connection_limit())
+    asyncio.run(validate_reusable_provider_session())
+    asyncio.run(validate_mixed_retained_and_request_scoped_capacity())
     validate_navigation_contracts()
     print("PINNED_OBSCURA_RUNTIME_CONTRACTS_OK")
 

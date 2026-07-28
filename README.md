@@ -57,7 +57,7 @@ The Docker Compose files in this stack relies on the following components:
 
 6. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides all custom search engines, and optionally the built-in Onyx Web Crawler, with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy that ensures public internet access.
 
-7. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. It is patched to issue queries in round-robin fashion to Google, Brave, DuckDuckGo, Startpage, and Bing, accessed through Obscura Browser.  SearXNG has also been patched to retry failed queries in round-robin mode using the next provider, and suspends providers after visible anti-bot failures or rate limit responses.
+7. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. It is patched to issue queries in round-robin fashion to Google, Brave, DuckDuckGo, Startpage, and Bing, accessed through Obscura Browser. If an attempt produces no usable result, SearXNG may continue sequentially with a different provider; it never repeats the same provider within that search. Providers are suspended after visible anti-bot failures or rate-limit responses.
 
 8. [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) is optionally installed for local embeddings on MacOS, for RAG document search. Other local embedding providers are supported but not recommended due to accuracy and API issues. Teep can also be used for private embeddings on non-Mac hosts.
 
@@ -226,7 +226,9 @@ Select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Pa
 
 The stock Onyx Web Crawler appears to be blocked less often than Obscura v0.1.10 by websites, but you can set `ONYX_AGENT_USE_OBSCURA_BROWSER=true` to cause the Onyx Web Crawler to use the Obscura Browser instead of Onyx's internal fetch + Chromium Playwrite fallback.
 
-SearXNG always uses Obscura.
+SearXNG always uses Obscura. Each search provider keeps its own browser session
+for up to one hour after its last query, preserving provider cookies and
+connection continuity without sharing state with another provider.
 
 In either case, Docker Compose network-namespace routing restricts egress to the selected final hop (Tor exit, VPN, or proxy). This is the case for all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
 
@@ -687,9 +689,11 @@ proxy settings must be configured in `.env.wrapper`.
 With respect to web browser privacy, Obscura uses a stable browser
 vendor/version profile with some per-navigation fingerprint variation, while the
 stack's default Onyx Web Crawler uses a fixed Chromium MacOS browser
-configuration profile. Both Obscura and the default Onyx Web Crawler clear
-cookies between every browser navigation. No other browser state or
-browser-based tracking information is preserved.
+configuration profile. `open_url()` transports remain request-scoped and do not
+preserve browser state between calls. SearXNG is the narrow exception: it
+retains one native browser session per search provider for up to one hour after
+the last query, without sharing that state with other providers or browser
+paths.
 
 ### The Anti-Bot Landscape is also Anti-Privacy
 

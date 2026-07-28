@@ -132,6 +132,11 @@ Audit these Obscura v0.1.11 areas (or their new equivalents):
   V8 isolates without a cookie-clear command; also re-audit the v0.1.11
   full-stealth split where accepted extra-header and User-Agent CDP overrides
   update the ordinary HTTP client rather than the wreq navigation client;
+- repeated fresh-target creation and cleanup on one retained provider
+  connection, native cookie/HTTP-client continuity between those targets,
+  bounded CDP event state, disabled idle keepalive pings, one-hour idle
+  connection expiry, and disposal after ambiguous client, body-stream cleanup,
+  target-close command, or negative target-close-acknowledgement failure;
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
@@ -153,7 +158,8 @@ Run tagged-image capability tests, not only fake CDP fixtures. Prove static and
 JS HTML, HTTP and JavaScript redirects, PDF, accepted raw text, unsupported and
 oversized content, challenge/status failures, one origin navigation, body/DOM
 byte limits, ten-way direct `open_url` concurrency, simultaneous search
-capacity, connection-cap refusal, complete cleanup, and no reconnect/refetch.
+capacity, repeated-target provider continuity, replacement-connection
+isolation, connection-cap refusal, complete cleanup, and no reconnect/refetch.
 
 ### Pinned Obscura limitations and wrapper handling
 
@@ -183,8 +189,9 @@ passes:
 - **Connection isolation.** The wrapper relies on v0.1.11 creating an isolated
   browser context and HTTP client for every WebSocket and does not clear
   cookies. Re-audit the immutable connection template, cookie-delta persistence
-  behavior, every state-bearing CDP domain, two-client interleavings, target
-  cleanup, and connection-thread exit before retaining this simplification.
+  behavior, every state-bearing CDP domain, two-client interleavings, repeated
+  target cleanup, provider idle expiry, and connection-thread exit before
+  retaining this simplification.
 - **Renderer stalls and upstream diagnostics.** DOM and cleanup commands can
   fail to answer, and upstream logs can contain full URLs. Caller-owned
   absolute setup/request/cleanup deadlines, opaque correlation IDs, sanitized
@@ -359,8 +366,8 @@ available providers or operator behavior changes.
 The current audited SearXNG pin is `2026.7.15-7b2199ecd`, sourced from commit
 `7b2199ecdf75a00981583fa2f392a785dfc4fcee`. Re-audit the pinned offline and
 online processors, engine loader, exception suspension mapping, result
-containers, timeout/late-result handling, engine selection, round-robin retry
-patch points, and last-resort scoring.
+containers, timeout/late-result handling, engine selection, round-robin
+rotation patch points, and last-resort scoring.
 
 Confirm that `use_default_settings.engines.keep_only` remains supported and
 that the effective engine list contains exactly `google2`, `brave2`,
@@ -384,7 +391,23 @@ For every custom engine verify:
   request or the remaining regular providers are suspended; pre-execution
   unavailability statistics do not name an ineligible last-resort provider;
 - CAPTCHA, rate-limit, and access-denied exceptions use the ordinary offline
-  suspension path; non-blocking failures become unresponsive records;
+  suspension path; all three wrapper-owned suspensions remain 3,600 seconds so
+  a blocked session expires before provider readmission; non-blocking failures
+  become unresponsive records;
+- one lazy shared event-loop thread and at most one retained connection per
+  exact provider; different-provider navigations remain concurrent while the
+  provider lease denies same-provider overlap; fresh target and bounded event
+  cleanup per query; native
+  cookie/HTTP-client continuity before the sliding one-hour idle deadline;
+  physical and synchronous-on-access expiry without keepalive pings or
+  timer-delay revival; expiry-boundary queries waiting for the old connection
+  to close before opening a replacement; a fresh connection after expiry; and
+  no state sharing between providers or with `open_url`; body-stream cleanup
+  and target-close command/acknowledgement failures must taint the retained
+  connection even when result collection otherwise completed; exercise the
+  real mixed-capacity composition of five retained provider connections plus
+  ten simultaneous request-scoped direct `open_url` connections, then prove
+  every provider cookie jar remains usable after the fresh connections close;
 - Bing's visible `One last step` challenge is a typed CAPTCHA while the same
   phrases in excluded script/style/template/noscript content are ignored;
 - Bing rejects structurally valid but unrelated organic result sets when none
@@ -393,15 +416,48 @@ For every custom engine verify:
   attribution labels containing `dictionary`;
 - Bing does not advertise SafeSearch support and always requests `adlt=off`;
 - engines and the CDP client never retry or select another provider;
-- enabled round-robin normal/last-resort order and same-request retry, plus
+- enabled round-robin normal/last-resort order and sequential next-provider
+  rotation, with an attempted-set proof that no provider is selected twice in
+  one search; treat rotation as defined scheduling behavior; pre-navigation
+  failures must leave cooldown unstamped only when the sole `Page.navigate` was
+  not authorized, while every post-guard or ambiguous-navigation failure
+  stamps cooldown; retain the provider lease until provider-specific parsing
+  and any blocking suspension are recorded, and prove a concurrent waiter
+  cannot reserve in the interval between CDP cleanup and suspension; keep that
+  outcome ordering in the SearXNG processor rather than adding provider,
+  reservation, cooldown, or rotation ownership to the shared CDP client;
+  simultaneous searches wait for regular-provider release or the nearest exact
+  cooldown deadline without polling, empty success, false rate-limit
+  statistics, or premature Bing use; capacity wait occurs before engine
+  dispatch; dispatch failure releases the exact reservation; each actual
+  rotation receives a fresh configured SearXNG engine window; plus
   disabled-round-robin selected-engine fan-out and disclosure warning.
+
+The API patch must strictly unwrap only the pinned
+`SearXNGClient.search` generic three-attempt decorator without replacing its
+request/result implementation. Verify each query produces one SearXNG
+`/search` HTTP request and that HTTP or parsing failure is returned without
+whole-search replay. Also verify the patch does not alter the separate built-in
+`open_url` crawler, its HTTP clients, or its transport-specific recovery.
+
+Re-audit Onyx's web-search batch shape before changing the Obscura connection
+cap. The pinned tool runner merges repeated `web_search` calls into one call,
+the merged query array has no item cap, and `WebSearchTool.run` dispatches every
+query concurrently. It may run beside the separately merged `open_url` tool.
+The mixed-capacity proof therefore uses five retained provider connections and
+the existing ten process-global direct-`open_url` permits; the sixteenth-slot
+refusal is a fail-closed server guard, not expected normal Onyx behavior.
 
 The derived SearXNG image must install its complete Python dependency set from
 the generated hashed `searxng/requirements.txt` lock, use one Granian process,
-one replica, perform no Chromium/browser download or runtime installation, and
-pass the shared-client import validation. Its local image tag must change when
-the upstream pin or any embedded Dockerfile, lock, shared-client, or engine
-input changes. Its explicit `PYTHONPATH` must expose
+one request worker, one replica, perform no Chromium/browser download or
+runtime installation, and pass the shared-client import validation. Verify
+`GRANIAN_WORKERS=1` in every effective Compose model and exactly one live
+request worker before accepting the five-provider/15-connection capacity
+proof; multiple request workers would create independent provider owners and
+invalidate both global serialization and capacity accounting. Its local image
+tag must change when the upstream pin or any embedded Dockerfile, lock,
+shared-client, or engine input changes. Its explicit `PYTHONPATH` must expose
 the wrapper patches, SearXNG application root, and shared client before the
 embedded interpreter imports `sitecustomize`; verify the real Granian
 entrypoint logs every strict patch success and loads every custom engine.
@@ -911,10 +967,10 @@ make check-upgrade
 `make test-patch-images` runs the strict Onyx, code-interpreter, executor, and
 SearXNG contracts plus the image-dependent SearXNG parser tests.
 `make test-obscura-image` runs the selected tagged server in a networkless
-fixture network and proves connection isolation/capacity, concurrent
-navigation, static and JavaScript HTML, redirect, PDF/raw/binary handling,
-main-body eviction behavior, full TLS-impersonating stealth startup, and
-cleanup. The separate Tor and OpenSearch
+fixture network and proves connection isolation/capacity, repeated-target
+provider continuity, concurrent navigation, static and JavaScript HTML,
+redirect, PDF/raw/binary handling, main-body eviction behavior, full
+TLS-impersonating stealth startup, and cleanup. The separate Tor and OpenSearch
 targets validate their own image families.
 `make test-all-images` aggregates all four focused image targets, and
 `make check-upgrade` runs `make check` followed by that aggregate. Use the
@@ -967,7 +1023,8 @@ explicit no-VPN, and a documented remote-DNS upstream. For each practical row:
 - query every custom search engine and distinguish genuine results/no-results
   from visible provider CAPTCHA/429/access denial;
 - verify a same-provider lease never overlaps, another provider can progress,
-  and `open_url`/helpers/executors remain outside search scheduling;
+  exactly one Granian request worker owns all five sessions, and
+  `open_url`/helpers/executors remain outside search scheduling;
 - interrupt Myst, Obscura, gateway, and the final hop and confirm no stale
   connection reuse, direct fallback, or application restart storm;
 - test full doc-drop crawl/freshness/native content-hash skip, embedding, and

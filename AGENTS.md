@@ -249,9 +249,16 @@ This stack protects private research, document contents, browsing behavior, infe
   - README.md is for user-facing deployment properties, not implementation details.
   - In normative README and subsystem documentation, remove or replace obsolete
     text instead of retaining historical sections.
+  - Keep implementation plans accurate through implementation and review,
+    including their status, accepted decisions, and validation evidence. Plans
+    are review artifacts, not long-term documentation: document current behavior
+    canonically in the appropriate owning `docs/` document before implementation
+    is complete, and link to that document from the plan instead of duplicating
+    the lasting specification across plans or multiple subsystem documents.
   - Files under `docs/plans/implemented/` are historical implementation records.
-    Preserve them as records, but do not append progress journals or post-
-    implementation fix diaries to them.
+    Preserve them after review/merge, but do not revise them for later behavior
+    changes or append progress journals and post-implementation fix diaries;
+    update the canonical owning document instead.
 - Patch upgrades:
   - Before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`.
   - Runtime patches should remain narrow, startup-validated, strict by default, and documented.

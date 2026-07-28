@@ -129,16 +129,19 @@ or navigation and gives the agent the same limit and split guidance. The
 startup patch validates the pinned default, truncation source shape, tool
 schema, and description before replacing that behavior.
 
-The shared CDP client validates URL syntax without public DNS, opens one
-v0.1.11-isolated browser connection per request, tracks the terminal main-frame
-Document request, reads retained body streams with actual byte accounting,
-obtains rendered DOM, returns typed warning-level failures, redacts wrapper
-diagnostics, and cleans up streams, targets, sessions, and connections on every
-path. It relies on connection isolation instead of a non-atomic cookie-clear
-command. The pinned server can evict a subresource-heavy page's main body before
-creating its loader alias. The client maps that exact rejection to
-`body-unavailable`; Onyx may continue only with same-navigation HTML/XHTML DOM,
-while PDF/raw/binary paths remain strict. See
+The shared CDP client validates URL syntax without public DNS, tracks the
+terminal main-frame Document request, reads retained body streams with actual
+byte accounting, obtains rendered DOM, returns typed warning-level failures,
+redacts wrapper diagnostics, and cleans up streams and targets on every path.
+Its default mode, used by direct `open_url`, opens and closes one
+v0.1.11-isolated browser connection per request. Its explicit reusable-session
+mode is owned only by the SearXNG provider adapter: each provider serializes
+fresh targets on one connection and discards that connection after an
+ambiguous client or cleanup failure. Neither mode uses a non-atomic
+cookie-clear command. The pinned server can evict a subresource-heavy page's
+main body before creating its loader alias. The client maps that exact
+rejection to `body-unavailable`; Onyx may continue only with same-navigation
+HTML/XHTML DOM, while PDF/raw/binary paths remain strict. See
 [Request handling](request_handling.md).
 
 ## Lite-mode `open_url` availability
@@ -184,24 +187,43 @@ reused flattened session identifier.
 
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are offline
 engines. `_obscura.py` owns one-navigation transport, exact terminal hosts,
-challenge/status mapping, the provider lease, and an exact three-second start
-interval. Each engine owns URL construction, sanitized DOM parsing, result
-normalization, and explicit no-results detection. Parser mismatch is an
-unresponsive failure, not empty success.
+shared-client challenge/status mapping, the provider lease, and an exact
+three-second start interval. Each engine owns URL construction, sanitized DOM
+parsing, provider-specific challenge checks, result normalization, and explicit
+no-results detection. Parser mismatch is an unresponsive failure, not empty
+success.
+
+The adapter uses one lazy event-loop thread for five independently retained
+provider connections. It creates and closes a fresh target for every query and
+retains each provider's native context until one hour after its last attempt.
+The existing provider lease is the same-provider serialization authority;
+different providers remain concurrent. Ambiguous client or cleanup failures
+discard only the affected connection. This mode is not used by either
+`open_url` transport. Detailed lifecycle and challenge ownership are normative
+in [Request handling](request_handling.md).
 
 The overlay uses `use_default_settings.engines.keep_only: []` and explicitly
 adds only those five engines. Unused stock engines are absent rather than merely
 disabled, preventing their initialization and associated startup network work.
 
-The SearXNG startup patch keeps the existing round-robin selection/retry and
-last-resort scoring behavior. It atomically reserves a provider before thread
-creation, passes its opaque exact reservation token to that engine attempt, and
-does not fan out when every provider is busy, cooling, or suspended. That path
-adds visible unresponsive-engine records without creating browser threads. It
-extends the ordinary offline processor's suspension path to
-CAPTCHA, rate-limit, and access-denied exceptions. SearXNG continues to own
-timeouts, late results, unresponsive records, retry selection, and suspension.
-Disabling round robin deliberately restores ordinary selected-engine fan-out.
+The SearXNG startup patch keeps round-robin selection/rotation and last-resort
+scoring, atomically reserves providers before dispatch, and extends the offline
+processor's ordinary suspension path to blocking exceptions. The processor
+retains the provider lease across navigation, parser outcome, and suspension
+recording; releasing at CDP cleanup would let a concurrent request reserve a
+provider during the small pre-suspension race. This ordering stays in SearXNG:
+the shared CDP client has no provider or round-robin ownership. Every rotation
+gets a fresh configured 60-second engine window and never selects the same
+provider twice. Concurrent searches wait on provider release or the nearest
+exact cooldown deadline before engine dispatch; that capacity wait does not
+produce an empty result or make Bing eligible.
+The API bootstrap unwraps only Onyx's generic three-attempt
+`SearXNGClient.search` retry, so each query creates one SearXNG `/search` HTTP
+request and SearXNG is the only rotation authority. It does not change the
+separate built-in `open_url` crawler or its transport recovery. Every blocking
+condition suspends its provider for the same one-hour period as session idle
+expiry. See [Request handling](request_handling.md) for the scheduling,
+cooldown, concurrency, and failure contracts.
 
 ## Network and helper routing patches
 
@@ -558,9 +580,12 @@ The base wrapper adds the hardened single-process Obscura service, direct
 control networks, API-only CDP gateway, derived SearXNG service, distinct fixed
 egress bridges, and shared public/host final-hop policies. Obscura v0.1.11
 isolates every live WebSocket browser context and rejects connections above the
-aggregate capacity of 15. It runs read-only as 65534:65534, without
-capabilities, storage, private mounts, or file-access permission. Application
-containers do not join the trusted VPN namespace or a direct public network.
+aggregate capacity of 15. Direct `open_url` connections remain request-scoped;
+each SearXNG provider instead lazily retains one connection for one hour after
+its last query while using a fresh target per query. It runs read-only as
+65534:65534, without capabilities, storage, private mounts, or file-access
+permission. Application containers do not join the trusted VPN namespace or a
+direct public network.
 
 Lite and full overlays mount the same named API bootstrap. Full mode adds local
 RAG services; lite mode does not install an anonymous substitute bootstrap.

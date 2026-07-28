@@ -1,11 +1,12 @@
-# First-Party Cookie Isolation for Browser Search and `open_url()`
+# First-Party Cookie Isolation for `open_url()`
 
 > **Status: deferred.** This document is an implementation plan, not a
 > description of current behavior. Both supported `open_url()` transports
 > currently start each navigation without cookies retained by an earlier
-> navigation. SearXNG browser searches also start without cookies from an
-> earlier search.
-> The normative behavior remains documented in
+> navigation. SearXNG no longer belongs to this deferred design: it now uses
+> provider-partitioned live browser sessions, as recorded in
+> [SearXNG provider browser sessions](../implemented/searxng_provider_sessions.md).
+> The normative current behavior remains documented in
 > [Request handling](../../request_handling.md) until this plan is implemented,
 > validated, documented, and moved to `docs/plans/implemented/`.
 >
@@ -18,8 +19,7 @@
 
 ## Goal
 
-Give SearXNG browser search and each `open_url()` transport a bounded,
-process-local cookie cache that:
+Give each `open_url()` transport a bounded, process-local cookie cache that:
 
 - retains only cookies belonging to the first-party site of the requested
   navigation;
@@ -29,8 +29,6 @@ process-local cookie cache that:
 - supports ten concurrent Obscura `open_url()` navigations without serializing
   browser work;
 - keeps the stock Requests and Playwright cookie stores separate;
-- retains SearXNG cookies only within the same custom provider and first-party
-  site;
 - does not alter URL validation, DNS ownership, egress routing, navigation
   count, retry behavior, or response limits; and
 - does not retain cookies for Web Connector ingestion or unrelated Onyx
@@ -43,34 +41,28 @@ The intended state boundaries are:
 | Onyx `open_url()` through Obscura | One in-memory cookie store | Same API process, same schemeful first-party site, and same live one-hour generation |
 | Stock `open_url()` Requests attempt | A separate in-memory cookie store | Same API process, same schemeful first-party site, Requests only |
 | Stock `open_url()` Playwright fallback | A separate in-memory cookie store | Same API process, same schemeful first-party site, Playwright only |
-| SearXNG through Obscura | One in-memory cookie store | Same SearXNG process, same custom provider, same schemeful first-party site, and same live one-hour generation |
 | Web Connector, indexing, or another Playwright caller | None added by this work | Existing upstream behavior remains authoritative |
 
 “Process-local” is deliberate. This plan does not promise a shared cookie
-session across API or SearXNG replicas, process restarts, image replacement, or
-stack restart. If either deployment later runs multiple worker processes, each
+session across API replicas, process restarts, image replacement, or stack
+restart. If the API later runs multiple worker processes, each
 worker must have an independent store and one-hour lifecycle. Do not add a
 database, broker, sidecar, shared file, or sticky load-balancing scheme to hide
 that boundary.
 
-This feature is site/provider isolation, not user isolation. Neither the
-current `open_url()` call chain nor the Onyx-to-SearXNG search request
-propagates a stable authenticated-user identifier to these adapters. In a
-multi-user deployment, callers served by the same API or SearXNG process could
-therefore reuse cookies for the same first-party site/provider. For search,
-that gives a provider a stable identifier with which it can correlate all
-users' queries that reach that provider during the generation. Implementation
+This feature is site isolation, not user isolation. The current `open_url()`
+call chain does not propagate a stable authenticated-user identifier to these
+adapters. In a multi-user deployment, callers served by the same API process
+could therefore reuse cookies for the same first-party site. Implementation
 must remain deferred unless the deployment's single-user trust assumption is
 accepted and documented, or a separate project first supplies an
-authenticated principal namespace through both request chains. Never describe
+authenticated principal namespace through the request chain. Never describe
 this plan as per-user isolation.
 
 ## Scope and Non-Goals
 
 This plan applies only to:
 
-- the five custom SearXNG offline engines through
-  `searxng/engines/_obscura.py`;
 - the direct-Obscura replacement installed by
   `onyx/patches/sitecustomize_api_server/obscura_crawler_patch.py`; and
 - the stock Onyx Requests/Playwright path wrapped by
@@ -85,23 +77,17 @@ It does not:
 - share state between Requests and Playwright;
 - share state between the stock and Obscura selections;
 - apply cookie policy in an egress proxy;
-- change SearXNG provider scheduling, round-robin behavior, reservations,
-  cooldowns, suspension, retries, or last-resort scoring;
-- share search cookies between Google, Brave, DuckDuckGo, Startpage, and Bing;
-- retain cookies from a search response classified as rate-limited, CAPTCHA,
-  access-denied, a consent terminal, or an unexpected terminal origin;
 - change Onyx indexed-result reuse, ingestion, or semantic retrieval;
 - add extra prefetches, browser navigations, retry attempts, or fixed sleeps;
 - use Obscura's `--storage-dir`; or
 - retain compatibility with any experimental or earlier cookie shim.
 
 Do not add a user-facing TTL setting. The retention ceiling is exactly 3,600
-seconds. Do not add switches for sharing transports or search providers. If a
+seconds. Do not add switches for sharing transports. If a
 deployment-wide enable/disable switch is considered necessary during privacy
 review, add at most one strictly parsed browser-cookie-continuity boolean and
-keep every partition mandatory. Do not create separate tuning switches for
-search and `open_url()`. The preferred implementation has no new setting:
-this behavior becomes the supported behavior for browser search and both
+keep every transport partition mandatory. The preferred implementation has no
+new setting: this behavior becomes the supported behavior for both
 `open_url()` selections once all gates pass.
 
 ## Version Scope
@@ -118,8 +104,6 @@ specified below.
 | Obscura | `OBSCURA_IMAGE=docker.io/h4ckf0r0day/obscura:0.1.11`; `reference_repos/obscura` at `v0.1.11` | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. |
 | Onyx application | Current `ONYX_IMAGE_TAG`; matching `reference_repos/onyx` checkout | Owns `open_url()` orchestration, the stock Requests-first/Playwright-fallback flow, the five-worker stock crawler, the 120-second tool deadline, and the runtime symbols wrapped by both Onyx patches. |
 | Onyx crawler libraries | Requests `2.33.0`, Playwright `1.58.0`, and `publicsuffix2` `2.20191221` in the Onyx `uv.lock` | Determine Requests cookie-jar metadata, Chromium context cookie conversion, and the parser available to runtime patches. The old parser package's implicit PSL data is not accepted as the shared current snapshot proposed here. |
-| SearXNG | `SEARXNG_IMAGE_TAG=2026.7.15-7b2199ecd`, with the wrapper image derived from the committed SearXNG inputs | Owns offline-engine loading, one-process provider state, round-robin/fan-out orchestration, provider failure suspension, and retry/scoring behavior that cookie persistence must not duplicate or influence. |
-| Shared SearXNG browser dependencies | Playwright `1.58.0` and websockets `15.0.1` from `searxng/requirements.in` and its hashed lock | Shape the derived image's browser/CDP runtime and dependency audit. Any PSL parser added for the shared store must be pinned and locked by the same workflow. |
 | Egress identity components | `MYST_IMAGE=local/private-onyx-myst:2d6e87618f9f-20260719` and `TOR_BASE_IMAGE=docker.io/dockurr/tor:0.4.9.11@sha256:446881b3366cbc2cc5cf8d13a76e3104f60824b7c15343d14defe903ded18f0d` | Myst reconnects and Tor circuit/exit changes can separate a retained cookie from the public IP that established it. Neither currently supplies an authoritative route-generation signal to the cookie store, so this plan deliberately relies on the fixed one-hour ceiling instead of heuristic route coupling. |
 
 ## Current Behavior and Blockers
@@ -204,9 +188,11 @@ and serialize or complicate same-site concurrency. Browser contexts exist
 only inside one WebSocket and disappear with it. Multiple Obscura processes or
 profile directories have the same lifecycle and resource problems.
 
-The intended design therefore keeps Obscura's one isolated connection per
-navigation and retains only validated cookie snapshots in the owning Onyx API
-or SearXNG process.
+The intended `open_url()` design therefore keeps Obscura's one isolated
+connection per navigation and retains only validated cookie snapshots in the
+owning Onyx API process. SearXNG's fixed set of five providers permits a
+separately implemented bounded live-session design; arbitrary crawler sites do
+not.
 
 ### Stock Requests/Chromium complication
 
@@ -244,53 +230,16 @@ shows this poisons the Requests path, first add one narrow classified-result
 commit boundary and its pinned-source validation; never infer the Playwright
 outcome inside `_proxied_get()`.
 
-### SearXNG benefits and complications
+### Implemented SearXNG exception
 
-Persisting ordinary cookies from accepted result pages can stabilize provider
-locale/preferences and retain short-lived anti-abuse state that tells a
-provider consecutive searches belong to one browser session. It may therefore
-reduce some 429s and CAPTCHAs. This is an expected benefit to measure, not a
-guarantee: provider defenses also use exit IP, TLS/HTTP fingerprints, query
-rate, behavior, and longer-lived server-side identifiers. A consent-terminal
-response is not accepted and cannot establish retained consent under this
-plan, because the wrapper must not make a consent choice on the user's behalf.
-
-The implementation has these complications:
-
-- The same Obscura v0.1.11 host-only/PSL export defect blocks safe SearXNG
-  persistence. Search cannot use a reduced or inferred cookie representation.
-- One SearXNG process serves every Onyx user without a user identity in the
-  engine call. A provider cookie would correlate queries across users during
-  its generation. Provider partitioning prevents cross-provider disclosure but
-  does not solve this cross-user boundary.
-- A persisted anti-abuse cookie can also preserve a challenged or throttled
-  browser identity. Never commit cookies from a navigation explicitly
-  classified as 429, CAPTCHA, access-denied, consent-only, or an unexpected
-  terminal origin. This does not guarantee that every harmful cookie is
-  recognizable.
-- Myst reconnects, Tor circuit/exit changes, and upstream-proxy changes can
-  leave a cookie associated with an earlier public IP. The request path has no
-  authoritative route-generation event to consume. Do not add heuristic VPN
-  log watching or couple cookie lifecycle to the scheduler. The fixed
-  one-hour ceiling and process restart are the only clearing mechanisms in
-  this scope.
-- Search queries rotate among five providers by default. Each provider will
-  accumulate useful continuity only when selected again within its current
-  generation. Last-resort Bing state remains separate even when Bing confirms
-  another provider's results.
-- SearXNG's custom engine module and the Onyx runtime do not currently share a
-  committed, current Public Suffix List data file. A single pinned PSL snapshot
-  and parser must be available in both images without runtime download.
-- SearXNG has one Granian process today. If its worker topology changes, each
-  process will have separate provider cookies unless a separately reviewed
-  user-aware state service is designed. This plan does not add one.
-
-Cookie state must remain outside provider scheduling. A cookie-cache hit or
-miss cannot change provider availability, round-robin cursor position,
-cooldown, suspension duration, or scoring. A cookie-state failure is reported
-as an ordinary engine response failure; the existing round-robin orchestration
-may then try a different untried provider exactly as it does for another
-unresponsive result. Cookie code must not initiate that retry itself.
+SearXNG avoids the unsafe cookie export/import round trip entirely. Each of its
+five exact providers owns at most one lazy Obscura connection, reuses fresh
+targets within that native context, and closes it after one hour idle. That
+implementation is isolated from every `open_url()` adapter and is fully
+specified in
+[SearXNG provider browser sessions](../implemented/searxng_provider_sessions.md).
+It is not a partial implementation of this plan and must not be generalized to
+arbitrary crawler sites.
 
 ## Enforcement Model
 
@@ -303,15 +252,14 @@ Cookie enforcement must be divided as follows:
 | Site-key calculation, one-hour generations, cache bounds, accepted-cookie filtering, and inter-navigation merge | New wrapper `FirstPartyCookieStore` |
 | Cookies sent during an Obscura navigation and its redirects/subresources | Obscura's isolated connection cookie jar |
 | Import/export CDP commands for one Obscura navigation | Shared Obscura client, only when its caller supplies an explicit cookie snapshot |
-| Search provider success/block classification and merge decision | `searxng/engines/_obscura.py` |
 | Cookies sent during one stock Requests attempt and its redirects | That attempt's `requests.Session` |
 | Cookies sent during one Playwright fallback and its redirects/subresources | That attempt's Playwright browser context |
 | URL normalization, private-address denial, DNS, and final routing | Existing URL validators and final-hop policy proxies |
 
 No other layer may clear, partition, copy, or merge cookies. In particular:
 
-- do not add cookie logic to the final-hop proxies, nginx, Myst, Tor, SearXNG
-  scheduler patch, or Compose health checks;
+- do not add cookie logic to the final-hop proxies, nginx, Myst, Tor, SearXNG,
+  or Compose health checks;
 - do not call `Network.clearBrowserCookies` on a timer;
 - do not combine the wrapper cache's one-hour expiration with a browser worker
   recycle policy;
@@ -327,8 +275,9 @@ its own expiry and its site's generation deadline.
 
 Create one shared, transport-independent store implementation under
 `browser/obscura_client/private_onyx_obscura/` so the exact same key, expiry,
-filtering, and merge rules are used in both derived images. Keep the CDP client
-itself stateless. Instantiate the store exactly three times in the API process:
+filtering, and merge rules are used by all three API adapters. Keep the CDP
+client itself stateless. Instantiate the store exactly three times in the API
+process:
 
 ```text
 open-url-obscura
@@ -336,28 +285,17 @@ open-url-stock-requests
 open-url-stock-playwright
 ```
 
-Instantiate it once more in the SearXNG process. Its namespace is
-`searxng-search:<engine_name>`, where `engine_name` must be one of the exact
-keys in `TERMINAL_HOSTS`. The provider name is part of the namespace even
-though the current providers use different registrable domains. This prevents
-a future alias, redirect, or provider-domain consolidation from sharing state.
-
 The namespace is part of every key even when store instances are separate.
-This prevents a future refactor into one map from collapsing transport or
-provider boundaries. Store globals are forbidden in the shared package:
-`obscura_crawler_patch.py`, `onyx_crawler_egress_patch.py`, and
-`searxng/engines/_obscura.py` own their explicit instances. The shared client
-defines lossless cookie value objects and explicit import/export parameters
-but owns no cache.
+This prevents a future refactor into one map from collapsing transport
+boundaries. Store globals are forbidden in the shared package:
+`obscura_crawler_patch.py` and `onyx_crawler_egress_patch.py` own their
+explicit instances. The shared client defines lossless cookie value objects
+and explicit import/export parameters but owns no cache.
 
 Commit one current Mozilla Public Suffix List snapshot, its provenance/license,
-and a pinned checksum alongside the shared store. Use one audited parser in
-both images and prohibit runtime list retrieval. If the selected SearXNG image
-does not already contain the parser, add its exact dependency to
-`searxng/requirements.in`, regenerate `searxng/requirements.txt`, and validate
-the derived image. The Onyx patch must startup-validate that the same parser
-and data work in its pinned image. Do not allow the two images to derive site
-keys from different PSL snapshots.
+and a pinned checksum alongside the shared store. Use an audited parser in the
+Onyx image and prohibit runtime list retrieval. The Onyx patch must
+startup-validate that the parser and data work in its pinned image.
 
 ### Site key
 
@@ -506,10 +444,10 @@ synchronously, so correctness does not depend on scheduler timing. Do not use
 one timer or thread per site. Process exit clears all stores without a shutdown
 write.
 
-Three dormant sweepers in the API process and one in the SearXNG process are
-acceptable. They can be reduced to one scheduler per process only if the store
-remains the sole lifecycle owner and the change is demonstrably simpler. Do
-not add a service, health check, or periodic wakeup when all stores are empty.
+Three dormant sweepers in the API process are acceptable. They can be reduced
+to one scheduler only if the store remains the sole lifecycle owner and the
+change is demonstrably simpler. Do not add a service, health check, or
+periodic wakeup when all stores are empty.
 
 ### Resource bounds
 
@@ -544,11 +482,9 @@ Cookie-state behavior must never silently become less strict:
 
 - Invalid startup assumptions, missing cookie attributes, unexpected patched
   source shape, or a failed PSL self-test must stop patch/engine installation
-  and prevent the affected API or SearXNG process from becoming ready.
+  and prevent the affected API process from becoming ready.
 - Failure to validate or import a retained snapshot must fail that URL before
-  navigation. Do not navigate statelessly and do not add a retry. SearXNG's
-  existing orchestration may select another untried provider after receiving
-  the typed engine failure.
+  navigation. Do not navigate statelessly and do not add a retry.
 - Failure to export or validate state after navigation must discard the
   proposed merge and mark that URL fetch unsuccessful with a sanitized
   cookie-state reason. The network request has already happened; do not repeat
@@ -561,9 +497,8 @@ Cookie-state behavior must never silently become less strict:
 
 Add a `COOKIE_STATE` failure category to the shared Obscura client only if the
 client itself detects the protocol failure. The Onyx patch maps it to a stable
-user-safe failure reason; SearXNG maps it to an ordinary unsuspended engine
-response failure rather than a provider rate-limit/block suspension. Do not
-include CDP payloads or cookie material in exceptions.
+user-safe failure reason. Do not include CDP payloads or cookie material in
+exceptions.
 
 ## Transport Integration
 
@@ -603,11 +538,12 @@ For an opted-in call:
 Cleanup must still close the target and WebSocket on every path. Cookie export
 must not suppress the primary protocol failure. Tests must prove that a
 default caller which supplies neither option sends no cookie import/export
-command. State exists only in the explicit Onyx and SearXNG adapters.
+command. State exists only in the explicit Onyx adapters.
 
-Because the shared client and store are inputs to the derived SearXNG image
-tag, rebuild and validate that image. Keep Onyx-specific patch imports out of
-the SearXNG image.
+The shared client remains an input to the derived SearXNG image tag even
+though SearXNG does not opt into cookie snapshots. Rebuild and validate that
+image, prove its provider-session path still issues no cookie import/export
+commands, and keep Onyx-specific patch imports out of it.
 
 ### Direct-Obscura `open_url()`
 
@@ -693,48 +629,16 @@ The Requests-to-Playwright fallback imports no Requests cookies and exports no
 Playwright cookies to Requests. Add an assertion at the adapter boundary so a
 future refactor cannot accidentally pass one store's snapshot into the other.
 
-### SearXNG custom engines
+### SearXNG non-interaction
 
-Make `searxng/engines/_obscura.py` the sole search adapter and instantiate one
-store when the module loads. Do not add cookie code to the five provider parser
-modules or `searxng/patches/sitecustomize.py`.
-
-Inside the existing `_lease(engine_name, reservation_token)`:
-
-1. Validate `engine_name` against `TERMINAL_HOSTS`.
-2. Normalize `target_url`, form namespace
-   `searxng-search:<engine_name>`, calculate its site key, and take a snapshot.
-3. Pass the snapshot and request final cookies through the shared client's
-   explicit cookie interface.
-4. Retain the provider lease through cookie export and store decision so the
-   existing one-active-navigation-per-provider rule remains authoritative.
-5. Perform the existing terminal-host, status, challenge, DOM-presence, and
-   block-marker classification.
-6. If the result is accepted by those checks, filter exported cookies against
-   the original site and merge the delta before returning the DOM.
-7. If it is classified as 429, CAPTCHA, access denied, consent terminal,
-   unexpected terminal origin, HTTP failure, empty DOM, or cookie-state
-   failure, discard the delta.
-
-An engine-specific parser mismatch happens after `_obscura.navigate()` returns
-and is not a reliable cookie-block signal; the shared adapter may already have
-committed cookies from a terminal host with no block markers. Do not add a
-transaction callback through all five parser modules solely to defer that
-merge. If live evidence shows parser-mismatch pages poison provider state,
-revisit this decision with a single explicit adapter result/commit interface
-rather than five independent cookie implementations.
-
-Provider rotation does not delete or move cookies. Google state remains in its
-own generation while Brave is selected, and is available if Google is selected
-again before that fixed generation expires. Round-robin disabled fan-out may
-use up to five provider namespaces concurrently, but the existing per-provider
-lease still prevents concurrent navigation to the same provider.
-
-The scheduler remains unaware of cache contents. Existing typed provider
-failures, suspensions, unresponsive-engine reporting, fallback to an untried
-provider, cooldowns, and last-resort scoring are unchanged. Cookies never cross
-between SearXNG and either `open_url()` selection even when their registrable
-domains match.
+SearXNG must continue using only its implemented live provider sessions. It
+must not instantiate `FirstPartyCookieStore`, supply an `open_url()` snapshot,
+or receive exported cookies through the future optional client interface.
+Tests must keep proving that no state crosses between SearXNG and either
+`open_url()` selection. Its effective Compose model must also retain exactly
+one Granian request worker; otherwise separate worker processes would create
+independent per-provider owners and invalidate the implemented capacity and
+serialization contract.
 
 ## Implementation Sequence
 
@@ -751,25 +655,18 @@ Do the work in these bounded phases. Stop if any gate fails.
    - Add the one authoritative shared store module, pinned PSL data/parser,
      value model, fake-clock seams, bounds, generation tokens, delta merge, and
      diagnostics.
-   - Audit both runtime images for the parser and update the SearXNG hashed
-     dependency lock if required.
+   - Audit the Onyx runtime image for the parser.
    - Add deterministic tests before connecting it to transports.
 3. **Obscura adapter**
    - Add stateless explicit cookie import/export to the shared client.
-   - Opt in from direct `open_url()` and the shared SearXNG engine adapter with
-     separate store instances/namespaces.
-   - Rebuild both affected derived images and prove cross-caller and
-     cross-provider separation.
-4. **Search integration**
-   - Add provider-scoped snapshot/validated-merge behavior only in
-     `searxng/engines/_obscura.py`.
-   - Preserve provider leases, classification, scheduler behavior, and existing
-     retry ownership.
-5. **Stock adapters**
+   - Opt in only from direct `open_url()`.
+   - Rebuild the derived SearXNG image because it contains the shared client,
+     and prove SearXNG remains on its independent live-session behavior.
+4. **Stock adapters**
    - Add the Requests store boundary.
    - Add the crawler-scoped Playwright boundary.
    - Keep their stores distinct and retain strict pinned-source validation.
-6. **Integration and documentation**
+5. **Integration and documentation**
    - Run deterministic, selected-image, concurrency, routing, Docker, and
      Podman checks below.
    - Replace obsolete normative documentation rather than preserving a
@@ -786,9 +683,6 @@ Expected implementation files are:
   model module if cookie values are separated;
 - `onyx/patches/sitecustomize_api_server/obscura_crawler_patch.py`;
 - `onyx/patches/sitecustomize_api_server/onyx_crawler_egress_patch.py`;
-- `searxng/engines/_obscura.py`;
-- `searxng/requirements.in` and `searxng/requirements.txt` only if the audited
-  selected image lacks the chosen PSL parser;
 - focused tests under `tests/`;
 - the existing Makefile-derived SearXNG input hash; and
 - the documentation listed below.
@@ -866,36 +760,14 @@ Add a default-caller assertion that no state is retained unless an adapter
 explicitly requests cookie transfer. Do not duplicate the store's PSL, TTL, or
 concurrency matrix in client tests.
 
-### SearXNG adapter and scheduler tests
+### SearXNG non-interaction tests
 
-Extend `tests/test_searxng_obscura_scheduling.py`,
-`tests/test_searxng_obscura_engines.py`, and the relevant patch tests to prove:
-
-- each `TERMINAL_HOSTS` provider produces a distinct
-  `searxng-search:<engine_name>` namespace;
-- a provider snapshot is imported before its one navigation and a validated
-  result is merged before its lease is released;
-- cookies persist when round robin selects the same provider again within its
-  generation;
-- selecting another provider neither reads, deletes, nor extends the first
-  provider's generation;
-- round-robin-disabled fan-out uses five independent namespaces;
-- 429, CAPTCHA, access-denied, consent-terminal, unexpected-terminal,
-  HTTP-failure, empty-DOM, and cookie-state results do not merge;
-- a valid terminal response that later encounters the documented
-  engine-parser-mismatch boundary follows the explicitly accepted merge
-  semantics;
-- cookie-state failure is not mapped to a provider-block suspension, while
-  existing orchestration may retry one untried provider;
-- a cookie hit/miss never changes provider availability, reservation,
-  `last_start`, three-second cooldown, round-robin cursor, attempted-provider
-  set, last-resort choice, or scoring;
-- the provider lease remains held through cookie export/merge decision;
-- no query string, cookie payload, or complete target URL enters logs; and
-- no cookie state crosses to direct Obscura `open_url()`.
-
-Do not repeat the store expiry matrix in scheduler tests. Use fake stores and
-assert adapter calls and classification ownership.
+Extend the shared-client and SearXNG session tests only as needed to prove
+that adding the optional snapshot interface does not make a provider call
+issue cookie import/export commands, instantiate an `open_url()` store, alter
+its live-session lifecycle, or share state with direct Obscura `open_url()`.
+The implemented provider-session plan owns the rest of the search validation
+matrix.
 
 ### Onyx patch tests
 
@@ -956,10 +828,9 @@ cross-site isolation, host-only subdomain denial, valid domain-cookie subdomain
 delivery, third-party/cross-redirect non-retention, and simultaneous
 connection isolation.
 
-The derived SearXNG image must exercise every custom provider adapter against
-controlled provider aliases. Prove continuity within a provider, isolation
-between providers and `open_url()`, no commit for each explicit block class,
-and unchanged round-robin/fan-out navigation counts.
+The derived SearXNG image must prove its existing provider continuity and
+provider/`open_url()` isolation still hold and that it does not use the new
+snapshot interface.
 
 The pinned Onyx patch-image tests must exercise Requests and Playwright
 separately with the same semantic fixture. They must prove continuity within
@@ -993,9 +864,7 @@ affected deterministic network-isolation suite and prove:
   direct, alternate-transport, or cookie-bypassing retry;
 - Obscura CDP failure does not fall back to stock Requests/Playwright;
 - Requests or Playwright failure does not switch to Obscura; and
-- cache eviction, expiry, or cookie rejection never triggers a network retry;
-  SearXNG's already-existing retry after an unresponsive provider remains the
-  only applicable orchestration.
+- cache eviction, expiry, or cookie rejection never triggers a network retry.
 
 ## Live Validation Criteria
 
@@ -1003,9 +872,7 @@ Live validation confirms wiring and resource behavior, not every deterministic
 cookie rule. Use a controlled public HTTPS test origin with at least two
 registrable sites or delegated subdomains for `open_url()`. Its response must
 expose only test-specific nonce receipt, never production cookies. Search
-provider cookie semantics are proved by the selected-image fixture because the
-five production engine adapters deliberately allow only their real provider
-origins.
+provider live-session semantics remain outside this deferred plan.
 
 Validate these cases:
 
@@ -1022,17 +889,12 @@ Validate these cases:
    the Requests path. Trigger the existing blocked-response classification to
    exercise Playwright, then repeat within Playwright and prove the Requests
    cookie was not shared into it.
-5. Exercise each real SearXNG provider with a harmless diagnostic query and
-   repeat at least one provider after rotation. Confirm ordinary results,
-   unchanged reservations/cooldowns/navigation counts, no cookie-state error,
-   and no secret-bearing log output. Treat any reduction in 429/CAPTCHA rate as
-   observational only; do not claim one live run proves the benefit.
-6. Stop the public egress bridge and then the Obscura CDP path in their
+5. Stop the public egress bridge and then the Obscura CDP path in their
    applicable modes. Confirm fail-closed behavior and no fallback/retry.
-7. Inspect API, SearXNG, Obscura, and policy-proxy logs for bounded errors,
+6. Inspect API, Obscura, and policy-proxy logs for bounded errors,
    correct adapter selection, absence of cookie data, and absence of new
    routing warnings.
-8. Stop the stack with the matching `make down-lite` and report its final
+7. Stop the stack with the matching `make down-lite` and report its final
    state.
 
 Repeat the affected lite-mode matrix under Docker and rootless Podman. Use
@@ -1052,8 +914,8 @@ Record:
 - selected image IDs/tags and container engine versions;
 - whether Myst, Tor, upstream proxy, or explicit no-VPN mode carried the live
   checks;
-- peak API, SearXNG, and Obscura thread counts and approximate memory before
-  and during ten-way `open_url()` plus ordinary provider rotation;
+- peak API and Obscura thread counts and approximate memory before and during
+  ten-way `open_url()`;
 - the exact deterministic, image, and live commands run;
 - any omitted case and its reason; and
 - the explicit final stack state.
@@ -1065,24 +927,21 @@ Replace obsolete statements; do not retain a history of the stateless
 behavior or prior Obscura releases.
 
 - [README.md](../../../README.md): briefly state the user-visible per-site,
-  per-transport/provider, process-local one-hour cookie behavior, the stock
-  Requests/Playwright separation, the lack of per-user isolation, and the
-  search correlation/privacy tradeoff. Keep implementation details out.
+  per-transport, process-local one-hour cookie behavior, the stock
+  Requests/Playwright separation, and the lack of per-user isolation. Keep
+  implementation details out.
 - [Request handling](../../request_handling.md): become the complete normative
   authority for keys, scheme separation, accepted cookie state, fixed
   generation lifetime, concurrency, redirect handling, transport partitions,
-  search provider partitions/commit rules, failure behavior, and process/user
-  limitations.
+  failure behavior, and process/user limitations.
 - [Onyx patch information](../../onyx_patch_info.md): document why the
   `FirstPartyCookieStore`, direct-Obscura adapter, Requests adapter, and
-  crawler-scoped Playwright context hook remain necessary; also document the
-  SearXNG shared-engine adapter and identify strict startup source validation
-  and sole ownership boundaries.
+  crawler-scoped Playwright context hook remain necessary, including strict
+  startup source validation and sole ownership boundaries.
 - [Onyx patches upgrade](../../onyx_patches_upgrade.md): add the Obscura
   lossless-cookie capability audit, pinned Onyx Requests/Playwright symbol and
-  source-shape audit, SearXNG provider partition/classification audit, pinned
-  PSL data/parser audit, selected-image commands, and ten-concurrent-call
-  regression.
+  source-shape audit, pinned PSL data/parser audit, selected-image commands,
+  and ten-concurrent-call regression.
 - [Internal network security](../../internal_network_security.md): document
   cookies as bounded process-local inter-request state, not a routing control;
   state that the cache is service-global rather than per-user and cannot grant
@@ -1092,24 +951,22 @@ behavior or prior Obscura releases.
   proxy authentication, destination validation, or fail-closed behavior, and
   that no proxy enforces cookie policy.
 - [Resource minimization](../../resource_minimization.md): document the three
-  API stores plus one SearXNG store, fixed byte/site/cookie limits, dormant
-  condition waiters, no per-domain workers/timers, no persistent storage, and
-  the ten-call/provider-rotation resource validation.
+  API stores, fixed byte/site/cookie limits, dormant condition waiters, no
+  per-domain workers/timers, no persistent storage, and the ten-call resource
+  validation.
 - [Podman support](../../podman_suport.md): add the affected selected-image and
   live compatibility checks and state that no Podman mount, volume,
   capability, socket, or lifecycle override is introduced.
 - `.env.wrapper.example`: update only the existing
   `ONYX_AGENT_USE_OBSCURA_BROWSER` explanation to describe the two resulting
-  `open_url()` cookie transports and the SearXNG section to describe
-  provider-scoped continuity. Do not add a TTL, transport-sharing, or
-  provider-sharing setting. If privacy review instead requires one enable
-  boolean, document that single setting here and in the request-handling
-  document.
+  `open_url()` cookie transports. Do not add a TTL or transport-sharing
+  setting. If privacy review instead requires one enable boolean, document
+  that single setting here and in the request-handling document.
 - `AGENTS.md`: update the repository-wide request-handling invariant only if
   maintainers want this boundary enforced for future work. The invariant
-  should say that browser search and `open_url()` retain bounded first-party
-  cookies only in their owning adapters, with separate stores for every
-  transport/provider and no per-user claim.
+  should say that `open_url()` retains bounded first-party cookies only in its
+  owning adapters, with separate stores for every transport and no per-user
+  claim.
 
 When implementation is complete, move this file to
 `docs/plans/implemented/cookie_isolation.md`. Keep it as an implementation
@@ -1128,15 +985,13 @@ This plan is complete only when all of the following are true:
   accepted-cookie model, bounds, generation semantics, and sanitized errors;
 - Obscura `open_url()`, Requests, and Playwright use three distinct namespaces
   and no other `open_url()` layer performs cookie persistence;
-- every custom SearXNG provider uses its own namespace and commits only a
-  response accepted by the shared engine adapter;
-- the shared Obscura client remains stateless by default while the direct
-  `open_url()` and SearXNG adapters explicitly opt into transfer;
-- all four store instances retain same-site cookies for no more than 3,600
+- the shared Obscura client remains stateless by default while only direct
+  `open_url()` explicitly opts into transfer;
+- all three store instances retain same-site cookies for no more than 3,600
   seconds and discard stale in-flight merges;
 - Requests and Playwright never exchange cookies;
-- SearXNG never exchanges cookies with another provider or `open_url()`, and
-  cache state never affects scheduler decisions;
+- SearXNG remains on its independent implemented provider-session design and
+  never exchanges state with `open_url()`;
 - ten concurrent Obscura `open_url()` calls pass without new per-site
   serialization or a substantial unbounded resource increase;
 - no extra navigation, retry, fixed sleep, browser worker, persistent mount,

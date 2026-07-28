@@ -196,10 +196,16 @@ are not duplicate enforcement.
 - Provider admission remains atomic before worker dispatch, with the existing
   per-provider concurrency/cooldown policy.
 - Obscura uses one process with isolated per-WebSocket browser state instead of
-  a process worker pool. Fifteen live connections cover ten direct `open_url`
-  attempts plus five independently leased search providers; excess connections
-  fail with HTTP 503 rather than queueing. Each connection has one response
-  stream slot.
+  a process worker pool. Each search provider lazily retains one independently
+  leased connection and closes it after one hour without a query. Reusable
+  connections disable periodic WebSocket pings and create a fresh target for
+  each request. One shared lazy SearXNG event-loop thread owns all five
+  connections and their one idle-deadline callback per live provider session.
+- Fifteen live connections cover the real mixed Onyx maximum of ten
+  process-global direct `open_url` attempts plus five provider sessions.
+  Excess connections fail with HTTP 503 rather than queueing as a fail-closed
+  guard for a changed process model or unexpected CDP caller. Each connection
+  has one response stream slot.
 - Search DOM limits and the configured built-in `open_url` document limit remain
   separate because they bound different request paths.
 

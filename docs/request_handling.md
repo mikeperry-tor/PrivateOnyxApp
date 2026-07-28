@@ -115,12 +115,20 @@ not published on the host or attached to an Onyx data/backend network.
 
 Obscura v0.1.11 gives every WebSocket connection its own browser context, HTTP
 client, cookie jar, targets, headers, User-Agent state, OS thread, and V8
-isolates. The wrapper uses one fresh connection and one target per navigation
-and does not issue `Network.clearBrowserCookies`; closing the connection
-destroys that request's browser state. The single Obscura process accepts at
-most 15 live WebSockets: ten direct `open_url` attempts plus one lease for each
-of the five search providers. Connections above the cap receive HTTP 503
-instead of entering a server queue.
+isolates. Direct `open_url` uses one fresh connection and target per navigation.
+SearXNG instead gives each of its five providers one lazy connection and creates
+a fresh target for every query on that provider connection. It retains the
+native cookie jar and context-owned HTTP client until the connection has been
+idle for one hour. Neither path issues `Network.clearBrowserCookies`.
+
+The single Obscura process accepts at most 15 live WebSockets: ten direct
+`open_url` attempts plus one retained connection for each of the five search
+providers. This is the actual mixed Onyx maximum in one API process:
+`open_url` has ten process-global browser permits, while the five SearXNG
+provider owners retain at most one connection each. Connections above the cap
+receive HTTP 503 instead of entering a server queue as a fail-closed guard
+against a changed worker/process model or another unexpected CDP caller; normal
+Onyx tool execution is expected to remain within the 15-slot composition.
 
 In the full-stealth build, upstream v0.1.11 accepts
 `Network.setExtraHTTPHeaders` and `Network.setUserAgentOverride` but applies
@@ -154,12 +162,17 @@ For each accepted target the shared client:
    final frame URL, and challenge state;
 7. obtains rendered DOM and, when Obscura retained it, that same navigation's
    response body;
-8. closes every IO stream, target, and WebSocket on success or failure.
+8. closes every IO stream and target on success or failure; a default caller
+   also closes its WebSocket, while an explicit SearXNG provider owner retains
+   a clean connection after successful target cleanup.
 
 The client does not issue `HEAD`, `GET`, range, MIME-probe, CLI, normal
 SearXNG HTTP-client, or retry requests. It does not reconnect after a CDP
 failure. Redirects and browser subresources are part of the single browser
-navigation; they are not wrapper refetches.
+navigation; they are not wrapper refetches. A reusable provider connection
+disables WebSocket keepalive pings, clears completed-target CDP events, and is
+discarded after a client failure, body-stream cleanup failure, target-close
+failure, or negative target-close acknowledgement.
 
 Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `load`). Built-in
 `open_url` uses `OBSCURA_BROWSER_WAIT_UNTIL_WEB` (default
@@ -402,11 +415,14 @@ they cannot perform startup DNS/network work or retain engine-specific state.
 
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are custom
 offline engines. Each builds one provider URL, performs one direct Obscura
-navigation, verifies an exact terminal-host allowlist, classifies status and
-challenge markers, and parses the rendered DOM. Explicit provider no-results
-selectors return no results; missing expected structure is an unresponsive
-parser mismatch. The engines cannot call SearXNG's normal HTTP transport,
-retry internally, or choose another provider.
+navigation, verifies an exact terminal-host allowlist, and parses the rendered
+DOM. The shared client owns bounded generic HTTP and challenge classification;
+provider parsers retain only provider-specific DOM checks. Generic detection
+ignores script, style, template, and noscript text and does not classify an
+embedded CAPTCHA iframe by itself, avoiding the prior Brave false positive.
+Explicit provider no-results selectors return no results; missing expected
+structure is an unresponsive parser mismatch. The engines cannot call
+SearXNG's normal HTTP transport, retry internally, or choose another provider.
 
 Bing's rendered `One last step` / `solve the challenge below to continue`
 interstitial is a CAPTCHA failure, even when it contains none of Bing's older
@@ -430,29 +446,102 @@ engine. The filter covers Bing's widget metadata and organic result attribution
 labels containing `dictionary`; ordinary non-dictionary organic results remain
 eligible for the query-coherence check.
 
-One Granian process owns scheduling. Each provider has one atomic pre-thread
-reservation, one active lease, and an exact 3.0-second minimum interval between
-navigation starts, with zero jitter. The engine thread must consume its exact
-reservation token. Busy and cooling providers are skipped before an engine
-thread is created; if no provider can be reserved, the request does not fan out.
-It reports the selected providers as unavailable without creating their engine
-threads. The lease is retained through target cleanup.
+One Granian request worker owns scheduling and all five provider-session
+owners. `GRANIAN_WORKERS=1` is therefore part of the capacity and serialization
+contract, not only a resource preference. Each provider has one atomic
+pre-thread reservation, one active lease, and an exact 3.0-second minimum
+interval between navigation starts, with zero jitter. The engine thread must
+consume its exact reservation token. Busy and cooling providers are skipped
+before an engine thread is created. If every eligible regular provider is
+active, reserved, or cooling, the request waits for provider capacity instead
+of returning an empty result or spilling into Bing. Provider release uses a
+condition notification; cooldown-only waits use the nearest exact monotonic
+deadline, so there is no polling sleep or periodic scheduler wakeup.
+
+The SearXNG offline processor retains the provider lease across the complete
+engine call: CDP setup and navigation, target cleanup, provider-specific DOM
+parsing, blocking-response classification, and suspension recording. This
+ordering is required because concurrent search requests can otherwise reserve
+a provider in the interval after CDP cleanup releases it but before SearXNG
+records a CAPTCHA, access denial, or 429 suspension. Provider admission,
+round-robin rotation, and suspension remain SearXNG responsibilities. The
+shared CDP client accepts only a caller-supplied pre-navigation guard and owns
+no provider names, reservations, cooldowns, suspension state, or rotation.
+
+One lazy process-local event-loop thread owns all five independent provider
+connections. Each exact provider retains at most one WebSocket, and its existing
+lease is the sole same-provider serialization authority. Different providers
+can navigate concurrently on the shared loop, so concurrent agent search calls
+do not become process-global serialization. After each completed attempt the
+provider owner arms one monotonic one-hour idle deadline. Another query before
+that deadline reuses the native cookie jar and context-owned HTTP client and
+moves the idle deadline; no query by the deadline physically closes the
+connection. A later query creates a fresh connection. The owner checks an
+elapsed deadline synchronously, so delayed timer scheduling cannot revive an
+expired session. This is a sliding idle lifetime, not an absolute maximum
+session age.
+
+The wrapper owns the blocking suspension values rather than inheriting them
+from SearXNG: CAPTCHA/verification, access denial, and HTTP 429 each suspend a
+provider for 3,600 seconds. Every blocking suspension therefore lets the
+affected browser session reach its idle deadline before SearXNG admits that
+provider again. Session state does not otherwise change suspension, provider
+selection, cooldown, or scoring.
 
 With `SEARXNG_ROUND_ROBIN=true` (default), the existing orchestration selects
 one available normal custom provider and removes the other selected engines
 from that attempt. A completed zero-result attempt or an unresponsive attempt
 with no main results advances sequentially to another normal provider. A
 normal provider that is merely active, reserved, or cooling remains eligible
-and prevents selection of a last-resort provider; the request does not spill
-into Bing merely because concurrent searches occupy the normal providers.
-Pre-execution unavailability reporting follows the same eligibility rule, so
-an unattempted Bing is not recorded as busy or rate-limited in engine
-statistics while a normal provider is merely occupied.
+and prevents selection of a last-resort provider; the request waits rather than
+spilling into Bing merely because concurrent searches occupy the normal
+providers. Pre-execution unavailability reporting follows the same eligibility
+rule, so neither occupied regular providers nor an ineligible Bing are recorded
+as rate-limited in engine statistics.
 Bing becomes eligible only after every selected non-suspended normal provider
 has failed in that request or the remaining normal providers are already
 suspended. Last-resort scoring is retained. Blocking conditions flow through
 the ordinary offline processor and suspend the provider. SearXNG owns caller
 timeouts, late results, unresponsive-engine reporting, and suspension state.
+
+Next-provider rotation is the defined round-robin scheduling behavior. It never
+selects the same provider twice within one SearXNG search. The provider name
+enters the request-local attempted set before its engine thread runs, regardless
+of whether failure occurs during connection setup, navigation, response
+classification, or parsing. CAPTCHA, access-denied, and 429 attempts can
+therefore advance only to a different eligible provider; they are never
+replayed against the blocked provider.
+
+Every selected provider attempt receives SearXNG's configured 60-second engine
+window. Provider-capacity waiting occurs before that attempt clock starts, and
+rotation starts a fresh 60-second window for the next provider. The browser
+client independently bounds one started attempt to 50 seconds plus cleanup, and
+the provider lease remains held until the engine has recorded the completed
+outcome even if SearXNG has stopped waiting for its engine thread.
+
+Onyx merges multiple `web_search` tool calls in one tool batch into one call,
+then executes every query in the merged `queries` array concurrently; the
+pinned schema has no query-count cap. It can also execute that merged search
+beside a merged `open_url` call. Requests beyond currently available search
+providers therefore wait in SearXNG admission, while direct `open_url` remains
+independently bounded by its ten process-global browser permits.
+
+The API bootstrap removes the pinned Onyx `SearXNGClient.search` retry wrapper.
+Each query therefore submits the SearXNG `/search` HTTP request exactly once,
+while SearXNG alone owns any sequential next-provider rotation inside that
+request. This patch is scoped to `web_search`; it does not unwrap or otherwise
+change built-in `open_url` crawler retries or transport recovery. The pinned
+ten-minute tool-runner timeout remains an outer failure bound, not a second
+search retry or provider scheduling authority.
+
+The three-second provider cooldown begins in the pre-navigation guard
+immediately before the sole `Page.navigate`. A WebSocket refusal, connection
+failure, target creation/attachment failure, or CDP-domain setup failure before
+that guard proves that no origin search request was sent and does not stamp the
+cooldown. There is still no automatic same-engine retry: only a later,
+independent SearXNG search may select that provider and open a replacement
+connection. Once the guard has run, cooldown applies even if `Page.navigate`
+fails ambiguously, and neither the client nor scheduler repeats that provider.
 
 The Bing engine does not advertise SearXNG SafeSearch support and always sends
 the explicit provider parameter `adlt=off`. It therefore has no engine-specific
@@ -464,6 +553,9 @@ disclose the same query concurrently to several providers and can leave one
 late attempt per provider. `open_url`, generic helpers, and enabled executors
 are intentionally outside the search-provider scheduler. Enabled executors
 may reach public search engines through the shared public final-hop policy.
+Direct-Obscura `open_url` retains its separate ten process-global permits and
+fresh connection per navigation; it does not use the SearXNG provider loop or
+provider leases.
 
 ## Routing, DNS, and failure behavior
 
@@ -504,6 +596,13 @@ data or secret mounts, `--storage-dir`, or `--allow-file-access`. The shared
 client rejects `file:` targets. These controls reduce impact but do not repair
 the pinned upstream ES-module local-file-read path; Obscura remains a trusted
 browser component and must not receive private mounts.
+
+SearXNG provider continuity retains all native state accepted by that
+connection, including first- and third-party cookies and HTTP-client state. It
+does not export, import, inspect, count, filter, or persist cookies. State is
+partitioned by provider and SearXNG process, not authenticated user or
+conversation, and never crosses into `open_url`, connectors, or executors.
+This is an intentional single-user deployment boundary.
 
 ## Diagnostics
 

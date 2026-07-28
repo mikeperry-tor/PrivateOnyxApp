@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sys
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ from private_onyx_obscura import validate_wait_until  # noqa: E402
 from private_onyx_obscura.client import _RawCdp  # noqa: E402
 from private_onyx_obscura.client import _can_preserve_html_dom_without_body  # noqa: E402
 from private_onyx_obscura.client import _challenge_details  # noqa: E402
+from private_onyx_obscura.client import _drain_body  # noqa: E402
 
 
 class ObscuraClientTests(unittest.TestCase):
@@ -207,7 +209,98 @@ class ObscuraClientTests(unittest.TestCase):
             ROOT / "browser/obscura_client/private_onyx_obscura/client.py"
         ).read_text()
         self.assertNotIn('"Network.clearBrowserCookies"', source)
+        self.assertNotIn('"Network.getCookies"', source)
+        self.assertNotIn('"Network.setCookies"', source)
         self.assertIn('"Target.createTarget"', source)
+
+    def test_reusable_session_is_explicit_and_disables_idle_pings(self):
+        from private_onyx_obscura import fetch
+        from private_onyx_obscura import ObscuraSession
+
+        self.assertIsNone(inspect.signature(fetch).parameters["session_owner"].default)
+        source = inspect.getsource(ObscuraSession.ensure_connected)
+        self.assertIn("ping_interval=None", source)
+
+    def test_cleanup_failures_taint_a_reusable_connection(self):
+        class Session:
+            async def send(self, method, *_args, **_kwargs):
+                if method == "Fetch.takeResponseBodyAsStream":
+                    return {"stream": "stream"}
+                if method == "IO.read":
+                    return {"data": "body", "eof": True}
+                if method == "IO.close":
+                    raise ObscuraClientError(
+                        FetchFailure.TRANSPORT,
+                        "cleanup-body-close",
+                        "stream close failed",
+                    )
+                raise AssertionError(method)
+
+        cleanup_failures = []
+
+        async def exercise():
+            body = await _drain_body(
+                Session(),
+                "request",
+                4,
+                1024,
+                diagnostic_id="diagnostic",
+                cleanup_command_timeout_seconds=1.0,
+                command_timeout=lambda _stage: 1.0,
+                cleanup_failure=lambda: cleanup_failures.append(True),
+            )
+            self.assertEqual(body, b"body")
+
+        asyncio.run(exercise())
+        self.assertEqual(cleanup_failures, [True])
+
+        from private_onyx_obscura import fetch
+
+        self.assertIn(
+            'closed.get("success") is not True',
+            inspect.getsource(fetch),
+        )
+
+    def test_cancelled_reusable_fetch_discards_connection(self):
+        from private_onyx_obscura import fetch
+        from private_onyx_obscura import ObscuraSession
+
+        class WebSocket:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        class Cdp:
+            def __init__(self):
+                self.events = []
+
+            async def send(self, *_args, **_kwargs):
+                raise asyncio.CancelledError
+
+        websocket = WebSocket()
+        owner = ObscuraSession()
+        owner.websocket = websocket
+        owner.cdp = Cdp()
+        owner.cdp_url = "ws://obscura.invalid/devtools/browser"
+        owner.max_size = 1 << 30
+
+        async def exercise():
+            await fetch(
+                "https://example.com/",
+                cdp_url=owner.cdp_url,
+                wait_until="load",
+                allow_http=False,
+                body_limit=1024,
+                dom_limit=1024,
+                session_owner=owner,
+            )
+
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(exercise())
+        self.assertTrue(websocket.closed)
+        self.assertIsNone(owner.websocket)
 
     def test_post_navigation_command_timeout_is_typed_and_stage_specific(self):
         class WebSocket:
@@ -280,10 +373,10 @@ class ObscuraClientTests(unittest.TestCase):
         self.assertEqual(challenge, FetchFailure.ACCESS_DENIED)
         self.assertEqual(signal, "http-denial-status")
 
-    def test_searxng_detector_does_not_block_on_iframe_alone(self):
+    def test_searxng_has_no_second_generic_challenge_detector(self):
         source = (ROOT / "searxng/engines/_obscura.py").read_text()
-        self.assertNotIn("| //iframe", source)
-        self.assertIn('"abcdefghijklmnopqrstuvwxyz"), "/captcha")', source)
+        self.assertNotIn("BLOCK_MARKER_XPATH", source)
+        self.assertIn("result.challenge is FetchFailure.CAPTCHA", source)
 
 
 if __name__ == "__main__":

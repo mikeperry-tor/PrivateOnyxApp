@@ -110,6 +110,13 @@ Only `api_server` and `obscura-cdp-gateway` join
 Obscura directly on the browser control network. CDP is never host-published.
 Obscura and SearXNG have no direct Internet route.
 
+SearXNG may keep one WebSocket and its provider-specific native browser context
+open for up to one hour after that provider's last query. This changes neither
+route selection nor DNS ownership: every navigation, redirect, and subresource
+still crosses `obscura-egress-bridge` and the selected public final hop.
+Provider-session lifetime is deliberately independent of Myst, upstream-proxy,
+and Tor route changes.
+
 Both `NO_PROXY` and `no_proxy` in `onyx/helper-egress.env` contain the exact
 internal name `obscura-cdp-gateway`. Removed browser intermediaries have no
 compatibility aliases.
