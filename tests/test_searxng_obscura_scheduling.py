@@ -145,6 +145,52 @@ def _install_scheduler_stubs(*, suspended: set[str], reservable: set[str]):
     return calls
 
 
+def _install_executable_scheduler(
+    *,
+    suspended: set[str],
+    reservable: set[str],
+    default_timer=time.monotonic,
+):
+    _reset_patchable_search()
+    patch = _load_patch_module()
+    patch._env_enabled = lambda *_args: True
+    patch._require_source = lambda *_args, **_kwargs: None
+    calls = _install_scheduler_stubs(
+        suspended=suspended,
+        reservable=reservable,
+    )
+    search_module = sys.modules["searx.search"]
+    search_module.Search = _PatchableSearch
+    search_module.default_timer = default_timer
+    abstract = types.ModuleType("searx.search.processors.abstract")
+    abstract.EngineProcessor = SimpleNamespace(extend_container=lambda: None)
+    sys.modules["searx.search.processors.abstract"] = abstract
+    obscura = sys.modules["searx.engines._obscura"]
+    obscura.RESERVATION_PARAM = "_reservation"
+    patch.apply_round_robin_search_patch()
+    return patch, calls, obscura
+
+
+def _new_patchable_search(patch, query: str):
+    search = _PatchableSearch()
+    search.search_query = SimpleNamespace(
+        engineref_list=[
+            SimpleNamespace(name=name) for name in patch._round_robin_providers()
+        ],
+        query=query,
+    )
+    search.result_container = SimpleNamespace(
+        main_results_map={},
+        suspended=[],
+        unavailable=[],
+        add_unresponsive_engine=lambda *args: search.result_container.unavailable.append(
+            args
+        ),
+    )
+    search.start_time = 0.0
+    return search
+
+
 class SearxngObscuraSchedulingTests(unittest.TestCase):
     def setUp(self):
         self.module = _load_module()
@@ -442,6 +488,103 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             google.close()
             brave.close()
 
+    def test_concurrent_searches_reserve_distinct_real_provider_leases(self):
+        original_interval = self.module.MINIMUM_START_INTERVAL
+        self.module.MINIMUM_START_INTERVAL = 0.0
+        self.addCleanup(
+            setattr,
+            self.module,
+            "MINIMUM_START_INTERVAL",
+            original_interval,
+        )
+        _reset_patchable_search()
+        patch = _load_patch_module()
+        patch._env_enabled = lambda *_args: True
+        patch._require_source = lambda *_args, **_kwargs: None
+        provider_names = tuple(patch._round_robin_providers())
+        searx = types.ModuleType("searx")
+        searx.__path__ = []
+        engines = types.ModuleType("searx.engines")
+        engines.__path__ = []
+        engines.engines = {
+            name: SimpleNamespace(name=name, last_resort=name == "bing2")
+            for name in provider_names
+        }
+        engines._obscura = self.module
+        search_module = types.ModuleType("searx.search")
+        search_module.__path__ = []
+        search_module.Search = _PatchableSearch
+        search_module.default_timer = time.monotonic
+        processors = types.ModuleType("searx.search.processors")
+        processors.__path__ = []
+        processors.PROCESSORS = {
+            name: _Processor(False) for name in provider_names
+        }
+        abstract = types.ModuleType("searx.search.processors.abstract")
+        abstract.EngineProcessor = SimpleNamespace(extend_container=lambda: None)
+        searx.engines = engines
+        searx.search = search_module
+        search_module.processors = processors
+        sys.modules.update(
+            {
+                "searx": searx,
+                "searx.engines": engines,
+                "searx.engines._obscura": self.module,
+                "searx.search": search_module,
+                "searx.search.processors": processors,
+                "searx.search.processors.abstract": abstract,
+            }
+        )
+        patch.apply_round_robin_search_patch()
+
+        searches = [
+            _new_patchable_search(patch, f"concurrent {index}")
+            for index in range(2)
+        ]
+        lease_barrier = threading.Barrier(2)
+        active = set()
+        maximum_active = 0
+        active_lock = threading.Lock()
+        dispatched = []
+        errors = []
+
+        def execute(search, requests):
+            nonlocal maximum_active
+            engine_name, _query, params = requests[0]
+            token = params[self.module.RESERVATION_PARAM]
+            with self.module.provider_lease(engine_name, token):
+                with active_lock:
+                    active.add(engine_name)
+                    dispatched.append(engine_name)
+                    maximum_active = max(maximum_active, len(active))
+                lease_barrier.wait(timeout=1.0)
+                search.result_container.main_results_map["result"] = True
+                with active_lock:
+                    active.remove(engine_name)
+
+        callers = []
+
+        def run_search(search):
+            try:
+                search.search_standard()
+            except Exception as exc:
+                errors.append(exc)
+
+        for search in searches:
+            search.search_multiple_requests = (
+                lambda requests, search=search: execute(search, requests)
+            )
+            callers.append(threading.Thread(target=run_search, args=(search,)))
+        for caller in callers:
+            caller.start()
+        for caller in callers:
+            caller.join(timeout=2.0)
+
+        self.assertTrue(all(not caller.is_alive() for caller in callers))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(set(dispatched)), 2)
+        self.assertEqual(maximum_active, 2)
+
     def test_query_at_idle_expiry_waits_for_old_connection_close(self):
         events: list[str] = []
         close_started = threading.Event()
@@ -541,47 +684,85 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         self.assertIsNot(google, brave)
         self.assertIs(self.module._provider_browser("google2"), google)
 
-    def test_scheduler_source_does_not_fan_out_when_no_provider_reserves(self):
-        source = (ROOT / "searxng/patches/sitecustomize.py").read_text()
-        self.assertIn("return [], {}", source)
-        self.assertIn(
-            "requests, actual_timeout = original_get_requests(self)", source
+    def test_scheduler_does_not_fan_out_when_no_provider_reserves(self):
+        regular = {"google2", "brave2", "duckduckgo2", "startpage2"}
+        patch, calls, obscura = _install_executable_scheduler(
+            suspended={"bing2"},
+            reservable=set(),
         )
-        self.assertIn("return requests, actual_timeout", source)
-        self.assertIn(
-            '"searx.exceptions.SearxEngineTooManyRequestsException"', source
+        processors = sys.modules["searx.search.processors"].PROCESSORS
+        waits = []
+
+        def suspend_regulars(_generation, names):
+            waits.append(names)
+            for name in regular:
+                processors[name].suspended_status.is_suspended = True
+
+        obscura.wait_for_provider_capacity_change = suspend_regulars
+        search = _new_patchable_search(patch, "no capacity")
+        dispatched = []
+        search.search_multiple_requests = lambda requests: dispatched.extend(requests)
+
+        search.search_standard()
+
+        self.assertEqual(dispatched, [])
+        self.assertEqual(calls, ["google2", "brave2", "duckduckgo2", "startpage2"])
+        self.assertEqual(
+            waits,
+            [("google2", "brave2", "duckduckgo2", "startpage2")],
         )
-        self.assertNotIn(
-            "return [first_ref_by_name[name] for name in candidate_provider_order]",
-            source,
-        )
+        self.assertEqual(len(search.result_container.suspended), 5)
+        self.assertEqual(search.result_container.unavailable, [])
 
     def test_last_resort_requires_regular_providers_to_be_exhausted(self):
-        source = (ROOT / "searxng/patches/sitecustomize.py").read_text()
-        self.assertIn(
-            "if chosen is None and not available_regular:",
-            source,
+        patch, _calls, _obscura = _install_executable_scheduler(
+            suspended=set(),
+            reservable={
+                "google2",
+                "brave2",
+                "duckduckgo2",
+                "startpage2",
+                "bing2",
+            },
         )
-        self.assertNotIn(
-            "if chosen is None:\n"
-            "        chosen, token = _reserve_round_robin_engine(available_last_resort)",
-            source,
+        search = _new_patchable_search(patch, "last resort")
+        dispatched = []
+
+        def execute(requests):
+            engine_name = requests[0][0]
+            dispatched.append(engine_name)
+            if engine_name == "bing2":
+                search.result_container.main_results_map["result"] = True
+
+        search.search_multiple_requests = execute
+        search.search_standard()
+
+        self.assertEqual(dispatched[-1], "bing2")
+        self.assertEqual(
+            set(dispatched[:-1]),
+            {"google2", "brave2", "duckduckgo2", "startpage2"},
         )
-        self.assertIn(
-            "if _is_last_resort_engine(engine_name) and not last_resort_eligible:",
-            source,
-        )
+        self.assertEqual(len(dispatched), 5)
 
     def test_zero_result_attempt_advances_to_the_next_provider(self):
-        source = (ROOT / "searxng/patches/sitecustomize.py").read_text()
-        no_result_check = source.index(
-            "if _has_main_results(self.result_container):"
+        patch, _calls, _obscura = _install_executable_scheduler(
+            suspended={"duckduckgo2", "startpage2", "bing2"},
+            reservable={"google2", "brave2"},
         )
-        next_provider_check = source.index(
-            "if not _has_untried_round_robin_provider("
-        )
-        self.assertLess(no_result_check, next_provider_check)
-        self.assertNotIn("_new_unresponsive_provider_names", source)
+        search = _new_patchable_search(patch, "zero then result")
+        dispatched = []
+
+        def execute(requests):
+            engine_name = requests[0][0]
+            dispatched.append(engine_name)
+            if engine_name == "brave2":
+                search.result_container.main_results_map["result"] = True
+
+        search.search_multiple_requests = execute
+        search.search_standard()
+
+        self.assertEqual(dispatched, ["google2", "brave2"])
+        self.assertEqual(search.result_container.unavailable, [])
 
     def test_busy_regular_providers_deny_last_resort_selection_and_statistics(self):
         patch = _load_patch_module()
@@ -647,12 +828,31 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         self.assertEqual(reservations, {})
 
     def test_round_robin_rotations_each_receive_one_searxng_timeout(self):
-        patched_source = (
-            ROOT / "searxng/patches/sitecustomize.py"
-        ).read_text()
-        self.assertIn(
-            "self.start_time = search_mod.default_timer()",
-            patched_source,
+        clock = iter((101.0, 202.0))
+        patch, _calls, _obscura = _install_executable_scheduler(
+            suspended={"duckduckgo2", "startpage2", "bing2"},
+            reservable={"google2", "brave2"},
+            default_timer=lambda: next(clock),
+        )
+        search = _new_patchable_search(patch, "fresh timeout")
+        attempts = []
+
+        def execute(requests):
+            attempts.append(
+                (requests[0][0], search.start_time, search.actual_timeout)
+            )
+            if requests[0][0] == "brave2":
+                search.result_container.main_results_map["result"] = True
+
+        search.search_multiple_requests = execute
+        search.search_standard()
+
+        self.assertEqual(
+            attempts,
+            [
+                ("google2", 101.0, 60.0),
+                ("brave2", 202.0, 60.0),
+            ],
         )
 
     def test_executable_scheduler_waits_before_starting_provider_timeout(self):
