@@ -4,19 +4,28 @@ This repository is a Docker Compose wrapper for running Onyx with private verifi
 
 It is not the upstream Onyx project, nor is it a fork. Most changes here are deployment, Compose, Python sidecar, shell, SearXNG, or runtime-patch changes around upstream projects.
 
-The core correctness property is privacy-preserving request handling. Preserve the current routing, anti-fingerprinting, rate-limiting, patch-upgrade, explicit configuration, and fail-closed behavior unless the user explicitly asks to change it.
+The core correctness property is privacy-preserving request handling. Preserve
+the documented routing, anti-fingerprinting, rate-limiting, patch-upgrade,
+explicit-configuration, and fail-closed properties. When a requested change
+affects one, identify the consequence and update its implementation, tests, and
+owning documentation together.
 
 ## How to Use These Instructions
 
 These instructions are an orientation layer. They tell you where to look and which repo-wide invariants not to violate; they do not replace the subsystem docs.
 
-Before changing a subsystem, read the matching document below, then inspect the implementation. If the implementation and docs disagree, treat that as a bug to resolve or report. Do not paper over drift with vague wording; do not allow unrelated drift to persist without reporting it to the user.
+Before changing a subsystem, read its owning document below, then inspect the
+implementation. If the implementation and docs disagree, treat that as a bug
+to resolve or report. Do not paper over drift with vague wording; do not allow
+unrelated drift to persist without reporting it to the user.
 
 - `README.md` - user-facing setup instructions, privacy properties, and option consequences. Keep deep implementation details out of this document.
-- `docs/request_handling.md` - direct-Obscura `web_search`, selectable built-in `open_url` transport, lifecycle waits, body/DOM limits, cookies, and anti-bot behavior.
+- `docs/request_handling.md` - `web_search`, the built-in crawler and
+  `open_url`, selectable browser transport, lifecycle waits, body/DOM limits,
+  cookies, and anti-bot behavior.
 - `docs/native_tor_support.md` - Tor roles, Compose layers, storage, process
-  contract, health, diagnostics, canonical-origin behavior, and change
-  validation.
+  contract, health, latency considerations, diagnostics, canonical-origin
+  behavior, and change validation.
 - `docs/vpn_routing_and_proxies.md` - trusted VPN namespace, restricted component networks, final-hop proxy policies, explicit no-VPN mode, and optional routing switches.
 - `docs/internal_network_security.md` - restricted component reachability, destination validation, bridge boundaries, Onyx SSRF interaction, and residual risks.
 - `docs/onyx_patch_info.md` - why local runtime patches exist.
@@ -28,9 +37,9 @@ Before changing a subsystem, read the matching document below, then inspect the 
   health checks, MLX lifecycle, or resource settings.
 - `docs/podman_suport.md` - Podman/macOS Compose overlays, startup-health
   translation, shared-storage ownership, bind-mount workarounds, known regressions, and
-  the compatibility checklist. Read it before adding or validating any feature
-  that changes Compose, mounts, container lifecycle, health checks, or
-  socket-dependent behavior under Podman.
+  the compatibility checklist. Read it before changes that could affect Podman
+  compatibility, including Compose, mounts, container lifecycle, health
+  checks, or socket-dependent behavior.
 
 When a request touches more than one path, read each relevant doc first. Prefer small, doc-aligned changes over broad rewrites.
 
@@ -39,45 +48,31 @@ When a request touches more than one path, read each relevant doc first. Prefer 
 At a high level:
 
 - Users reach nginx through a hardened fixed host publisher or optional fixed Tailscale/onion frontend gateways; nginx stays internal-only.
-- There are two main modes for the stack: lite and full. The full mode adds local document RAG through `doc-drop-web`, the Onyx Web connector, and `local-embedding-shim`.
+- There are two main modes for the stack: lite and full. Full mode adds the
+  local-document ingestion, embedding, and `internal_search` path documented
+  in `docs/local_docs_rag_search.md`.
 - Onyx sends LLM requests through the included Teep local inference service.
-- Onyx `web_search` uses only the wrapper's supported SearXNG engines, which
-  render through Obscura; inherited stock engines are absent.
-- Onyx `open_url()` is a chat-time read tool, not an ingestion or semantic
-  retrieval path. Its indexed/crawler and selectable transport contracts are
+- `web_search`, the built-in crawler, and `open_url` are distinct from local
+  document RAG. Their transport, retrieval, and failure contracts are
   documented in `docs/request_handling.md`.
+- Optional Tor can add substantial connection and circuit latency. Before
+  changing any timeout, deadline, lifecycle wait, or startup allowance on a
+  path that can use Tor, read `docs/native_tor_support.md` and the affected
+  request or routing document and preserve enough time for that route.
 
 ## Network Security
 
-This stack controls egress and internal reachability through network-namespace
-topology, explicit routes, and final-hop destination policy, as documented in
-`docs/internal_network_security.md`. Safety must not depend on application-level
-proxy settings or caller discipline alone.
+Network topology and final-hop policy are privacy boundaries, not ordinary
+deployment details. Before changing egress, reachability, DNS, proxying,
+browser routing, or WebUI network controls, read
+`docs/internal_network_security.md` and `docs/vpn_routing_and_proxies.md`, plus
+`docs/native_tor_support.md` when either Tor role may be affected.
 
-- Applications and executors must not acquire direct fallback egress when a
-  selected bridge, policy proxy, VPN, upstream proxy, or Tor path fails.
-- Authoritative target DNS and private-address rejection remain at the final
-  hop. Caller-side URL checks must not become an alternate, weaker authority.
-- Applications use internal-only networks and separate route-class bridges.
-  Generic helpers and executors must not inherit configured integration,
-  inference, embedding, host, or LAN exceptions.
-- `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS` is the user-facing opt-in for
-  validated RFC1918 endpoints used by configured integrations and inference
-  providers. It must never grant LAN access to generic helpers, `open_url`,
-  browser activity, or executors.
-- Myst and the final-hop proxies are trusted routing-namespace processes.
-  Enabling Myst routing for Teep or Tailscale deliberately promotes that
-  trusted component into the same namespace, including its loopback,
-  interfaces, routes, and policy listeners. Their fixed gateways constrain
-  application ingress; they are not a sandbox between co-resident processes.
-- Optional VPN, proxy, Tor, and no-VPN lifecycles must preserve their documented
-  fail-closed ownership and non-arming behavior. Never retry an ambiguous
-  financial mutation.
-- Nginx adds a restrictive WebUI CSP because browser requests are outside the
-  container routing boundary. Preserve the tested policy and its documented
-  compatibility exception; do not describe it as complete XSS prevention.
-
-Those bullets are only a map. Read the docs above before changing any runtime networking path. Keep the documentation up-to-date.
+Preserve the documented route separation, final-hop destination authority, and
+fail-closed behavior: a failed selected bridge, proxy, VPN, or Tor path must
+not give an application, browser, or executor direct fallback egress. The
+owning documents define the exact trust boundaries, exceptions, lifecycle,
+residual risks, and validation requirements.
 
 ## Key Locations
 
@@ -187,12 +182,6 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   executor image is derived from its pinned upstream release plus the hashed
   `executor/requirements.txt` lock.
 
-`make up-lite` and `make up-full` generate ephemeral local secrets on every start, including SearXNG, Onyx auth, and MinIO credentials. Do not move those secrets (or any other new ephemeral secrets) into `.env.wrapper.example`.
-
-Do not display, inspect, modify, stage, or shell-source the custom
-`.env.wrapper` unless specifically asked to do so. Pass it through the
-supported Make and Compose mechanisms when its configuration is needed.
-
 ## Repository Rules
 
 This stack protects private research, document contents, browsing behavior, inference traffic, local credentials, VPN identities, and proxy configuration.
@@ -227,21 +216,9 @@ This stack protects private research, document contents, browsing behavior, infe
 
 - Compose layering:
   - The Makefile assembles `COMPOSE_FILE`. Keep optional behavior in override files, keep Docker and Podman behavior separated, and preserve generated local secret flow plus Compose `${VAR:?message}` checks.
-  - Treat Podman as a separately validated runtime, not a Docker alias. Follow
-    `docs/podman_suport.md` for its overlay, mount, startup-health, socket, and
-    clean-machine/restart validation requirements.
-- VPN/proxy routing:
-  - Preserve explicit VPN/no-VPN behavior, separate public/host route classes,
-    narrow host/LAN exceptions, final-hop DNS ownership, and documented proxy
-    environment handling.
-  - Onyx applications must never join `netns-holder` or gain direct fallback when VPN, policy-proxy, or bridge connectivity fails.
-- Request handling:
-  - Keep supported search engines on the shared direct-Obscura path.
-  - Preserve `open_url` as a chat-time read operation. It must not ingest
-    crawled pages, replace `internal_search`, or become semantic retrieval.
-  - Keep the built-in crawler's default stock requests/local-Chromium transport
-    public-only; switching it to Obscura must not alter SearXNG's path.
-  - Do not add hidden retries, fallbacks, or fixed sleeps.
+  - Treat Podman as a separately validated runtime, not a Docker alias. Read
+    `docs/podman_suport.md` before changes that could affect its overlays,
+    mounts, lifecycle, startup health, socket use, or compatibility matrix.
 - Documentation:
   - Update AGENTS.md only when repository-wide invariants, documentation
     routing, supported workflows, or key locations change. Put subsystem
@@ -264,14 +241,16 @@ This stack protects private research, document contents, browsing behavior, infe
   - Runtime patches should remain narrow, startup-validated, strict by default, and documented.
   - Runtime startup must not install packages, regenerate dependency locks, or
     download browsers. Change dependency inputs deliberately, regenerate hashed
-    locks with `make upgrade-python-deps`, and commit the resulting lock files.
-- Local RAG compatibility:
-  - Do not enable Craft or its cleanup schedule without adding and documenting a supported sandbox backend.
-  - Follow `docs/local_docs_rag_search.md` for embedding-model compatibility,
-    bootstrap process isolation, and required PDF extraction validation.
+    locks with `make upgrade-python-deps`, and include the resulting lock files
+    in the change. Create a Git commit only when the user requests one.
 - Untracked stack files:
+  - Stack startup generates ephemeral local secrets, including SearXNG, Onyx
+    auth, and MinIO credentials. Do not move them or other ephemeral secrets
+    into `.env.wrapper.example`.
   - Treat `.env.wrapper`, `docker-data/`, and `doc-drop/` as local private data.
-    Do not read, stage, or rewrite them unless the user explicitly asks.
+    Do not display, inspect, modify, stage, rewrite, or shell-source them unless
+    the user explicitly asks. Pass `.env.wrapper` through the supported Make
+    and Compose mechanisms when its configuration is needed.
   - Treat `onyx/onyx_data/deployment/.env` as potentially secret local runtime
     configuration. Do not read or stage it unless the user explicitly asks.
   - Other files under `onyx/onyx_data/` are generated upstream deployment
@@ -298,8 +277,9 @@ This stack protects private research, document contents, browsing behavior, infe
 - Deterministic test coverage:
   - Use `make test` for the complete Python suite. Use the underlying unittest
     command only when focused debugging is useful.
-  - Do not add tests whose subject is documentation. Test executable behavior
-    and machine-consumed contracts at their source instead.
+  - Do not test prose merely to freeze its wording. Test executable behavior,
+    machine-consumed contracts, generated examples, and executable
+    documentation at their source.
   - Deterministic tests must not require live Internet access, VPN credentials,
     or the private `.env.wrapper`.
 - Compose and lifecycle changes:
