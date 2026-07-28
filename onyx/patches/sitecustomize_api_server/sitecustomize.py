@@ -39,6 +39,9 @@ def _install() -> None:
     from open_url_limit_patch import install as install_open_url_limit
     from onyx_crawler_egress_patch import install as install_onyx_crawler
     from onyx_crawler_egress_patch import use_obscura_browser
+    from url_identity_preservation_patch import (
+        install as install_url_identity_preservation,
+    )
 
     apply_embedding_tokenizer_alias_patch()
     apply_llm_max_tokens_override_patch()
@@ -59,6 +62,7 @@ def _install() -> None:
     apply_coding_agent_final_answer_fallback_patch()
     apply_preserve_tool_results_patch()
     apply_searxng_single_attempt_patch()
+    install_url_identity_preservation()
     install_open_url_failure_reporting()
     install_open_url_limit()
     if use_obscura_browser():

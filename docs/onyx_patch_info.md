@@ -225,6 +225,19 @@ condition suspends its provider for the same one-hour period as session idle
 expiry. See [Request handling](request_handling.md) for the scheduling,
 cooldown, concurrency, and failure contracts.
 
+The API bootstrap also strictly patches the `WebSearchResult` model boundary
+and generic URL identity paths to preserve complete URLs. Pinned Onyx otherwise
+removes all query strings and fragments from `WebSearchResult`, crawled
+`WebContent`, crawl-result merge keys, and the generic indexed-document
+fallback. That query-blind behavior can conflate distinct resources rather
+than merely forming a display-neutral cache key. The patch changes the generic
+utility, every already-imported model/merge alias, and the generic
+indexed-document normalizer while retaining its scheme, lower-case host, and
+trailing-slash formatting. Connector-specific canonical normalization remains
+unchanged. Query-addressed resource identifiers, nested encoded values,
+signatures, and fragments therefore survive into citations, LLM-facing search
+results, crawl matching, and document IDs.
+
 ## Network and helper routing patches
 
 Environment-aware Onyx HTTP clients are routed through fixed public or

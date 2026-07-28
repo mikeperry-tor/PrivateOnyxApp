@@ -424,6 +424,15 @@ Explicit provider no-results selectors return no results; missing expected
 structure is an unresponsive parser mismatch. The engines cannot call
 SearXNG's normal HTTP transport, retry internally, or choose another provider.
 
+Provider result URLs retain their complete query strings and fragments.
+DuckDuckGo's `uddg` result wrapper is decoded exactly once by query parsing;
+the resulting URL is not decoded again, because its remaining escapes can be
+meaningful nested URL values, signatures, or encoded separators. SearXNG's
+optional tracker-remover plugin remains disabled and does not rewrite results.
+DuckDuckGo's rendered `anomaly-modal__modal` verification page is a typed
+CAPTCHA failure, alongside its form-based anomaly markers, so it enters the
+ordinary one-hour blocking suspension instead of surfacing as parser drift.
+
 Bing's rendered `One last step` / `solve the challenge below to continue`
 interstitial is a CAPTCHA failure, even when it contains none of Bing's older
 challenge selectors. Detection uses visible body text only; matching text in
@@ -533,6 +542,19 @@ request. This patch is scoped to `web_search`; it does not unwrap or otherwise
 change built-in `open_url` crawler retries or transport recovery. The pinned
 ten-minute tool-runner timeout remains an outer failure bound, not a second
 search retry or provider scheduling authority.
+
+The API bootstrap also preserves each provider's complete result URL when
+Onyx constructs `WebSearchResult`. The pinned model otherwise applies a
+generic normalizer that removes every query string and fragment, breaking
+query-addressed resources such as Hacker News items and YouTube videos. The
+same query-blind behavior also affects crawled `WebContent`, crawl-result
+merging, and the generic indexed-document fallback and can conflate distinct
+resources. The patch therefore preserves query and fragment identity in the
+generic utility and every already-imported model/merge alias. Connector-owned
+canonical normalization remains authoritative for known document systems;
+the generic fallback retains scheme, lower-case host, and trailing-slash
+formatting without dropping query or fragment. The preserved URL is used for
+the LLM-facing link, citation source, crawl matching, and document identity.
 
 The three-second provider cooldown begins in the pre-navigation guard
 immediately before the sole `Page.navigate`. A WebSocket refusal, connection

@@ -5,6 +5,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from urllib.parse import quote
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -222,6 +223,18 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "verification challenge"):
             self.duckduckgo._parse_html(challenge)
 
+        anomaly_modal = """
+        <html><head><title>DuckDuckGo</title></head><body>
+          <div class="anomaly-modal__mask">
+            <div class="anomaly-modal__modal is-ie">
+              <div class="anomaly-modal__title">Verification</div>
+            </div>
+          </div>
+        </body></html>
+        """
+        with self.assertRaisesRegex(RuntimeError, "verification challenge"):
+            self.duckduckgo._parse_html(anomaly_modal)
+
         result = """
         <html><body><div class="result results_links web-result">
           <a class="result__a"
@@ -232,6 +245,29 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         self.assertEqual(
             self.duckduckgo._parse_html(result),
             [{"url": "https://example.com/", "title": "Example", "content": "Snippet"}],
+        )
+
+    def test_duckduckgo_redirect_preserves_result_query_and_fragment(self):
+        destination = (
+            "https://news.ycombinator.com/item?id=46850588"
+            "&ref=search#comments"
+        )
+        wrapped = "/l/?uddg=" + quote(destination, safe="")
+        self.assertEqual(
+            self.duckduckgo._strip_ddg_redirect(wrapped),
+            destination,
+        )
+
+    def test_duckduckgo_redirect_does_not_double_decode_nested_values(self):
+        destination = (
+            "https://example.com/redirect?"
+            "next=https%3A%2F%2Ftarget.example%2Fpage%3Fa%3D1%26b%3D2"
+            "&sig=a%2Bb%2Fc%3D"
+        )
+        wrapped = "/l/?uddg=" + quote(destination, safe="")
+        self.assertEqual(
+            self.duckduckgo._strip_ddg_redirect(wrapped),
+            destination,
         )
 
     def test_startpage_sanitized_result_and_captcha(self):

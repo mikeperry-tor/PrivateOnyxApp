@@ -67,6 +67,14 @@ echo "Validating API patch contracts in $onyx_backend_image"
     "$onyx_backend_image" \
     /validation/validate_pinned_api.py
 
+echo "Validating complete URL identity in $onyx_backend_image"
+"$container_bin" run --rm \
+    --network none \
+    --entrypoint python \
+    -v "$repo_root/onyx/patches/sitecustomize_api_server:/api-patches:ro" \
+    "$onyx_backend_image" \
+    -c "import sys; sys.path.insert(0, '/api-patches'); import url_identity_preservation_patch as m; m.install(); from onyx.tools.tool_implementations.web_search.models import WebSearchResult; from onyx.tools.tool_implementations.open_url.models import WebContent; from onyx.tools.tool_implementations.open_url.url_normalization import normalize_url as normalize_open_url; from onyx.utils.url import normalize_url; u='https://news.ycombinator.com/item?id=46850588&ref=search#comments'; assert WebSearchResult(title='HN', link=u, snippet='test').link == u; assert WebContent(title='HN', link=u, full_content='test').link == u; assert normalize_url(u) == u; assert normalize_open_url(u) == u; print('PINNED_URL_IDENTITY_PRESERVATION_OK')"
+
 echo "Validating stock open_url crawler patch in $onyx_backend_image"
 "$container_bin" run --rm \
     --network none \

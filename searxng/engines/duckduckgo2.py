@@ -8,7 +8,7 @@ path retains the wrapper's fingerprint and routing policy.
 """
 
 import typing as t
-from urllib.parse import urlencode, unquote
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from lxml import html
 
@@ -48,7 +48,9 @@ captcha_xpath = (
     '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), '
     '"duckduckgo.com/anomaly.js") '
     'or contains(translate(@action, '
-    '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "cc=botnet")]'
+    '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "cc=botnet")] '
+    '| //*[contains(concat(" ", normalize-space(@class), " "), '
+    '" anomaly-modal__modal ")]'
 )
 
 
@@ -71,13 +73,14 @@ def search(query: str, params: "RequestParams"):
 def _strip_ddg_redirect(href: str) -> str:
     """DuckDuckGo wraps result links in ``/l/?uddg=<encoded>``.  Unwrap them."""
     if "uddg=" in href:
-        # parse the uddg query param
-        from urllib.parse import urlparse, parse_qs
         parsed = urlparse(href)
         qs = parse_qs(parsed.query)
         uddg = qs.get("uddg", [None])[0]
         if uddg:
-            return unquote(uddg)
+            # parse_qs already percent-decodes the wrapper value exactly once.
+            # A second unquote would corrupt meaningful escapes in the result
+            # URL, including nested URLs, signatures, and encoded separators.
+            return uddg
     return href
 
 

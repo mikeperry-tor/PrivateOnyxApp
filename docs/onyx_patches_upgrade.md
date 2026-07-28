@@ -380,6 +380,11 @@ For every custom engine verify:
 - URL/query/locale/safe-search/time/page construction;
 - sanitized selector fixtures, normalization, explicit no-results marker,
   parser mismatch, exact terminal hosts, and shared block markers;
+- complete result query/fragment preservation; DuckDuckGo `uddg` wrapper
+  decoding exactly once without decoding nested URL values, signatures, or
+  encoded separators a second time;
+- DuckDuckGo form-based and rendered `anomaly-modal__modal` verification
+  fixtures mapping to the ordinary CAPTCHA suspension path;
 - one atomic pre-thread reservation consumed only by its exact engine attempt,
   one provider lease held through cleanup, exact monotonic 3.0-second start
   interval, no queued busy-provider thread, no all-unavailable fan-out, and
@@ -439,6 +444,16 @@ request/result implementation. Verify each query produces one SearXNG
 `/search` HTTP request and that HTTP or parsing failure is returned without
 whole-search replay. Also verify the patch does not alter the separate built-in
 `open_url` crawler, its HTTP clients, or its transport-specific recovery.
+
+Re-audit `onyx.utils.url.normalize_url`, `WebSearchResult.normalize_link`,
+`WebContent.normalize_link`, the crawler-result merge alias, and the generic
+OpenURL indexed-document normalizer. The wrapper must preserve complete URLs,
+including query strings and fragments, through LLM-facing results, citations,
+crawl matching, and document IDs; no query-blind cache or deduplication key may
+conflate distinct resources. Connector-specific canonical normalization stays
+authoritative. Test at least distinct Hacker News `item?id=...` URLs, a
+fragment, and nested encoded separators or signatures. Remove the patch when
+pinned Onyx natively preserves identity across all of these paths.
 
 Re-audit Onyx's web-search batch shape before changing the Obscura connection
 cap. The pinned tool runner merges repeated `web_search` calls into one call,
