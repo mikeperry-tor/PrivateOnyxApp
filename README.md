@@ -323,14 +323,14 @@ Bring the stack up as usual (`make up-lite` or `make up-full`).
 
 Your Onyx WebUI will then be available publicly at `https://onyx.your-tailnet.ts.net`.
 
-To make this Tailscale URL the authoritative WebUI URL, also set
+You should also make this Tailscale URL the authoritative WebUI URL by setting
 `WEBUI_CANONICAL_ORIGIN=https://onyx.your-tailnet.ts.net`, using the actual
 Funnel hostname. Onyx will use that URL for invitation, verification, and
 password-reset links; generated absolute links; identity-provider and MCP OAuth
 callbacks; and origin-checked voice WebSockets. Update any externally registered
 MCP callback URLs after changing it.
 
-> The HTTPS canonical origin marks authentication and CSRF cookies `Secure` globally. This protects the Tailscale cookies from downgraded HTTP connections, but prevents login through the HTTP onion URL and `http://localhost:3000`. Voice WebSockets work only from the Tailscale hostname, and absolute links opened from another hostname lead to Tailscale and its separate browser session.
+> The HTTPS canonical origin marks authentication and CSRF cookies `Secure` globally. This protects the Tailscale cookies from downgraded HTTP connections, making your login credentials safer. Browsers will still allow login through `http://localhost:300`, and Tor Browser and Brave's Tor window will still support http onion logins, due to special handling of Secure cookies for onion domains. Voice WebSockets work only from the Tailscale hostname.
 
 By default, the Tailscale service does not route through Mysterium VPN, to avoid linking your Tailscale account to your search activity at the Myst VPN exit server. To route Tailscale through the VPN namespace instead, set `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` in `.env.wrapper`.
 
