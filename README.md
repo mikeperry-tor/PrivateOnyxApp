@@ -180,6 +180,7 @@ Other key variables you may want to change:
   - `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` selects which TCP ports configured integrations may reach at exact `host.docker.internal`.
     - Ollama, LM Studio, MCP servers, and other custom host services require their actual port in the list when used for anything other than `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
   - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let [Onyx MCP servers](#optional-external-mcp-servers) and [Onyx LLM inference](#onyx-llm-configuration) reach endpoints on your private LAN.
+  - MCP access to either kind of private endpoint also requires the saved Onyx **Admin → Security Hardening** setting described in the [MCP instructions](#optional-external-mcp-servers).
   - **The agent's tools still cannot access your host or LAN**, regardless of any host or LAN configuration option value. This includes the code agent and code interpreter tool; even if you [grant network access to coding tools](#optional-network-access-for-the-code-interpreter). This is enforced through this stack's docker service network isolation, not Onyx code.
     - Even if the Onyx application code itself becomes fully compromised, it can reach only explicitly configured or allowed host endpoints.
   - **Enabling LAN access additionally will allow a compromised Onyx service to access anything on your LAN.**
@@ -610,14 +611,56 @@ This Onyx configuration choices cause the stack's patches to route embedding req
 
 You can add any MCP servers you operate or trust through Onyx Admin.
 
-Access to MCP servers is subject to the saved **Admin → Security Hardening** setting,
-in addition to `.env.wrapper` host port and LAN settings.
+For an MCP server running on the same host as Docker or Podman:
 
-To access an MCP server on your host, add the server port to `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS`.
+1. Make the MCP server reachable through the container engine's host gateway:
+   - If the server runs directly on a native Linux host, the portable choice is
+     to make it listen on `0.0.0.0:<port>`. This includes the engine's host
+     gateway interface; use host firewall rules to reject unwanted LAN or
+     public access to that port. For a narrower listener, bind to the actual
+     host-gateway address reported by the selected engine (often `172.17.0.1`
+     but do not hardcode this: distribution Docker daemon configuration can
+     use a different address). A host process bound only to the host's
+     `127.0.0.1` is not reachable through `host.docker.internal` on native
+     Linux.
+   - If the server runs in a separate Docker or Podman container, make it
+     listen on that container's network interface (commonly `0.0.0.0`) and
+     publish its MCP port on a host address reachable through the engine
+     gateway. Publishing on `0.0.0.0:<host-port>` is portable, but requires
+     firewall or container-publication rules that prevent unwanted LAN or
+     public access. `127.0.0.1` inside the MCP container refers only to that
+     container; on native Linux, publishing only on the host's `127.0.0.1` is
+     also not reachable through `host.docker.internal`. Use the published host
+     port below, not the container's private address or name.
+2. Add its port to `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` in `.env.wrapper`,
+   restart the stack, and configure its Onyx URL as
+   `http://host.docker.internal:<port>/...`. Do not use `localhost`: from Onyx,
+   that refers to the Onyx container itself.
+3. In **Admin → Security Hardening**, save `Allow Private Network` (preferred)
+   or `Disabled`.
 
-To access an MCP server on your LAN, ensure `Allow Private Network` or
-`Disabled` is set in the Onyx Security Hardening settings, and
-set`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`.
+For an MCP server on another private-LAN machine:
+
+1. Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` in `.env.wrapper` and
+   restart the stack. This broad opt-in is not needed for exact
+   `host.docker.internal` access.
+2. Configure the Onyx MCP URL with the server's RFC1918 address, or with an
+   operator-local name ending in `.local`, `.internal`, or `.home.arpa`.
+3. In **Admin → Security Hardening**, save `Allow Private Network` (preferred)
+   or `Disabled`.
+
+The Onyx security setting is required in both cases: it selects the
+host-capable MCP route. `Validate All` and `Validate LLM` select the
+public-only route, so an allowed host port or the LAN opt-in alone is not
+enough.
+
+The URL hostname is also the HTTP `Host` authority sent to the MCP server.
+Consequently, a host-local server configured in Onyx as
+`http://host.docker.internal:<port>/...` must accept
+`host.docker.internal:<port>` (or that hostname, according to the server's
+configuration) in any allowed-host/DNS-rebinding checks. A LAN server must
+accept the LAN name or address used in its Onyx URL. Prefer adding the exact
+authority to the server's allowlist over disabling Host validation globally.
 
 > These MCP permissions do not extend to agent browsing or generated code. Onyx SSRF protections are redundant to this stack's network topology isolation, and less comprehensive as well.
 
