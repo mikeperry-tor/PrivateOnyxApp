@@ -505,17 +505,18 @@ connection/target generations. Each exact provider retains at most one
 WebSocket and one target, and its existing
 lease is the sole same-provider serialization authority. Different providers
 can navigate concurrently on the shared loop, so concurrent agent search calls
-do not become process-global serialization. After each completed attempt the
-provider owner arms one monotonic one-hour idle deadline. Another query before
-that deadline reuses the same target, native cookie jar, selected browser
-profile, target-owned stealth HTTP client and pool, and target-scoped
-fingerprint bundle, then moves the idle deadline. A new main-document
-navigation creates a fresh JavaScript realm, but the source-built Obscura patch
-injects the same unpredictable target seed into each realm. Native form POST
-uses that same target stealth client as GET, including its cookies, proxy,
-TLS-emulation profile, redirect handling, and pool. Natural upstream/library
-idle socket expiry is allowed; the retained client may open a replacement
-socket without rotating browser state.
+do not become process-global serialization. After each browser transaction
+that leaves its generation reusable, the provider owner arms one monotonic
+one-hour idle deadline before provider-specific parsing and SearXNG outcome
+recording finish. Another query before that deadline reuses the same target,
+native cookie jar, selected browser profile, target-owned stealth HTTP client
+and pool, and target-scoped fingerprint bundle, then moves the idle deadline.
+A new main-document navigation creates a fresh JavaScript realm, but the
+source-built Obscura patch injects the same unpredictable target seed into each
+realm. Native form POST uses that same target stealth client as GET, including
+its cookies, proxy, TLS-emulation profile, redirect handling, and pool. Natural
+upstream/library idle socket expiry is allowed; the retained client may open a
+replacement socket without rotating browser state.
 
 No query by the deadline physically closes the target followed by its
 connection. A later query creates a fresh generation. The owner checks an
@@ -549,10 +550,19 @@ is an experimental request-shape option, not an anti-bot guarantee.
 
 The wrapper owns the blocking suspension values rather than inheriting them
 from SearXNG: CAPTCHA/verification, access denial, and HTTP 429 each suspend a
-provider for 3,600 seconds. Every blocking suspension therefore lets the
-affected browser session reach its idle deadline before SearXNG admits that
-provider again. Session state does not otherwise change suspension, provider
-selection, cooldown, or scoring.
+provider for 3,600 seconds. The reusable browser generation's equal 3,600-second
+idle clock starts first, when the browser transaction returns; the offline
+processor then classifies the returned DOM, records the blocking suspension,
+and releases the provider lease. Its browser deadline therefore precedes its
+unsuspension deadline by the parser/outcome-recording interval. This ordering
+is deliberate: a provider becoming eligible again must receive a fresh target,
+fingerprint bundle, cookie jar, stealth client, and connection generation
+instead of resuming the state that encountered the block. A delayed timer
+callback cannot violate that property because admission checks the monotonic
+deadline synchronously and closes an expired generation before navigation.
+Transport or protocol ambiguity closes the generation immediately instead of
+arming the idle clock. Session state does not otherwise change suspension,
+provider selection, cooldown, or scoring.
 
 With `SEARXNG_ROUND_ROBIN=true` (default), the existing orchestration selects
 one available normal custom provider and removes the other selected engines
@@ -578,15 +588,48 @@ classification, or parsing. CAPTCHA, access-denied, and 429 attempts can
 therefore advance only to a different eligible provider; they are never
 replayed against the blocked provider.
 
-Every selected provider attempt receives SearXNG's configured 60-second engine
-window. Provider-capacity waiting occurs before that attempt clock starts, and
-rotation starts a fresh 60-second window for the next provider. The browser
-client independently bounds setup, homepage navigation, entry delays,
-submission, result navigation, and both DOM reads to one shared 50-second
-absolute attempt deadline plus separately bounded cleanup; it does not grant
-each stage a fresh deadline. The setup portion retains its 45-second absolute
-ceiling. The provider lease remains held until the engine has recorded the completed
-outcome even if SearXNG has stopped waiting for its engine thread.
+The timeout layers are nested or sequential as follows; none is a remainder
+carried from one provider rotation into another:
+
+- Provider reservation, active-lease, and exact three-second cooldown waits
+  happen before the selected provider's engine clock starts. They can extend
+  the SearXNG HTTP request but do not consume a partial provider budget.
+- Every selected provider receives a fresh SearXNG 60-second engine window.
+  Rotation never gives a later provider the earlier provider's remainder. The
+  custom offline engines' explicit `timeout: 60.0` entries are authoritative;
+  the general `outgoing.request_timeout: 6.0` applies to SearXNG network
+  clients, not these browser-owned offline engines. Onyx sends no
+  `timeout_limit`, and the deployment does not set `max_request_timeout`.
+- Inside that 60-second window, the browser transaction starts its own single
+  50-second absolute deadline. Connection/target setup, homepage navigation,
+  entry events and optional 45–135 ms timed-entry delays, form submission,
+  result navigation, completion events, and both DOM reads consume the same
+  deadline. No browser stage receives a fresh 50 seconds.
+- Browser setup has a 45-second absolute sub-deadline within the 50 seconds.
+  WebSocket opening is further limited to the smaller of ten seconds and the
+  remaining setup time. These are ceilings within the browser budget, not
+  additional time.
+- Cleanup is deliberately outside the browser transaction deadline so an
+  ambiguous generation can still fail closed after its 50 seconds are spent.
+  Target closure has a five-second command bound and WebSocket closure has its
+  own five-second close bound; in the worst ambiguous path they can run
+  sequentially and bring the engine thread close to or beyond SearXNG's
+  60-second wait. A successful reusable transaction performs neither immediate
+  close. The Obscura server's configured 90-second navigation and 120-second
+  command ceilings are lower-level safety bounds; the client's remaining
+  50-second deadline normally expires first and they add no time.
+- Provider parsing, challenge classification, and suspension recording use
+  whatever remains of SearXNG's 60 seconds after browser work. SearXNG's
+  timeout is a waiting boundary, not thread cancellation: it marks the engine
+  unresponsive and may rotate after 60 seconds, while the late engine thread
+  continues cleanup/outcome processing and retains its provider lease until it
+  actually finishes.
+
+A request that sequentially reaches all five distinct providers therefore has
+up to 300 seconds of nominal provider execution windows, plus admission waits.
+There is intentionally no separate whole-SearXNG-request deadline in this
+wrapper. The one-hour browser idle lifetime and blocking suspension are state
+lifetime/readmission controls, not execution budgets.
 
 Onyx merges multiple `web_search` tool calls in one tool batch into one call,
 then executes every query in the merged `queries` array concurrently; the
@@ -600,8 +643,12 @@ Each query therefore submits the SearXNG `/search` HTTP request exactly once,
 while SearXNG alone owns any sequential next-provider rotation inside that
 request. This patch is scoped to `web_search`; it does not unwrap or otherwise
 change built-in `open_url` crawler retries or transport recovery. The pinned
-ten-minute tool-runner timeout remains an outer failure bound, not a second
-search retry or provider scheduling authority.
+Onyx call uses no `requests.post` timeout. Its ten-minute tool-runner timeout is
+an outer soft wait over the concurrently executed tool batch, not a second
+search retry, provider budget, or provider scheduling authority. On timeout
+Onyx stops awaiting unfinished worker results, but Python worker threads and
+their in-flight SearXNG requests continue in the background; it is not hard
+cancellation and does not release a SearXNG provider lease.
 
 The API bootstrap also preserves each provider's complete result URL when
 Onyx constructs `WebSearchResult`. The pinned model otherwise applies a
