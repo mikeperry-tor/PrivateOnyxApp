@@ -25,6 +25,9 @@ def _load_module():
     searx = types.ModuleType("searx")
     exceptions = types.ModuleType("searx.exceptions")
     exceptions.SearxEngineResponseException = SearxEngineResponseException
+    exceptions.SearxEngineAccessDeniedException = SearxEngineResponseException
+    exceptions.SearxEngineCaptchaException = SearxEngineResponseException
+    exceptions.SearxEngineTooManyRequestsException = SearxEngineResponseException
     sys.modules["searx"] = searx
     sys.modules["searx.exceptions"] = exceptions
     sys.path.insert(0, str(CLIENT_PATH))
@@ -339,6 +342,60 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
 
         self.assertNotEqual(state.last_start, float("-inf"))
 
+    def test_repeated_navigation_guard_waits_for_exact_cooldown(self):
+        original_interval = self.module.MINIMUM_START_INTERVAL
+        self.module.MINIMUM_START_INTERVAL = 0.03
+        self.addCleanup(
+            setattr,
+            self.module,
+            "MINIMUM_START_INTERVAL",
+            original_interval,
+        )
+        state = self.module._PROVIDERS["bing2"]
+
+        with self.module.provider_lease("bing2") as record_start:
+            self.assertTrue(record_start())
+            started = time.monotonic()
+            self.assertTrue(record_start())
+        elapsed = time.monotonic() - started
+
+        self.assertGreaterEqual(elapsed, 0.02)
+
+    def test_browser_transaction_is_capped_by_remaining_engine_window(self):
+        captured = {}
+
+        class Browser:
+            def submit_sync(self, _query, **kwargs):
+                captured.update(kwargs)
+                return SimpleNamespace(
+                    challenge=None,
+                    status=200,
+                    rendered_html="<html>result</html>",
+                )
+
+        deadline = time.monotonic() + 8.0
+        with (
+            patch.object(self.module, "_provider_browser", return_value=Browser()),
+            self.module.provider_lease(
+                "bing2",
+                engine_deadline=deadline,
+            ) as record_start,
+        ):
+            result = self.module.submit_search(
+                "bing2",
+                "query",
+                (),
+                record_start,
+            )
+
+        self.assertEqual(result, "<html>result</html>")
+        self.assertGreater(captured["request_timeout_seconds"], 6.0)
+        self.assertLessEqual(captured["request_timeout_seconds"], 7.0)
+        self.assertEqual(
+            captured["pre_navigation_timeout_seconds"],
+            captured["request_timeout_seconds"],
+        )
+
     def test_blocking_suspension_is_recorded_before_provider_release(self):
         patch = _load_patch_module()
         patch._require_source = lambda *_args, **_kwargs: None
@@ -358,6 +415,8 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         exceptions.SearxEngineResponseException = SearxEngineResponseException
         exceptions.SearxEngineTooManyRequestsException = TooManyRequests
 
+        deadline_observations = []
+
         class OfflineProcessor:
             def search(
                 self,
@@ -376,12 +435,16 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             def __init__(self):
                 self.engine = SimpleNamespace(
                     name="brave2",
-                    search=lambda _query, _params: (_ for _ in ()).throw(
-                        TooManyRequests("blocked")
-                    ),
+                    search=self._search,
                 )
                 self.logger = SimpleNamespace(exception=lambda *_args: None)
                 self.suspended = False
+
+            def _search(self, _query, _params):
+                deadline_observations.append(
+                    self_module._PROVIDERS["brave2"].engine_deadline
+                )
+                raise TooManyRequests("blocked")
 
             def extend_container(self, *_args):
                 raise AssertionError("blocked result must not extend the container")
@@ -403,6 +466,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             }
         )
         patch.apply_offline_block_suspension_patch()
+        self_module = self.module
 
         token = self.module.reserve_provider("brave2")
         self.assertIsNotNone(token)
@@ -429,7 +493,9 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
 
         self.assertTrue(processor.suspended)
         self.assertEqual(release_observations, [True])
+        self.assertEqual(deadline_observations, [60.0])
         self.assertFalse(self.module._PROVIDERS["brave2"].active)
+        self.assertIsNone(self.module._PROVIDERS["brave2"].engine_deadline)
 
     def test_capacity_waiter_is_not_lost_between_check_and_lease_release(self):
         original_interval = self.module.MINIMUM_START_INTERVAL

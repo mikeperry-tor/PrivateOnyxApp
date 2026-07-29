@@ -148,12 +148,127 @@ class SearxngObscuraEngineTests(unittest.TestCase):
           </a></h2><p>Microsoft result.</p></li>
         </ol></body></html>
         """
-        with patch.object(self.obscura, "submit_search", return_value=result) as submit:
+        with (
+            patch.object(self.bing, "_sparse_first_page_threshold", 1),
+            patch.object(self.obscura, "submit_search", return_value=result) as submit,
+        ):
             self.bing.search("Microsoft", {"pageno": 1, "safesearch": 2})
         self.assertEqual(
             submit.call_args.args[2],
             (("adlt", "off"), ("setlang", "en")),
         )
+
+    def test_bing_sparse_first_page_fetches_and_merges_page_two(self):
+        def page(*urls: str) -> str:
+            rows = "".join(
+                f"""<li class='b_algo'><h2><a href='{url}'>
+                  Privacy result {index}
+                </a></h2><p>Privacy search result {index}.</p></li>"""
+                for index, url in enumerate(urls)
+            )
+            return f"<html><body><ol id='b_results'>{rows}</ol></body></html>"
+
+        first_page = page(
+            "https://example.com/one",
+            "https://example.com/shared",
+        )
+        second_page = page(
+            "https://example.com/shared",
+            "https://example.com/two",
+            "https://example.com/three",
+            "https://example.com/four",
+            "https://example.com/five",
+            "https://example.com/six",
+            "https://example.com/seven",
+            "https://example.com/eight",
+            "https://example.com/nine",
+            "https://example.com/ten",
+        )
+        guard = object()
+        with patch.object(
+            self.obscura,
+            "submit_search",
+            side_effect=(first_page, second_page),
+        ) as submit:
+            results = self.bing.search(
+                "privacy search",
+                {
+                    "pageno": 1,
+                    self.obscura.PRE_NAVIGATION_GUARD_PARAM: guard,
+                },
+            )
+
+        self.assertEqual(submit.call_count, 2)
+        self.assertEqual(
+            submit.call_args_list[0].args,
+            (
+                "bing2",
+                "privacy search",
+                (("adlt", "off"), ("setlang", "en")),
+                guard,
+            ),
+        )
+        self.assertEqual(
+            submit.call_args_list[1].args,
+            (
+                "bing2",
+                "privacy search",
+                (("adlt", "off"), ("setlang", "en"), ("first", "11")),
+                guard,
+            ),
+        )
+        self.assertEqual(len(results), 10)
+        self.assertEqual(results[0]["url"], "https://example.com/one")
+        self.assertEqual(results[1]["url"], "https://example.com/shared")
+        self.assertEqual(results[-1]["url"], "https://example.com/nine")
+
+    def test_bing_complete_first_page_does_not_fetch_page_two(self):
+        rows = "".join(
+            f"""<li class='b_algo'><h2><a href='https://example.com/{index}'>
+              Privacy result {index}
+            </a></h2><p>Privacy result {index}.</p></li>"""
+            for index in range(5)
+        )
+        page = f"<html><body><ol id='b_results'>{rows}</ol></body></html>"
+        with patch.object(self.obscura, "submit_search", return_value=page) as submit:
+            results = self.bing.search("privacy", {"pageno": 1})
+        self.assertEqual(len(results), 5)
+        submit.assert_called_once()
+
+    def test_bing_explicit_page_two_does_not_fetch_another_page(self):
+        page = """
+        <html><body><ol id='b_results'>
+          <li class='b_algo'><h2><a href='https://example.com/privacy'>
+            Privacy result
+          </a></h2><p>Privacy result.</p></li>
+        </ol></body></html>
+        """
+        with patch.object(self.obscura, "submit_search", return_value=page) as submit:
+            self.bing.search("privacy", {"pageno": 2})
+        submit.assert_called_once_with(
+            "bing2",
+            "privacy",
+            (("adlt", "off"), ("setlang", "en"), ("first", "11")),
+            None,
+        )
+
+    def test_bing_page_two_parser_failure_is_not_hidden(self):
+        first_page = """
+        <html><body><ol id='b_results'>
+          <li class='b_algo'><h2><a href='https://example.com/privacy'>
+            Privacy result
+          </a></h2><p>Privacy result.</p></li>
+        </ol></body></html>
+        """
+        with (
+            patch.object(
+                self.obscura,
+                "submit_search",
+                side_effect=(first_page, "<html><body>changed DOM</body></html>"),
+            ),
+            self.assertRaisesRegex(ParserMismatch, "zero b_algo cards"),
+        ):
+            self.bing.search("privacy", {"pageno": 1})
 
     def test_bing_rejects_structurally_valid_unrelated_results(self):
         unrelated = """

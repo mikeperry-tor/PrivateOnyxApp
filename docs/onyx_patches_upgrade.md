@@ -430,7 +430,8 @@ For every custom engine verify:
 - one lazy shared event-loop thread and at most one retained connection per
   exact provider; different-provider navigations remain concurrent while the
   provider lease denies same-provider overlap; one retained target with
-  bounded two-stage event accounting per query; native cookie, profile,
+  bounded two-stage event accounting per ordinary query and at most two
+  transactions/four stages for Bing's sparse-first-page pagination; native cookie, profile,
   fingerprint-seed, and target-owned stealth-client continuity before the
   sliding one-hour idle deadline;
   physical and synchronous-on-access expiry without keepalive pings or
@@ -449,7 +450,13 @@ For every custom engine verify:
 - Bing excludes dictionary/answer widget metadata and organic result
   attribution labels containing `dictionary`;
 - Bing does not advertise SafeSearch support and always requests `adlt=off`;
-- engines and the CDP client never retry or select another provider;
+- Bing requests `first=11` only when a successfully parsed first page contains
+  fewer than five valid results, reuses the exact lease/session, enforces the
+  three-second start interval, shares the original 60-second engine deadline,
+  propagates page-two blocks/timeouts/parser failures, removes exact duplicate
+  URLs, preserves page order, and caps the combined result at ten;
+- engines and the CDP client never retry failed transactions or select another
+  provider;
 - enabled round-robin normal/last-resort order and sequential next-provider
   rotation, with an attempted-set proof that no provider is selected twice in
   one search; treat rotation as defined scheduling behavior; pre-navigation

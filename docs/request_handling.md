@@ -420,8 +420,13 @@ offline engines. Each begins at its declared provider homepage, validates the
 completed homepage document, populates that page's declared query control and
 fixed fields, calls the owning form's native `requestSubmit()`, validates a
 distinct completed result document, and passes only the bounded result DOM to
-its parser. There is no constructed result URL, direct-navigation compatibility
-mode, same-provider retry, or fallback. The shared client owns form/origin
+its parser. Bing alone performs one additional homepage/form/result transaction
+when a successfully parsed first page contains fewer than five valid organic
+results; it requests page two in the same provider lease and retained browser
+session, merges exact-URL-unique results, and returns at most ten. This is
+bounded pagination after a successful parse, not a replay of a failed
+transaction. There is no constructed result URL, direct-navigation
+compatibility mode, failure retry, or fallback. The shared client owns form/origin
 policy plus bounded generic HTTP and challenge classification; provider parsers
 retain only provider-specific DOM checks. Generic detection
 ignores script, style, template, and noscript text and does not classify an
@@ -475,7 +480,14 @@ check retain the structural parser contract.
 Bing dictionary and answer results remain excluded from this research-oriented
 engine. The filter covers Bing's widget metadata and organic result attribution
 labels containing `dictionary`; ordinary non-dictionary organic results remain
-eligible for the query-coherence check.
+eligible for the query-coherence check. If those filters and the ordinary URL,
+title, and query-coherence checks leave zero through four first-page results,
+the engine submits page two with `first=11`. Page two uses the same strict
+challenge, structure, and coherence checks; a page-two block, timeout, or parser
+failure is not hidden by returning the partial first page. Exact duplicate URLs
+are removed while preserving page order, and the combined result is capped at
+ten. Five or more first-page results, and explicit requests for pages after the
+first, perform no automatic extra pagination.
 
 One Granian request worker owns scheduling and all five provider-session
 owners. `GRANIAN_WORKERS=1` is therefore part of the capacity and serialization
@@ -528,8 +540,11 @@ failed query. An owner whose ambiguous generation was already closed is removed
 immediately; it is not reported as reused and does not receive a redundant idle
 close.
 
-Each search attempt has exactly two main-document stages. Redirects and
-subresources remain within their stage. Homepage and result independently
+Each ordinary search attempt has exactly two main-document stages. Bing's
+successful sparse-first-page path has two such transactions and therefore at
+most four stages: homepage and result for page one, then homepage and result
+for page two. Redirects and subresources remain within their stage. Every
+homepage and result independently
 receive HTTPS/default-port/exact-host, lifecycle, status, challenge, and
 20 MiB rendered-DOM validation. The homepage DOM is released before result
 extraction and never reaches a provider parser. Form policy requires one
@@ -581,7 +596,9 @@ the ordinary offline processor and suspend the provider. SearXNG owns caller
 timeouts, late results, unresponsive-engine reporting, and suspension state.
 
 Next-provider rotation is the defined round-robin scheduling behavior. It never
-selects the same provider twice within one SearXNG search. The provider name
+selects the same provider twice within one SearXNG search. Bing's bounded
+page-two fetch remains inside its one selected engine attempt and is not a
+second selection. The provider name
 enters the request-local attempted set before its engine thread runs, regardless
 of whether failure occurs during connection setup, navigation, response
 classification, or parsing. CAPTCHA, access-denied, and 429 attempts can
@@ -591,20 +608,26 @@ replayed against the blocked provider.
 The timeout layers are nested or sequential as follows; none is a remainder
 carried from one provider rotation into another:
 
-- Provider reservation, active-lease, and exact three-second cooldown waits
-  happen before the selected provider's engine clock starts. They can extend
-  the SearXNG HTTP request but do not consume a partial provider budget.
+- Provider reservation, active-lease, and the initial exact three-second
+  cooldown wait happen before the selected provider's engine clock starts.
+  They can extend the SearXNG HTTP request but do not consume a partial provider
+  budget. Bing's second homepage navigation is different: its pre-navigation
+  guard enforces the same interval inside the already-running engine window.
 - Every selected provider receives a fresh SearXNG 60-second engine window.
   Rotation never gives a later provider the earlier provider's remainder. The
   custom offline engines' explicit `timeout: 60.0` entries are authoritative;
   the general `outgoing.request_timeout: 6.0` applies to SearXNG network
   clients, not these browser-owned offline engines. Onyx sends no
   `timeout_limit`, and the deployment does not set `max_request_timeout`.
-- Inside that 60-second window, the browser transaction starts its own single
-  50-second absolute deadline. Connection/target setup, homepage navigation,
-  entry events and optional 45–135 ms timed-entry delays, form submission,
-  result navigation, completion events, and both DOM reads consume the same
-  deadline. No browser stage receives a fresh 50 seconds.
+- Inside that 60-second window, each browser transaction has a nominal
+  50-second absolute deadline, capped to the remaining engine window minus one
+  second of outcome-processing headroom. Connection/target setup, homepage
+  navigation, entry events and optional 45–135 ms timed-entry delays, form
+  submission, result navigation, completion events, and both DOM reads consume
+  that transaction's deadline. No browser stage receives a fresh deadline.
+  Bing's page-two transaction shares the original 60-second engine window; it
+  does not receive a fresh engine budget, and its deadline is only the
+  remaining bounded portion.
 - Browser setup has a 45-second absolute sub-deadline within the 50 seconds.
   WebSocket opening is further limited to the smaller of ten seconds and the
   remaining setup time. These are ceilings within the browser budget, not
@@ -668,7 +691,10 @@ immediately before homepage `Page.navigate`, the first provider-origin request.
 A WebSocket refusal, connection
 failure, target creation/attachment failure, or CDP-domain setup failure before
 that guard proves that no origin search request was sent and does not stamp the
-cooldown. There is still no automatic same-engine retry: only a later,
+cooldown. Bing's sparse-result pagination calls the same guard before its
+second homepage navigation, waits out any remainder of the exact interval, and
+stamps a new start time. There is still no automatic same-engine failure retry:
+only a later,
 independent SearXNG search may select that provider and open a replacement
 generation. Once the guard has run, cooldown applies even if either document
 stage or submission fails ambiguously, and neither the client nor scheduler

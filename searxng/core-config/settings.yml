@@ -33,8 +33,9 @@ outgoing:
 plugins: {}
 
 engines:
-  # Offline callbacks own one direct Obscura navigation. The normal SearXNG
-  # HTTP client is intentionally not involved.
+  # Offline callbacks own their Obscura homepage/form transactions. The normal
+  # SearXNG HTTP client is intentionally not involved. Bing may perform a
+  # second bounded transaction for sparse first-page results.
   - name: google2
     engine: google2
     shortcut: go2

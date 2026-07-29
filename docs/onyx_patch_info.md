@@ -215,8 +215,11 @@ entry-mode selection, exact origin policies, shared-client challenge/status
 mapping, the provider lease, and an exact three-second start interval. Each
 engine owns only fixed-field calculation, sanitized DOM parsing,
 provider-specific challenge checks, result normalization, and explicit
-no-results detection. Parser mismatch is an unresponsive failure, not empty
-success.
+no-results detection. Bing additionally owns a bounded sparse-first-page rule:
+fewer than five valid results triggers page two in the same lease and retained
+session, followed by exact-URL deduplication and a ten-result cap. Parser
+mismatch is an unresponsive failure, not empty success, including during that
+second page.
 
 `duckduckgo2` uses DuckDuckGo's JavaScript-rendered No-AI search surface at
 `noai.duckduckgo.com`, not the CAPTCHA-prone HTML endpoint. Search navigation
@@ -248,7 +251,10 @@ recording; releasing at CDP cleanup would let a concurrent request reserve a
 provider during the small pre-suspension race. This ordering stays in SearXNG:
 the shared CDP client has no provider or round-robin ownership. Every rotation
 gets a fresh configured 60-second engine window and never selects the same
-provider twice. Concurrent searches wait on provider release or the nearest
+provider twice. The processor passes that absolute engine deadline into the
+lease so Bing's optional second browser transaction is capped by the remaining
+window, and the second homepage start obeys the same exact cooldown. Concurrent
+searches wait on provider release or the nearest
 exact cooldown deadline before engine dispatch; that capacity wait does not
 produce an empty result or make Bing eligible.
 The API bootstrap unwraps only Onyx's generic three-attempt

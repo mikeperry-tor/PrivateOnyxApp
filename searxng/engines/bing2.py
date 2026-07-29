@@ -103,26 +103,63 @@ non_web_result_block_xpath = (
 _query_word_re = re.compile(r"\w+", re.UNICODE)
 _query_anchor_limit = 8
 _minimum_query_anchor_length = 4
+_sparse_first_page_threshold = 5
+_maximum_combined_results = 10
+
+
+def _fixed_fields(pageno: int) -> tuple[tuple[str, str], ...]:
+    fields: list[tuple[str, str]] = [
+        ("adlt", "off"),
+        ("setlang", "en"),
+    ]
+    if pageno > 1:
+        fields.append(("first", str((pageno - 1) * 10 + 1)))
+    return tuple(fields)
+
+
+def _merge_unique_results(
+    first_page: list[dict[str, t.Any]],
+    second_page: list[dict[str, t.Any]],
+) -> list[dict[str, t.Any]]:
+    merged: list[dict[str, t.Any]] = []
+    seen_urls: set[str] = set()
+    for result in first_page + second_page:
+        url = result["url"]
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        merged.append(result)
+        if len(merged) == _maximum_combined_results:
+            break
+    return merged
 
 
 def search(query: str, params: "RequestParams"):
     """Submit the Bing homepage form and parse its result DOM."""
-    fixed_fields: list[tuple[str, str]] = [
-        ("adlt", "off"),
-        ("setlang", "en"),
-    ]
-    if params["pageno"] > 1:
-        fixed_fields.append(("first", str((params["pageno"] - 1) * 10 + 1)))
-
-    return _parse_html(
+    pageno = params["pageno"]
+    guard = params.get(_obscura.PRE_NAVIGATION_GUARD_PARAM)
+    first_page = _parse_html(
         _obscura.submit_search(
             "bing2",
             query,
-            tuple(fixed_fields),
-            params.get(_obscura.PRE_NAVIGATION_GUARD_PARAM),
+            _fixed_fields(pageno),
+            guard,
         ),
         query,
     )
+    if pageno != 1 or len(first_page) >= _sparse_first_page_threshold:
+        return first_page
+
+    second_page = _parse_html(
+        _obscura.submit_search(
+            "bing2",
+            query,
+            _fixed_fields(2),
+            guard,
+        ),
+        query,
+    )
+    return _merge_unique_results(first_page, second_page)
 
 
 def _strip_bing_redirect(href: str) -> str:

@@ -133,7 +133,9 @@ def apply_offline_block_suspension_patch() -> None:
             # scheduling or round-robin state; this lease belongs here at the
             # SearXNG engine-processing boundary.
             with _obscura.provider_lease(
-                self.engine.name, reservation_token
+                self.engine.name,
+                reservation_token,
+                engine_deadline=start_time + timeout_limit,
             ) as pre_navigation_guard:
                 params[_obscura.PRE_NAVIGATION_GUARD_PARAM] = pre_navigation_guard
                 try:

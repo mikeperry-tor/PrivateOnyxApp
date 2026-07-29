@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import threading
 import time
@@ -36,6 +37,7 @@ SEARCH_DOM_LIMIT = 20 * 1024 * 1024
 SEARCH_BROWSER_ATTEMPT_TIMEOUT_SECONDS = 50.0
 SEARCH_PRE_NAVIGATION_TIMEOUT_SECONDS = 45.0
 SEARCH_CLEANUP_TIMEOUT_SECONDS = 5.0
+ENGINE_OUTCOME_HEADROOM_SECONDS = 1.0
 MINIMUM_START_INTERVAL = 3.0
 PROVIDER_SESSION_IDLE_SECONDS = 3600.0
 RESERVATION_PARAM = "_wrapper_obscura_reservation_token"
@@ -323,6 +325,7 @@ class _ProviderState:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.active = False
+        self.engine_deadline: float | None = None
         self.reservation: str | None = None
         self.last_start = float("-inf")
         self.browser: _ProviderBrowserSession | None = None
@@ -414,10 +417,19 @@ def release_provider_reservation(name: str, token: str | None) -> None:
 
 
 @contextmanager
-def provider_lease(name: str, reservation_token: str | None = None):
+def provider_lease(
+    name: str,
+    reservation_token: str | None = None,
+    *,
+    engine_deadline: float | None = None,
+):
     """Own one provider through navigation, parsing, and outcome recording."""
     from searx.exceptions import SearxEngineResponseException
 
+    if engine_deadline is not None and not math.isfinite(engine_deadline):
+        raise SearxEngineResponseException(
+            f"{name}: provider engine deadline is invalid"
+        )
     state = _PROVIDERS[name]
     with state.lock:
         now = time.monotonic()
@@ -434,18 +446,28 @@ def provider_lease(name: str, reservation_token: str | None = None):
         ):
             raise SearxEngineResponseException(f"{name}: provider is busy or cooling down")
         state.active = True
+        state.engine_deadline = engine_deadline
     try:
         yield lambda: _record_start(state)
     finally:
         with state.lock:
             state.active = False
+            state.engine_deadline = None
         _provider_capacity_changed()
 
 
 def _record_start(state: _ProviderState) -> bool:
-    with state.lock:
-        state.last_start = time.monotonic()
-    return True
+    while True:
+        with state.lock:
+            now = time.monotonic()
+            remaining = MINIMUM_START_INTERVAL - (now - state.last_start)
+            if remaining <= 0:
+                state.last_start = now
+                return True
+        # A single Bing engine attempt can deliberately submit sparse page 2.
+        # Recheck at the actual pre-navigation boundary so its second homepage
+        # navigation preserves the same exact provider start interval.
+        time.sleep(remaining)
 
 
 def _provider_browser(name: str) -> _ProviderBrowserSession:
@@ -493,6 +515,26 @@ def submit_search(
             f"{engine_name}: unknown browser interaction"
         )
     try:
+        state = _PROVIDERS[engine_name]
+        with state.lock:
+            engine_deadline = state.engine_deadline
+        request_timeout_seconds = SEARCH_BROWSER_ATTEMPT_TIMEOUT_SECONDS
+        if engine_deadline is not None:
+            available = (
+                engine_deadline
+                - time.monotonic()
+                - ENGINE_OUTCOME_HEADROOM_SECONDS
+            )
+            if available <= 0:
+                raise ObscuraClientError(
+                    FetchFailure.PRE_NAVIGATION_TIMEOUT,
+                    "search-engine-deadline",
+                    "SearXNG engine deadline leaves no browser transaction budget",
+                )
+            request_timeout_seconds = min(
+                request_timeout_seconds,
+                available,
+            )
         result = _provider_browser(engine_name).submit_sync(
             query,
             spec=spec,
@@ -503,9 +545,12 @@ def submit_search(
             cdp_url=CDP_URL,
             wait_until=WAIT_UNTIL,
             dom_limit=SEARCH_DOM_LIMIT,
-            pre_navigation_timeout_seconds=SEARCH_PRE_NAVIGATION_TIMEOUT_SECONDS,
+            pre_navigation_timeout_seconds=min(
+                SEARCH_PRE_NAVIGATION_TIMEOUT_SECONDS,
+                request_timeout_seconds,
+            ),
             cleanup_command_timeout_seconds=SEARCH_CLEANUP_TIMEOUT_SECONDS,
-            request_timeout_seconds=SEARCH_BROWSER_ATTEMPT_TIMEOUT_SECONDS,
+            request_timeout_seconds=request_timeout_seconds,
             pre_navigation_guard=pre_navigation_guard,
         )
     except ObscuraClientError as exc:
