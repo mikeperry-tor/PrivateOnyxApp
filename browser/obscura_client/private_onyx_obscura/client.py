@@ -420,7 +420,7 @@ def _challenge_details(
     visible = " ".join(" ".join(parser.visible).lower().split())
     title = " ".join(" ".join(parser.title).lower().split())
     parsed_url = urlsplit(final_url)
-    route = unquote(f"{parsed_url.path}?{parsed_url.query}").lower()
+    route = unquote(parsed_url.path).lower()
 
     if any(
         marker in route
@@ -755,6 +755,14 @@ class SearchBrowserSession:
         self._session_id: str | None = None
         self._frame_id: str | None = None
         self._cleanup_command_timeout_seconds = CLEANUP_COMMAND_TIMEOUT_SECONDS
+
+    @property
+    def generation_active(self) -> bool:
+        """Whether this owner still has a retained connection or target."""
+        return (
+            self._connection.websocket is not None
+            or self._target_id is not None
+        )
 
     async def close(self) -> None:
         target_id = self._target_id
@@ -1869,9 +1877,6 @@ async def submit_search(
             )
         del homepage_html
 
-        _validate_search_terminal_url(
-            homepage_url, spec.allowed_homepage_hosts, stage="form-origin"
-        )
         await _search_form_call(
             session,
             operation="validate",

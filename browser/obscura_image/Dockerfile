@@ -24,7 +24,8 @@ RUN apt-get update \
 COPY browser/obscura_image/fetch_source.py /wrapper/fetch_source.py
 COPY browser/obscura_image/patches/ /wrapper/patches/
 
-RUN python3 /wrapper/fetch_source.py \
+RUN set -eu; \
+    python3 /wrapper/fetch_source.py \
         --ref "${OBSCURA_SOURCE_REF}" \
         --sha256 "${OBSCURA_SOURCE_SHA256}" \
         --output-dir /build \

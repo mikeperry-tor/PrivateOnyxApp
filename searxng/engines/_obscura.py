@@ -257,9 +257,13 @@ class _ProviderBrowserSession:
             await asyncio.shield(expiry_task)
         self._generation += 1
         generation = self._generation
-        reused = self._session is not None
+        reused = (
+            self._session is not None
+            and getattr(self._session, "generation_active", True)
+        )
         if self._session is None:
             self._session = self._session_factory()
+        session = self._session
         logger.info(
             "%s: browser session query_sequence=%d reused=%s",
             self.engine_name,
@@ -269,16 +273,22 @@ class _ProviderBrowserSession:
         try:
             return await self._submit_async(
                 query,
-                session_owner=self._session,
+                session_owner=session,
                 **kwargs,
             )
         finally:
-            self._idle_deadline = loop.time() + self.idle_seconds
-            self._idle_handle = loop.call_at(
-                self._idle_deadline,
-                self._begin_expiry,
-                generation,
-            )
+            if getattr(session, "generation_active", True):
+                self._idle_deadline = loop.time() + self.idle_seconds
+                self._idle_handle = loop.call_at(
+                    self._idle_deadline,
+                    self._begin_expiry,
+                    generation,
+                )
+            elif self._session is session:
+                # The shared client already closed an ambiguous generation.
+                # Discard its empty owner immediately instead of reporting the
+                # next connection as reused and scheduling a redundant close.
+                self._session = None
 
     def submit_sync(self, query: str, **kwargs):
         return _PROVIDER_BROWSER_LOOP.submit(

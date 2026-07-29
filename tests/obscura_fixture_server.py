@@ -89,7 +89,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/search-post-home":
             self._search_page(method="post", result_path="/search-post-result")
             return
+        if path == "/search-post-302-home":
+            self._search_page(method="post", result_path="/search-post-302")
+            return
+        if path == "/search-post-307-home":
+            self._search_page(method="post", result_path="/search-post-307")
+            return
         if path == "/search-get-result":
+            self._search_result(method="GET")
+            return
+        if path == "/search-post-redirected-result":
             self._search_result(method="GET")
             return
         if path == "/static":
@@ -241,6 +250,25 @@ class Handler(BaseHTTPRequestHandler):
         if length:
             self.rfile.read(length)
         if path == "/search-post-result":
+            self._search_result(method="POST")
+            return
+        if path == "/search-post-302":
+            self._send(
+                b"",
+                content_type="text/plain",
+                status=HTTPStatus.FOUND,
+                headers={"Location": "/search-post-redirected-result"},
+            )
+            return
+        if path == "/search-post-307":
+            self._send(
+                b"",
+                content_type="text/plain",
+                status=HTTPStatus.TEMPORARY_REDIRECT,
+                headers={"Location": "/search-post-preserved-result"},
+            )
+            return
+        if path == "/search-post-preserved-result":
             self._search_result(method="POST")
             return
         self._send(

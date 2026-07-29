@@ -88,6 +88,10 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         )
         self.assertIn("fetch_source.py", self.obscura_dockerfile)
         self.assertIn(
+            "RUN set -eu; \\\n    python3 /wrapper/fetch_source.py",
+            self.obscura_dockerfile,
+        )
+        self.assertIn(
             "ARG OBSCURA_UPSTREAM_IMAGE="
             "docker.io/h4ckf0r0day/obscura:0.1.11"
             "@sha256:e5fd7b8032a5fedc6e8e27f9d4f2e35327ea08b2548ab1372775974add171547",

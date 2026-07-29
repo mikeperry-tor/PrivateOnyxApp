@@ -698,6 +698,18 @@ class ObscuraClientTests(unittest.TestCase):
         self.assertEqual(challenge, FetchFailure.ACCESS_DENIED)
         self.assertEqual(signal, "http-denial-status")
 
+    def test_challenge_route_detection_ignores_result_query_values(self):
+        challenge, signal = _challenge_details(
+            200,
+            (
+                "https://www.google.com/search?"
+                "q=site%3Aexample.com%2Fchallenge%2F"
+            ),
+            "<title>Search results</title><body>ordinary results</body>",
+        )
+        self.assertIsNone(challenge)
+        self.assertEqual(signal, "none")
+
     def test_searxng_has_no_second_generic_challenge_detector(self):
         source = (ROOT / "searxng/engines/_obscura.py").read_text()
         self.assertNotIn("BLOCK_MARKER_XPATH", source)

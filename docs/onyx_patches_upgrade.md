@@ -146,7 +146,8 @@ Audit these Obscura v0.1.11 areas (or their new equivalents):
   negative target-close-acknowledgement failure;
 - identical target-owned stealth transport for initial GET and native form POST,
   including cookies, proxy, TLS-emulation profile, tracker policy, connection
-  pool, and 301/302/303 versus 307/308 redirect semantics. Remove
+  pool, 301/302/303 versus 307/308 redirect semantics, and final CDP
+  `Network.requestWillBeSent` method reporting. Remove
   `0001-stealth-native-post.patch` only when upstream provides that complete
   contract without falling back to its ordinary context client;
 - one unpredictable nonzero target seed injected before each new JavaScript
@@ -179,8 +180,9 @@ capacity, repeated-target provider continuity, replacement-connection
 isolation, connection-cap refusal, complete cleanup, and no reconnect/refetch.
 For SearXNG, recheck all five homepage control/form action/method/field
 contracts against the exact selected image, prove GET and POST fixture
-submission, stable target profile/fingerprint state, and connection reuse below
-the library pool-idle deadline.
+submission plus POST-to-GET and method-preserving redirects, stable target
+profile/fingerprint state, and connection reuse below the library pool-idle
+deadline.
 
 ### Pinned Obscura limitations and wrapper handling
 

@@ -2,7 +2,7 @@ diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/pag
 index 2e169fd..f47461a 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -280,6 +280,20 @@ impl Page {
+@@ -280,6 +280,21 @@ impl Page {
              .fetch_with_callbacks(url, Some(&self.callbacks))
              .await
      }
@@ -11,7 +11,7 @@ index 2e169fd..f47461a 100644
 +        &self,
 +        url: &Url,
 +        body: &str,
-+    ) -> Result<Response, ObscuraNetError> {
++    ) -> Result<(Response, String), ObscuraNetError> {
 +        #[cfg(feature = "stealth")]
 +        if let Some(ref stealth) = self.stealth_client {
 +            return stealth.post_form(url, body).await;
@@ -19,11 +19,12 @@ index 2e169fd..f47461a 100644
 +        self.http_client
 +            .post_form_with_callbacks(url, body, Some(&self.callbacks))
 +            .await
++            .map(|response| (response, "POST".to_string()))
 +    }
      fn init_js(&mut self) {
          // Drop any existing runtime so the JS realm starts clean on
          // every navigation. The old code reused the V8 isolate and
-@@ -934,7 +948,7 @@ impl Page {
+@@ -934,7 +949,7 @@ impl Page {
                      );
                      break;
                  }
@@ -32,23 +33,36 @@ index 2e169fd..f47461a 100644
                  current_url = next_url;
                  current_method = next_method;
                  current_body = next_body;
-@@ -1027,9 +1041,7 @@ impl Page {
+@@ -1015,7 +1030,8 @@ impl Page {
+             return Ok(());
+         }
+
+-        let response = if url.scheme() == "data" {
++        let mut document_method = method.to_string();
++        let response = if url.scheme() == "data" {
+             let content_type = url_str.strip_prefix("data:")
+                 .and_then(|s| s.split(',').next())
+                 .unwrap_or("text/html")
+@@ -1027,9 +1043,10 @@ impl Page {
              headers.insert("content-type".to_string(), content_type);
              Ok(obscura_net::Response { url: url.clone(), status: 200, headers, body: body_bytes, redirected_from: Vec::new() })
          } else if method == "POST" {
 -            self.http_client
 -                .post_form_with_callbacks(&url, body, Some(&self.callbacks))
 -                .await
-+            self.do_post_form(&url, body).await
++            self.do_post_form(&url, body).await.map(|(response, final_method)| {
++                document_method = final_method;
++                response
++            })
          } else {
              self.do_fetch(&url).await
          }.map_err(|e| {
-@@ -1043,7 +1055,7 @@ impl Page {
+@@ -1043,7 +1060,7 @@ impl Page {
          let main_is_binary = !is_text_like_content_type(response.content_type());
          self.record_network_event_with_body(
              url.as_str(),
 -            "GET",
-+            method,
++            &document_method,
              "Document",
              response.status,
              &response.headers,
@@ -58,7 +72,7 @@ index 9570328..421c1cd 100644
 +++ b/crates/obscura-cdp/src/server.rs
 @@ -1176,7 +1176,7 @@ async fn process_cdp_request(
      }
- 
+
      if let Some((nav_url, nav_method, nav_body)) = check_pending_navigation(ctx, &req.session_id) {
 -        tracing::info!("JS-triggered nav: {} {} (body: {} bytes)", nav_method, nav_url, nav_body.len());
 +        tracing::info!("JS-triggered nav: method={} body_bytes={}", nav_method, nav_body.len());
@@ -92,7 +106,7 @@ index bf56a9a..06d2837 100644
 @@ -32,6 +32,19 @@ pub const STEALTH_UA_PLATFORM: &str = "Windows";
  #[cfg(feature = "stealth")]
  pub const STEALTH_UA_PLATFORM_VERSION: &str = "15.0.0";
- 
+
 +#[cfg(feature = "stealth")]
 +fn redirected_navigation_method(
 +    status: u16,
@@ -109,14 +123,20 @@ index bf56a9a..06d2837 100644
  #[cfg(feature = "stealth")]
  pub struct StealthHttpClient {
      client: wreq::Client,
-@@ -74,7 +87,22 @@ impl StealthHttpClient {
+@@ -74,7 +87,28 @@ impl StealthHttpClient {
      }
  
      pub async fn fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
-+        self.navigate(url, "GET", "").await
++        self.navigate(url, "GET", "")
++            .await
++            .map(|(response, _final_method)| response)
 +    }
 +
-+    pub async fn post_form(&self, url: &Url, body: &str) -> Result<Response, ObscuraNetError> {
++    pub async fn post_form(
++        &self,
++        url: &Url,
++        body: &str,
++    ) -> Result<(Response, String), ObscuraNetError> {
 +        self.navigate(url, "POST", body).await
 +    }
 +
@@ -125,14 +145,27 @@ index bf56a9a..06d2837 100644
 +        url: &Url,
 +        method: &str,
 +        body: &str,
-+    ) -> Result<Response, ObscuraNetError> {
++    ) -> Result<(Response, String), ObscuraNetError> {
          let mut current_url = url.clone();
 +        let mut current_method = method.to_string();
 +        let mut current_body = body.to_string();
  
          if let Some(host) = current_url.host_str() {
              if crate::blocklist::is_blocked(host) {
-@@ -92,16 +120,24 @@ impl StealthHttpClient {
+@@ -82,10 +116,10 @@ impl StealthHttpClient {
+                 tracing::debug!("Blocked tracker: {}", current_url);
+-                return Ok(Response {
++                return Ok((Response {
+                     status: 0,
+                     url: current_url,
+                     headers: HashMap::new(),
+                     body: Vec::new(),
+                     redirected_from: Vec::new(),
+-                });
++                }, current_method));
+             }
+         }
+@@ -92,16 +126,24 @@ impl StealthHttpClient {
          let mut redirects = Vec::new();
  
          for _ in 0..20 {
@@ -159,7 +192,7 @@ index bf56a9a..06d2837 100644
  
              self.in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
              let resp = req.send().await.map_err(|e| {
-@@ -134,6 +170,11 @@ impl StealthHttpClient {
+@@ -134,6 +176,11 @@ impl StealthHttpClient {
                      })?;
                      redirects.push(current_url.clone());
                      current_url = next_url;
@@ -171,7 +204,18 @@ index bf56a9a..06d2837 100644
                      continue;
                  }
              }
-@@ -245,3 +286,34 @@ impl StealthHttpClient {
+@@ -145,8 +192,8 @@ impl StealthHttpClient {
+-            return Ok(Response {
++            return Ok((Response {
+                 url: current_url,
+                 status: status.as_u16(),
+                 headers: response_headers,
+                 body,
+                 redirected_from: redirects,
+-            });
++            }, current_method));
+         }
+@@ -245,3 +292,34 @@ impl StealthHttpClient {
          self.active_requests() == 0
      }
  }

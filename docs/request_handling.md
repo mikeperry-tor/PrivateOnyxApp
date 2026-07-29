@@ -426,6 +426,9 @@ policy plus bounded generic HTTP and challenge classification; provider parsers
 retain only provider-specific DOM checks. Generic detection
 ignores script, style, template, and noscript text and does not classify an
 embedded CAPTCHA iframe by itself, avoiding the prior Brave false positive.
+Challenge-route markers are matched only against the decoded terminal path,
+never the result query string, so a user query containing a path such as
+`/challenge/` cannot suspend a provider.
 Explicit provider no-results selectors return no results; missing expected
 structure is an unresponsive parser mismatch. The engines cannot call
 SearXNG's normal HTTP transport, retry internally, or choose another provider.
@@ -520,7 +523,9 @@ elapsed deadline synchronously, so delayed timer scheduling cannot revive an
 expired session. This is a sliding idle lifetime, not an absolute maximum
 session age. Transport, protocol, submission acknowledgement, event-accounting,
 DOM, or cleanup ambiguity discards the generation earlier and never replays the
-failed query.
+failed query. An owner whose ambiguous generation was already closed is removed
+immediately; it is not reported as reused and does not receive a redundant idle
+close.
 
 Each search attempt has exactly two main-document stages. Redirects and
 subresources remain within their stage. Homepage and result independently

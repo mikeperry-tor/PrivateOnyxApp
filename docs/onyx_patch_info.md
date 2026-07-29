@@ -195,8 +195,9 @@ binaries with the `stealth` feature:
 - `0001-stealth-native-post.patch` routes native form POST through the
   target-owned stealth client used by GET, preserves its cookies, proxy,
   TLS-emulation profile and pool, implements browser-style redirect method
-  changes, records the real document method, removes the submitted URL/body
-  from form-navigation diagnostics, and adds a static patchset marker.
+  changes, records the final request method after redirects, removes the
+  submitted URL/body from form-navigation diagnostics, and adds a static
+  patchset marker.
 - `0002-target-fingerprint-seed.patch` generates one nonzero random seed when
   a target is created and injects it through a one-shot private setter before
   every page-realm initialization, so seed-derived screen/GPU/canvas/audio
@@ -230,7 +231,8 @@ context, target, cookie jar, profile, target stealth client, connection pool,
 and target fingerprint until one hour after its last attempt.
 The existing provider lease is the same-provider serialization authority;
 different providers remain concurrent. Ambiguous client or cleanup failures
-discard only the affected connection. This mode is not used by either
+close and immediately discard only the affected connection/target owner,
+without a later redundant idle close. This mode is not used by either
 `open_url` transport. Detailed lifecycle and challenge ownership are normative
 in [Request handling](request_handling.md).
 

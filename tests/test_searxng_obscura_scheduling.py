@@ -530,6 +530,49 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         finally:
             browser.close()
 
+    def test_ambiguous_closed_generation_is_discarded_without_idle_reclose(self):
+        created = []
+
+        class Session:
+            def __init__(self):
+                self.generation_active = False
+                self.close_calls = 0
+                created.append(self)
+
+            async def close(self):
+                self.close_calls += 1
+                self.generation_active = False
+
+        attempts = 0
+
+        async def fake_submit(_query, *, session_owner, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            session_owner.generation_active = True
+            if attempts == 1:
+                await session_owner.close()
+                raise RuntimeError("ambiguous transaction")
+            return session_owner
+
+        browser = self.module._ProviderBrowserSession(
+            "brave2",
+            idle_seconds=60.0,
+            session_factory=Session,
+            submit_async=fake_submit,
+        )
+        try:
+            with self.assertRaisesRegex(RuntimeError, "ambiguous transaction"):
+                browser.submit_sync("one")
+            self.assertIsNone(browser._session)
+            self.assertIsNone(browser._idle_handle)
+            self.assertEqual(created[0].close_calls, 1)
+
+            second = browser.submit_sync("two")
+            self.assertIs(second, created[1])
+            self.assertEqual(len(created), 2)
+        finally:
+            browser.close()
+
     def test_distinct_provider_calls_share_one_loop_and_run_concurrently(self):
         sessions = []
         event_loop_threads = []

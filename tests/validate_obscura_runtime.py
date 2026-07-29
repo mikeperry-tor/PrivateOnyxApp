@@ -190,6 +190,15 @@ async def validate_patched_search_runtime() -> None:
                 and event.get("params", {}).get("loaderId") == loader_id
             ]
             assert len(documents) == 1
+            request_methods = [
+                event["params"]["request"]["method"]
+                for event in cdp.events[event_start:]
+                if event.get("method") == "Network.requestWillBeSent"
+                and event.get("params", {}).get("type") == "Document"
+                and event.get("params", {}).get("frameId") == frame_id
+                and event.get("params", {}).get("loaderId") == loader_id
+            ]
+            assert request_methods == [expected_method], request_methods
             observed_method = await evaluate(
                 "document.querySelector('main').dataset.method"
             )
@@ -215,6 +224,10 @@ async def validate_patched_search_runtime() -> None:
         observations.append(await submit("GET", mode="instant"))
         observations.append(await navigate("/search-post-home"))
         observations.append(await submit("POST", mode="timed"))
+        observations.append(await navigate("/search-post-302-home"))
+        observations.append(await submit("GET", mode="instant"))
+        observations.append(await navigate("/search-post-307-home"))
+        observations.append(await submit("POST", mode="instant"))
         observations.append(await navigate("/search-get-home"))
         assert len({item[0] for item in observations}) == 1, observations
         assert len({item[1] for item in observations}) == 1, observations
