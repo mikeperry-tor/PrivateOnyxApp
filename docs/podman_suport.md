@@ -609,8 +609,8 @@ The primary Podman-specific tests are:
   the live-connection cap, ten-way navigation concurrency, retained-body
   behavior, full stealth-feature startup, and hardened runtime settings. The
   same `make obscura-build CONTAINER_BIN=podman` workflow derives this image
-  from the architecture-matched digest-verified release archive without
-  Docker-specific mounts or sockets.
+  from the exact digest-verified source revision and strict patch series
+  without Docker-specific mounts or sockets.
 - `tests/test_doc_drop_webserver.py`: the non-indexed host readiness endpoint
   and document-root/symlink confinement.
 - `tests/test_myst_readiness.py`: interface/route parsing that must remain

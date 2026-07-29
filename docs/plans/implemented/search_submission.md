@@ -1,10 +1,13 @@
 # Homepage-First SearXNG Search Submission Plan
 
-> **Status: planned.** This document specifies intended behavior, not current
-> runtime behavior. The five custom SearXNG engines currently navigate directly
-> to provider result URLs. Current normative behavior remains in
-> [Request handling](../request_handling.md) until this plan is implemented,
-> validated, documented there, and moved to `docs/plans/implemented/`.
+> **Status: implemented 2026-07-29.** Current behavior is normative in
+> [Request handling](../../request_handling.md). Validation completed with 515
+> deterministic tests, the final SearXNG patch-image gate, Docker and Podman
+> source builds plus selected-image gates, Docker/Podman lite/full effective
+> model inventories, the no-VPN five-provider matrix, subset and all-provider
+> timed-entry matrices, native Tor staging/latency checks, and a selected-bridge
+> fail-closed check. The stack and bundled MLX proxy were returned to their
+> original stopped state.
 >
 > This plan is written as an implementation handoff. An implementer must verify
 > the committed component pins and the matching `reference_repos/` source
@@ -1136,12 +1139,20 @@ selected images:
   retain cookies, retain the stable advertised profile and seed-derived
   JavaScript fingerprint bundle across homepage/result and later-query
   navigations, and do not issue state-clearing CDP commands between attempts;
-- in an isolated `--network none` validation container, run Obscura and a
-  loopback-only TLS fixture in the same container with test-only
+- in an isolated disposable internal validation network with no host
+  publishers, run Obscura against a loopback-only fixture with test-only
   `--allow-private-network`; require consecutive GET navigation, native POST
   form navigation, and another GET on one retained target to present the same
-  expected stealth client profile and to reuse an HTTP connection when the
-  fixture keeps it alive and the interval is below the library idle timeout;
+  expected profile and seed-derived fingerprint shape and to reuse an HTTP
+  connection when the fixture keeps it alive and the interval is below the
+  library idle timeout;
+- validate the selected binary's TLS path separately through its focused
+  shared-client GET/POST Rust tests, full-stealth startup diagnostic, and live
+  HTTPS no-VPN/Tor matrices. The selected hardened runtime contains no shell or
+  fixture interpreter, while the binary uses embedded public roots, so a
+  same-container self-signed TLS fixture would require changing the selected
+  artifact's trust behavior and would no longer test the exact production
+  binary;
 - the loopback fixture records only method, connection identity, and
   fingerprint-shape assertions, never query or cookie values;
 - a failed interactive transaction discards only the affected provider

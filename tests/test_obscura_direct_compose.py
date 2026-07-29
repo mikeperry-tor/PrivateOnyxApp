@@ -20,8 +20,11 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             ROOT / "browser/obscura_image/Dockerfile"
         ).read_text()
         cls.obscura_fetcher = (
-            ROOT / "browser/obscura_image/fetch_release.py"
+            ROOT / "browser/obscura_image/fetch_source.py"
         ).read_text()
+        cls.obscura_patch_series = (
+            ROOT / "browser/obscura_image/patches/series"
+        ).read_text().splitlines()
         cls.searxng_compose = (ROOT / "searxng/docker-compose.yml").read_text()
         cls.makefile = (ROOT / "Makefile").read_text()
 
@@ -65,31 +68,49 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             self.makefile,
         )
 
-    def test_obscura_image_uses_verified_multi_arch_stealth_release(self):
-        for digest_name in (
-            "OBSCURA_RELEASE_AMD64_SHA256",
-            "OBSCURA_RELEASE_ARM64_SHA256",
-        ):
+    def test_obscura_image_uses_verified_pinned_source_and_patchset(self):
+        for digest_name in ("OBSCURA_SOURCE_SHA256",):
             match = re.search(
                 rf"^{digest_name}=([0-9a-f]{{64}})$",
                 self.manifest,
                 re.MULTILINE,
             )
             self.assertIsNotNone(match)
-        self.assertIn("fetch_release.py", self.obscura_dockerfile)
+        self.assertIsNotNone(
+            re.search(r"^OBSCURA_SOURCE_REF=[0-9a-f]{40}$", self.manifest, re.MULTILINE)
+        )
+        self.assertIsNotNone(
+            re.search(
+                r"^OBSCURA_BUILDER_IMAGE=.+@sha256:[0-9a-f]{64}$",
+                self.manifest,
+                re.MULTILINE,
+            )
+        )
+        self.assertIn("fetch_source.py", self.obscura_dockerfile)
         self.assertIn(
             "ARG OBSCURA_UPSTREAM_IMAGE="
             "docker.io/h4ckf0r0day/obscura:0.1.11"
             "@sha256:e5fd7b8032a5fedc6e8e27f9d4f2e35327ea08b2548ab1372775974add171547",
             self.obscura_dockerfile,
         )
-        self.assertIn("linux-stealth.tar.gz", self.obscura_fetcher)
+        self.assertIn("obscura/archive/{ref}.tar.gz", self.obscura_fetcher)
         self.assertIn("actual_digest != expected_digest", self.obscura_fetcher)
-        self.assertIn("set(members) != set(EXPECTED_FILES)", self.obscura_fetcher)
+        self.assertIn("member.isdir() or member.isfile()", self.obscura_fetcher)
         self.assertIn(
-            "browser/obscura_image/fetch_release.py",
+            "browser/obscura_image/fetch_source.py",
             self.makefile,
         )
+        self.assertEqual(
+            self.obscura_patch_series,
+            [
+                "0001-stealth-native-post.patch",
+                "0002-target-fingerprint-seed.patch",
+            ],
+        )
+        self.assertIn("cargo build --release --locked --features stealth", self.obscura_dockerfile)
+        self.assertIn("--bin obscura --bin obscura-worker", self.obscura_dockerfile)
+        self.assertNotIn("fetch_release.py", self.makefile + self.obscura_dockerfile)
+        self.assertNotIn("OBSCURA_RELEASE_AMD64_SHA256", self.manifest + self.makefile)
         self.assertIn("obscura-build:", self.makefile)
 
     def test_new_manifest_and_no_proxy_names(self):
@@ -161,6 +182,21 @@ class ObscuraDirectComposeTests(unittest.TestCase):
 
     def test_searxng_provider_capacity_requires_one_request_worker(self):
         self.assertIn('GRANIAN_WORKERS: "1"', self.compose)
+
+    def test_timed_typing_setting_is_passed_without_compose_parsing(self):
+        expected = (
+            'SEARXNG_TIMED_TYPING_PROVIDERS: '
+            '"${SEARXNG_TIMED_TYPING_PROVIDERS:-none}"'
+        )
+        self.assertIn(expected, self.compose)
+        self.assertIn(expected, self.searxng_compose)
+        for forbidden in (
+            "OBSCURA_ROTATE_PROFILE",
+            "OBSCURA_PROFILE",
+            "FINGERPRINT_SEED",
+            "POOL_IDLE_TIMEOUT",
+        ):
+            self.assertNotIn(forbidden, self.compose)
 
 
 if __name__ == "__main__":

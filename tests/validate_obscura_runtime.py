@@ -13,6 +13,7 @@ from private_onyx_obscura import ObscuraSession
 from private_onyx_obscura import fetch as fetch_async
 from private_onyx_obscura import fetch_sync
 from private_onyx_obscura.client import _RawCdp
+from private_onyx_obscura.client import _SEARCH_FORM_FUNCTION
 from websockets.asyncio.client import connect
 
 
@@ -45,6 +46,185 @@ async def create_target(cdp: _RawCdp) -> tuple[str, str]:
         == target_id
     )
     return target_id, str(attached["params"]["sessionId"])
+
+
+async def validate_patched_search_runtime() -> None:
+    """Exercise retained-target GET/POST and fingerprint contracts."""
+    websocket = await connect(CDP_URL, proxy=None)
+    cdp = _RawCdp(websocket)
+    target_id = ""
+    try:
+        target_id, session_id = await create_target(cdp)
+        for method, params in (
+            ("Network.enable", {}),
+            ("Page.enable", {}),
+            ("Page.setLifecycleEventsEnabled", {"enabled": True}),
+        ):
+            await cdp.send(method, params, session_id=session_id)
+        frame_tree = await cdp.send("Page.getFrameTree", session_id=session_id)
+        frame_id = frame_tree["frameTree"]["frame"]["id"]
+
+        async def evaluate(expression: str):
+            result = await cdp.send(
+                "Runtime.evaluate",
+                {
+                    "expression": expression,
+                    "returnByValue": True,
+                    "awaitPromise": True,
+                },
+                session_id=session_id,
+                timeout_seconds=15,
+            )
+            assert "exceptionDetails" not in result, result
+            return result["result"].get("value")
+
+        async def navigate(path: str) -> tuple[int, str]:
+            event_start = len(cdp.events)
+            nav = await cdp.send(
+                "Page.navigate",
+                {"url": f"{BASE_URL}{path}", "waitUntil": "load"},
+                session_id=session_id,
+                timeout_seconds=15,
+            )
+            loader_id = nav["loaderId"]
+            await cdp.wait_for_event(
+                "Page.frameStoppedLoading",
+                lambda event: event.get("frameId") == frame_id,
+                10,
+                start_index=event_start,
+            )
+            documents = [
+                event["params"]
+                for event in cdp.events[event_start:]
+                if event.get("method") == "Network.responseReceived"
+                and event.get("params", {}).get("type") == "Document"
+                and event.get("params", {}).get("frameId") == frame_id
+                and event.get("params", {}).get("loaderId") == loader_id
+            ]
+            assert len(documents) == 1
+            connection_id = int(
+                await evaluate(
+                    "document.querySelector('main').dataset.connection"
+                )
+            )
+            fingerprint = await evaluate(
+                "(()=>{const c=document.createElement('canvas');"
+                "const gl=c.getContext('webgl');const a=new AudioContext();"
+                "return JSON.stringify([screen.width,screen.height,"
+                "navigator.hardwareConcurrency,navigator.deviceMemory,"
+                "navigator.platform,navigator.userAgent,"
+                "gl&&gl.getParameter(0x9246),c.toDataURL(),"
+                "a.sampleRate,a.baseLatency]);})()"
+            )
+            return connection_id, fingerprint
+
+        async def form_call(operation: str, query: str):
+            result = await cdp.send(
+                "Runtime.callFunctionOn",
+                {
+                    "functionDeclaration": _SEARCH_FORM_FUNCTION,
+                    "arguments": [
+                        {"value": operation},
+                        {"value": 'textarea[name="q"]'},
+                        {"value": "q"},
+                        {"value": [["lang", "en"]]},
+                        {"value": query},
+                    ],
+                    "returnByValue": True,
+                    "awaitPromise": True,
+                },
+                session_id=session_id,
+                timeout_seconds=15,
+            )
+            assert "exceptionDetails" not in result, result
+            policy = result["result"].get("value")
+            assert policy["enctype"] == "application/x-www-form-urlencoded"
+            return policy
+
+        async def submit(expected_method: str, *, mode: str) -> tuple[int, str]:
+            event_start = len(cdp.events)
+            if mode == "instant":
+                await form_call("instant", "fixture")
+            else:
+                await form_call("timed-prepare", "fixture")
+                for character in "fixture":
+                    await cdp.send(
+                        "Input.dispatchKeyEvent",
+                        {
+                            "type": "keyDown",
+                            "key": character,
+                            "text": character,
+                            "unmodifiedText": character,
+                        },
+                        session_id=session_id,
+                    )
+                    await cdp.send(
+                        "Input.dispatchKeyEvent",
+                        {"type": "keyUp", "key": character},
+                        session_id=session_id,
+                    )
+                await form_call("verify", "fixture")
+            await form_call("submit", "fixture")
+            document = await cdp.wait_for_event(
+                "Network.responseReceived",
+                lambda event: (
+                    event.get("type") == "Document"
+                    and event.get("frameId") == frame_id
+                ),
+                10,
+                start_index=event_start,
+            )
+            loader_id = document["params"]["loaderId"]
+            await cdp.wait_for_event(
+                "Page.frameStoppedLoading",
+                lambda event: event.get("frameId") == frame_id,
+                10,
+                start_index=event_start,
+            )
+            documents = [
+                event["params"]
+                for event in cdp.events[event_start:]
+                if event.get("method") == "Network.responseReceived"
+                and event.get("params", {}).get("type") == "Document"
+                and event.get("params", {}).get("frameId") == frame_id
+                and event.get("params", {}).get("loaderId") == loader_id
+            ]
+            assert len(documents) == 1
+            observed_method = await evaluate(
+                "document.querySelector('main').dataset.method"
+            )
+            assert observed_method == expected_method
+            connection_id = int(
+                await evaluate(
+                    "document.querySelector('main').dataset.connection"
+                )
+            )
+            fingerprint = await evaluate(
+                "(()=>{const c=document.createElement('canvas');"
+                "const gl=c.getContext('webgl');const a=new AudioContext();"
+                "return JSON.stringify([screen.width,screen.height,"
+                "navigator.hardwareConcurrency,navigator.deviceMemory,"
+                "navigator.platform,navigator.userAgent,"
+                "gl&&gl.getParameter(0x9246),c.toDataURL(),"
+                "a.sampleRate,a.baseLatency]);})()"
+            )
+            return connection_id, fingerprint
+
+        observations = []
+        observations.append(await navigate("/search-get-home"))
+        observations.append(await submit("GET", mode="instant"))
+        observations.append(await navigate("/search-post-home"))
+        observations.append(await submit("POST", mode="timed"))
+        observations.append(await navigate("/search-get-home"))
+        assert len({item[0] for item in observations}) == 1, observations
+        assert len({item[1] for item in observations}) == 1, observations
+    finally:
+        if target_id:
+            closed = await cdp.send(
+                "Target.closeTarget", {"targetId": target_id}, timeout_seconds=5
+            )
+            assert closed == {"success": True}
+        await websocket.close()
 
 
 async def validate_connection_isolation() -> None:
@@ -295,6 +475,7 @@ def validate_navigation_contracts() -> None:
 
 
 def main() -> None:
+    asyncio.run(validate_patched_search_runtime())
     asyncio.run(validate_connection_isolation())
     asyncio.run(validate_connection_limit())
     asyncio.run(validate_reusable_provider_session())

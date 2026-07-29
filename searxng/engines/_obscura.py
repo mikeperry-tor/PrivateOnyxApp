@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Shared direct-Obscura navigation and provider admission for offline engines."""
+"""Homepage-first Obscura submission and provider admission for offline engines."""
 
 from __future__ import annotations
 
@@ -10,40 +10,112 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from urllib.parse import urlsplit
 
 from private_onyx_obscura import (
     FetchFailure,
     ObscuraClientError,
-    ObscuraSession,
-    fetch,
+    SearchBrowserSession,
+    SearchInteractionSpec,
+    submit_search as submit_search_async,
     validate_wait_until,
 )
 
 logger = logging.getLogger("searx.engines._obscura")
+# SearXNG's default root level is warning.  These two loggers emit only the
+# URL- and query-free lifecycle fields audited below, so keep their information
+# diagnostics visible without enabling verbose provider or framework logging.
+logger.setLevel(logging.INFO)
+logging.getLogger("private_onyx_obscura").setLevel(logging.INFO)
 CDP_URL = os.environ.get(
     "SEARXNG_OBSCURA_CDP_URL", "ws://obscura:9222/devtools/browser"
 )
 WAIT_UNTIL = validate_wait_until(
     os.environ.get("OBSCURA_BROWSER_WAIT_UNTIL_SEARCH", "networkidle2")
 )
-ALLOW_HTTP = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in {
-    "1", "true", "yes", "on"
-}
 SEARCH_DOM_LIMIT = 20 * 1024 * 1024
 SEARCH_BROWSER_ATTEMPT_TIMEOUT_SECONDS = 50.0
+SEARCH_PRE_NAVIGATION_TIMEOUT_SECONDS = 45.0
+SEARCH_CLEANUP_TIMEOUT_SECONDS = 5.0
 MINIMUM_START_INTERVAL = 3.0
 PROVIDER_SESSION_IDLE_SECONDS = 3600.0
 RESERVATION_PARAM = "_wrapper_obscura_reservation_token"
 PRE_NAVIGATION_GUARD_PARAM = "_wrapper_obscura_pre_navigation_guard"
 
-TERMINAL_HOSTS = {
-    "google2": frozenset({"www.google.com", "google.com", "consent.google.com"}),
-    "bing2": frozenset({"www.bing.com", "bing.com"}),
-    "duckduckgo2": frozenset({"noai.duckduckgo.com"}),
-    "brave2": frozenset({"search.brave.com"}),
-    "startpage2": frozenset({"www.startpage.com", "startpage.com"}),
+INTERACTIONS = {
+    "google2": SearchInteractionSpec(
+        homepage_url="https://www.google.com/",
+        allowed_homepage_hosts=frozenset({"www.google.com", "google.com"}),
+        allowed_result_hosts=frozenset({"www.google.com", "google.com"}),
+        query_selector='textarea[name="q"]',
+        query_field_name="q",
+        form_action_path="/search",
+        form_method="get",
+        allowed_fixed_field_names=frozenset({"hl", "udm", "start", "tbs"}),
+    ),
+    "brave2": SearchInteractionSpec(
+        homepage_url="https://search.brave.com/",
+        allowed_homepage_hosts=frozenset({"search.brave.com"}),
+        allowed_result_hosts=frozenset({"search.brave.com"}),
+        query_selector='textarea[name="q"]',
+        query_field_name="q",
+        form_action_path="/search",
+        form_method="get",
+        allowed_fixed_field_names=frozenset({"tf", "offset"}),
+    ),
+    "duckduckgo2": SearchInteractionSpec(
+        homepage_url="https://noai.duckduckgo.com/",
+        allowed_homepage_hosts=frozenset({"noai.duckduckgo.com"}),
+        allowed_result_hosts=frozenset({"noai.duckduckgo.com"}),
+        query_selector='input[name="q"]:not([type="hidden"])',
+        query_field_name="q",
+        form_action_path="/",
+        form_method="get",
+        allowed_fixed_field_names=frozenset({"ia"}),
+    ),
+    "startpage2": SearchInteractionSpec(
+        homepage_url="https://www.startpage.com/",
+        allowed_homepage_hosts=frozenset({"www.startpage.com", "startpage.com"}),
+        allowed_result_hosts=frozenset({"www.startpage.com", "startpage.com"}),
+        query_selector="input#q",
+        query_field_name="query",
+        form_action_path="/sp/search",
+        form_method="post",
+        allowed_fixed_field_names=frozenset({"cat", "page"}),
+    ),
+    "bing2": SearchInteractionSpec(
+        homepage_url="https://www.bing.com/",
+        allowed_homepage_hosts=frozenset({"www.bing.com", "bing.com"}),
+        allowed_result_hosts=frozenset({"www.bing.com", "bing.com"}),
+        query_selector='textarea[name="q"]',
+        query_field_name="q",
+        form_action_path="/search",
+        form_method="get",
+        allowed_fixed_field_names=frozenset({"adlt", "setlang", "first"}),
+    ),
 }
+PROVIDER_NAMES = tuple(INTERACTIONS)
+
+
+def _parse_timed_typing_providers(value: str) -> frozenset[str]:
+    if value == "none":
+        return frozenset()
+    if value == "all":
+        return frozenset(PROVIDER_NAMES)
+    if not value or any(character.isspace() for character in value):
+        raise ValueError("SEARXNG_TIMED_TYPING_PROVIDERS has invalid whitespace")
+    names = value.split(",")
+    if (
+        any(not name for name in names)
+        or len(names) != len(set(names))
+        or any(name not in INTERACTIONS for name in names)
+    ):
+        raise ValueError("SEARXNG_TIMED_TYPING_PROVIDERS is invalid")
+    return frozenset(names)
+
+
+TIMED_TYPING_PROVIDERS = _parse_timed_typing_providers(
+    os.environ.get("SEARXNG_TIMED_TYPING_PROVIDERS", "none")
+)
 
 
 class _ProviderBrowserLoop:
@@ -115,16 +187,16 @@ class _ProviderBrowserSession:
         engine_name: str,
         *,
         idle_seconds: float = PROVIDER_SESSION_IDLE_SECONDS,
-        session_factory=ObscuraSession,
-        fetch_async=fetch,
+        session_factory=SearchBrowserSession,
+        submit_async=submit_search_async,
     ) -> None:
         if idle_seconds <= 0:
             raise ValueError("provider session idle timeout must be positive")
         self.engine_name = engine_name
         self.idle_seconds = idle_seconds
         self._session_factory = session_factory
-        self._fetch_async = fetch_async
-        self._session: ObscuraSession | None = None
+        self._submit_async = submit_async
+        self._session: SearchBrowserSession | None = None
         self._idle_handle: asyncio.TimerHandle | None = None
         self._idle_deadline: float | None = None
         self._expiry_task: asyncio.Task | None = None
@@ -160,7 +232,7 @@ class _ProviderBrowserSession:
 
         task.add_done_callback(_clear_expiry_task)
 
-    async def _run_fetch(self, url: str, **kwargs):
+    async def _run_submit(self, query: str, **kwargs):
         loop = asyncio.get_running_loop()
         if self._idle_handle is not None:
             deadline_reached = (
@@ -185,11 +257,18 @@ class _ProviderBrowserSession:
             await asyncio.shield(expiry_task)
         self._generation += 1
         generation = self._generation
+        reused = self._session is not None
         if self._session is None:
             self._session = self._session_factory()
+        logger.info(
+            "%s: browser session query_sequence=%d reused=%s",
+            self.engine_name,
+            generation,
+            str(reused).lower(),
+        )
         try:
-            return await self._fetch_async(
-                url,
+            return await self._submit_async(
+                query,
                 session_owner=self._session,
                 **kwargs,
             )
@@ -201,8 +280,10 @@ class _ProviderBrowserSession:
                 generation,
             )
 
-    def fetch_sync(self, url: str, **kwargs):
-        return _PROVIDER_BROWSER_LOOP.submit(self._run_fetch(url, **kwargs)).result()
+    def submit_sync(self, query: str, **kwargs):
+        return _PROVIDER_BROWSER_LOOP.submit(
+            self._run_submit(query, **kwargs)
+        ).result()
 
     def close(self) -> None:
         if (
@@ -237,7 +318,7 @@ class _ProviderState:
         self.browser: _ProviderBrowserSession | None = None
 
 
-_PROVIDERS = {name: _ProviderState() for name in TERMINAL_HOSTS}
+_PROVIDERS = {name: _ProviderState() for name in INTERACTIONS}
 _PROVIDER_CAPACITY_CONDITION = threading.Condition()
 _PROVIDER_CAPACITY_GENERATION = 0
 
@@ -367,6 +448,7 @@ def _provider_browser(name: str) -> _ProviderBrowserSession:
 
 def _mapped_failure(engine_name: str, exc: ObscuraClientError):
     from searx.exceptions import SearxEngineAccessDeniedException
+    from searx.exceptions import SearxEngineCaptchaException
     from searx.exceptions import SearxEngineResponseException
 
     if exc.category is FetchFailure.RATE_LIMITED:
@@ -374,15 +456,18 @@ def _mapped_failure(engine_name: str, exc: ObscuraClientError):
         return SearxEngineTooManyRequestsException(message=f"{engine_name}: provider rate limited")
     if exc.category in {FetchFailure.ACCESS_DENIED, FetchFailure.POLICY_DENIED}:
         return SearxEngineAccessDeniedException(message=f"{engine_name}: provider access denied")
+    if exc.category is FetchFailure.CAPTCHA:
+        return SearxEngineCaptchaException(message=f"{engine_name}: verification page")
     return SearxEngineResponseException(f"{engine_name}: browser request failed ({exc.category.value})")
 
 
-def navigate(
+def submit_search(
     engine_name: str,
-    target_url: str,
+    query: str,
+    fixed_fields: tuple[tuple[str, str], ...],
     pre_navigation_guard,
 ) -> str:
-    """Navigate once and return a bounded rendered DOM; never retry."""
+    """Return the bounded submitted-result DOM for one leased provider attempt."""
     from searx.exceptions import SearxEngineAccessDeniedException
     from searx.exceptions import SearxEngineCaptchaException
     from searx.exceptions import SearxEngineResponseException
@@ -390,28 +475,32 @@ def navigate(
 
     if not callable(pre_navigation_guard):
         raise SearxEngineResponseException(
-            f"{engine_name}: provider navigation is missing its SearXNG lease guard"
+            f"{engine_name}: provider submission is missing its SearXNG lease guard"
+        )
+    spec = INTERACTIONS.get(engine_name)
+    if spec is None:
+        raise SearxEngineResponseException(
+            f"{engine_name}: unknown browser interaction"
         )
     try:
-        result = _provider_browser(engine_name).fetch_sync(
-            target_url,
+        result = _provider_browser(engine_name).submit_sync(
+            query,
+            spec=spec,
+            fixed_fields=fixed_fields,
+            text_entry_mode=(
+                "timed" if engine_name in TIMED_TYPING_PROVIDERS else "instant"
+            ),
             cdp_url=CDP_URL,
             wait_until=WAIT_UNTIL,
-            allow_http=ALLOW_HTTP,
-            body_limit=SEARCH_DOM_LIMIT,
             dom_limit=SEARCH_DOM_LIMIT,
-            want="dom",
+            pre_navigation_timeout_seconds=SEARCH_PRE_NAVIGATION_TIMEOUT_SECONDS,
+            cleanup_command_timeout_seconds=SEARCH_CLEANUP_TIMEOUT_SECONDS,
             request_timeout_seconds=SEARCH_BROWSER_ATTEMPT_TIMEOUT_SECONDS,
             pre_navigation_guard=pre_navigation_guard,
         )
     except ObscuraClientError as exc:
         raise _mapped_failure(engine_name, exc) from exc
 
-    host = (urlsplit(result.final_url).hostname or "").rstrip(".").lower()
-    if host not in TERMINAL_HOSTS[engine_name] or host == "consent.google.com":
-        raise SearxEngineAccessDeniedException(
-            message=f"{engine_name}: unexpected or consent terminal origin"
-        )
     if result.challenge is FetchFailure.RATE_LIMITED:
         raise SearxEngineTooManyRequestsException(
             message=f"{engine_name}: provider rate limited"
@@ -426,7 +515,7 @@ def navigate(
         )
     if result.status == 404 or result.status >= 500:
         raise SearxEngineResponseException(f"{engine_name}: provider HTTP failure")
-    dom = result.rendered_html or ""
+    dom = result.rendered_html
     if not dom:
         raise SearxEngineResponseException(f"{engine_name}: empty rendered DOM")
     return dom

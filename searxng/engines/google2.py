@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Google WEB offline engine backed by one direct Obscura navigation."""
+"""Google WEB offline engine backed by homepage form submission in Obscura."""
 
 import typing as t
-from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from lxml import html
 
@@ -59,19 +59,21 @@ content_xpath = (
 
 
 def search(query: str, params: "RequestParams"):
-    """Build the Google URL, navigate once, and parse its rendered DOM."""
+    """Submit the Google homepage form and parse its rendered result DOM."""
     start = (params["pageno"] - 1) * 10
-    query_args: t.Dict[str, str] = {"q": query, "hl": "en", "udm": "14"}
+    fixed_fields: list[tuple[str, str]] = [("hl", "en"), ("udm", "14")]
     if start:
-        query_args["start"] = str(start)
+        fixed_fields.append(("start", str(start)))
     if params.get("time_range") in time_range_dict:
-        query_args["tbs"] = "qdr:" + time_range_dict[params["time_range"]]
+        fixed_fields.append(
+            ("tbs", "qdr:" + time_range_dict[params["time_range"]])
+        )
 
-    target_url = "https://www.google.com/search?" + urlencode(query_args)
     return _parse_html(
-        _obscura.navigate(
+        _obscura.submit_search(
             "google2",
-            target_url,
+            query,
+            tuple(fixed_fields),
             params.get(_obscura.PRE_NAVIGATION_GUARD_PARAM),
         )
     )

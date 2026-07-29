@@ -197,10 +197,18 @@ are not duplicate enforcement.
   per-provider concurrency/cooldown policy.
 - Obscura uses one process with isolated per-WebSocket browser state instead of
   a process worker pool. Each search provider lazily retains one independently
-  leased connection and closes it after one hour without a query. Reusable
-  connections disable periodic WebSocket pings and create a fresh target for
-  each request. One shared lazy SearXNG event-loop thread owns all five
-  connections and their one idle-deadline callback per live provider session.
+  leased connection and target, then closes the target and connection after one
+  hour without a query. Reusable connections disable periodic WebSocket pings.
+  One shared lazy SearXNG event-loop thread owns all five generations and their
+  one idle-deadline callback per live provider session. This changes target
+  lifetime, not the maximum target, connection, thread, or callback counts.
+- Homepage-first search adds one provider main document and its subresources,
+  one independently bounded homepage DOM serialization, form execution, and
+  optional timed-entry delay/autocomplete traffic. Homepage DOM text is
+  released before result extraction, but the retained target necessarily keeps
+  its current native page/history state until idle expiry or generation
+  invalidation. No worker, health check, periodic task, persistent store, or
+  browser binary is added.
 - Fifteen live connections cover the real mixed Onyx maximum of ten
   process-global direct `open_url` attempts plus five provider sessions.
   Excess connections fail with HTTP 503 rather than queueing as a fail-closed

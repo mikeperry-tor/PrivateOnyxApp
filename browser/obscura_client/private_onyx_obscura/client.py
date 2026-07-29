@@ -13,13 +13,14 @@ import json
 import logging
 import math
 import re
+import secrets
 import socket
 import time
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from html.parser import HTMLParser
-from typing import Callable, Literal
+from typing import Callable, Literal, Mapping
 from urllib.parse import SplitResult, unquote, urlsplit, urlunsplit
 
 LOGGER = logging.getLogger("private_onyx_obscura")
@@ -106,6 +107,99 @@ class FetchResult:
     navigation_seconds: float
     body_read_seconds: float
     challenge: FetchFailure | None
+
+
+TextEntryMode = Literal["instant", "timed"]
+
+
+def _canonical_search_host(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.lower()
+        or value.endswith(".")
+        or any(character in value for character in (":", "/", "\\", "*", "@"))
+    ):
+        raise ValueError("search hosts must be lowercase canonical DNS names")
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("search hosts cannot be IP literals")
+    try:
+        canonical = value.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError("search host is invalid") from exc
+    if canonical != value or "." not in value:
+        raise ValueError("search host is not canonical")
+    return value
+
+
+@dataclass(frozen=True)
+class SearchInteractionSpec:
+    homepage_url: str
+    allowed_homepage_hosts: frozenset[str]
+    allowed_result_hosts: frozenset[str]
+    query_selector: str
+    query_field_name: str
+    form_action_path: str
+    form_method: Literal["get", "post"]
+    allowed_fixed_field_names: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not self.allowed_homepage_hosts or not self.allowed_result_hosts:
+            raise ValueError("search host policies cannot be empty")
+        for host in self.allowed_homepage_hosts | self.allowed_result_hosts:
+            _canonical_search_host(host)
+        try:
+            parsed = urlsplit(self.homepage_url)
+            port = parsed.port
+        except (TypeError, ValueError) as exc:
+            raise ValueError("search homepage URL is invalid") from exc
+        if (
+            parsed.scheme != "https"
+            or parsed.username is not None
+            or parsed.password is not None
+            or port not in {None, 443}
+            or not parsed.hostname
+            or parsed.hostname.rstrip(".").lower() not in self.allowed_homepage_hosts
+            or parsed.fragment
+        ):
+            raise ValueError("search homepage URL violates its origin policy")
+        if not self.query_selector or not self.query_field_name:
+            raise ValueError("search control declarations cannot be empty")
+        if self.form_method not in {"get", "post"}:
+            raise ValueError("search form method must be get or post")
+        action = self.form_action_path
+        if (
+            not action.startswith("/")
+            or action.startswith("//")
+            or any(character in action for character in ("?", "#", "\\"))
+            or re.search(r"%2f|%5c", action, re.IGNORECASE)
+        ):
+            raise ValueError("search form action must be one absolute path")
+        if self.query_field_name in self.allowed_fixed_field_names:
+            raise ValueError("query field cannot also be a fixed field")
+        for name in self.allowed_fixed_field_names:
+            if (
+                not isinstance(name, str)
+                or not name
+                or not name.isascii()
+                or not re.fullmatch(r"[A-Za-z0-9_.:-]+", name)
+            ):
+                raise ValueError("fixed field names must be nonempty ASCII form names")
+
+
+@dataclass(frozen=True)
+class SearchSubmissionResult:
+    final_url: str
+    status: int
+    headers: Mapping[str, str]
+    rendered_html: str
+    challenge: FetchFailure | None
+    homepage_navigation_seconds: float
+    submission_navigation_seconds: float
 
 
 def validate_wait_until(value: str) -> str:
@@ -570,10 +664,17 @@ class _RawCdp:
                 f"Obscura did not complete {timeout_stage} before its deadline",
             ) from exc
 
-    async def wait_for_event(self, method: str, predicate, timeout: float) -> dict:
+    async def wait_for_event(
+        self,
+        method: str,
+        predicate,
+        timeout: float,
+        *,
+        start_index: int = 0,
+    ) -> dict:
         async def _wait() -> dict:
             while True:
-                for event in self.events:
+                for event in self.events[start_index:]:
                     if event.get("method") == method and predicate(event.get("params", {})):
                         return event
                 message = await self.websocket.recv()
@@ -643,6 +744,48 @@ class ObscuraSession:
         self.max_size = 0
         if websocket is not None:
             await websocket.close()
+
+
+class SearchBrowserSession:
+    """Opaque owner of one retained search connection and target generation."""
+
+    def __init__(self) -> None:
+        self._connection = ObscuraSession()
+        self._target_id: str | None = None
+        self._session_id: str | None = None
+        self._frame_id: str | None = None
+        self._cleanup_command_timeout_seconds = CLEANUP_COMMAND_TIMEOUT_SECONDS
+
+    async def close(self) -> None:
+        target_id = self._target_id
+        cdp = self._connection.cdp
+        self._target_id = None
+        self._session_id = None
+        self._frame_id = None
+        failure: BaseException | None = None
+        if cdp is not None and target_id:
+            try:
+                result = await cdp.send(
+                    "Target.closeTarget",
+                    {"targetId": target_id},
+                    timeout_seconds=self._cleanup_command_timeout_seconds,
+                    timeout_stage="cleanup-target-close",
+                )
+                if result.get("success") is not True:
+                    failure = ObscuraClientError(
+                        FetchFailure.PROTOCOL,
+                        "cleanup-target-close",
+                        "Obscura did not confirm retained target closure",
+                    )
+            except BaseException as exc:
+                failure = exc
+        try:
+            await self._connection.close()
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+        if failure is not None:
+            raise failure
 
 
 class _Session:
@@ -1159,6 +1302,790 @@ async def fetch(
             diagnostic_id,
             time.monotonic() - started,
         )
+
+
+_SEARCH_FORM_FUNCTION = r"""
+function(operation, selector, fieldName, fixedFields, query) {
+  function inspect() {
+    const controls = Array.from(document.querySelectorAll(selector));
+    if (controls.length !== 1) throw new Error("control-count");
+    const control = controls[0];
+    const tag = String(control.tagName || "").toLowerCase();
+    const inputType = String(control.type || "text").toLowerCase();
+    if ((tag !== "input" && tag !== "textarea") ||
+        (tag === "input" && inputType !== "text" && inputType !== "search") ||
+        !control.isConnected || control.disabled || control.readOnly ||
+        control.name !== fieldName || control.hidden) {
+      throw new Error("control-state");
+    }
+    const style = globalThis.getComputedStyle ? getComputedStyle(control) : null;
+    if (style && (style.display === "none" || style.visibility === "hidden")) {
+      throw new Error("control-visibility");
+    }
+    const rect = control.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0 ||
+        rect.right <= 0 || rect.bottom <= 0 ||
+        rect.left >= globalThis.innerWidth || rect.top >= globalThis.innerHeight) {
+      throw new Error("control-geometry");
+    }
+    const form = control.form;
+    if (!(form instanceof HTMLFormElement) || form.ownerDocument !== document) {
+      throw new Error("form-owner");
+    }
+    const action = new URL(form.action || location.href, location.href);
+    const current = new URL(location.href);
+    const target = String(form.getAttribute("target") || "").toLowerCase();
+    const declaredEnctype = String(
+      form.enctype || form.getAttribute("enctype") || ""
+    ).toLowerCase();
+    const enctype = declaredEnctype || "application/x-www-form-urlencoded";
+    return {
+      control, form,
+      policy: {
+        currentScheme: current.protocol,
+        currentHost: current.hostname.toLowerCase(),
+        currentPort: current.port,
+        scheme: action.protocol,
+        host: action.hostname.toLowerCase(),
+        port: action.port,
+        username: action.username,
+        password: action.password,
+        path: action.pathname,
+        method: String(form.method || "get").toLowerCase(),
+        target,
+        enctype
+      }
+    };
+  }
+  function applyFixed(form) {
+    for (const pair of fixedFields) {
+      const name = pair[0], value = pair[1];
+      let controls = Array.from(form.elements).filter(
+        item => item && item.name === name && !item.disabled
+      );
+      if (controls.length === 0) {
+        const hidden = document.createElement("input");
+        hidden.type = "hidden";
+        hidden.name = name;
+        form.appendChild(hidden);
+        controls = [hidden];
+      }
+      if (controls.length !== 1 ||
+          String(controls[0].tagName || "").toLowerCase() !== "input" ||
+          String(controls[0].type || "").toLowerCase() !== "hidden") {
+        throw new Error("fixed-field");
+      }
+      controls[0].value = value;
+      const finalControls = Array.from(form.elements).filter(
+        item => item && item.name === name && !item.disabled
+      );
+      if (finalControls.length !== 1 || finalControls[0].value !== value) {
+        throw new Error("fixed-field-verify");
+      }
+    }
+  }
+  let state = inspect();
+  if (operation === "validate") return state.policy;
+  applyFixed(state.form);
+  if (operation === "instant") {
+    const proto = String(state.control.tagName).toLowerCase() === "textarea"
+      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
+    if (typeof setter !== "function") throw new Error("native-setter");
+    setter.call(state.control, query);
+    state.control.dispatchEvent(new Event("input", {bubbles: true}));
+    state.control.dispatchEvent(new Event("change", {bubbles: true}));
+  } else if (operation === "timed-prepare") {
+    if (state.control.value !== "") throw new Error("control-not-empty");
+    state.control.focus();
+    if (document.activeElement !== state.control) throw new Error("focus");
+  }
+  state = inspect();
+  if (operation === "instant" || operation === "verify" || operation === "submit") {
+    if (state.control.value !== query) throw new Error("query-value");
+  }
+  if (operation === "submit") {
+    if (typeof state.form.requestSubmit !== "function") {
+      throw new Error("request-submit");
+    }
+    state.form.requestSubmit();
+  }
+  return state.policy;
+}
+"""
+
+
+def _validate_search_terminal_url(
+    url: str, allowed_hosts: frozenset[str], *, stage: str
+) -> None:
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise ObscuraClientError(
+            FetchFailure.POLICY_DENIED, stage, "search terminal URL is invalid"
+        ) from exc
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or host not in allowed_hosts
+    ):
+        raise ObscuraClientError(
+            FetchFailure.POLICY_DENIED,
+            stage,
+            "search terminal URL violates its origin policy",
+        )
+
+
+def _validate_form_policy(
+    value: object, spec: SearchInteractionSpec, *, stage: str
+) -> None:
+    if not isinstance(value, dict):
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL, stage, "search form inspection was invalid"
+        )
+    if (
+        value.get("currentScheme") != "https:"
+        or value.get("currentHost") not in spec.allowed_homepage_hosts
+        or value.get("currentPort") not in {"", "443"}
+        or
+        value.get("scheme") != "https:"
+        or value.get("host") not in spec.allowed_result_hosts
+        or value.get("port") not in {"", "443"}
+        or value.get("username") != ""
+        or value.get("password") != ""
+        or value.get("path") != spec.form_action_path
+        or value.get("method") != spec.form_method
+        or value.get("target") not in {"", "_self"}
+        or value.get("enctype") != "application/x-www-form-urlencoded"
+    ):
+        raise ObscuraClientError(
+            FetchFailure.POLICY_DENIED,
+            stage,
+            "search form violates its declared policy",
+        )
+
+
+def _search_event_document(
+    cdp: _RawCdp,
+    *,
+    start_index: int,
+    frame_id: str,
+    loader_id: str,
+    stage: str,
+) -> tuple[str, int, dict[str, str], str]:
+    events = cdp.events[start_index:]
+    if any(
+        event.get("method") == "Target.attachedToTarget"
+        and event.get("params", {}).get("targetInfo", {}).get("targetId")
+        for event in events
+    ):
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL, stage, "search created an unsupported target"
+        )
+    documents = [
+        event.get("params", {})
+        for event in events
+        if event.get("method") == "Network.responseReceived"
+        and event.get("params", {}).get("type") == "Document"
+        and event.get("params", {}).get("frameId") == frame_id
+        and event.get("params", {}).get("loaderId") == loader_id
+    ]
+    if len(documents) != 1:
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            stage,
+            "expected one terminal search document response",
+        )
+    document = documents[0]
+    request_id = str(document.get("requestId", ""))
+    response = document.get("response", {})
+    frames = [
+        event.get("params", {}).get("frame", {})
+        for event in events
+        if event.get("method") == "Page.frameNavigated"
+        and event.get("params", {}).get("frame", {}).get("id") == frame_id
+        and event.get("params", {}).get("frame", {}).get("loaderId") == loader_id
+    ]
+    finished = {
+        str(event.get("params", {}).get("requestId"))
+        for event in events
+        if event.get("method") == "Network.loadingFinished"
+    }
+    if not request_id or request_id not in finished or not frames:
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL, stage, "search document event set is incomplete"
+        )
+    return (
+        str(frames[-1].get("url", "")),
+        int(response.get("status", 0)),
+        _normalize_headers(response.get("headers", {})),
+        request_id,
+    )
+
+
+async def _search_dom(
+    session: _Session,
+    *,
+    dom_limit: int,
+    remaining: Callable[[str, FetchFailure], float],
+    stage_prefix: str,
+) -> str:
+    document = await session.send(
+        "DOM.getDocument",
+        {"depth": 0},
+        timeout_seconds=remaining(
+            f"{stage_prefix}-dom-document", FetchFailure.POST_NAVIGATION_TIMEOUT
+        ),
+        timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+        timeout_stage=f"{stage_prefix}-dom-document",
+    )
+    node_id = document.get("root", {}).get("nodeId")
+    outer = await session.send(
+        "DOM.getOuterHTML",
+        {"nodeId": node_id},
+        timeout_seconds=remaining(
+            f"{stage_prefix}-dom-outer-html", FetchFailure.POST_NAVIGATION_TIMEOUT
+        ),
+        timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+        timeout_stage=f"{stage_prefix}-dom-outer-html",
+    )
+    html = outer.get("outerHTML")
+    if not isinstance(html, str):
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            f"{stage_prefix}-dom",
+            "Obscura returned an invalid search DOM",
+        )
+    if len(html.encode("utf-8")) > dom_limit:
+        raise ObscuraClientError(
+            FetchFailure.OVERSIZE,
+            f"{stage_prefix}-dom",
+            "search DOM exceeds the configured byte limit",
+        )
+    return html
+
+
+async def _search_form_call(
+    session: _Session,
+    *,
+    operation: str,
+    spec: SearchInteractionSpec,
+    fixed_fields: tuple[tuple[str, str], ...],
+    query: str,
+    remaining: Callable[[str, FetchFailure], float],
+    stage: str,
+) -> None:
+    result = await session.send(
+        "Runtime.callFunctionOn",
+        {
+            "functionDeclaration": _SEARCH_FORM_FUNCTION,
+            "arguments": [
+                {"value": operation},
+                {"value": spec.query_selector},
+                {"value": spec.query_field_name},
+                {"value": [list(item) for item in fixed_fields]},
+                {"value": query},
+            ],
+            "returnByValue": True,
+            "awaitPromise": True,
+        },
+        timeout_seconds=remaining(stage, FetchFailure.POST_NAVIGATION_TIMEOUT),
+        timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+        timeout_stage=stage,
+    )
+    remote = result.get("result", {})
+    if (
+        result.get("exceptionDetails") is not None
+        or not isinstance(remote, dict)
+        or remote.get("subtype") == "error"
+    ):
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL, stage, "search form operation failed"
+        )
+    _validate_form_policy(remote.get("value"), spec, stage=stage)
+
+
+async def submit_search(
+    query: str,
+    *,
+    spec: SearchInteractionSpec,
+    fixed_fields: tuple[tuple[str, str], ...],
+    text_entry_mode: TextEntryMode,
+    cdp_url: str,
+    wait_until: str,
+    dom_limit: int,
+    pre_navigation_guard: Callable[[], bool],
+    pre_navigation_timeout_seconds: float,
+    cleanup_command_timeout_seconds: float,
+    request_timeout_seconds: float,
+    session_owner: SearchBrowserSession,
+    _timing_random=None,
+    _timing_sleep=asyncio.sleep,
+) -> SearchSubmissionResult:
+    """Perform one retained-target homepage/form/result browser transaction."""
+    if not isinstance(query, str):
+        raise TypeError("query must be a string")
+    if not isinstance(session_owner, SearchBrowserSession):
+        raise TypeError("search requires a SearchBrowserSession")
+    if not callable(pre_navigation_guard):
+        raise TypeError("search requires a pre-navigation guard")
+    if not callable(_timing_sleep):
+        raise TypeError("timing sleeper must be callable")
+    if text_entry_mode not in {"instant", "timed"}:
+        raise ValueError("text entry mode must be instant or timed")
+    if dom_limit <= 0:
+        raise ValueError("DOM limit must be positive")
+    for value, label in (
+        (pre_navigation_timeout_seconds, "pre-navigation timeout"),
+        (cleanup_command_timeout_seconds, "cleanup timeout"),
+        (request_timeout_seconds, "request timeout"),
+    ):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{label} must be positive and finite")
+    wait_until = validate_wait_until(wait_until)
+    if not isinstance(fixed_fields, tuple):
+        raise TypeError("fixed fields must be a tuple")
+    seen_fields: set[str] = set()
+    for item in fixed_fields:
+        if (
+            not isinstance(item, tuple)
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or not isinstance(item[1], str)
+            or item[0] not in spec.allowed_fixed_field_names
+            or item[0] in seen_fields
+            or item[0] == spec.query_field_name
+        ):
+            raise ValueError("fixed fields violate the search specification")
+        seen_fields.add(item[0])
+
+    started = time.monotonic()
+    request_deadline = started + request_timeout_seconds
+    setup_deadline = min(started + pre_navigation_timeout_seconds, request_deadline)
+    diagnostic_id = uuid.uuid4().hex[:12]
+    stage = "search-connect"
+    ambiguous = False
+    owner = session_owner
+    owner._cleanup_command_timeout_seconds = cleanup_command_timeout_seconds
+
+    def remaining(next_stage: str, category: FetchFailure) -> float:
+        nonlocal stage
+        stage = next_stage
+        deadline = setup_deadline if category is FetchFailure.PRE_NAVIGATION_TIMEOUT else request_deadline
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise ObscuraClientError(
+                category, next_stage, f"Obscura did not complete {next_stage} before its deadline"
+            )
+        return value
+
+    async def command(
+        transport: _RawCdp,
+        method: str,
+        params: dict | None = None,
+        *,
+        session_id: str | None = None,
+        command_stage: str,
+        category: FetchFailure,
+    ) -> dict:
+        return await transport.send(
+            method,
+            params,
+            session_id=session_id,
+            timeout_seconds=remaining(command_stage, category),
+            timeout_category=category,
+            timeout_stage=command_stage,
+        )
+
+    LOGGER.info(
+        "obscura search started request_id=%s entry_mode=%s wait_until=%s",
+        diagnostic_id,
+        text_entry_mode,
+        wait_until,
+    )
+    try:
+        try:
+            cdp = await owner._connection.ensure_connected(
+                cdp_url=cdp_url,
+                max_size=dom_limit + (1 << 20),
+                open_timeout=min(
+                    10.0,
+                    remaining(
+                        "search-connect", FetchFailure.PRE_NAVIGATION_TIMEOUT
+                    ),
+                ),
+                close_timeout=cleanup_command_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ObscuraClientError(
+                FetchFailure.PRE_NAVIGATION_TIMEOUT,
+                "search-connect",
+                "Obscura search connection setup timed out",
+            ) from exc
+        if owner._target_id is None:
+            created = await command(
+                cdp,
+                "Target.createTarget",
+                {"url": "about:blank"},
+                command_stage="search-create-target",
+                category=FetchFailure.PRE_NAVIGATION_TIMEOUT,
+            )
+            target_id = str(created.get("targetId", ""))
+            attached = next(
+                (
+                    event
+                    for event in cdp.events
+                    if event.get("method") == "Target.attachedToTarget"
+                    and event.get("params", {}).get("targetInfo", {}).get("targetId")
+                    == target_id
+                ),
+                None,
+            )
+            session_id = str((attached or {}).get("params", {}).get("sessionId", ""))
+            if not target_id or not session_id:
+                raise ObscuraClientError(
+                    FetchFailure.PROTOCOL,
+                    "search-target",
+                    "Obscura search target attachment is incomplete",
+                )
+            owner._target_id = target_id
+            owner._session_id = session_id
+        session_id = owner._session_id
+        if not session_id:
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL, "search-target", "search session is incomplete"
+            )
+        for method, params, command_stage in (
+            ("Network.enable", None, "search-network-enable"),
+            ("Page.enable", None, "search-page-enable"),
+            (
+                "Page.setLifecycleEventsEnabled",
+                {"enabled": True},
+                "search-lifecycle-enable",
+            ),
+        ):
+            await command(
+                cdp,
+                method,
+                params,
+                session_id=session_id,
+                command_stage=command_stage,
+                category=FetchFailure.PRE_NAVIGATION_TIMEOUT,
+            )
+        frame_tree = await command(
+            cdp,
+            "Page.getFrameTree",
+            session_id=session_id,
+            command_stage="search-frame-tree",
+            category=FetchFailure.PRE_NAVIGATION_TIMEOUT,
+        )
+        frame_id = str(frame_tree.get("frameTree", {}).get("frame", {}).get("id", ""))
+        if not frame_id or (
+            owner._frame_id is not None and owner._frame_id != frame_id
+        ):
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL,
+                "search-frame-tree",
+                "retained search main frame changed",
+            )
+        owner._frame_id = frame_id
+        cdp.events.clear()
+        session = _Session(cdp, session_id)
+
+        if not pre_navigation_guard():
+            raise ObscuraClientError(
+                FetchFailure.FINALIZED,
+                "search-pre-navigation",
+                "request invocation is finalized",
+            )
+        homepage_event_start = len(cdp.events)
+        homepage_started = time.monotonic()
+        nav = await command(
+            cdp,
+            "Page.navigate",
+            {"url": spec.homepage_url, "waitUntil": wait_until},
+            session_id=session_id,
+            command_stage="homepage-navigation",
+            category=FetchFailure.NAVIGATION_TIMEOUT,
+        )
+        homepage_loader = str(nav.get("loaderId", ""))
+        if not homepage_loader:
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL,
+                "homepage-navigation",
+                "homepage navigation returned no loader",
+            )
+        try:
+            await cdp.wait_for_event(
+                "Page.frameStoppedLoading",
+                lambda event: event.get("frameId") == frame_id,
+                remaining(
+                    "homepage-event-barrier",
+                    FetchFailure.POST_NAVIGATION_TIMEOUT,
+                ),
+                start_index=homepage_event_start,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ObscuraClientError(
+                FetchFailure.POST_NAVIGATION_TIMEOUT,
+                "homepage-event-barrier",
+                "homepage document completion event timed out",
+            ) from exc
+        homepage_seconds = time.monotonic() - homepage_started
+        homepage_url, homepage_status, _homepage_headers, _request_id = (
+            _search_event_document(
+                cdp,
+                start_index=homepage_event_start,
+                frame_id=frame_id,
+                loader_id=homepage_loader,
+                stage="homepage-events",
+            )
+        )
+        _validate_search_terminal_url(
+            homepage_url, spec.allowed_homepage_hosts, stage="homepage-origin"
+        )
+        homepage_html = await _search_dom(
+            session,
+            dom_limit=dom_limit,
+            remaining=remaining,
+            stage_prefix="homepage",
+        )
+        homepage_challenge = _challenge(homepage_status, homepage_url, homepage_html)
+        if homepage_challenge is not None:
+            raise ObscuraClientError(
+                homepage_challenge,
+                "homepage-classification",
+                "provider homepage returned a blocking classification",
+            )
+        if homepage_status == 404 or homepage_status >= 500:
+            raise ObscuraClientError(
+                FetchFailure.HTTP_STATUS,
+                "homepage-classification",
+                "provider homepage returned a terminal HTTP status",
+            )
+        del homepage_html
+
+        _validate_search_terminal_url(
+            homepage_url, spec.allowed_homepage_hosts, stage="form-origin"
+        )
+        await _search_form_call(
+            session,
+            operation="validate",
+            spec=spec,
+            fixed_fields=fixed_fields,
+            query=query,
+            remaining=remaining,
+            stage="form-validate",
+        )
+        if text_entry_mode == "instant":
+            await _search_form_call(
+                session,
+                operation="instant",
+                spec=spec,
+                fixed_fields=fixed_fields,
+                query=query,
+                remaining=remaining,
+                stage="instant-entry",
+            )
+        else:
+            await _search_form_call(
+                session,
+                operation="timed-prepare",
+                spec=spec,
+                fixed_fields=fixed_fields,
+                query=query,
+                remaining=remaining,
+                stage="timed-entry-prepare",
+            )
+            random_source = _timing_random or secrets.SystemRandom()
+            for index, character in enumerate(query):
+                await session.send(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": "keyDown",
+                        "key": character,
+                        "text": character,
+                        "unmodifiedText": character,
+                    },
+                    timeout_seconds=remaining(
+                        "timed-entry-key-down", FetchFailure.POST_NAVIGATION_TIMEOUT
+                    ),
+                    timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+                    timeout_stage="timed-entry-key-down",
+                )
+                await session.send(
+                    "Input.dispatchKeyEvent",
+                    {"type": "keyUp", "key": character},
+                    timeout_seconds=remaining(
+                        "timed-entry-key-up", FetchFailure.POST_NAVIGATION_TIMEOUT
+                    ),
+                    timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+                    timeout_stage="timed-entry-key-up",
+                )
+                if index + 1 < len(query):
+                    delay = random_source.uniform(0.045, 0.135)
+                    if delay >= remaining(
+                        "timed-entry-delay", FetchFailure.POST_NAVIGATION_TIMEOUT
+                    ):
+                        raise ObscuraClientError(
+                            FetchFailure.POST_NAVIGATION_TIMEOUT,
+                            "timed-entry-delay",
+                            "timed entry delay exceeds the remaining deadline",
+                        )
+                    await _timing_sleep(delay)
+            await _search_form_call(
+                session,
+                operation="verify",
+                spec=spec,
+                fixed_fields=fixed_fields,
+                query=query,
+                remaining=remaining,
+                stage="timed-entry-verify",
+            )
+
+        result_event_start = len(cdp.events)
+        result_started = time.monotonic()
+        await _search_form_call(
+            session,
+            operation="submit",
+            spec=spec,
+            fixed_fields=fixed_fields,
+            query=query,
+            remaining=remaining,
+            stage="form-submit",
+        )
+        try:
+            result_response = await cdp.wait_for_event(
+                "Network.responseReceived",
+                lambda event: (
+                    event.get("type") == "Document"
+                    and event.get("frameId") == frame_id
+                    and event.get("loaderId") != homepage_loader
+                ),
+                remaining(
+                    "submission-result-navigation",
+                    FetchFailure.POST_NAVIGATION_TIMEOUT,
+                ),
+                start_index=result_event_start,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ObscuraClientError(
+                FetchFailure.POST_NAVIGATION_TIMEOUT,
+                "submission-result-navigation",
+                "submitted search did not produce a distinct result document",
+            ) from exc
+        result_loader = str(result_response.get("params", {}).get("loaderId", ""))
+        if not result_loader or result_loader == homepage_loader:
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL,
+                "submission-result-navigation",
+                "submitted search did not create a distinct result loader",
+            )
+        try:
+            await cdp.wait_for_event(
+                "Page.frameStoppedLoading",
+                lambda event: event.get("frameId") == frame_id,
+                remaining(
+                    "submission-event-barrier",
+                    FetchFailure.POST_NAVIGATION_TIMEOUT,
+                ),
+                start_index=result_event_start,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ObscuraClientError(
+                FetchFailure.POST_NAVIGATION_TIMEOUT,
+                "submission-event-barrier",
+                "submitted document completion event timed out",
+            ) from exc
+        submission_seconds = time.monotonic() - result_started
+        result_url, result_status, result_headers, _request_id = (
+            _search_event_document(
+                cdp,
+                start_index=result_event_start,
+                frame_id=frame_id,
+                loader_id=result_loader,
+                stage="result-events",
+            )
+        )
+        _validate_search_terminal_url(
+            result_url, spec.allowed_result_hosts, stage="result-origin"
+        )
+        result_html = await _search_dom(
+            session,
+            dom_limit=dom_limit,
+            remaining=remaining,
+            stage_prefix="result",
+        )
+        challenge = _challenge(result_status, result_url, result_html)
+        LOGGER.info(
+            "obscura search completed request_id=%s entry_mode=%s "
+            "status_class=%sxx homepage_seconds=%.3f submission_seconds=%.3f "
+            "challenge=%s",
+            diagnostic_id,
+            text_entry_mode,
+            result_status // 100,
+            homepage_seconds,
+            submission_seconds,
+            challenge.value if challenge is not None else "none",
+        )
+        return SearchSubmissionResult(
+            final_url=result_url,
+            status=result_status,
+            headers=result_headers,
+            rendered_html=result_html,
+            challenge=challenge,
+            homepage_navigation_seconds=homepage_seconds,
+            submission_navigation_seconds=submission_seconds,
+        )
+    except asyncio.CancelledError:
+        ambiguous = True
+        raise
+    except ObscuraClientError as exc:
+        ambiguous = exc.category not in {
+            FetchFailure.FINALIZED,
+            FetchFailure.HTTP_STATUS,
+            FetchFailure.ACCESS_DENIED,
+            FetchFailure.RATE_LIMITED,
+            FetchFailure.CAPTCHA,
+        }
+        LOGGER.warning(
+            "obscura search failed request_id=%s entry_mode=%s category=%s "
+            "stage=%s elapsed_seconds=%.3f",
+            diagnostic_id,
+            text_entry_mode,
+            exc.category.value,
+            exc.stage,
+            time.monotonic() - started,
+        )
+        raise
+    except Exception as exc:
+        ambiguous = True
+        mapped = ObscuraClientError(
+            FetchFailure.TRANSPORT, stage, "Obscura search transaction failed"
+        )
+        LOGGER.warning(
+            "obscura search failed request_id=%s entry_mode=%s category=%s "
+            "stage=%s elapsed_seconds=%.3f",
+            diagnostic_id,
+            text_entry_mode,
+            mapped.category.value,
+            mapped.stage,
+            time.monotonic() - started,
+        )
+        raise mapped from exc
+    finally:
+        if ambiguous:
+            try:
+                await owner.close()
+            except Exception:
+                LOGGER.warning(
+                    "obscura cleanup failed request_id=%s stage=search-generation-close",
+                    diagnostic_id,
+                )
 
 
 def fetch_sync(*args, **kwargs) -> FetchResult:

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Brave Search engine backed by one direct Obscura navigation.
+"""Brave Search engine backed by homepage form submission in Obscura.
 
 Brave's SERP is a SvelteKit single-page app: the stock ``brave`` engine fetches
 HTML directly and Brave rate-limits / returns a JS shell with no results.  This
@@ -8,8 +8,6 @@ cards are present in the DOM.
 """
 
 import typing as t
-from urllib.parse import urlencode
-
 from lxml import html
 
 from searx.utils import eval_xpath, eval_xpath_list, extract_text
@@ -53,18 +51,18 @@ url_xpath = './/cite[contains(@class, "snippet-url")]'
 
 
 def search(query: str, params: "RequestParams"):
-    """Build the Brave search URL and navigate it once through Obscura."""
-    query_args: t.Dict[str, str] = {"q": query}
+    """Submit the Brave homepage form and parse the rendered result DOM."""
+    fixed_fields: list[tuple[str, str]] = []
     if params.get("time_range") in time_range_dict:
-        query_args["tf"] = time_range_dict[params["time_range"]]
+        fixed_fields.append(("tf", time_range_dict[params["time_range"]]))
     if params["pageno"] > 1:
-        query_args["offset"] = str((params["pageno"] - 1) * 10)
+        fixed_fields.append(("offset", str((params["pageno"] - 1) * 10)))
 
-    target_url = "https://search.brave.com/search?" + urlencode(query_args)
     return _parse_html(
-        _obscura.navigate(
+        _obscura.submit_search(
             "brave2",
-            target_url,
+            query,
+            tuple(fixed_fields),
             params.get(_obscura.PRE_NAVIGATION_GUARD_PARAM),
         )
     )

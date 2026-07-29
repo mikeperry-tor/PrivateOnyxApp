@@ -136,8 +136,9 @@ redacts wrapper diagnostics, and cleans up streams and targets on every path.
 Its default mode, used by direct `open_url`, opens and closes one
 v0.1.11-isolated browser connection per request. Its explicit reusable-session
 mode is owned only by the SearXNG provider adapter: each provider serializes
-fresh targets on one connection and discards that connection after an
-ambiguous client or cleanup failure. Neither mode uses a non-atomic
+two-stage searches on one retained connection and target generation and
+discards the generation after an ambiguous client or cleanup failure. Neither
+mode uses a non-atomic
 cookie-clear command. The pinned server can evict a subresource-heavy page's
 main body before creating its loader alias. The client maps that exact
 rejection to `body-unavailable`; Onyx may continue only with same-navigation
@@ -185,11 +186,34 @@ The runtime direct client uses pinned WebSockets because Playwright's public
 page session attachment is incompatible with the pinned Obscura server's
 reused flattened session identifier.
 
+The Obscura image is built from the digest-verified archive for exact commit
+`e78b5e60261599a850c053eaecc2de92625496d7`, using a digest-pinned Rust/Debian
+builder and the upstream locked dependency graph. The build applies exactly
+two ordered patches with `git apply --check` before compiling both runtime
+binaries with the `stealth` feature:
+
+- `0001-stealth-native-post.patch` routes native form POST through the
+  target-owned stealth client used by GET, preserves its cookies, proxy,
+  TLS-emulation profile and pool, implements browser-style redirect method
+  changes, records the real document method, removes the submitted URL/body
+  from form-navigation diagnostics, and adds a static patchset marker.
+- `0002-target-fingerprint-seed.patch` generates one nonzero random seed when
+  a target is created and injects it through a one-shot private setter before
+  every page-realm initialization, so seed-derived screen/GPU/canvas/audio
+  surfaces remain stable for that target without exposing the seed to page
+  code or CDP. Profile-owned hardware and memory values remain stable too.
+
+Source, patches, compiler, Cargo cache, and build tools remain in builder
+stages. The final image retains the audited upstream hardened runtime base and
+only replaces its two binaries. Remove either patch only at its separate
+upgrade gate in [the patch checklist](onyx_patches_upgrade.md).
+
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are offline
-engines. `_obscura.py` owns one-navigation transport, exact terminal hosts,
-shared-client challenge/status mapping, the provider lease, and an exact
-three-second start interval. Each engine owns URL construction, sanitized DOM
-parsing, provider-specific challenge checks, result normalization, and explicit
+engines. `_obscura.py` owns the homepage/form/result interaction registry,
+entry-mode selection, exact origin policies, shared-client challenge/status
+mapping, the provider lease, and an exact three-second start interval. Each
+engine owns only fixed-field calculation, sanitized DOM parsing,
+provider-specific challenge checks, result normalization, and explicit
 no-results detection. Parser mismatch is an unresponsive failure, not empty
 success.
 
@@ -201,8 +225,9 @@ decodes the destination once, and treats an unfinished deep-result preload as
 a verification failure.
 
 The adapter uses one lazy event-loop thread for five independently retained
-provider connections. It creates and closes a fresh target for every query and
-retains each provider's native context until one hour after its last attempt.
+provider connection/target generations. It retains each provider's native
+context, target, cookie jar, profile, target stealth client, connection pool,
+and target fingerprint until one hour after its last attempt.
 The existing provider lease is the same-provider serialization authority;
 different providers remain concurrent. Ambiguous client or cleanup failures
 discard only the affected connection. This mode is not used by either
@@ -602,7 +627,7 @@ egress bridges, and shared public/host final-hop policies. Obscura v0.1.11
 isolates every live WebSocket browser context and rejects connections above the
 aggregate capacity of 15. Direct `open_url` connections remain request-scoped;
 each SearXNG provider instead lazily retains one connection for one hour after
-its last query while using a fresh target per query. It runs read-only as
+its last query together with one retained target. It runs read-only as
 65534:65534, without capabilities, storage, private mounts, or file-access
 permission. Application containers do not join the trusted VPN namespace or a
 direct public network.

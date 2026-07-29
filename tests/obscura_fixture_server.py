@@ -18,6 +18,8 @@ _STRESS = threading.Condition()
 _STRESS_ACTIVE = 0
 _CAPACITY = threading.Condition()
 _CAPACITY_ACTIVE = 0
+_CONNECTION_IDS: dict[int, int] = {}
+_NEXT_CONNECTION_ID = 0
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -42,12 +44,53 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _connection_id(self) -> int:
+        global _NEXT_CONNECTION_ID
+        identity = id(self.connection)
+        with _COUNTS_LOCK:
+            connection_id = _CONNECTION_IDS.get(identity)
+            if connection_id is None:
+                _NEXT_CONNECTION_ID += 1
+                connection_id = _NEXT_CONNECTION_ID
+                _CONNECTION_IDS[identity] = connection_id
+            return connection_id
+
+    def _search_page(self, *, method: str, result_path: str) -> None:
+        connection_id = self._connection_id()
+        body = (
+            "<html><body>"
+            f"<main data-connection='{connection_id}'>homepage</main>"
+            f"<form action='{result_path}' method='{method}'>"
+            "<textarea name='q'></textarea>"
+            "<input type='hidden' name='lang' value='en'>"
+            "</form></body></html>"
+        ).encode()
+        self._send(body, content_type="text/html; charset=utf-8")
+
+    def _search_result(self, *, method: str) -> None:
+        connection_id = self._connection_id()
+        body = (
+            "<html><body>"
+            f"<main data-method='{method}' data-connection='{connection_id}'>"
+            "submitted</main></body></html>"
+        ).encode()
+        self._send(body, content_type="text/html; charset=utf-8")
+
     def do_GET(self) -> None:  # noqa: N802
         global _BARRIER_ACTIVE, _CAPACITY_ACTIVE, _STRESS_ACTIVE
 
         path = urlsplit(self.path).path
         if path == "/health":
             self._send(b"ok", content_type="text/plain")
+            return
+        if path == "/search-get-home":
+            self._search_page(method="get", result_path="/search-get-result")
+            return
+        if path == "/search-post-home":
+            self._search_page(method="post", result_path="/search-post-result")
+            return
+        if path == "/search-get-result":
+            self._search_result(method="GET")
             return
         if path == "/static":
             self._send(
@@ -185,6 +228,20 @@ class Handler(BaseHTTPRequestHandler):
                 else b"<html><body><main id='capacity'>under-capacity</main></body></html>"
             )
             self._send(body, content_type="text/html; charset=utf-8")
+            return
+        self._send(
+            b"not found",
+            content_type="text/plain",
+            status=HTTPStatus.NOT_FOUND,
+        )
+
+    def do_POST(self) -> None:  # noqa: N802
+        path = urlsplit(self.path).path
+        length = int(self.headers.get("Content-Length", "0"))
+        if length:
+            self.rfile.read(length)
+        if path == "/search-post-result":
+            self._search_result(method="POST")
             return
         self._send(
             b"not found",

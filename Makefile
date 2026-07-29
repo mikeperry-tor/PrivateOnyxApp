@@ -56,18 +56,22 @@ endif
 PYTHON_SLIM_IMAGE ?= $(call env_value,PYTHON_SLIM_IMAGE)
 PYTHON_ALPINE_IMAGE ?= $(call env_value,PYTHON_ALPINE_IMAGE)
 OBSCURA_RELEASE_VERSION ?= $(call env_value,OBSCURA_RELEASE_VERSION)
-OBSCURA_RELEASE_AMD64_SHA256 ?= $(call env_value,OBSCURA_RELEASE_AMD64_SHA256)
-OBSCURA_RELEASE_ARM64_SHA256 ?= $(call env_value,OBSCURA_RELEASE_ARM64_SHA256)
+OBSCURA_SOURCE_REF ?= $(call env_value,OBSCURA_SOURCE_REF)
+OBSCURA_SOURCE_SHA256 ?= $(call env_value,OBSCURA_SOURCE_SHA256)
+OBSCURA_BUILDER_IMAGE ?= $(call env_value,OBSCURA_BUILDER_IMAGE)
 OBSCURA_UPSTREAM_IMAGE ?= $(call env_value,OBSCURA_UPSTREAM_IMAGE)
 OBSCURA_WRAPPER_IMAGE_REPOSITORY ?= $(call env_value,OBSCURA_WRAPPER_IMAGE_REPOSITORY)
 ifeq ($(strip $(OBSCURA_RELEASE_VERSION)),)
 $(error OBSCURA_RELEASE_VERSION is not set in $(VERSION_FILE))
 endif
-ifeq ($(strip $(OBSCURA_RELEASE_AMD64_SHA256)),)
-$(error OBSCURA_RELEASE_AMD64_SHA256 is not set in $(VERSION_FILE))
+ifeq ($(strip $(OBSCURA_SOURCE_REF)),)
+$(error OBSCURA_SOURCE_REF is not set in $(VERSION_FILE))
 endif
-ifeq ($(strip $(OBSCURA_RELEASE_ARM64_SHA256)),)
-$(error OBSCURA_RELEASE_ARM64_SHA256 is not set in $(VERSION_FILE))
+ifeq ($(strip $(OBSCURA_SOURCE_SHA256)),)
+$(error OBSCURA_SOURCE_SHA256 is not set in $(VERSION_FILE))
+endif
+ifeq ($(strip $(OBSCURA_BUILDER_IMAGE)),)
+$(error OBSCURA_BUILDER_IMAGE is not set in $(VERSION_FILE))
 endif
 ifeq ($(strip $(OBSCURA_UPSTREAM_IMAGE)),)
 $(error OBSCURA_UPSTREAM_IMAGE is not set in $(VERSION_FILE))
@@ -307,8 +311,10 @@ SEARXNG_WRAPPER_IMAGE ?= $(SEARXNG_WRAPPER_IMAGE_REPOSITORY):$(SEARXNG_IMAGE_TAG
 SEARXNG_WRAPPER_IMAGE := $(SEARXNG_WRAPPER_IMAGE)
 OBSCURA_WRAPPER_BUILD_INPUTS := \
 	$(OBSCURA_DOCKERFILE) \
-	browser/obscura_image/fetch_release.py
-OBSCURA_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(); [h.update(v.encode()+b"\0") for v in sys.argv[1:4]]; [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[4:]]; print(h.hexdigest()[:12])' "$(OBSCURA_UPSTREAM_IMAGE)" "$(OBSCURA_RELEASE_AMD64_SHA256)" "$(OBSCURA_RELEASE_ARM64_SHA256)" $(OBSCURA_WRAPPER_BUILD_INPUTS))
+	browser/obscura_image/fetch_source.py \
+	browser/obscura_image/patches/series \
+	$(sort $(wildcard browser/obscura_image/patches/*.patch))
+OBSCURA_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(); [h.update(v.encode()+b"\0") for v in sys.argv[1:5]]; [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[5:]]; print(h.hexdigest()[:12])' "$(OBSCURA_UPSTREAM_IMAGE)" "$(OBSCURA_BUILDER_IMAGE)" "$(OBSCURA_SOURCE_REF)" "$(OBSCURA_SOURCE_SHA256)" $(OBSCURA_WRAPPER_BUILD_INPUTS))
 ifeq ($(strip $(OBSCURA_WRAPPER_SOURCE_HASH)),)
 $(error could not compute the Obscura wrapper source hash)
 endif
@@ -685,7 +691,7 @@ obscura-image-ready:
 	fi
 
 obscura-build:
-	@echo "Building $(OBSCURA_IMAGE) from pinned Obscura $(OBSCURA_RELEASE_VERSION) stealth release..."
+	@echo "Building $(OBSCURA_IMAGE) from pinned Obscura source $(OBSCURA_SOURCE_REF)..."
 	@set -eu; set --; \
 	[ -z "$${HTTP_PROXY:-}" ] || set -- "$$@" --build-arg HTTP_PROXY; \
 	[ -z "$${HTTPS_PROXY:-}" ] || set -- "$$@" --build-arg HTTPS_PROXY; \
@@ -695,11 +701,11 @@ obscura-build:
 	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
 	"$(CONTAINER_BIN)" build "$$@" \
 		--file "$(OBSCURA_DOCKERFILE)" \
-		--build-arg PYTHON_ALPINE_IMAGE="$(PYTHON_ALPINE_IMAGE)" \
 		--build-arg OBSCURA_UPSTREAM_IMAGE="$(OBSCURA_UPSTREAM_IMAGE)" \
+		--build-arg OBSCURA_BUILDER_IMAGE="$(OBSCURA_BUILDER_IMAGE)" \
 		--build-arg OBSCURA_RELEASE_VERSION="$(OBSCURA_RELEASE_VERSION)" \
-		--build-arg OBSCURA_RELEASE_AMD64_SHA256="$(OBSCURA_RELEASE_AMD64_SHA256)" \
-		--build-arg OBSCURA_RELEASE_ARM64_SHA256="$(OBSCURA_RELEASE_ARM64_SHA256)" \
+		--build-arg OBSCURA_SOURCE_REF="$(OBSCURA_SOURCE_REF)" \
+		--build-arg OBSCURA_SOURCE_SHA256="$(OBSCURA_SOURCE_SHA256)" \
 		--tag "$(OBSCURA_IMAGE)" \
 		.
 

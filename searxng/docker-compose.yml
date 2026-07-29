@@ -12,6 +12,7 @@ services:
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET must be set}
       SEARXNG_ROUND_ROBIN: "${SEARXNG_ROUND_ROBIN:-true}"
+      SEARXNG_TIMED_TYPING_PROVIDERS: "${SEARXNG_TIMED_TYPING_PROVIDERS:-none}"
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/usr/local/searxng/wrapper-patches:/usr/local/searxng:/usr/local/lib"
     volumes:

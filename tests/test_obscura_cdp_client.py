@@ -11,6 +11,9 @@ sys.path.insert(0, str(ROOT / "browser" / "obscura_client"))
 
 from private_onyx_obscura import FetchFailure  # noqa: E402
 from private_onyx_obscura import ObscuraClientError  # noqa: E402
+from private_onyx_obscura import SearchBrowserSession  # noqa: E402
+from private_onyx_obscura import SearchInteractionSpec  # noqa: E402
+from private_onyx_obscura import submit_search  # noqa: E402
 from private_onyx_obscura import fetch_sync  # noqa: E402
 from private_onyx_obscura import is_text_like_content_type  # noqa: E402
 from private_onyx_obscura import normalize_public_url  # noqa: E402
@@ -19,9 +22,331 @@ from private_onyx_obscura.client import _RawCdp  # noqa: E402
 from private_onyx_obscura.client import _can_preserve_html_dom_without_body  # noqa: E402
 from private_onyx_obscura.client import _challenge_details  # noqa: E402
 from private_onyx_obscura.client import _drain_body  # noqa: E402
+from private_onyx_obscura.client import _SEARCH_FORM_FUNCTION  # noqa: E402
 
 
 class ObscuraClientTests(unittest.TestCase):
+    @staticmethod
+    def _search_spec(method: str = "get") -> SearchInteractionSpec:
+        return SearchInteractionSpec(
+            homepage_url="https://search.example/",
+            allowed_homepage_hosts=frozenset({"search.example"}),
+            allowed_result_hosts=frozenset({"search.example"}),
+            query_selector='textarea[name="q"]',
+            query_field_name="q",
+            form_action_path="/search",
+            form_method=method,
+            allowed_fixed_field_names=frozenset({"lang"}),
+        )
+
+    def test_search_spec_validation_is_strict(self):
+        spec = SearchInteractionSpec(
+            homepage_url="https://search.example/",
+            allowed_homepage_hosts=frozenset({"search.example"}),
+            allowed_result_hosts=frozenset({"search.example"}),
+            query_selector='textarea[name="q"]',
+            query_field_name="q",
+            form_action_path="/search",
+            form_method="get",
+            allowed_fixed_field_names=frozenset({"lang"}),
+        )
+        self.assertEqual(spec.form_action_path, "/search")
+        for changes in (
+            {"homepage_url": "http://search.example/"},
+            {"allowed_result_hosts": frozenset({"*.example"})},
+            {"form_action_path": "//other.example/search"},
+            {"form_action_path": "/search?fixed=1"},
+            {"allowed_fixed_field_names": frozenset({"q"})},
+        ):
+            values = {
+                "homepage_url": spec.homepage_url,
+                "allowed_homepage_hosts": spec.allowed_homepage_hosts,
+                "allowed_result_hosts": spec.allowed_result_hosts,
+                "query_selector": spec.query_selector,
+                "query_field_name": spec.query_field_name,
+                "form_action_path": spec.form_action_path,
+                "form_method": spec.form_method,
+                "allowed_fixed_field_names": spec.allowed_fixed_field_names,
+            }
+            values.update(changes)
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                SearchInteractionSpec(**values)
+
+    def test_search_form_data_is_passed_as_protocol_arguments(self):
+        self.assertNotIn("private query", _SEARCH_FORM_FUNCTION)
+        source = (
+            ROOT
+            / "browser/obscura_client/private_onyx_obscura/client.py"
+        ).read_text()
+        self.assertIn('{"value": query}', source)
+        self.assertIn('{"value": [list(item) for item in fixed_fields]}', source)
+
+    def test_search_owner_closes_target_before_connection(self):
+        calls = []
+
+        class Cdp:
+            async def send(self, method, params, **_kwargs):
+                calls.append((method, params))
+                return {"success": True}
+
+        class WebSocket:
+            async def close(self):
+                calls.append(("websocket-close", None))
+
+        owner = SearchBrowserSession()
+        owner._connection.cdp = Cdp()
+        owner._connection.websocket = WebSocket()
+        owner._target_id = "target"
+        asyncio.run(owner.close())
+        self.assertEqual(
+            calls,
+            [
+                ("Target.closeTarget", {"targetId": "target"}),
+                ("websocket-close", None),
+            ],
+        )
+        asyncio.run(owner.close())
+        self.assertEqual(len(calls), 2)
+
+    def test_search_owner_closes_connection_when_target_close_fails(self):
+        calls = []
+
+        class Cdp:
+            async def send(self, method, _params, **_kwargs):
+                calls.append(method)
+                raise ObscuraClientError(
+                    FetchFailure.PROTOCOL,
+                    "cleanup-target-close",
+                    "target close failed",
+                )
+
+        class WebSocket:
+            async def close(self):
+                calls.append("websocket-close")
+
+        owner = SearchBrowserSession()
+        owner._connection.cdp = Cdp()
+        owner._connection.websocket = WebSocket()
+        owner._target_id = "target"
+        with self.assertRaises(ObscuraClientError):
+            asyncio.run(owner.close())
+        self.assertEqual(calls, ["Target.closeTarget", "websocket-close"])
+        self.assertIsNone(owner._target_id)
+        self.assertIsNone(owner._connection.websocket)
+
+    def test_search_transaction_reuses_one_target_and_partitions_two_loaders(self):
+        class WebSocket:
+            def __init__(self):
+                self.closed = 0
+
+            async def close(self):
+                self.closed += 1
+
+        class Cdp:
+            def __init__(self):
+                self.events = []
+                self.calls = []
+                self.attempt = 0
+                self.current_document = "homepage"
+
+            def document_events(self, loader, url):
+                request = f"request-{loader}"
+                self.events.extend(
+                    [
+                        {
+                            "method": "Network.responseReceived",
+                            "params": {
+                                "type": "Document",
+                                "frameId": "frame",
+                                "loaderId": loader,
+                                "requestId": request,
+                                "response": {
+                                    "url": url,
+                                    "status": 200,
+                                    "headers": {"content-type": "text/html"},
+                                },
+                            },
+                        },
+                        {
+                            "method": "Page.frameNavigated",
+                            "params": {
+                                "frame": {
+                                    "id": "frame",
+                                    "loaderId": loader,
+                                    "url": url,
+                                }
+                            },
+                        },
+                        {
+                            "method": "Network.loadingFinished",
+                            "params": {"requestId": request},
+                        },
+                        {
+                            "method": "Page.frameStoppedLoading",
+                            "params": {"frameId": "frame"},
+                        },
+                    ]
+                )
+
+            async def send(self, method, params=None, **_kwargs):
+                params = params or {}
+                self.calls.append((method, params))
+                if method == "Target.createTarget":
+                    self.events.append(
+                        {
+                            "method": "Target.attachedToTarget",
+                            "params": {
+                                "sessionId": "session",
+                                "targetInfo": {"targetId": "target"},
+                            },
+                        }
+                    )
+                    return {"targetId": "target"}
+                if method in {
+                    "Network.enable",
+                    "Page.enable",
+                    "Page.setLifecycleEventsEnabled",
+                }:
+                    return {}
+                if method == "Page.getFrameTree":
+                    return {"frameTree": {"frame": {"id": "frame"}}}
+                if method == "Page.navigate":
+                    self.attempt += 1
+                    loader = f"homepage-{self.attempt}"
+                    self.current_document = "homepage"
+                    self.document_events(loader, "https://search.example/")
+                    return {"loaderId": loader}
+                if method == "DOM.getDocument":
+                    return {"root": {"nodeId": 1}}
+                if method == "DOM.getOuterHTML":
+                    return {
+                        "outerHTML": (
+                            "<html><body>homepage form</body></html>"
+                            if self.current_document == "homepage"
+                            else "<html><body>submitted results</body></html>"
+                        )
+                    }
+                if method == "Runtime.callFunctionOn":
+                    operation = params["arguments"][0]["value"]
+                    if operation == "submit":
+                        # Result events deliberately precede the command
+                        # acknowledgement; _RawCdp has the same buffering
+                        # contract while awaiting this result.
+                        loader = f"result-{self.attempt}"
+                        self.current_document = "result"
+                        self.document_events(
+                            loader, "https://search.example/search"
+                        )
+                    return {
+                        "result": {
+                            "value": {
+                                "currentScheme": "https:",
+                                "currentHost": "search.example",
+                                "currentPort": "",
+                                "scheme": "https:",
+                                "host": "search.example",
+                                "port": "",
+                                "username": "",
+                                "password": "",
+                                "path": "/search",
+                                "method": self.form_method,
+                                "target": "",
+                                "enctype": "application/x-www-form-urlencoded",
+                            }
+                        }
+                    }
+                if method == "Input.dispatchKeyEvent":
+                    return {}
+                if method == "Target.closeTarget":
+                    return {"success": True}
+                raise AssertionError(method)
+
+            async def wait_for_event(
+                self, method, predicate, _timeout, *, start_index=0
+            ):
+                return next(
+                    event
+                    for event in self.events[start_index:]
+                    if event["method"] == method
+                    and predicate(event.get("params", {}))
+                )
+
+        async def exercise(method, mode):
+            cdp = Cdp()
+            cdp.form_method = method
+            websocket = WebSocket()
+            owner = SearchBrowserSession()
+            owner._connection.cdp = cdp
+            owner._connection.websocket = websocket
+            owner._connection.cdp_url = "ws://obscura.invalid/devtools/browser"
+            owner._connection.max_size = 1 << 30
+            delays = []
+
+            class TimingRandom:
+                @staticmethod
+                def uniform(start, end):
+                    self.assertEqual((start, end), (0.045, 0.135))
+                    return 0.09
+
+            async def timing_sleep(delay):
+                delays.append(delay)
+
+            for query in ("ab", "c"):
+                result = await submit_search(
+                    query,
+                    spec=self._search_spec(method),
+                    fixed_fields=(("lang", "en"),),
+                    text_entry_mode=mode,
+                    cdp_url=owner._connection.cdp_url,
+                    wait_until="load",
+                    dom_limit=1 << 20,
+                    pre_navigation_guard=lambda: True,
+                    pre_navigation_timeout_seconds=5,
+                    cleanup_command_timeout_seconds=1,
+                    request_timeout_seconds=10,
+                    session_owner=owner,
+                    _timing_random=TimingRandom(),
+                    _timing_sleep=timing_sleep,
+                )
+                self.assertEqual(result.final_url, "https://search.example/search")
+                self.assertIn("submitted results", result.rendered_html)
+            self.assertEqual(
+                [call[0] for call in cdp.calls].count("Target.createTarget"), 1
+            )
+            self.assertEqual(
+                [call[0] for call in cdp.calls].count("Page.navigate"), 2
+            )
+            self.assertNotIn(
+                "Target.closeTarget", [call[0] for call in cdp.calls]
+            )
+            if mode == "timed":
+                texts = [
+                    call[1].get("text")
+                    for call in cdp.calls
+                    if call[0] == "Input.dispatchKeyEvent"
+                    and call[1]["type"] == "keyDown"
+                ]
+                self.assertEqual("".join(texts), "abc")
+                self.assertEqual(delays, [0.09])
+            await owner.close()
+            self.assertEqual(websocket.closed, 1)
+            self.assertEqual(
+                [call[0] for call in cdp.calls].count("Target.closeTarget"), 1
+            )
+
+        for method in ("get", "post"):
+            for mode in ("instant", "timed"):
+                with self.subTest(method=method, mode=mode):
+                    asyncio.run(exercise(method, mode))
+
+    def test_search_form_function_enforces_native_entry_and_native_submission(self):
+        self.assertIn('Object.getOwnPropertyDescriptor(proto, "value").set', _SEARCH_FORM_FUNCTION)
+        self.assertEqual(_SEARCH_FORM_FUNCTION.count('new Event("input"'), 1)
+        self.assertEqual(_SEARCH_FORM_FUNCTION.count('new Event("change"'), 1)
+        self.assertIn("state.form.requestSubmit()", _SEARCH_FORM_FUNCTION)
+        self.assertNotIn("location.assign", _SEARCH_FORM_FUNCTION)
+        self.assertNotIn("fetch(", _SEARCH_FORM_FUNCTION)
+
     def test_wait_values_are_exact(self):
         for value in ("domcontentloaded", "load", "networkidle0", "networkidle2"):
             self.assertEqual(validate_wait_until(value), value)

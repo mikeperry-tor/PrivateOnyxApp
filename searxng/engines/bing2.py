@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Bing Web engine backed by one direct Obscura navigation.
+"""Bing Web engine backed by homepage form submission in Obscura.
 
 This engine is intentionally configured as a last-resort SearXNG engine in the
 wrapper settings. Bing often returns broad, noisy matches, but it can still
@@ -15,7 +15,7 @@ import base64
 import re
 import typing as t
 import unicodedata
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from lxml import html
 
@@ -44,8 +44,6 @@ max_page = 5
 time_range_support = False
 safesearch = False
 language_support = False
-
-base_url = "https://www.bing.com"
 
 # Organic Bing results are normally:
 #
@@ -108,20 +106,19 @@ _minimum_query_anchor_length = 4
 
 
 def search(query: str, params: "RequestParams"):
-    """Build the Bing search URL and navigate it once through Obscura."""
-    query_args: dict[str, str | int] = {
-        "q": query,
-        "adlt": "off",
-        "setlang": "en",
-    }
+    """Submit the Bing homepage form and parse its result DOM."""
+    fixed_fields: list[tuple[str, str]] = [
+        ("adlt", "off"),
+        ("setlang", "en"),
+    ]
     if params["pageno"] > 1:
-        query_args["first"] = (params["pageno"] - 1) * 10 + 1
+        fixed_fields.append(("first", str((params["pageno"] - 1) * 10 + 1)))
 
-    target_url = f"{base_url}/search?{urlencode(query_args)}"
     return _parse_html(
-        _obscura.navigate(
+        _obscura.submit_search(
             "bing2",
-            target_url,
+            query,
+            tuple(fixed_fields),
             params.get(_obscura.PRE_NAVIGATION_GUARD_PARAM),
         ),
         query,

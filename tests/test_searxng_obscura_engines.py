@@ -71,7 +71,7 @@ class SearxngObscuraEngineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         obscura = types.ModuleType("searx.engines._obscura")
-        obscura.navigate = lambda *_args: ""
+        obscura.submit_search = lambda *_args: ""
         obscura.RESERVATION_PARAM = "_wrapper_obscura_reservation_token"
         obscura.PRE_NAVIGATION_GUARD_PARAM = "_wrapper_obscura_pre_navigation_guard"
 
@@ -106,14 +106,15 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         )
         self.assertEqual(self.brave._parse_html("<html><div id='no-results'/></html>"), [])
 
-    def test_search_calls_direct_navigator_once(self):
+    def test_search_calls_homepage_submitter_once(self):
         dom = """<html><body><div data-type='web'><a class='l1' href='https://example.org/'><div class='title'>Result</div></a></div></body></html>"""
-        with patch.object(self.obscura, "navigate", return_value=dom) as navigate:
+        with patch.object(self.obscura, "submit_search", return_value=dom) as submit:
             self.brave.search("private query", {"pageno": 1, "time_range": None})
-        navigate.assert_called_once()
-        engine, target, guard = navigate.call_args.args
+        submit.assert_called_once()
+        engine, query, fixed_fields, guard = submit.call_args.args
         self.assertEqual(engine, "brave2")
-        self.assertIn("q=private+query", target)
+        self.assertEqual(query, "private query")
+        self.assertEqual(fixed_fields, ())
         self.assertIsNone(guard)
 
     def test_bing_visible_one_last_step_is_typed_captcha(self):
@@ -147,12 +148,12 @@ class SearxngObscuraEngineTests(unittest.TestCase):
           </a></h2><p>Microsoft result.</p></li>
         </ol></body></html>
         """
-        with patch.object(self.obscura, "navigate", return_value=result) as navigate:
+        with patch.object(self.obscura, "submit_search", return_value=result) as submit:
             self.bing.search("Microsoft", {"pageno": 1, "safesearch": 2})
-        target = navigate.call_args.args[1]
-        self.assertIn("adlt=off", target)
-        self.assertNotIn("adlt=strict", target)
-        self.assertNotIn("adlt=moderate", target)
+        self.assertEqual(
+            submit.call_args.args[2],
+            (("adlt", "off"), ("setlang", "en")),
+        )
 
     def test_bing_rejects_structurally_valid_unrelated_results(self):
         unrelated = """
@@ -259,7 +260,7 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         """
         self.assertEqual(self.duckduckgo._parse_html(no_results), [])
 
-        with patch.object(self.obscura, "navigate", return_value=no_results) as navigate:
+        with patch.object(self.obscura, "submit_search", return_value=no_results) as submit:
             self.duckduckgo.search(
                 "private query",
                 {
@@ -267,13 +268,11 @@ class SearxngObscuraEngineTests(unittest.TestCase):
                     self.obscura.PRE_NAVIGATION_GUARD_PARAM: None,
                 },
             )
-        navigate.assert_called_once()
-        engine, target, guard = navigate.call_args.args
+        submit.assert_called_once()
+        engine, query, fixed_fields, guard = submit.call_args.args
         self.assertEqual(engine, "duckduckgo2")
-        self.assertEqual(
-            target,
-            "https://noai.duckduckgo.com/?q=private+query&ia=web",
-        )
+        self.assertEqual(query, "private query")
+        self.assertEqual(fixed_fields, (("ia", "web"),))
         self.assertIsNone(guard)
         self.assertFalse(self.duckduckgo.paging)
 
@@ -361,7 +360,8 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         for path in sorted((ROOT / "searxng/engines").glob("*2.py")):
             source = path.read_text()
             self.assertIn('engine_type = "offline"', source, path.name)
-            self.assertIn("_obscura.navigate(", source, path.name)
+            self.assertIn("_obscura.submit_search(", source, path.name)
+            self.assertNotIn("urlencode(", source, path.name)
             self.assertNotIn("searx.network", source, path.name)
 
 

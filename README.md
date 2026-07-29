@@ -4,9 +4,9 @@ This stack gets you a private deep research agent with code sub-agents and RAG d
 
 The stack is built around [Onyx](https://github.com/onyx-dot-app/onyx) using [teep](https://github.com/13rac1/teep) for private verified LLM inference.
 
-Search traffic is rendered through [Obscura Browser](https://github.com/h4ckf0r0day/obscura) via customized [SearXNG](https://github.com/searxng/searxng) engines which round-robin to minimize search load and associated captchas.
+Search traffic starts at provider homepages and submits their search forms through [Obscura Browser](https://github.com/h4ckf0r0day/obscura) via customized [SearXNG](https://github.com/searxng/searxng) engines which round-robin to minimize search load and associated captchas.
 
-Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Fingerprints are stable in the default web crawler, but are varied per-navigation in Obscura. Cookies are cleared between every navigation. No other browser state or browser-based tracking information is preserved.
+Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Direct `open_url` browser state remains request-scoped. Each SearXNG provider retains its own isolated browser session and target for up to one idle hour so cookies, the selected browser profile, and its target fingerprint remain stable within that provider session.
 
 Users can optionally enable [Tor](https://www.torproject.org/) for the Agent's internet access. Tor onion service access is supported in the Tor egress mode. Alternatively, [Mysterium VPN](https://github.com/mysteriumnetwork/node) can be used for this purpose, or an upstream proxy, or both. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route to prevent host/LAN access, proxy bypass, and DNS leaks.
 
@@ -56,7 +56,7 @@ The Docker Compose files in this stack relies on the following components:
 
 5. [Mysterium](https://github.com/mysteriumnetwork/node) is an optional WireGuard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. It is disabled by default. Enabling it can reduce captchas and rate limiting by search engines and websites through residential exit addresses. Mysterium server-side code is open source and contains no centralized data retention. No comparable Zero Data Retention options are available to end-users to reduce captcha and ban frequency. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
-6. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides all custom search engines, and optionally the built-in Onyx Web Crawler, with one headless-browser navigation per target. It supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy that ensures public internet access.
+6. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides all custom search engines, and optionally the built-in Onyx Web Crawler. Search uses one homepage navigation followed by that page's native form submission; `open_url` retains its single-navigation contract. Obscura supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy that ensures public internet access.
 
 7. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. It is patched to issue queries in round-robin fashion to Google, Brave, DuckDuckGo No-AI, Startpage, and Bing, accessed through Obscura Browser. If an attempt produces no usable result, SearXNG may continue sequentially with a different provider; it never repeats the same provider within that search. Providers are suspended after visible anti-bot failures or rate-limit responses.
 
@@ -229,10 +229,13 @@ Select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Pa
 The stock Onyx Web Crawler appears to be blocked less often than Obscura v0.1.10 by websites, but you can set `ONYX_AGENT_USE_OBSCURA_BROWSER=true` to cause the Onyx Web Crawler to use the Obscura Browser instead of Onyx's internal fetch + Chromium Playwrite fallback.
 
 SearXNG always uses Obscura. Each search provider keeps its own browser session
-for up to one hour after its last query, preserving provider cookies and
-connection continuity without sharing state with another provider.
+and target for up to one hour after its last query, preserving provider cookies,
+profile/fingerprint state, and connection continuity without sharing state with
+another provider. `SEARXNG_TIMED_TYPING_PROVIDERS` can opt selected providers
+into experimental timed key entry; it adds latency and can disclose successive
+query prefixes through provider autocomplete.
 
-In either case, Docker Compose network-namespace routing restricts egress to the selected final hop (Tor exit, VPN, or proxy). This is the case for all search traffic as well. For the request flow, one-navigation contract, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
+In either case, Docker Compose network-namespace routing restricts egress to the selected final hop (Tor exit, VPN, or proxy). This is the case for all search traffic as well. For the request flows, distinct browser navigation contracts, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
 
 Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Search, is supported. Connections to these services use the selected Tor/VPN/proxy route, but these external providers perform their accesses from their own IP address space. None of these providers offer ZDR policies to consumer end users, so your API key and account on these services will be associated with your usage activity, and this data will be stored, trained on, and/or sold by these providers. A nice rant about this situation can be found at the [end of this README](#the-anti-bot-landscape-is-also-anti-privacy).
 
@@ -731,13 +734,14 @@ default, the stack uses no VPN, no Tor, and no proxy. The stack's VPN, Tor, and
 proxy settings must be configured in `.env.wrapper`.
 
 With respect to web browser privacy, Obscura uses a stable browser
-vendor/version profile with some per-navigation fingerprint variation, while the
-stack's default Onyx Web Crawler uses a fixed Chromium MacOS browser
-configuration profile. `open_url()` transports remain request-scoped and do not
-preserve browser state between calls. SearXNG is the narrow exception: it
-retains one native browser session per search provider for up to one hour after
-the last query, without sharing that state with other providers or browser
-paths.
+vendor/version profile. The wrapper keeps its seed-derived JavaScript
+fingerprint stable for the lifetime of each retained search-provider target,
+while the stack's default Onyx Web Crawler uses a fixed Chromium MacOS browser
+configuration profile. `open_url()` transports remain request-scoped and do
+not preserve browser state between calls. SearXNG is the narrow exception: it
+retains one native browser connection and target per search provider for up to
+one hour after the last query, without sharing that state with other providers
+or browser paths.
 
 ### The Anti-Bot Landscape is also Anti-Privacy
 

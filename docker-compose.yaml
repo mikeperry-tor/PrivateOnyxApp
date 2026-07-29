@@ -89,14 +89,15 @@ services:
       # providers such as bing2 are selected only when normal providers are
       # already suspended or unavailable.
       SEARXNG_ROUND_ROBIN: "${SEARXNG_ROUND_ROBIN:-true}"
+      SEARXNG_TIMED_TYPING_PROVIDERS: "${SEARXNG_TIMED_TYPING_PROVIDERS:-none}"
       SEARXNG_OBSCURA_CDP_URL: "ws://obscura:9222/devtools/browser"
       OBSCURA_BROWSER_WAIT_UNTIL_SEARCH: "${OBSCURA_BROWSER_WAIT_UNTIL_SEARCH:-networkidle2}"
       EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
       GRANIAN_WORKERS: "1"
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/usr/local/searxng/wrapper-patches:/usr/local/lib:${PYTHONPATH:-}"
-      # The shared client issues the configured lifecycle wait directly in the
-      # one Page.navigate command used for each provider request.
+      # The shared client applies this lifecycle wait to both the provider
+      # homepage and the submitted result document.
     networks: [searxng-api, obscura-control]
     volumes: !override
       - ./searxng/core-config/:/etc/searxng/:Z

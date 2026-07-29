@@ -66,13 +66,15 @@ gateway prevents unrelated Onyx backend peers from gaining CDP reachability,
 but it is not an authorization protocol between the two intended callers.
 
 Each direct `open_url` request uses and closes a fresh connection and target.
-SearXNG partitions one lazy connection per exact provider, creates and closes a
-fresh target for every query, and closes the connection after one hour idle.
-Provider connections retain their native cookie jar and HTTP client only
-within that provider boundary. There is no cookie-clear race to claim as an
-isolation mechanism. A cleanup failure discards the affected connection and
-remains an availability/resource event, not a safe retry signal. Clients do
-not reconnect or navigate a second time within an attempt.
+SearXNG partitions one lazy connection and target per exact provider, reuses
+both across clean homepage-first search attempts, and closes the target and
+then the connection after one hour idle. Provider generations retain their
+native cookie jar, stable target fingerprint seed, selected profile, and
+target-owned stealth HTTP client only within that provider boundary. There is
+no cookie-clear race to claim as an isolation mechanism. A cleanup or
+protocol ambiguity discards the affected generation and remains an
+availability/resource event, not a safe retry signal. Clients do not
+reconnect or replay an in-flight attempt.
 
 ## Destination validation
 

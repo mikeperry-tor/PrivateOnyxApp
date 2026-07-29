@@ -9,6 +9,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 CLIENT_PATH = ROOT / "browser/obscura_client"
@@ -218,6 +219,105 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             self.assertTrue(self.module._PROVIDERS["brave2"].active)
         self.assertFalse(self.module._PROVIDERS["brave2"].active)
 
+    def test_timed_provider_setting_parser_is_strict(self):
+        names = frozenset(self.module.PROVIDER_NAMES)
+        self.assertEqual(self.module._parse_timed_typing_providers("none"), frozenset())
+        self.assertEqual(self.module._parse_timed_typing_providers("all"), names)
+        for name in names:
+            self.assertEqual(
+                self.module._parse_timed_typing_providers(name),
+                frozenset({name}),
+            )
+        self.assertEqual(
+            self.module._parse_timed_typing_providers("google2,bing2"),
+            frozenset({"google2", "bing2"}),
+        )
+        for invalid in (
+            "",
+            " google2",
+            "google2 ",
+            "google2,,bing2",
+            "google2,google2",
+            "unknown",
+            "all,google2",
+            "none,bing2",
+            "GOOGLE2",
+            "google2,",
+        ):
+            with self.subTest(value=invalid):
+                with self.assertRaises(ValueError):
+                    self.module._parse_timed_typing_providers(invalid)
+
+    def test_interaction_registry_matches_declared_provider_forms(self):
+        expected = {
+            "google2": (
+                "https://www.google.com/",
+                'textarea[name="q"]',
+                "q",
+                "/search",
+                "get",
+                {"hl", "udm", "start", "tbs"},
+            ),
+            "brave2": (
+                "https://search.brave.com/",
+                'textarea[name="q"]',
+                "q",
+                "/search",
+                "get",
+                {"tf", "offset"},
+            ),
+            "duckduckgo2": (
+                "https://noai.duckduckgo.com/",
+                'input[name="q"]:not([type="hidden"])',
+                "q",
+                "/",
+                "get",
+                {"ia"},
+            ),
+            "startpage2": (
+                "https://www.startpage.com/",
+                "input#q",
+                "query",
+                "/sp/search",
+                "post",
+                {"cat", "page"},
+            ),
+            "bing2": (
+                "https://www.bing.com/",
+                'textarea[name="q"]',
+                "q",
+                "/search",
+                "get",
+                {"adlt", "setlang", "first"},
+            ),
+        }
+        self.assertEqual(set(self.module.INTERACTIONS), set(expected))
+        for name, values in expected.items():
+            spec = self.module.INTERACTIONS[name]
+            self.assertEqual(
+                (
+                    spec.homepage_url,
+                    spec.query_selector,
+                    spec.query_field_name,
+                    spec.form_action_path,
+                    spec.form_method,
+                    set(spec.allowed_fixed_field_names),
+                ),
+                values,
+            )
+
+    def test_timed_provider_setting_is_parsed_at_import(self):
+        with patch.dict(
+            "os.environ",
+            {"SEARXNG_TIMED_TYPING_PROVIDERS": "google2,bing2"},
+        ):
+            module = _load_module()
+        self.addCleanup(module._PROVIDER_BROWSER_LOOP.stop)
+        self.assertEqual(
+            module.TIMED_TYPING_PROVIDERS,
+            frozenset({"google2", "bing2"}),
+        )
+
     def test_wrong_token_cannot_consume_reservation(self):
         token = self.module.reserve_provider("google2")
         self.assertIsNotNone(token)
@@ -411,11 +511,11 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             "brave2",
             idle_seconds=0.03,
             session_factory=Session,
-            fetch_async=fake_fetch,
+            submit_async=fake_fetch,
         )
         try:
-            first = browser.fetch_sync("https://search.brave.com/search?q=one")
-            second = browser.fetch_sync("https://search.brave.com/search?q=two")
+            first = browser.submit_sync("one")
+            second = browser.submit_sync("two")
             self.assertIs(first, second)
             self.assertEqual(len(created), 1)
 
@@ -424,7 +524,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
                 time.sleep(0.005)
             self.assertTrue(first.closed)
 
-            third = browser.fetch_sync("https://search.brave.com/search?q=three")
+            third = browser.submit_sync("three")
             self.assertIsNot(third, first)
             self.assertEqual(len(created), 2)
         finally:
@@ -456,17 +556,17 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         google = self.module._ProviderBrowserSession(
             "google2",
             session_factory=Session,
-            fetch_async=fake_fetch,
+            submit_async=fake_fetch,
         )
         brave = self.module._ProviderBrowserSession(
             "brave2",
             session_factory=Session,
-            fetch_async=fake_fetch,
+            submit_async=fake_fetch,
         )
         try:
             callers = [
                 threading.Thread(
-                    target=browser.fetch_sync,
+                    target=browser.submit_sync,
                     args=(url,),
                 )
                 for browser, url in (
@@ -611,16 +711,16 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             "google2",
             idle_seconds=0.01,
             session_factory=Session,
-            fetch_async=fake_fetch,
+            submit_async=fake_fetch,
         )
         try:
-            browser.fetch_sync("https://www.google.com/search?q=one")
+            browser.submit_sync("one")
             self.assertTrue(close_started.wait(timeout=1.0))
 
             second_done = threading.Event()
 
             def second_fetch():
-                browser.fetch_sync("https://www.google.com/search?q=two")
+                browser.submit_sync("two")
                 second_done.set()
 
             caller = threading.Thread(target=second_fetch)
@@ -651,7 +751,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         browser = self.module._ProviderBrowserSession(
             "duckduckgo2",
             session_factory=Session,
-            fetch_async=fake_fetch,
+            submit_async=fake_fetch,
         )
         try:
             loop = self.module._PROVIDER_BROWSER_LOOP.ensure_started()
@@ -663,7 +763,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
                 browser._idle_handle = loop.call_later(60.0, lambda: None)
 
             asyncio.run_coroutine_threadsafe(seed_overdue_session(), loop).result()
-            browser.fetch_sync("https://html.duckduckgo.com/html/?q=next")
+            browser.submit_sync("next")
             self.assertEqual(
                 events,
                 ["created", "closed", "created", "fetch"],

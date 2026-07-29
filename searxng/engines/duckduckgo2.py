@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""DuckDuckGo No-AI engine backed by one direct Obscura navigation.
+"""DuckDuckGo No-AI engine backed by homepage form submission in Obscura.
 
 The stock ``duckduckgo`` engine hits captchas on most exit IPs.  This stub uses
 DuckDuckGo's JavaScript-rendered No-AI endpoint (``noai.duckduckgo.com``)
@@ -9,7 +9,7 @@ organic-result DOM.
 """
 
 import typing as t
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from lxml import html
 
@@ -73,13 +73,12 @@ redirect_hosts = frozenset(
 
 
 def search(query: str, params: "RequestParams"):
-    """Build the DuckDuckGo No-AI web URL and navigate it once."""
-    query_args: t.Dict[str, str] = {"q": query, "ia": "web"}
-    target_url = "https://noai.duckduckgo.com/?" + urlencode(query_args)
+    """Submit the DuckDuckGo No-AI homepage form."""
     return _parse_html(
-        _obscura.navigate(
+        _obscura.submit_search(
             "duckduckgo2",
-            target_url,
+            query,
+            (("ia", "web"),),
             params.get(_obscura.PRE_NAVIGATION_GUARD_PARAM),
         )
     )

@@ -1,0 +1,208 @@
+diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
+index 2e169fd..f47461a 100644
+--- a/crates/obscura-browser/src/page.rs
++++ b/crates/obscura-browser/src/page.rs
+@@ -280,6 +280,20 @@ impl Page {
+             .fetch_with_callbacks(url, Some(&self.callbacks))
+             .await
+     }
++
++    async fn do_post_form(
++        &self,
++        url: &Url,
++        body: &str,
++    ) -> Result<Response, ObscuraNetError> {
++        #[cfg(feature = "stealth")]
++        if let Some(ref stealth) = self.stealth_client {
++            return stealth.post_form(url, body).await;
++        }
++        self.http_client
++            .post_form_with_callbacks(url, body, Some(&self.callbacks))
++            .await
++    }
+     fn init_js(&mut self) {
+         // Drop any existing runtime so the JS realm starts clean on
+         // every navigation. The old code reused the V8 isolate and
+@@ -934,7 +948,7 @@ impl Page {
+                     );
+                     break;
+                 }
+-                tracing::info!("JS-triggered navigation chain: {} {} -> {}", current_method, current_url, next_url);
++                tracing::info!("JS-triggered navigation chain: method={}", current_method);
+                 current_url = next_url;
+                 current_method = next_method;
+                 current_body = next_body;
+@@ -1027,9 +1041,7 @@ impl Page {
+             headers.insert("content-type".to_string(), content_type);
+             Ok(obscura_net::Response { url: url.clone(), status: 200, headers, body: body_bytes, redirected_from: Vec::new() })
+         } else if method == "POST" {
+-            self.http_client
+-                .post_form_with_callbacks(&url, body, Some(&self.callbacks))
+-                .await
++            self.do_post_form(&url, body).await
+         } else {
+             self.do_fetch(&url).await
+         }.map_err(|e| {
+@@ -1043,7 +1055,7 @@ impl Page {
+         let main_is_binary = !is_text_like_content_type(response.content_type());
+         self.record_network_event_with_body(
+             url.as_str(),
+-            "GET",
++            method,
+             "Document",
+             response.status,
+             &response.headers,
+diff --git a/crates/obscura-cdp/src/server.rs b/crates/obscura-cdp/src/server.rs
+index 9570328..421c1cd 100644
+--- a/crates/obscura-cdp/src/server.rs
++++ b/crates/obscura-cdp/src/server.rs
+@@ -1176,7 +1176,7 @@ async fn process_cdp_request(
+     }
+ 
+     if let Some((nav_url, nav_method, nav_body)) = check_pending_navigation(ctx, &req.session_id) {
+-        tracing::info!("JS-triggered nav: {} {} (body: {} bytes)", nav_method, nav_url, nav_body.len());
++        tracing::info!("JS-triggered nav: method={} body_bytes={}", nav_method, nav_body.len());
+         let nav_req = CdpRequest {
+             id: 0,
+             method: "Page.navigate".to_string(),
+diff --git a/crates/obscura-cli/src/main.rs b/crates/obscura-cli/src/main.rs
+index 5b8d63f..a7a95f3 100644
+--- a/crates/obscura-cli/src/main.rs
++++ b/crates/obscura-cli/src/main.rs
+@@ -353,9 +353,12 @@ async fn main() -> anyhow::Result<()> {
+             }
+             if stealth {
+                 #[cfg(feature = "stealth")]
+-                tracing::info!(
+-                    "Stealth mode enabled (TLS fingerprint impersonation + tracker blocking)"
+-                );
++                {
++                    tracing::info!(
++                        "Stealth mode enabled (TLS fingerprint impersonation + tracker blocking)"
++                    );
++                    tracing::info!("Private Onyx patchset: search-submission-v1");
++                }
+                 #[cfg(not(feature = "stealth"))]
+                 tracing::info!("Stealth mode enabled (tracker blocking)");
+             }
+diff --git a/crates/obscura-net/src/wreq_client.rs b/crates/obscura-net/src/wreq_client.rs
+index bf56a9a..06d2837 100644
+--- a/crates/obscura-net/src/wreq_client.rs
++++ b/crates/obscura-net/src/wreq_client.rs
+@@ -32,6 +32,19 @@ pub const STEALTH_UA_PLATFORM: &str = "Windows";
+ #[cfg(feature = "stealth")]
+ pub const STEALTH_UA_PLATFORM_VERSION: &str = "15.0.0";
+ 
++#[cfg(feature = "stealth")]
++fn redirected_navigation_method(
++    status: u16,
++    method: &str,
++    body: &str,
++) -> (String, String) {
++    if matches!(status, 301 | 302 | 303) {
++        ("GET".to_string(), String::new())
++    } else {
++        (method.to_string(), body.to_string())
++    }
++}
++
+ #[cfg(feature = "stealth")]
+ pub struct StealthHttpClient {
+     client: wreq::Client,
+@@ -74,7 +87,22 @@ impl StealthHttpClient {
+     }
+ 
+     pub async fn fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
++        self.navigate(url, "GET", "").await
++    }
++
++    pub async fn post_form(&self, url: &Url, body: &str) -> Result<Response, ObscuraNetError> {
++        self.navigate(url, "POST", body).await
++    }
++
++    async fn navigate(
++        &self,
++        url: &Url,
++        method: &str,
++        body: &str,
++    ) -> Result<Response, ObscuraNetError> {
+         let mut current_url = url.clone();
++        let mut current_method = method.to_string();
++        let mut current_body = body.to_string();
+ 
+         if let Some(host) = current_url.host_str() {
+             if crate::blocklist::is_blocked(host) {
+@@ -92,16 +120,24 @@ impl StealthHttpClient {
+         let mut redirects = Vec::new();
+ 
+         for _ in 0..20 {
+-            let mut req = self.client.get(current_url.as_str());
++            let request_method = current_method.parse::<wreq::Method>().map_err(|e| {
++                ObscuraNetError::Network(format!("invalid navigation method: {}", e))
++            })?;
++            let mut req = self.client.request(request_method, current_url.as_str());
+ 
+             let cookie_header = self.cookie_jar.get_cookie_header(&current_url);
+             if !cookie_header.is_empty() {
+-                req = req.header("Cookie", &cookie_header);
++                req = req.header("cookie", &cookie_header);
+             }
+ 
+             for (k, v) in self.extra_headers.read().await.iter() {
+                 req = req.header(k.as_str(), v.as_str());
+             }
++            if current_method == "POST" {
++                req = req
++                    .header("content-type", "application/x-www-form-urlencoded")
++                    .body(current_body.clone());
++            }
+ 
+             self.in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+             let resp = req.send().await.map_err(|e| {
+@@ -134,6 +170,11 @@ impl StealthHttpClient {
+                     })?;
+                     redirects.push(current_url.clone());
+                     current_url = next_url;
++                    (current_method, current_body) = redirected_navigation_method(
++                        status.as_u16(),
++                        &current_method,
++                        &current_body,
++                    );
+                     continue;
+                 }
+             }
+@@ -245,3 +286,34 @@ impl StealthHttpClient {
+         self.active_requests() == 0
+     }
+ }
++
++#[cfg(all(test, feature = "stealth"))]
++mod private_onyx_patch_tests {
++    use super::{redirected_navigation_method, StealthHttpClient};
++    use crate::cookies::CookieJar;
++    use std::sync::Arc;
++
++    #[test]
++    fn private_onyx_stealth_form_redirect_semantics() {
++        for status in [301, 302, 303] {
++            assert_eq!(
++                redirected_navigation_method(status, "POST", "q=private"),
++                ("GET".to_string(), String::new())
++            );
++        }
++        for status in [307, 308] {
++            assert_eq!(
++                redirected_navigation_method(status, "POST", "q=private"),
++                ("POST".to_string(), "q=private".to_string())
++            );
++        }
++    }
++
++    #[test]
++    fn private_onyx_stealth_get_and_post_share_client_and_cookie_jar() {
++        let jar = Arc::new(CookieJar::new());
++        let client = StealthHttpClient::new(jar.clone());
++        assert!(Arc::ptr_eq(&client.cookie_jar, &jar));
++        assert_eq!(client.active_requests(), 0);
++    }
++}

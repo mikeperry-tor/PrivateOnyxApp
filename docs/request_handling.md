@@ -116,10 +116,11 @@ not published on the host or attached to an Onyx data/backend network.
 Obscura v0.1.11 gives every WebSocket connection its own browser context, HTTP
 client, cookie jar, targets, headers, User-Agent state, OS thread, and V8
 isolates. Direct `open_url` uses one fresh connection and target per navigation.
-SearXNG instead gives each of its five providers one lazy connection and creates
-a fresh target for every query on that provider connection. It retains the
-native cookie jar and context-owned HTTP client until the connection has been
-idle for one hour. Neither path issues `Network.clearBrowserCookies`.
+SearXNG instead gives each of its five providers one lazy connection and one
+target retained together until the provider has been idle for one hour. Later
+queries reuse that target, its native cookie jar, selected profile,
+target-owned stealth HTTP client/connection pool, and target-scoped fingerprint
+seed. Neither path issues `Network.clearBrowserCookies`.
 
 The single Obscura process accepts at most 15 live WebSockets: ten direct
 `open_url` attempts plus one retained connection for each of the five search
@@ -142,11 +143,12 @@ The client still uses flattened CDP messages over the pinned WebSocket
 transport. Attaching Playwright 1.58's public `new_cdp_session(page)` to an
 Obscura-created target reuses the already attached session identifier and
 crashes the Playwright driver as a duplicate target. The audited raw transport
-avoids that incompatible second attachment while preserving the exact
-one-`Page.navigate` contract. The derived SearXNG image pins the audited
+avoids that incompatible second attachment. Direct `open_url` preserves the
+exact one-`Page.navigate` contract; SearXNG uses the separate two-document
+transaction below. The derived SearXNG image pins the audited
 Playwright package for compatibility checks and contains no browser binary.
 
-## Obscura one-navigation contract
+## Obscura `open_url` one-navigation contract
 
 For each accepted target the shared client:
 
@@ -162,17 +164,13 @@ For each accepted target the shared client:
    final frame URL, and challenge state;
 7. obtains rendered DOM and, when Obscura retained it, that same navigation's
    response body;
-8. closes every IO stream and target on success or failure; a default caller
-   also closes its WebSocket, while an explicit SearXNG provider owner retains
-   a clean connection after successful target cleanup.
+8. closes every IO stream, target, and request-owned WebSocket on success or
+   failure.
 
 The client does not issue `HEAD`, `GET`, range, MIME-probe, CLI, normal
 SearXNG HTTP-client, or retry requests. It does not reconnect after a CDP
 failure. Redirects and browser subresources are part of the single browser
-navigation; they are not wrapper refetches. A reusable provider connection
-disables WebSocket keepalive pings, clears completed-target CDP events, and is
-discarded after a client failure, body-stream cleanup failure, target-close
-failure, or negative target-close acknowledgement.
+navigation; they are not wrapper refetches.
 
 Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `networkidle2`) so
 JavaScript result payloads have time to hydrate after the page load event.
@@ -418,20 +416,31 @@ stock engines disabled: unused engines are never imported or initialized, so
 they cannot perform startup DNS/network work or retain engine-specific state.
 
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are custom
-offline engines. Each builds one provider URL, performs one direct Obscura
-navigation, verifies an exact terminal-host allowlist, and parses the rendered
-DOM. The shared client owns bounded generic HTTP and challenge classification;
-provider parsers retain only provider-specific DOM checks. Generic detection
+offline engines. Each begins at its declared provider homepage, validates the
+completed homepage document, populates that page's declared query control and
+fixed fields, calls the owning form's native `requestSubmit()`, validates a
+distinct completed result document, and passes only the bounded result DOM to
+its parser. There is no constructed result URL, direct-navigation compatibility
+mode, same-provider retry, or fallback. The shared client owns form/origin
+policy plus bounded generic HTTP and challenge classification; provider parsers
+retain only provider-specific DOM checks. Generic detection
 ignores script, style, template, and noscript text and does not classify an
 embedded CAPTCHA iframe by itself, avoiding the prior Brave false positive.
 Explicit provider no-results selectors return no results; missing expected
 structure is an unresponsive parser mismatch. The engines cannot call
 SearXNG's normal HTTP transport, retry internally, or choose another provider.
 
+The provider forms receive these explicit engine-owned values in addition to
+their own successful controls: Google receives `hl=en`, `udm=14`, and optional
+`start`/`tbs`; Brave receives optional `tf`/`offset`; DuckDuckGo receives
+`ia=web`; Startpage receives `cat=web` and optional `page`; and Bing receives
+`adlt=off`, `setlang=en`, and optional `first`. Existing provider-generated
+hidden state remains in the form. Unknown, duplicate, or conflicting explicit
+fields fail visibly.
+
 Provider result URLs retain their complete query strings and fragments.
-`duckduckgo2` navigates
-`https://noai.duckduckgo.com/?q=...&ia=web`, admits only that exact terminal
-host, waits for the JavaScript `d.js` result payload, and parses organic
+`duckduckgo2` starts at `https://noai.duckduckgo.com/`, submits its homepage
+form, waits for the JavaScript `d.js` result payload, and parses organic
 `data-layout` / `data-testid` rows rather than generated class names.
 DuckDuckGo's `/l/` `uddg` result wrapper is unwrapped only on a relative link
 or a recognized DuckDuckGo host and is decoded exactly once by query parsing;
@@ -478,8 +487,9 @@ condition notification; cooldown-only waits use the nearest exact monotonic
 deadline, so there is no polling sleep or periodic scheduler wakeup.
 
 The SearXNG offline processor retains the provider lease across the complete
-engine call: CDP setup and navigation, target cleanup, provider-specific DOM
-parsing, blocking-response classification, and suspension recording. This
+engine call: CDP setup, homepage navigation, text entry, form submission,
+result navigation, local cleanup, provider-specific DOM parsing,
+blocking-response classification, and suspension recording. This
 ordering is required because concurrent search requests can otherwise reserve
 a provider in the interval after CDP cleanup releases it but before SearXNG
 records a CAPTCHA, access denial, or 429 suspension. Provider admission,
@@ -488,17 +498,49 @@ shared CDP client accepts only a caller-supplied pre-navigation guard and owns
 no provider names, reservations, cooldowns, suspension state, or rotation.
 
 One lazy process-local event-loop thread owns all five independent provider
-connections. Each exact provider retains at most one WebSocket, and its existing
+connection/target generations. Each exact provider retains at most one
+WebSocket and one target, and its existing
 lease is the sole same-provider serialization authority. Different providers
 can navigate concurrently on the shared loop, so concurrent agent search calls
 do not become process-global serialization. After each completed attempt the
 provider owner arms one monotonic one-hour idle deadline. Another query before
-that deadline reuses the native cookie jar and context-owned HTTP client and
-moves the idle deadline; no query by the deadline physically closes the
-connection. A later query creates a fresh connection. The owner checks an
+that deadline reuses the same target, native cookie jar, selected browser
+profile, target-owned stealth HTTP client and pool, and target-scoped
+fingerprint bundle, then moves the idle deadline. A new main-document
+navigation creates a fresh JavaScript realm, but the source-built Obscura patch
+injects the same unpredictable target seed into each realm. Native form POST
+uses that same target stealth client as GET, including its cookies, proxy,
+TLS-emulation profile, redirect handling, and pool. Natural upstream/library
+idle socket expiry is allowed; the retained client may open a replacement
+socket without rotating browser state.
+
+No query by the deadline physically closes the target followed by its
+connection. A later query creates a fresh generation. The owner checks an
 elapsed deadline synchronously, so delayed timer scheduling cannot revive an
 expired session. This is a sliding idle lifetime, not an absolute maximum
-session age.
+session age. Transport, protocol, submission acknowledgement, event-accounting,
+DOM, or cleanup ambiguity discards the generation earlier and never replays the
+failed query.
+
+Each search attempt has exactly two main-document stages. Redirects and
+subresources remain within their stage. Homepage and result independently
+receive HTTPS/default-port/exact-host, lifecycle, status, challenge, and
+20 MiB rendered-DOM validation. The homepage DOM is released before result
+extraction and never reaches a provider parser. Form policy requires one
+visible editable main-frame control, its owning self-targeted URL-encoded form,
+the declared action path/method, and an allowed result origin. Popups, child
+frames, same-document/XHR-only results, and a missing distinct result loader
+fail visibly. A missing or empty form `enctype` is normalized only to HTML's
+standard `application/x-www-form-urlencoded` default; any explicit different
+encoding remains a policy failure.
+
+Instant query entry is the default. It uses the control prototype's native
+value setter followed by one bubbling `input` and `change` event.
+`SEARXNG_TIMED_TYPING_PROVIDERS` accepts exact provider names, `none`, or `all`
+and selects timed CDP key events without changing any navigation or submission
+path. Timed entry adds 45–135 ms after each code point except the last and can
+disclose successive query prefixes to that provider through autocomplete. It
+is an experimental request-shape option, not an anti-bot guarantee.
 
 The wrapper owns the blocking suspension values rather than inheriting them
 from SearXNG: CAPTCHA/verification, access denial, and HTTP 429 each suspend a
@@ -534,8 +576,11 @@ replayed against the blocked provider.
 Every selected provider attempt receives SearXNG's configured 60-second engine
 window. Provider-capacity waiting occurs before that attempt clock starts, and
 rotation starts a fresh 60-second window for the next provider. The browser
-client independently bounds one started attempt to 50 seconds plus cleanup, and
-the provider lease remains held until the engine has recorded the completed
+client independently bounds setup, homepage navigation, entry delays,
+submission, result navigation, and both DOM reads to one shared 50-second
+absolute attempt deadline plus separately bounded cleanup; it does not grant
+each stage a fresh deadline. The setup portion retains its 45-second absolute
+ceiling. The provider lease remains held until the engine has recorded the completed
 outcome even if SearXNG has stopped waiting for its engine thread.
 
 Onyx merges multiple `web_search` tool calls in one tool batch into one call,
@@ -567,13 +612,15 @@ formatting without dropping query or fragment. The preserved URL is used for
 the LLM-facing link, citation source, crawl matching, and document identity.
 
 The three-second provider cooldown begins in the pre-navigation guard
-immediately before the sole `Page.navigate`. A WebSocket refusal, connection
+immediately before homepage `Page.navigate`, the first provider-origin request.
+A WebSocket refusal, connection
 failure, target creation/attachment failure, or CDP-domain setup failure before
 that guard proves that no origin search request was sent and does not stamp the
 cooldown. There is still no automatic same-engine retry: only a later,
 independent SearXNG search may select that provider and open a replacement
-connection. Once the guard has run, cooldown applies even if `Page.navigate`
-fails ambiguously, and neither the client nor scheduler repeats that provider.
+generation. Once the guard has run, cooldown applies even if either document
+stage or submission fails ambiguously, and neither the client nor scheduler
+repeats that provider.
 
 The Bing engine does not advertise SearXNG SafeSearch support and always sends
 the explicit provider parameter `adlt=off`. It therefore has no engine-specific
@@ -614,14 +661,23 @@ stage, typed category, status class, safe host where needed, and bounded sizes.
 Each shared-client attempt has a random opaque correlation ID. Start, completed
 setup, terminal result, typed failure, and cleanup records include that ID plus
 elapsed time; timeout records identify the exact setup or cleanup stage without
-logging the target URL.
-The wrapper-selected image retains the upstream runtime but replaces the lean
-server binaries with the matching official, SHA-256-verified `-stealth`
-release binaries for both supported architectures. This is required for
-wreq/BoringSSL TLS fingerprint impersonation; the upstream tagged Docker image
-enables tracker blocking under `--stealth` but is built without that feature.
-Obscura does not offer equivalent end-to-end redaction and may log full URLs.
-Treat its logs as private browsing data.
+logging the target URL. SearXNG keeps these sanitized information-level records
+visible under its otherwise warning-oriented default logger and adds only the
+engine name, provider-local query sequence, and whether the retained browser
+session was reused.
+The wrapper-selected image retains the digest-pinned upstream runtime but
+builds the exact SHA-256-verified upstream source revision with the `stealth`
+feature and the two strict wrapper patch-series entries, then copies only the
+resulting server binaries into that runtime. This is required for
+wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
+fingerprint seed plus stealth-native form POST contracts; the upstream tagged
+Docker image enables tracker blocking under `--stealth` but is built without
+the full feature.
+The patch removes the submitted URL and body from Obscura's JS-triggered
+main-navigation diagnostics so search queries are not written there. Obscura
+does not offer equivalent end-to-end redaction for every upstream subresource
+diagnostic and may still log other full URLs. Treat its logs as private
+browsing data.
 
 Obscura is run as UID/GID 65534, read-only, capability-free, without browser
 data or secret mounts, `--storage-dir`, or `--allow-file-access`. The shared

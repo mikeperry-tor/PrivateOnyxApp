@@ -117,6 +117,11 @@ integration, or bridge changes.
 
 Audit these Obscura v0.1.11 areas (or their new equivalents):
 
+- exact source commit/archive digest, digest-pinned multi-architecture builder
+  and hardened runtime identities, safe archive extraction, ordered patch
+  series, and zero-fuzz `git apply --check` plus application. Rebase each patch
+  against the exact candidate source; do not carry an offset, already-applied
+  hunk, or source-shape fallback into a release build;
 - flattened Target attachment/session identifiers, target creation/closure,
   per-WebSocket context ownership, connection-thread cleanup, and the atomic
   live-connection cap;
@@ -132,11 +137,23 @@ Audit these Obscura v0.1.11 areas (or their new equivalents):
   V8 isolates without a cookie-clear command; also re-audit the v0.1.11
   full-stealth split where accepted extra-header and User-Agent CDP overrides
   update the ordinary HTTP client rather than the wreq navigation client;
-- repeated fresh-target creation and cleanup on one retained provider
-  connection, native cookie/HTTP-client continuity between those targets,
-  bounded CDP event state, disabled idle keepalive pings, one-hour idle
-  connection expiry, and disposal after ambiguous client, body-stream cleanup,
-  target-close command, or negative target-close-acknowledgement failure;
+- repeated homepage/result and later-query navigation on one retained provider
+  target/connection generation; native cookie, selected-profile,
+  target-stealth-client/pool, and target-seeded fingerprint continuity;
+  bounded CDP event state; disabled idle keepalive pings; one-hour idle
+  target-then-connection expiry; and disposal after ambiguous transport,
+  submission acknowledgement, event accounting, DOM, target-close command, or
+  negative target-close-acknowledgement failure;
+- identical target-owned stealth transport for initial GET and native form POST,
+  including cookies, proxy, TLS-emulation profile, tracker policy, connection
+  pool, and 301/302/303 versus 307/308 redirect semantics. Remove
+  `0001-stealth-native-post.patch` only when upstream provides that complete
+  contract without falling back to its ordinary context client;
+- one unpredictable nonzero target seed injected before each new JavaScript
+  realm and stable seed-derived screen/GPU/canvas/audio/hardware/device-memory
+  surfaces across homepage, result, and later-query navigation. Remove
+  `0002-target-fingerprint-seed.patch` only when upstream provides target- or
+  context-stable fingerprint state with the same provider-session lifetime;
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
@@ -160,6 +177,10 @@ oversized content, challenge/status failures, one origin navigation, body/DOM
 byte limits, ten-way direct `open_url` concurrency, simultaneous search
 capacity, repeated-target provider continuity, replacement-connection
 isolation, connection-cap refusal, complete cleanup, and no reconnect/refetch.
+For SearXNG, recheck all five homepage control/form action/method/field
+contracts against the exact selected image, prove GET and POST fixture
+submission, stable target profile/fingerprint state, and connection reuse below
+the library pool-idle deadline.
 
 ### Pinned Obscura limitations and wrapper handling
 
@@ -406,15 +427,16 @@ For every custom engine verify:
   become unresponsive records;
 - one lazy shared event-loop thread and at most one retained connection per
   exact provider; different-provider navigations remain concurrent while the
-  provider lease denies same-provider overlap; fresh target and bounded event
-  cleanup per query; native
-  cookie/HTTP-client continuity before the sliding one-hour idle deadline;
+  provider lease denies same-provider overlap; one retained target with
+  bounded two-stage event accounting per query; native cookie, profile,
+  fingerprint-seed, and target-owned stealth-client continuity before the
+  sliding one-hour idle deadline;
   physical and synchronous-on-access expiry without keepalive pings or
   timer-delay revival; expiry-boundary queries waiting for the old connection
   to close before opening a replacement; a fresh connection after expiry; and
-  no state sharing between providers or with `open_url`; body-stream cleanup
-  and target-close command/acknowledgement failures must taint the retained
-  connection even when result collection otherwise completed; exercise the
+  no state sharing between providers or with `open_url`; target-close
+  command/acknowledgement failures must taint the retained generation even
+  when result collection otherwise completed; exercise the
   real mixed-capacity composition of five retained provider connections plus
   ten simultaneous request-scoped direct `open_url` connections, then prove
   every provider cookie jar remains usable after the fresh connections close;
@@ -1011,14 +1033,16 @@ LiteLLM's local cost map, API database/thread limits, API/background
 data-network reachability, and positive aggregate internal-search cap behavior.
 
 For an Obscura-only pin change, update the tagged upstream image's
-multi-architecture manifest digest, release version, and both
-architecture-specific stealth-archive SHA-256 values in
-`stack.versions.env`; audit the official release archive names and the
-Dockerfile's lean/stealth feature selection; then run `make obscura-build`.
+multi-architecture manifest digest, release version, exact source revision,
+source-archive SHA-256, and digest-pinned Rust builder image in
+`stack.versions.env`; audit the source archive root, the Dockerfile's
+locked stealth build, and exact patch-series application; then run
+`make obscura-build`.
 Rebuild the derived SearXNG image only when its embedded shared client changed,
 then run `make check`, `make test-obscura-image`, and
 `make test-patch-images`. The image test must observe Obscura's full
-TLS-impersonation startup diagnostic, not its tracker-blocking-only diagnostic.
+TLS-impersonation startup diagnostic and the wrapper patchset startup marker,
+not its tracker-blocking-only diagnostic.
 Do not run the broad dependency-lock or unrelated component upgrade flow.
 
 Also inspect effective lite/full Compose models through the Makefile. Search

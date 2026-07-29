@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Startpage web engine backed by one direct Obscura navigation.
+"""Startpage web engine backed by homepage form submission in Obscura.
 
 Startpage proxies Google results but wraps them behind its own anti-bot layer
 (``startpage.com``).  The stock ``startpage`` engine scrapes a pre-hydration
@@ -16,7 +16,7 @@ disabled in settings.yml so SearXNG does not double-query Startpage.
 """
 
 import typing as t
-from urllib.parse import urlencode, unquote, urlparse, parse_qs
+from urllib.parse import unquote, urlparse, parse_qs
 
 from lxml import html
 
@@ -87,19 +87,17 @@ captcha_xpath = (
 
 
 def search(query: str, params: "RequestParams"):
-    """Build the Startpage search URL and navigate it once through Obscura."""
-    query_args: t.Dict[str, str] = {"query": query}
+    """Submit the Startpage homepage form through Obscura."""
+    fixed_fields: list[tuple[str, str]] = [("cat", "web")]
     # Startpage paginates via the `page` parameter (1-based).
     if params["pageno"] > 1:
-        query_args["page"] = str(params["pageno"])
-    # cat=web is the default; set it explicitly for determinism.
-    query_args["cat"] = "web"
+        fixed_fields.append(("page", str(params["pageno"])))
 
-    target_url = "https://www.startpage.com/sp/search?" + urlencode(query_args)
     return _parse_html(
-        _obscura.navigate(
+        _obscura.submit_search(
             "startpage2",
-            target_url,
+            query,
+            tuple(fixed_fields),
             params.get(_obscura.PRE_NAVIGATION_GUARD_PARAM),
         )
     )
