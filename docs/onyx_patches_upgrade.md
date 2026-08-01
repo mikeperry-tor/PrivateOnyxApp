@@ -821,6 +821,18 @@ Retest every wrapper patch summarized in
 sufficient. For each family, confirm both its strict installation boundary and
 its user-visible behavior:
 
+Treat source-rewriting runtime patches as one ordered composition, including
+when they live in different patch families. They must use the shared source-
+patch helper rather than independently recompiling `inspect.getsource()` from
+an already-patched callable: `functools.wraps` sets `__wrapped__`, which can
+make source inspection return the pristine upstream definition and silently
+discard an earlier rewrite. When multiple patches target one function, add a
+deterministic composition test and validate the final installed callable in the
+pinned image; an individual installer's source match or success diagnostic is
+not evidence that a later patch preserved its behavior. In particular, do not
+treat inspected source text as authoritative for the composition of installed
+wrappers.
+
 - **Deep Research and tool choice:** the two rewritten agent loops must match
   every exact replacement once; all accepted mixed tool calls execute, control
   tools remain single-call-only, nested placements are unique, batch overflow

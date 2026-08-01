@@ -91,6 +91,11 @@ def _saved_tool_response(tool_name, generated_images, tool_call_response):
     return TOOL_CALL_RESPONSE_CROSS_MESSAGE  # noqa: F821
 
 
+def _source_patch_composition_fixture():
+    values = ["base"]
+    return values
+
+
 def _convert_history(
     chat_history,
     files,
@@ -267,6 +272,34 @@ def _code_description_modules(
 
 
 class SharedAgentPatchContractTests(unittest.TestCase):
+    def test_source_patches_compose_on_the_same_function(self) -> None:
+        wrapper = _load_wrapper()
+        module = SimpleNamespace(
+            _source_patch_composition_fixture=_source_patch_composition_fixture
+        )
+
+        wrapper._patch_function_source(
+            module=module,
+            function_name="_source_patch_composition_fixture",
+            patch_name="first composition fixture",
+            replacements={
+                '    values = ["base"]\n': '    values = ["base", "first"]\n'
+            },
+        )
+        wrapper._patch_function_source(
+            module=module,
+            function_name="_source_patch_composition_fixture",
+            patch_name="second composition fixture",
+            replacements={
+                "    return values\n": '    values.append("second")\n    return values\n'
+            },
+        )
+
+        self.assertEqual(
+            module._source_patch_composition_fixture(),
+            ["base", "first", "second"],
+        )
+
     def test_python_package_capabilities_are_unconditional(self) -> None:
         wrapper = _load_wrapper()
         modules, PythonTool, _, tool_prompts, _, _, _ = _code_description_modules()

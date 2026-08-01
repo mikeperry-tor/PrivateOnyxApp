@@ -543,7 +543,10 @@ concurrency, placement, and compatible automatic tool choice natively.
 
 The reasoning patch family carries assistant `reasoning_content` across Onyx's
 structured-message, reconstructed-history, and LiteLLM serialization
-boundaries. Exact source checks protect every rebuilt loop and serializer. The
+boundaries. Exact source checks protect every rebuilt loop and serializer.
+Source rewrites of the same function retain and compose the previously rebuilt
+body; the pinned-image contract checks the final compiled chat loop so a later
+runtime patch cannot silently restore the upstream reasoning-stripping path. The
 native-reasoning override now additionally validates the pinned detector's
 two-argument signature and its model-map/LiteLLM fallback source before
 replacing it. The saved-tool-result patch validates both the upstream response

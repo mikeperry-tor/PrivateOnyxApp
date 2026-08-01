@@ -321,6 +321,7 @@ def _validate_web_search_concurrency_contract() -> None:
 
 
 def _validate_litellm_contract() -> None:
+    from onyx.chat import llm_loop
     from litellm.litellm_core_utils.get_model_cost_map import (
         get_model_cost_map_source_info,
     )
@@ -372,6 +373,12 @@ def _validate_litellm_contract() -> None:
     )
     assert transformed["messages"][0]["reasoning_content"] == "retained reasoning"
     assert transformed["messages"][0]["tool_calls"][0]["id"] == "call-1"
+
+    # These are separate source patches of the same live function. Check the
+    # final compiled body, not each installer's intermediate success message.
+    final_loop_names = set(llm_loop.run_llm_loop.__code__.co_names)
+    assert "_wrapper_attach_reasoning_fields" in final_loop_names
+    assert "_wrapper_append_python_guidance" in final_loop_names
 
 
 if __name__ == "__main__":

@@ -588,7 +588,13 @@ def _patch_function_source(
 ) -> None:
     function = getattr(module, function_name)
     try:
-        source = inspect.getsource(function)
+        # ``functools.wraps`` sets ``__wrapped__`` and ``inspect.getsource``
+        # follows that chain. Without retaining our generated source, a second
+        # source patch for the same function recompiles the pristine upstream
+        # body and silently discards the first patch.
+        source = getattr(function, "_wrapper_patched_source", None)
+        if not isinstance(source, str):
+            source = inspect.getsource(function)
         filename = inspect.getsourcefile(function) or f"<{patch_name}>"
     except Exception as e:  # pragma: no cover
         _warn_or_raise(f"could not inspect {patch_name}: {e}")
@@ -608,7 +614,9 @@ def _patch_function_source(
         _warn_or_raise(f"{patch_name} patch did not rebuild {function_name}")
         return
 
-    setattr(module, function_name, functools.wraps(function)(patched_function))
+    wrapped_function = functools.wraps(function)(patched_function)
+    wrapped_function._wrapper_patched_source = patched_source
+    setattr(module, function_name, wrapped_function)
     print(f"sitecustomize: patched {patch_name}", flush=True)
 
 
