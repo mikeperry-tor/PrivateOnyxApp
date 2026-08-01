@@ -1,9 +1,15 @@
-mlx-openai-server
-mlx-embeddings
-huggingface_hub
-# Compatibility pin: transformers 5.13 changed AutoTokenizer.register()
-# handling in a way that breaks mlx-lm 0.31.3's NewlineTokenizer registration.
-transformers<5.13
-# Compatibility pin: newer Typer releases trigger a sys.exit() handler
-# traceback in the local embedserv CLI path. Re-test before unpinning.
-typer==0.20.0
+# Audited as one embedding-runtime compatibility set. Upgrade these exact pins
+# together through the documented candidate-environment and live-model checks.
+mlx-openai-server==1.8.1
+# mlx-openai-server 1.8.1 requires mlx-embeddings<0.1.
+mlx-embeddings==0.0.5
+mlx-lm==0.31.3
+# Newer huggingface-hub releases require Click >=8.4.2, while
+# mlx-openai-server 1.8.1 requires Click <8.4.
+huggingface_hub==1.16.1
+# Transformers 5.13 broke mlx-lm's string-first tokenizer registration. The
+# audited 5.14.1 release restores compatibility; keep the exact tested version.
+transformers==5.14.1
+# huggingface_hub's CLI still uses Typer. Typer 0.26+ emits an Exit traceback
+# for successful help/exit paths; 0.25.0 is the newest audited clean release.
+typer==0.25.0

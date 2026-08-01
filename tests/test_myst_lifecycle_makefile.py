@@ -956,6 +956,8 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             fake_uv = fake_bin / "uv"
             fake_uv.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             fake_uv.chmod(0o755)
+            fake_sync = temporary / "sync_environment.py"
+            fake_sync.write_text("raise SystemExit(0)\n", encoding="utf-8")
 
             venv = temporary / "venv"
             (venv / "bin").mkdir(parents=True)
@@ -983,6 +985,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
                     f"EMBEDSERV_VENV={relative_venv}",
                     f"EMBEDSERV_MODEL_CACHE={relative_models}",
                     "EMBEDSERV_REQUIREMENTS=/dev/null",
+                    f"EMBEDSERV_ENV_SYNC={fake_sync}",
                     f"EMBEDSERV_DIR={os.path.relpath(temporary / 'embedserv', ROOT)}",
                 ],
                 cwd=ROOT,

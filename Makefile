@@ -385,6 +385,7 @@ endif
 PYTHON_EXECUTOR_DOCKERFILE ?= executor/Dockerfile
 PYTHON_EXECUTOR_REQUIREMENTS_IN := executor/requirements.in
 PYTHON_EXECUTOR_REQUIREMENTS := executor/requirements.txt
+PYTHON_EXECUTOR_PYTHON_VERSION := 3.11
 PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY ?= $(call env_value,PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY)
 ifeq ($(strip $(PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY)),)
 $(error PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY is not set. Add it to $(VERSION_FILE) or override it on the make command line)
@@ -443,6 +444,14 @@ HOST_PROCESS_MANAGER := $(EMBEDSERV_DIR)/host_process_manager.py
 EMBEDSERV_REQUIREMENTS_IN := $(EMBEDSERV_DIR)/requirements.in
 EMBEDSERV_REQUIREMENTS := $(EMBEDSERV_DIR)/requirements.txt
 EMBEDSERV_VENV := $(EMBEDSERV_DIR)/.venv
+EMBEDSERV_PYTHON_VERSION := 3.12
+EMBEDSERV_ENV_SYNC ?= embedserv/sync_environment.py
+EMBEDSERV_INSTALL_STAMP_NAME := .private-onyx-install-hash
+EMBEDSERV_INSTALL_CONTRACT_VERSION := 1
+EMBEDSERV_INSTALL_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(); [h.update(v.encode()+b"\0") for v in sys.argv[1:3]]; [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[3:]]; print(h.hexdigest())' 'python=$(EMBEDSERV_PYTHON_VERSION)' 'contract=$(EMBEDSERV_INSTALL_CONTRACT_VERSION)' '$(EMBEDSERV_REQUIREMENTS)' '$(EMBEDSERV_ENV_SYNC)')
+ifeq ($(strip $(EMBEDSERV_INSTALL_SOURCE_HASH)),)
+$(error could not compute the bundled MLX installation source hash)
+endif
 EMBEDSERV_MODEL_CACHE := $(EMBEDSERV_DIR)/models
 EMBEDSERV_LOG := $(EMBEDSERV_DIR)/serve.log
 EMBEDSERV_PID_FILE := $(EMBEDSERV_DIR)/serve.pid
@@ -455,6 +464,7 @@ OPENSEARCH_VALIDATION_ITERATIONS ?= 24
 OPENSEARCH_EXPECTED_VERSION ?= 3.6.0
 SEARXNG_REQUIREMENTS_IN := searxng/requirements.in
 SEARXNG_REQUIREMENTS := searxng/requirements.txt
+SEARXNG_PYTHON_VERSION := 3.14
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
 LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)
@@ -475,7 +485,7 @@ FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-stop-if-started
 endif
 endif
 
-.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine prepare-lite-host-data prepare-full-host-data up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine prepare-lite-host-data prepare-full-host-data up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-sync-environment embedserv-sync-if-installed embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -537,6 +547,7 @@ check: test
 		onyx/beat_liveness_watchdog.py \
 		$(HOST_PROCESS_MANAGER) \
 		embedserv/idle_embedding_proxy.py \
+		embedserv/sync_environment.py \
 		podman \
 		tor \
 		searxng/engines \
@@ -674,9 +685,9 @@ upgrade-python-deps:
 		echo "ERROR: uv is required for upgrade-python-deps"; \
 		exit 1; \
 	fi; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(EMBEDSERV_REQUIREMENTS_IN)" -o "$(EMBEDSERV_REQUIREMENTS)"; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(SEARXNG_REQUIREMENTS_IN)" -o "$(SEARXNG_REQUIREMENTS)"; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --upgrade --generate-hashes "$(PYTHON_EXECUTOR_REQUIREMENTS_IN)" -o "$(PYTHON_EXECUTOR_REQUIREMENTS)"
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(EMBEDSERV_PYTHON_VERSION)" --upgrade --generate-hashes "$(EMBEDSERV_REQUIREMENTS_IN)" -o "$(EMBEDSERV_REQUIREMENTS)"; \
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(SEARXNG_PYTHON_VERSION)" --python-platform linux --upgrade --generate-hashes "$(SEARXNG_REQUIREMENTS_IN)" -o "$(SEARXNG_REQUIREMENTS)"; \
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(PYTHON_EXECUTOR_PYTHON_VERSION)" --python-platform linux --upgrade --generate-hashes "$(PYTHON_EXECUTOR_REQUIREMENTS_IN)" -o "$(PYTHON_EXECUTOR_REQUIREMENTS)"
 
 tailscale-image-ready:
 	@echo "Pulling Tailscale image: $(TAILSCALE_IMAGE)"; \
@@ -1129,14 +1140,56 @@ embedserv-install: wrapper-config-preflight
 	venv_python="$(PWD)/$(EMBEDSERV_VENV)/bin/python"; \
 	model_dir="$(PWD)/$(EMBEDSERV_MODEL_CACHE)/$$model_repo"; \
 	mkdir -p "$(EMBEDSERV_DIR)" "$$(dirname "$$model_dir")"; \
-	if [ ! -x "$$venv_python" ]; then \
-		uv venv --python 3.13 "$(EMBEDSERV_VENV)"; \
-	fi; \
-	uv pip install --python "$$venv_python" --require-hashes -r "$(EMBEDSERV_REQUIREMENTS)"; \
+	"$${MAKE:-make}" --no-print-directory embedserv-stop-if-started; \
+	"$${MAKE:-make}" --no-print-directory embedserv-sync-environment; \
 	echo "Downloading MLX embedding model: $$model_repo"; \
 	MODEL_REPO="$$model_repo" MODEL_DIR="$$model_dir" "$$venv_python" -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["MODEL_REPO"], local_dir=os.environ["MODEL_DIR"])'; \
 	$(MAKE) --no-print-directory embedserv-verify-model; \
 	echo "Model ready and verified at $$model_dir"
+
+embedserv-sync-environment:
+	@set -eu; \
+	if ! command -v uv >/dev/null 2>&1; then \
+		echo "ERROR: uv is required to synchronize the bundled MLX environment"; \
+		exit 1; \
+	fi; \
+	echo "Synchronizing bundled MLX Python $(EMBEDSERV_PYTHON_VERSION) environment..."; \
+	python3 "$(abspath $(EMBEDSERV_ENV_SYNC))" \
+		--venv "$(abspath $(EMBEDSERV_VENV))" \
+		--requirements "$(abspath $(EMBEDSERV_REQUIREMENTS))" \
+		--python-version "$(EMBEDSERV_PYTHON_VERSION)" \
+		--fingerprint "$(EMBEDSERV_INSTALL_SOURCE_HASH)" \
+		--stamp-name "$(EMBEDSERV_INSTALL_STAMP_NAME)" \
+		--uv-cache-dir "$(UV_CACHE_DIR)"; \
+	echo "Bundled MLX environment matches the committed dependency lock."
+
+# Preserve explicit first-time setup, but automatically refresh an existing
+# bundled installation after git pull changes its lock, Python runtime, or
+# installer contract. Custom embedding endpoints never mutate the host venv.
+embedserv-sync-if-installed:
+	@set -eu; \
+	if [ "$(EMBEDSERV_MODE)" = "custom" ]; then exit 0; fi; \
+	model_repo="$${ONYX_RAG_EMBEDDING_MLX_SERVE_MODEL}"; \
+	venv_dir="$(abspath $(EMBEDSERV_VENV))"; \
+	venv_python="$$venv_dir/bin/python"; \
+	venv_server="$$venv_dir/bin/mlx-openai-server"; \
+	model_dir="$(abspath $(EMBEDSERV_MODEL_CACHE))/$$model_repo"; \
+	stamp="$$venv_dir/$(EMBEDSERV_INSTALL_STAMP_NAME)"; \
+	if [ ! -d "$$venv_dir" ] || [ ! -d "$$model_dir" ]; then exit 0; fi; \
+	installed_python=""; \
+	if [ -x "$$venv_python" ]; then \
+		installed_python=$$("$$venv_python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || :); \
+	fi; \
+	installed_hash=$$(sed -n '1p' "$$stamp" 2>/dev/null || :); \
+	if [ "$$installed_hash" = "$(EMBEDSERV_INSTALL_SOURCE_HASH)" ] && \
+	   [ "$$installed_python" = "$(EMBEDSERV_PYTHON_VERSION)" ] && \
+	   [ -x "$$venv_server" ]; then \
+		echo "Bundled MLX environment already matches the committed dependency lock."; \
+		exit 0; \
+	fi; \
+	echo "Bundled MLX dependency or Python contract changed; refreshing the installed environment."; \
+	"$${MAKE:-make}" --no-print-directory embedserv-stop-if-started; \
+	"$${MAKE:-make}" --no-print-directory embedserv-sync-environment
 
 embedserv-verify-model: wrapper-config-preflight
 	@set -eu; \
@@ -1191,6 +1244,7 @@ embedserv-start-if-installed:
 		echo "Embedding shim uses a custom upstream; not starting bundled MLX server: $$embeddings_url"; \
 		exit 0; \
 	fi; \
+	"$${MAKE:-make}" --no-print-directory embedserv-sync-if-installed; \
 	if [ ! -x "$$venv_server" ] || [ ! -d "$$model_dir" ]; then \
 		echo "ERROR: full mode has no usable embedding endpoint."; \
 		echo "The default endpoint uses the bundled MLX server, but it is not installed for model $$model_repo."; \

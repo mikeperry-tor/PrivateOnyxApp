@@ -79,6 +79,11 @@ hour. Do not copy fixed counts into documentation.
 
 ### Bundled MLX embeddings
 
+- Before starting an existing bundled installation, `make up-full` compares its
+  dependency/runtime stamp with the committed lock and installer contract. A
+  stale environment is replaced atomically before the proxy starts; a failed
+  replacement restores the prior environment and fails startup. Custom
+  endpoints and never-installed bundled environments do not trigger this work.
 - The lightweight host lifecycle proxy remains listening while its MLX child is
   loaded on demand.
 - A completed request resets the ten-minute idle timer. When the timer expires,

@@ -500,19 +500,37 @@ validation; those are not duplicated by the host manager.
 
 `make embedserv-install` installs from the hashed lock file with
 `--require-hashes`, downloads the selected model, and verifies its integrity
-before reporting it ready. To upgrade package versions during a stack upgrade, edit
-`embedserv/requirements.in` if needed and run `make upgrade-python-deps`.
+before reporting it ready. It creates the host environment with Python 3.12,
+the supported runtime for the pinned server set. To upgrade package versions
+during a stack upgrade, edit the exact direct pins in
+`embedserv/requirements.in` and run `make upgrade-python-deps`.
 This host-side installation and model download occur before stack startup and
 do not depend on Myst readiness. They honor the standard host
 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` environment when a download proxy is
 required; `EGRESS_UPSTREAM_PROXY_URL` is intentionally only a runtime
 final-hop policy setting.
-Most embedserv requirements are intentionally unconstrained so that target can
-float them forward. Two inputs are compatibility pins. `transformers<5.13`
-avoids a `mlx-lm` tokenizer-registration failure during handler startup:
-`'str' object has no attribute '__module__'`. `typer==0.20.0` avoids a
-`sys.exit()` handler traceback in the local embedserv CLI path. Re-test the
-matching behavior before unpinning either dependency.
+The direct MLX requirements are one exact audited compatibility set:
+`mlx-openai-server==1.8.1`, `mlx-embeddings==0.0.5`, `mlx-lm==0.31.3`,
+`huggingface_hub==1.16.1`, and `transformers==5.14.1`. Server 1.8.1 requires
+`mlx-embeddings<0.1` and Click below 8.4, which excludes the currently
+incompatible newer embedding and Hugging Face Hub lines. Transformers 5.14.1
+fixes the string-first tokenizer-registration regression seen with 5.13 and
+`mlx-lm` 0.31.3. `typer==0.25.0` is also direct: the Hugging Face CLI still uses
+Typer, and 0.26 through 0.27 emit an exit-handler traceback even for successful
+help paths. Version 0.25 is the newest audited clean release, so the former
+0.20 pin can move forward but cannot yet be removed. Follow the joint
+candidate-environment and live-model policy in
+[`docs/onyx_patches_upgrade.md`](onyx_patches_upgrade.md#python-dependency-and-host-install-policy)
+before changing this set.
+
+An existing bundled installation carries a fingerprint of the lock, Python
+runtime, and synchronization implementation. Before `make up-full` starts the
+MLX lifecycle proxy, it leaves a matching environment untouched or atomically
+replaces a stale one and runs the locked dependency/Python checks. A failed
+refresh restores the previous environment and fails startup. This pre-start
+host preparation is skipped for custom embedding endpoints and machines where
+the bundled environment/model has never been installed; initial setup remains
+the explicit `make embedserv-install` operation.
 
 The default model is:
 

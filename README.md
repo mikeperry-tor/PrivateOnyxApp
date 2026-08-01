@@ -559,7 +559,9 @@ After `make embedserv-install` has installed the selected model, `make up-full`
 automatically launches a lightweight lifecycle proxy at the bundled default
 endpoint, `http://host.docker.internal:3210/v1/embeddings`. It loads the MLX
 model for the first embedding request and unloads it ten minutes after the last
-request completes.
+request completes. After a repository update changes the bundled dependency or
+Python contract, `make up-full` atomically refreshes an existing installation
+before launching it; first-time installation remains explicit.
 
 Full mode skips MLX launch with a custom `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL` value.
 
@@ -677,14 +679,18 @@ git pull
 make up-lite     # or make up-full
 ```
 
-That is all an end user needs to do.
+That is all an end user needs to do. Persistent application and user data is
+retained.
 
 The start command prepares any images selected by the updated
 [`stack.versions.env`](stack.versions.env) or changed content-addressed build
-inputs, reuses images that already match, and recreates affected services.
-Persistent application data is retained. This works with either container engine
-selected by `CONTAINER_BIN`: Podman mode prepares images in Podman's image
-store, and Docker mode prepares images in Docker's image store.
+inputs, refreshes an existing bundled MLX environment when its committed
+dependency/runtime fingerprint changes, reuses artifacts that already match,
+and recreates affected services.
+
+This works with either container engine selected by `CONTAINER_BIN`: Podman
+mode compares and prepares images using Podman's image store, and Docker mode
+compares and prepares images in Docker's image store.
 
 Repository updates that change `stack.versions.env` have already performed
 the required patch review, upgrade validation, and compatibility checks.

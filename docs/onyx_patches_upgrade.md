@@ -42,8 +42,10 @@ contains read-only audit checkouts when present.
 2. Read the upstream implementations named below. Do not infer compatibility
    from a tag or passing import alone.
 3. Run `make upgrade` to update pins/hashed locks and rebuild or refresh the
-   required images. Runtime startup must not invoke a package manager, `pip`,
-   or a Playwright browser download.
+   required images. Container and service entrypoints must not invoke a package
+   manager, `pip`, or a Playwright browser download. The Makefile may refresh a
+   previously installed bundled host MLX environment before starting it, as
+   specified below; first-time installation remains explicit.
 4. Run `make check-upgrade`. It first runs the complete deterministic suite and
    local static checks, then runs `make test-all-images`: strict patch
    installation against the
@@ -77,6 +79,56 @@ contains read-only audit checkouts when present.
 Keep API and background bootstrap diagnostics on stderr. Onyx isolated child
 processes reserve stdout for their pickled result; validate at least one real
 PDF extraction after changing bootstrap or process-isolation behavior.
+
+### Python dependency and host-install policy
+
+Treat every direct dependency in `embedserv/requirements.in`,
+`searxng/requirements.in`, and `executor/requirements.in` as an exact component
+pin. `make upgrade-python-deps` updates transitive packages and hashes around
+those decisions; it must not silently select a new direct component release.
+Edit a direct pin deliberately, audit its source and metadata constraints, and
+validate the affected component before accepting the regenerated lock.
+
+Compile each lock for the Python runtime that consumes it, not for whichever
+Python happens to run `uv` on the maintainer host:
+
+- bundled macOS MLX environment: Python 3.12;
+- derived SearXNG image: Python 3.14 on Linux;
+- derived Python executor image: Python 3.11 on Linux.
+
+The bundled MLX direct pins form one tested compatibility set:
+`mlx-openai-server==1.8.1`, `mlx-embeddings==0.0.5`, `mlx-lm==0.31.3`,
+`huggingface_hub==1.16.1`, and `transformers==5.14.1`. Upgrade them together in
+a disposable Python 3.12 environment. Require hashed installation and
+`uv pip check`, then validate the server CLI, MLX/Metal imports, handler
+startup, real selected-model loading, and a multi-input embedding request with
+ordered finite vectors of the expected dimension. Also run the model-cache
+integrity check and the full-stack embedding readiness path. Keep
+`typer==0.25.0` as a sixth direct pin: the Hugging Face CLI still uses Typer,
+and 0.26 through 0.27 emit a `click.exceptions.Exit: 0` traceback on successful
+help/exit paths while 0.25 does not. Re-test `hf cache verify --help` and a real
+verification before moving it. The old 0.20 release can therefore be upgraded,
+but the direct compatibility pin itself is still required. The former
+Transformers 5.13 upper bound is obsolete.
+
+For SearXNG, upgrade its exact WebSockets pin only after the direct Obscura
+client suite and a live restricted-route fetch pass. Upgrade its exact
+Playwright pin only with the pinned Onyx browser release and repeat the full
+browser compatibility matrix. For the executor, retain exact SymPy selection
+and run the executor image contract whenever that pin changes.
+
+End-user upgrades retain the README contract:
+`make down-* && git pull && make up-*`. The derived SearXNG and executor image
+tags already hash their lock files and wrapper inputs, so their normal start
+targets rebuild when those inputs change. For an existing bundled MLX
+installation, `make up-full` compares a stamp against a fingerprint of the
+hashed lock, target Python, installer implementation, and installer-contract
+version before the host proxy starts. A mismatch atomically installs a fresh
+environment, runs `uv pip check`, validates Python 3.12, and writes the stamp;
+failure removes the partial replacement and restores the prior environment,
+then fails startup. A matching environment is not modified. A custom embedding
+endpoint and a machine with no prior bundled MLX model/environment are not
+modified; first-time bundled setup still requires `make embedserv-install`.
 
 ### Documentation applicability gate
 

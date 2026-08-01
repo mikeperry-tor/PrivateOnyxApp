@@ -433,6 +433,13 @@ machines with slow MLX load times; Ctrl-C is the operator escape. Once ready,
 an individual proxy-to-child request has the same five-minute blocked-socket
 timeout as normal embedding traffic.
 
+The host MLX environment preparation is engine-independent. Before either
+Docker or Podman full-mode startup launches an existing bundled installation,
+the Makefile checks its dependency/runtime fingerprint and atomically refreshes
+a stale environment. It performs no such mutation for a custom endpoint or an
+installation that has never been set up. A refresh failure restores the old
+environment and aborts startup before Compose begins.
+
 ## Image preparation
 
 The Podman `onyx-build` branch pulls the exact Makefile-selected Onyx images
