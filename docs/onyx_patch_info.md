@@ -289,6 +289,12 @@ Saved MCP/OAuth and Web Connector choices, configured inference, and the
 embedding shim retain their public/host route-class selection. The exact
 internal Teep base is a startup-validated direct exception. Full-mode doc-drop
 uses its exact local gateway rather than a process-wide direct crawl.
+Configured OpenAI-compatible inference also gives the shared `/v1/models`
+metadata helper an environment-independent client: exact internal Teep stays
+direct, while host and opt-in LAN endpoints use the same fixed host-capable
+bridge as completion traffic. The patch validates the pinned helper signature
+and HTTP/error-handling source shape at startup so model discovery cannot
+silently return to the public proxy or inherit a process-wide bypass.
 The Compose final-hop host policy separately restricts exact
 `host.docker.internal` by TCP port with operator default `none`. Full mode
 separately supplies only the exact configured embedding authority, and each

@@ -3224,6 +3224,7 @@ def apply_configured_inference_proxy_patch() -> None:
 
         from onyx.llm import multi_llm
         from onyx.llm.constants import LlmProviderNames
+        from onyx.server.manage.llm import api as llm_api
         from onyx.utils.url import validate_outbound_http_url
     except Exception as e:  # pragma: no cover
         print(
@@ -3235,12 +3236,44 @@ def apply_configured_inference_proxy_patch() -> None:
 
     original_init = multi_llm.LitellmLLM.__init__
     original_completion = multi_llm.LitellmLLM._completion
+    original_models_response = llm_api._get_openai_compatible_models_response
     completion_signature = inspect.signature(original_completion)
     if "client" not in completion_signature.parameters:
         _warn_or_raise(
             f"LitellmLLM._completion no longer accepts client: {completion_signature}"
         )
         return
+    models_response_signature = inspect.signature(original_models_response)
+    if tuple(models_response_signature.parameters) != (
+        "url",
+        "source_name",
+        "api_key",
+    ):
+        _warn_or_raise(
+            "configured inference model-discovery signature changed: "
+            f"{models_response_signature}"
+        )
+        return
+    try:
+        models_response_source = inspect.getsource(original_models_response)
+    except (OSError, TypeError) as e:
+        _warn_or_raise(
+            "could not inspect configured inference model-discovery source: "
+            f"{e}"
+        )
+        return
+    for marker in (
+        "response = httpx.get(url, headers=headers, timeout=10.0)",
+        "response.raise_for_status()",
+        "except httpx.HTTPStatusError as e:",
+        "except httpx.RequestError as e:",
+    ):
+        if marker not in models_response_source:
+            _warn_or_raise(
+                "configured inference model-discovery source contract changed; "
+                f"missing {marker!r}"
+            )
+            return
 
     supported = {
         str(LlmProviderNames.OPENAI),
@@ -3307,11 +3340,91 @@ def apply_configured_inference_proxy_patch() -> None:
         bound.arguments["client"] = configured_client
         return original_completion(*bound.args, **bound.kwargs)
 
+    def _is_internal_teep_models_url(url: str) -> bool:
+        parsed = urlsplit(url)
+        try:
+            parsed_port = parsed.port
+        except ValueError:
+            return False
+        return (
+            parsed.scheme == internal_base.scheme
+            and parsed.hostname == internal_base.hostname
+            and parsed_port == internal_base.port
+            and parsed.path.rstrip("/")
+            == f"{internal_base.path.rstrip('/')}/models"
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+        )
+
+    @functools.wraps(original_models_response)
+    def _patched_models_response(
+        url: str,
+        source_name: str,
+        api_key: str | None = None,
+    ) -> dict:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "https://onyx.app",
+            "X-Title": "Onyx",
+        }
+        if not api_key:
+            headers.pop("Authorization")
+
+        client_kwargs: dict[str, Any] = {"trust_env": False}
+        if not _is_internal_teep_models_url(url):
+            client_kwargs["proxy"] = proxy_url
+        try:
+            with httpx.Client(**client_kwargs) as client:
+                response = client.get(url, headers=headers, timeout=10.0)
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise llm_api.OnyxError(
+                    llm_api.OnyxErrorCode.VALIDATION_ERROR,
+                    "Authentication failed: invalid or missing API key for "
+                    f"{source_name}.",
+                )
+            if e.response.status_code == 404:
+                raise llm_api.OnyxError(
+                    llm_api.OnyxErrorCode.VALIDATION_ERROR,
+                    f"{source_name} models endpoint not found at {url}. "
+                    "Please verify the API base URL.",
+                )
+            raise llm_api.OnyxError(
+                llm_api.OnyxErrorCode.BAD_GATEWAY,
+                f"Failed to fetch {source_name} models: {e}",
+            )
+        except httpx.RequestError as e:
+            llm_api.logger.warning(
+                "Could not reach OpenAI-compatible models endpoint",
+                extra={"source": source_name, "url": url, "error": str(e)},
+                exc_info=True,
+            )
+            raise llm_api.OnyxError(
+                llm_api.OnyxErrorCode.VALIDATION_ERROR,
+                f"Could not reach {source_name} at {url}. Check that the URL is "
+                f"correct and reachable from Onyx ({type(e).__name__}).",
+            )
+        except ValueError as e:
+            llm_api.logger.warning(
+                "Received invalid model response from OpenAI-compatible endpoint",
+                extra={"source": source_name, "url": url, "error": str(e)},
+                exc_info=True,
+            )
+            raise llm_api.OnyxError(
+                llm_api.OnyxErrorCode.BAD_GATEWAY,
+                f"Failed to fetch {source_name} models: {e}",
+            )
+
     multi_llm.LitellmLLM.__init__ = _patched_init
     multi_llm.LitellmLLM._completion = _patched_completion
+    llm_api._get_openai_compatible_models_response = _patched_models_response
     print(
-        "sitecustomize: routed supported configured inference bases through "
-        "fixed host egress with an exact internal Teep exception",
+        "sitecustomize: routed supported configured inference bases and model "
+        "discovery through fixed host egress with an exact internal Teep exception",
         flush=True,
     )
 

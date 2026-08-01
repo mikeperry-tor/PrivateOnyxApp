@@ -354,6 +354,16 @@ insufficient. Carry a wrapper control forward only while the installed
 dependency still needs it, and add strict source-shape and behavioral coverage
 for each new reliance.
 
+Re-audit configured-inference model discovery in
+`onyx.server.manage.llm.api`. The shared OpenAI-compatible `/v1/models` helper
+must retain its patched signature and HTTP/error-handling source markers,
+disable proxy-environment inheritance, keep exact internal Teep direct, and
+send public, selected `host.docker.internal`, RFC1918-literal, and supported
+operator-local bases through the fixed host-capable bridge. Prove that final-hop
+host-port and LAN opt-ins remain the destination authority; model discovery
+must not select the public bridge, add a direct LAN exception, or weaken mixed
+and non-private DNS-answer rejection.
+
 Verify `sitecustomize_api_server` is the only API bootstrap in both modes,
 neutral shared helpers are imported rather than executed, and patch drift is
 startup-fatal. Confirm `OpenURLToolOverrideKwargs.max_urls` remains ten and

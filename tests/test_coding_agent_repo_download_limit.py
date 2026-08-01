@@ -226,16 +226,44 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
         llm_package = ModuleType("onyx.llm")
         multi_llm_module = ModuleType("onyx.llm.multi_llm")
         constants_module = ModuleType("onyx.llm.constants")
+        server_package = ModuleType("onyx.server")
+        manage_package = ModuleType("onyx.server.manage")
+        manage_llm_package = ModuleType("onyx.server.manage.llm")
+        manage_llm_api_module = ModuleType("onyx.server.manage.llm.api")
         utils_module = ModuleType("onyx.utils")
         url_module = ModuleType("onyx.utils.url")
         httpx_module = ModuleType("httpx")
         openai_module = ModuleType("openai")
         clients: list[dict] = []
+        model_requests: list[dict] = []
+
+        class HTTPStatusError(Exception):
+            pass
+
+        class RequestError(Exception):
+            pass
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"data": [{"id": "test-model"}]}
 
         class Client:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
                 clients.append(kwargs)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def get(self, url, **kwargs):
+                model_requests.append({"url": url, **kwargs})
+                return Response()
 
         class OpenAI:
             def __init__(self, **kwargs):
@@ -273,14 +301,38 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
             del kwargs
             return url
 
+        def _get_openai_compatible_models_response(
+            url: str,
+            source_name: str,
+            api_key: str | None = None,
+        ) -> dict:
+            headers = {"Authorization": f"Bearer {api_key}"}
+            try:
+                response = httpx.get(url, headers=headers, timeout=10.0)  # noqa: F821
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:  # noqa: F821
+                raise RuntimeError(source_name) from e
+            except httpx.RequestError as e:  # noqa: F821
+                raise RuntimeError(source_name) from e
+
         httpx_module.Client = Client
+        httpx_module.HTTPStatusError = HTTPStatusError
+        httpx_module.RequestError = RequestError
         openai_module.OpenAI = OpenAI
         constants_module.LlmProviderNames = LlmProviderNames
         multi_llm_module.LitellmLLM = LitellmLLM
         llm_package.multi_llm = multi_llm_module
         url_module.validate_outbound_http_url = validate_outbound_http_url
+        manage_llm_api_module._get_openai_compatible_models_response = (
+            _get_openai_compatible_models_response
+        )
+        manage_llm_package.api = manage_llm_api_module
+        manage_package.llm = manage_llm_package
+        server_package.manage = manage_package
         utils_module.url = url_module
         onyx_module.llm = llm_package
+        onyx_module.server = server_package
         onyx_module.utils = utils_module
         return (
             {
@@ -290,16 +342,28 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
                 "onyx.llm": llm_package,
                 "onyx.llm.multi_llm": multi_llm_module,
                 "onyx.llm.constants": constants_module,
+                "onyx.server": server_package,
+                "onyx.server.manage": manage_package,
+                "onyx.server.manage.llm": manage_llm_package,
+                "onyx.server.manage.llm.api": manage_llm_api_module,
                 "onyx.utils": utils_module,
                 "onyx.utils.url": url_module,
             },
             multi_llm_module,
+            manage_llm_api_module,
             clients,
+            model_requests,
         )
 
     def _apply_patch(self):
         wrapper = _load_wrapper_module()
-        fake_modules, multi_llm_module, clients = self._fake_modules()
+        (
+            fake_modules,
+            multi_llm_module,
+            manage_llm_api_module,
+            clients,
+            model_requests,
+        ) = self._fake_modules()
         env = {
             "WRAPPER_PATCH_STRICT": "true",
             "ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL": (
@@ -307,10 +371,26 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
             ),
             "ONYX_CONFIGURED_INFERENCE_INTERNAL_BASE_URL": "http://teep:8337/v1",
         }
-        return wrapper, fake_modules, multi_llm_module, clients, env
+        return (
+            wrapper,
+            fake_modules,
+            multi_llm_module,
+            manage_llm_api_module,
+            clients,
+            model_requests,
+            env,
+        )
 
     def test_exact_internal_teep_uses_direct_trust_env_false_client(self) -> None:
-        wrapper, fake_modules, multi_llm_module, clients, env = self._apply_patch()
+        (
+            wrapper,
+            fake_modules,
+            multi_llm_module,
+            _manage_llm_api_module,
+            clients,
+            _model_requests,
+            env,
+        ) = self._apply_patch()
         with patch.dict(os.environ, env, clear=True), patch.dict(
             sys.modules, fake_modules
         ):
@@ -326,7 +406,15 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
         self.assertEqual(clients, [{"trust_env": False, "timeout": 30}])
 
     def test_other_configured_base_uses_fixed_host_proxy(self) -> None:
-        wrapper, fake_modules, multi_llm_module, clients, env = self._apply_patch()
+        (
+            wrapper,
+            fake_modules,
+            multi_llm_module,
+            _manage_llm_api_module,
+            clients,
+            _model_requests,
+            env,
+        ) = self._apply_patch()
         with patch.dict(os.environ, env, clear=True), patch.dict(
             sys.modules, fake_modules
         ):
@@ -346,6 +434,91 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
                     "trust_env": False,
                     "timeout": 30,
                     "proxy": "http://onyx-host-egress-bridge:3128",
+                }
+            ],
+        )
+
+    def test_host_and_lan_model_discovery_use_fixed_host_proxy(self) -> None:
+        for url in (
+            "http://host.docker.internal:1234/v1/models",
+            "http://192.168.10.20:3002/v1/models",
+            "http://inference.internal:3002/v1/models",
+        ):
+            with self.subTest(url=url):
+                (
+                    wrapper,
+                    fake_modules,
+                    _multi_llm_module,
+                    manage_llm_api_module,
+                    clients,
+                    model_requests,
+                    env,
+                ) = self._apply_patch()
+                with patch.dict(os.environ, env, clear=True), patch.dict(
+                    sys.modules, fake_modules
+                ):
+                    wrapper.apply_configured_inference_proxy_patch()
+                    result = manage_llm_api_module._get_openai_compatible_models_response(
+                        url=url,
+                        source_name="OpenAI-Compatible",
+                    )
+
+                self.assertEqual(result, {"data": [{"id": "test-model"}]})
+                self.assertEqual(
+                    clients,
+                    [
+                        {
+                            "trust_env": False,
+                            "proxy": "http://onyx-host-egress-bridge:3128",
+                        }
+                    ],
+                )
+                self.assertEqual(
+                    model_requests,
+                    [
+                        {
+                            "url": url,
+                            "headers": {
+                                "HTTP-Referer": "https://onyx.app",
+                                "X-Title": "Onyx",
+                            },
+                            "timeout": 10.0,
+                        }
+                    ],
+                )
+
+    def test_exact_internal_teep_model_discovery_is_direct(self) -> None:
+        (
+            wrapper,
+            fake_modules,
+            _multi_llm_module,
+            manage_llm_api_module,
+            clients,
+            model_requests,
+            env,
+        ) = self._apply_patch()
+        with patch.dict(os.environ, env, clear=True), patch.dict(
+            sys.modules, fake_modules
+        ):
+            wrapper.apply_configured_inference_proxy_patch()
+            manage_llm_api_module._get_openai_compatible_models_response(
+                url="http://teep:8337/v1/models",
+                source_name="OpenAI-Compatible",
+                api_key="test-key",
+            )
+
+        self.assertEqual(clients, [{"trust_env": False}])
+        self.assertEqual(
+            model_requests,
+            [
+                {
+                    "url": "http://teep:8337/v1/models",
+                    "headers": {
+                        "Authorization": "Bearer test-key",
+                        "HTTP-Referer": "https://onyx.app",
+                        "X-Title": "Onyx",
+                    },
+                    "timeout": 10.0,
                 }
             ],
         )
