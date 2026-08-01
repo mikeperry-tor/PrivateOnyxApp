@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import linecache
 import os
 import sys
 import unittest
@@ -35,6 +36,12 @@ def _package(name: str) -> ModuleType:
     module = ModuleType(name)
     module.__path__ = []
     return module
+
+
+def _exec_module_source(module: ModuleType, filename: str, source: str) -> None:
+    lines = source.splitlines(keepends=True)
+    linecache.cache[filename] = (len(source), None, lines, filename)
+    exec(compile(source, filename, "exec"), module.__dict__)
 
 
 def _reasoning_detector(model_name, model_provider):
@@ -193,13 +200,14 @@ def _code_description_modules(
     prompts = _package("onyx.prompts")
     tool_prompts = ModuleType("onyx.prompts.tool_prompts")
     tool_prompts.PYTHON_TOOL_GUIDANCE = (
-        "Files written to the current directory will be returned with a `file_link`. "
+        "## run_python\nFiles written to the current directory will be returned with a `file_link`. "
         "Use this to give the user a way to download the file OR to display "
         "generated images. Internet access for this session is disabled. Do not "
         "make external web requests or API calls as they will fail. Use `openpyxl` "
         "to read and write Excel files. You have access to libraries like numpy, "
         "pandas, scipy, matplotlib, and PIL."
     )
+    tool_prompts.TOOL_SECTION_HEADER = "\n# Tools\n\n"
     prompts.tool_prompts = tool_prompts
     chat_prompts = ModuleType("onyx.prompts.chat_prompts")
     chat_prompts.FILE_REMINDER = (
@@ -369,6 +377,260 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             "/api/chat/file/another-id",
         )
 
+    def test_chat_file_markdown_normalization_is_origin_independent(self) -> None:
+        wrapper = _load_wrapper()
+        normalize = wrapper._normalize_chat_file_markdown
+
+        self.assertEqual(
+            normalize(
+                r"![math \[plot\].png](https://onyx.tail.example/api/chat/file/file-id)"
+            ),
+            r"[math \[plot\].png](/api/chat/file/file-id)",
+        )
+        self.assertEqual(
+            normalize(
+                "[graph.png](http://localhost:3000/api/chat/file/file-id?download=1#view)"
+            ),
+            "[graph.png](/api/chat/file/file-id?download=1#view)",
+        )
+        self.assertEqual(
+            normalize("![graph.png](//onion.example/api/chat/file/file-id)"),
+            "[graph.png](/api/chat/file/file-id)",
+        )
+        self.assertEqual(
+            normalize("![graph.png](</api/chat/file/file-id>)"),
+            "[graph.png](/api/chat/file/file-id)",
+        )
+
+    def test_chat_file_markdown_normalization_is_narrow(self) -> None:
+        wrapper = _load_wrapper()
+        normalize = wrapper._normalize_chat_file_markdown
+        unchanged = (
+            "![remote](https://images.example/graph.png) "
+            "![near](/api/chat/file/id/extra) "
+            "![title](/api/chat/file/id \"caption\") "
+            "![scheme](javascript:/api/chat/file/id) "
+            r"\![escaped](/api/chat/file/id)"
+        )
+        self.assertEqual(normalize(unchanged), unchanged)
+        self.assertEqual(
+            normalize(
+                "![one](/api/chat/file/one) and "
+                "[two](https://tail/api/chat/file/two)"
+            ),
+            "[one](/api/chat/file/one) and [two](/api/chat/file/two)",
+        )
+        literal_examples = (
+            "`![inline](/api/chat/file/inline)`\n"
+            "```markdown\n![fenced](https://tail/api/chat/file/fenced)\n```"
+        )
+        self.assertEqual(normalize(literal_examples), literal_examples)
+
+        for split in range(len(literal_examples) + 1):
+            stream = wrapper._ChatFileMarkdownStream()
+            actual = stream.feed(literal_examples[:split])
+            actual += stream.feed(literal_examples[split:]) + stream.flush()
+            self.assertEqual(actual, literal_examples, f"code split={split}")
+
+    def test_chat_file_markdown_stream_handles_every_chunk_boundary(self) -> None:
+        wrapper = _load_wrapper()
+        raw = (
+            "before ![math_functions_graph.png](https://tail.example/api/chat/file/"
+            "6a8c8c24-7d45-4f55-bcf5-85f9b1a62b4e) after"
+        )
+        expected = (
+            "before [math_functions_graph.png](/api/chat/file/"
+            "6a8c8c24-7d45-4f55-bcf5-85f9b1a62b4e) after"
+        )
+        for split in range(len(raw) + 1):
+            stream = wrapper._ChatFileMarkdownStream()
+            actual = stream.feed(raw[:split]) + stream.feed(raw[split:])
+            actual += stream.flush()
+            self.assertEqual(actual, expected, f"split={split}")
+
+        stream = wrapper._ChatFileMarkdownStream()
+        actual = "".join(stream.feed(character) for character in raw)
+        actual += stream.flush()
+        self.assertEqual(actual, expected)
+
+    def test_chat_file_markdown_stream_flushes_incomplete_text_losslessly(self) -> None:
+        wrapper = _load_wrapper()
+        raw = "ordinary [unfinished and ![also unfinished"
+        stream = wrapper._ChatFileMarkdownStream()
+        self.assertEqual(stream.feed(raw), "ordinary ")
+        self.assertEqual(stream.flush(), "[unfinished and ![also unfinished")
+
+    def test_python_file_link_enforcement_covers_prompt_stream_state_and_history(
+        self,
+    ) -> None:
+        wrapper = _load_wrapper()
+        modules, *_ = _code_description_modules()
+        onyx = modules["onyx"]
+        chat = _package("onyx.chat")
+        llm_loop = ModuleType("onyx.chat.llm_loop")
+        server = _package("onyx.server")
+        query_and_chat = _package("onyx.server.query_and_chat")
+        streaming_models = ModuleType(
+            "onyx.server.query_and_chat.streaming_models"
+        )
+        session_loading = ModuleType("onyx.server.query_and_chat.session_loading")
+
+        _exec_module_source(
+            llm_loop,
+            "<file_link_fake_llm_loop>",
+            """\
+class ChatMessageSimple:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+class MessageType:
+    SYSTEM = "system"
+
+def run_llm_loop(tools, persona):
+    if True:
+        if True:
+            if persona and persona.replace_base_system_prompt:
+                processed_system_prompt = "replacement prompt"
+                system_prompt = (
+                    ChatMessageSimple(
+                        message=processed_system_prompt,
+                        token_count=len(processed_system_prompt),
+                        message_type=MessageType.SYSTEM,
+                    )
+                    if processed_system_prompt
+                    else None
+                )
+                return system_prompt
+            return None
+        return None
+    return None
+
+def run_llm_step(emitter, state_container):
+    raw = "before ![graph.png](https://tail.example/api/chat/file/file-id) after"
+    state_container.set_answer_tokens(raw)
+    emitter.emit(Packet(placement=Placement(2), obj=AgentResponseDelta(content=raw[:19])))
+    emitter.emit(Packet(placement=Placement(2), obj=AgentResponseDelta(content=raw[19:])))
+    return Result(raw), False
+""",
+        )
+        _exec_module_source(
+            session_loading,
+            "<file_link_fake_session_loading>",
+            """\
+def create_message_packets(message_text, final_documents, turn_index):
+    return [message_text, final_documents, turn_index]
+
+def translate_assistant_message_to_packets(chat_message, db_session):
+    return create_message_packets(
+        message_text=chat_message.message,
+        final_documents=None,
+        turn_index=0,
+    )
+""",
+        )
+
+        class Placement:
+            def __init__(self, turn_index):
+                self.turn_index = turn_index
+
+        class AgentResponseDelta:
+            def __init__(self, content):
+                self.content = content
+
+        class Packet:
+            def __init__(self, placement, obj):
+                self.placement = placement
+                self.obj = obj
+
+        class Result:
+            def __init__(self, answer):
+                self.answer = answer
+
+            def model_copy(self, *, update):
+                return Result(update.get("answer", self.answer))
+
+        class State:
+            def __init__(self):
+                self.answer = None
+
+            def set_answer_tokens(self, answer):
+                self.answer = answer
+
+        class Collector:
+            def __init__(self):
+                self.packets = []
+
+            def emit(self, packet):
+                self.packets.append(packet)
+
+        llm_loop.Packet = Packet
+        llm_loop.Placement = Placement
+        llm_loop.AgentResponseDelta = AgentResponseDelta
+        llm_loop.Result = Result
+        streaming_models.AgentResponseDelta = AgentResponseDelta
+        streaming_models.Packet = Packet
+        chat.llm_loop = llm_loop
+        server.query_and_chat = query_and_chat
+        query_and_chat.session_loading = session_loading
+        query_and_chat.streaming_models = streaming_models
+        modules.update(
+            {
+                "onyx.chat": chat,
+                "onyx.chat.llm_loop": llm_loop,
+                "onyx.server": server,
+                "onyx.server.query_and_chat": query_and_chat,
+                "onyx.server.query_and_chat.streaming_models": streaming_models,
+                "onyx.server.query_and_chat.session_loading": session_loading,
+            }
+        )
+        onyx.chat = chat
+        onyx.server = server
+
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            wrapper.apply_python_file_link_prompt_patches()
+            wrapper.apply_python_file_link_enforcement_patches()
+
+            prompt = llm_loop.run_llm_loop(
+                [SimpleNamespace(name="run_python")],
+                SimpleNamespace(replace_base_system_prompt=True),
+            )
+            self.assertIn("## run_python", prompt.message)
+            self.assertIn("response_markdown", prompt.message)
+            self.assertEqual(
+                llm_loop._wrapper_append_python_guidance(
+                    "replacement prompt", [SimpleNamespace(name="open_url")]
+                ),
+                "replacement prompt",
+            )
+            self.assertIn(
+                "## run_python",
+                llm_loop._wrapper_append_python_guidance(
+                    None, [SimpleNamespace(name="run_python")]
+                ),
+            )
+
+            state = State()
+            collector = Collector()
+            result, has_reasoned = llm_loop.run_llm_step(collector, state)
+            expected = "before [graph.png](/api/chat/file/file-id) after"
+            self.assertFalse(has_reasoned)
+            self.assertEqual(result.answer, expected)
+            self.assertEqual(state.answer, expected)
+            self.assertEqual(
+                "".join(packet.obj.content for packet in collector.packets),
+                expected,
+            )
+            self.assertEqual(
+                session_loading.create_message_packets(
+                    "![old.png](http://localhost:3000/api/chat/file/old-id)",
+                    None,
+                    4,
+                ),
+                ["[old.png](/api/chat/file/old-id)", None, 4],
+            )
+
     def test_python_file_link_description_drift_fails_strict(self) -> None:
         wrapper = _load_wrapper()
         modules, *_ = _code_description_modules("Upstream changed this description")
@@ -479,6 +741,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             all("restricted HTTP/HTTPS proxy" in text for text in descriptions)
         )
         self.assertTrue(all("no network access" not in text for text in descriptions))
+        self.assertNotIn("an sandbox", PythonTool.DESCRIPTION)
         self.assertIn(
             "do not substitute Markdown image syntax",
             tool_prompts.PYTHON_TOOL_GUIDANCE,

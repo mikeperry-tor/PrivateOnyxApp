@@ -12,6 +12,7 @@ import importlib
 import inspect
 import json
 import os
+import re
 import sys
 import threading
 from contextlib import contextmanager
@@ -3438,6 +3439,364 @@ def _is_code_interpreter_network_enabled() -> bool:
     )
 
 
+_CHAT_FILE_PATH_RE = re.compile(r"^/api/chat/file/[^/?#]+$")
+_CHAT_FILE_MARKDOWN_CANDIDATE_LIMIT = 4096
+
+
+def _relative_chat_file_destination(destination: str) -> str | None:
+    """Return one browser-current-origin chat-file URL, or ``None``.
+
+    Markdown destinations produced by older Onyx versions may contain the
+    configured ``WEB_DOMAIN``. Only the endpoint path is authoritative: using
+    it as a relative URL keeps localhost, Tailscale, and onion frontends
+    interchangeable within the same running stack.
+    """
+    candidate = destination.strip()
+    if candidate.startswith("<") and candidate.endswith(">"):
+        candidate = candidate[1:-1].strip()
+    if not candidate or any(character.isspace() for character in candidate):
+        return None
+
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return None
+
+    if parsed.scheme and parsed.scheme.lower() not in {"http", "https"}:
+        return None
+    if not parsed.scheme and not parsed.netloc and not candidate.startswith("/"):
+        return None
+    if not _CHAT_FILE_PATH_RE.fullmatch(parsed.path):
+        return None
+
+    relative = parsed.path
+    if parsed.query:
+        relative += f"?{parsed.query}"
+    if parsed.fragment:
+        relative += f"#{parsed.fragment}"
+    return relative
+
+
+def _find_unescaped(value: str, character: str, start: int) -> int:
+    index = start
+    while True:
+        index = value.find(character, index)
+        if index < 0:
+            return -1
+        backslashes = 0
+        cursor = index - 1
+        while cursor >= 0 and value[cursor] == "\\":
+            backslashes += 1
+            cursor -= 1
+        if backslashes % 2 == 0:
+            return index
+        index += 1
+
+
+def _is_escaped(value: str, index: int) -> bool:
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and value[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
+class _ChatFileMarkdownStream:
+    """Incrementally canonicalize Markdown links to generated chat files."""
+
+    def __init__(self) -> None:
+        self._pending = ""
+        self._code_ticks: int | None = None
+
+    def feed(self, content: str, *, final: bool = False) -> str:
+        self._pending += content
+        output: list[str] = []
+
+        while self._pending:
+            if self._code_ticks is not None:
+                tick_index = self._pending.find("`")
+                if tick_index < 0:
+                    output.append(self._pending)
+                    self._pending = ""
+                    break
+                if tick_index > 0:
+                    output.append(self._pending[:tick_index])
+                    self._pending = self._pending[tick_index:]
+                    continue
+                tick_count = len(self._pending) - len(self._pending.lstrip("`"))
+                if tick_count == len(self._pending) and not final:
+                    break
+                output.append(self._pending[:tick_count])
+                self._pending = self._pending[tick_count:]
+                if tick_count == self._code_ticks:
+                    self._code_ticks = None
+                continue
+
+            open_index = self._pending.find("[")
+            tick_index = self._pending.find("`")
+            if tick_index >= 0 and (open_index < 0 or tick_index < open_index):
+                if _is_escaped(self._pending, tick_index):
+                    output.append(self._pending[: tick_index + 1])
+                    self._pending = self._pending[tick_index + 1 :]
+                    continue
+                if tick_index > 0:
+                    output.append(self._pending[:tick_index])
+                    self._pending = self._pending[tick_index:]
+                    continue
+                tick_count = len(self._pending) - len(self._pending.lstrip("`"))
+                if tick_count == len(self._pending) and not final:
+                    break
+                output.append(self._pending[:tick_count])
+                self._pending = self._pending[tick_count:]
+                self._code_ticks = tick_count
+                continue
+            if open_index < 0:
+                if final:
+                    output.append(self._pending)
+                    self._pending = ""
+                elif self._pending.endswith("!"):
+                    output.append(self._pending[:-1])
+                    self._pending = "!"
+                else:
+                    output.append(self._pending)
+                    self._pending = ""
+                break
+
+            image_marker = (
+                open_index > 0
+                and self._pending[open_index - 1] == "!"
+                and not _is_escaped(self._pending, open_index - 1)
+            )
+            candidate_start = open_index - 1 if image_marker else open_index
+            if candidate_start > 0:
+                output.append(self._pending[:candidate_start])
+                self._pending = self._pending[candidate_start:]
+                continue
+
+            bracket_index = 1 if image_marker else 0
+            label_end = _find_unescaped(self._pending, "]", bracket_index + 1)
+            if label_end < 0:
+                if final or len(self._pending) > _CHAT_FILE_MARKDOWN_CANDIDATE_LIMIT:
+                    output.append(self._pending[0])
+                    self._pending = self._pending[1:]
+                    continue
+                break
+            if label_end + 1 >= len(self._pending):
+                if final:
+                    output.append(self._pending)
+                    self._pending = ""
+                break
+            if self._pending[label_end + 1] != "(":
+                output.append(self._pending[: label_end + 1])
+                self._pending = self._pending[label_end + 1 :]
+                continue
+
+            destination_end = _find_unescaped(self._pending, ")", label_end + 2)
+            if destination_end < 0:
+                if final or len(self._pending) > _CHAT_FILE_MARKDOWN_CANDIDATE_LIMIT:
+                    output.append(self._pending[0])
+                    self._pending = self._pending[1:]
+                    continue
+                break
+
+            destination = self._pending[label_end + 2 : destination_end]
+            relative = _relative_chat_file_destination(destination)
+            complete = self._pending[: destination_end + 1]
+            if relative is None:
+                output.append(complete)
+            else:
+                label_start = bracket_index + 1
+                label = self._pending[label_start:label_end]
+                output.append(f"[{label}]({relative})")
+            self._pending = self._pending[destination_end + 1 :]
+
+        return "".join(output)
+
+    def flush(self) -> str:
+        return self.feed("", final=True)
+
+
+def _normalize_chat_file_markdown(content: str) -> str:
+    stream = _ChatFileMarkdownStream()
+    return stream.feed(content) + stream.flush()
+
+
+def _append_python_guidance_to_replacement_prompt(
+    prompt: str | None,
+    tools: list[Any],
+) -> str | None:
+    if not any(getattr(tool, "name", None) == "run_python" for tool in tools):
+        return prompt
+
+    from onyx.prompts.tool_prompts import PYTHON_TOOL_GUIDANCE
+    from onyx.prompts.tool_prompts import TOOL_SECTION_HEADER
+
+    if prompt and PYTHON_TOOL_GUIDANCE in prompt:
+        return prompt
+    return (prompt or "") + TOOL_SECTION_HEADER + PYTHON_TOOL_GUIDANCE
+
+
+class _ChatFileMarkdownEmitter:
+    def __init__(self, emitter: Any, packet_type: Any, delta_type: Any) -> None:
+        self._emitter = emitter
+        self._packet_type = packet_type
+        self._delta_type = delta_type
+        self._stream = _ChatFileMarkdownStream()
+        self._placement = None
+
+    def _emit_content(self, content: str) -> None:
+        if content:
+            self._emitter.emit(
+                self._packet_type(
+                    placement=self._placement,
+                    obj=self._delta_type(content=content),
+                )
+            )
+
+    def emit(self, packet: Any) -> None:
+        if isinstance(packet.obj, self._delta_type):
+            self._placement = packet.placement
+            self._emit_content(self._stream.feed(packet.obj.content))
+            return
+        self._emit_content(self._stream.flush())
+        self._emitter.emit(packet)
+
+    def flush(self) -> None:
+        self._emit_content(self._stream.flush())
+
+
+def apply_python_file_link_enforcement_patches() -> None:
+    """Enforce portable generated-file Markdown at every response boundary."""
+    try:
+        from onyx.chat import llm_loop
+        from onyx.server.query_and_chat import session_loading
+        from onyx.server.query_and_chat.streaming_models import AgentResponseDelta
+        from onyx.server.query_and_chat.streaming_models import Packet
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing Python file-link enforcement targets: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    try:
+        run_source = inspect.getsource(llm_loop.run_llm_loop)
+        replacement_anchor = (
+            "                system_prompt = (\n"
+            "                    ChatMessageSimple(\n"
+            "                        message=processed_system_prompt,\n"
+        )
+        if run_source.count(replacement_anchor) != 1:
+            _warn_or_raise(
+                "replace-base Python guidance patch expected exactly one system-prompt "
+                "construction site"
+            )
+            return
+        llm_loop._wrapper_append_python_guidance = (
+            _append_python_guidance_to_replacement_prompt
+        )
+        _patch_function_source(
+            module=llm_loop,
+            function_name="run_llm_loop",
+            patch_name="replace-base Python tool guidance",
+            replacements={
+                replacement_anchor: (
+                    "                processed_system_prompt = "
+                    "_wrapper_append_python_guidance(processed_system_prompt, tools)\n"
+                    + replacement_anchor
+                )
+            },
+        )
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed to patch replace-base Python guidance: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    original_step = llm_loop.run_llm_step
+    if getattr(original_step, "_wrapper_chat_file_markdown", False):
+        _warn_or_raise("Python file-link stream patch was installed more than once")
+        return
+
+    signature = inspect.signature(original_step)
+    for required in ("emitter", "state_container"):
+        if required not in signature.parameters:
+            _warn_or_raise(
+                f"run_llm_step no longer has required {required!r} parameter"
+            )
+            return
+
+    @functools.wraps(original_step)
+    def _run_llm_step_with_chat_file_markdown(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        emitter = bound.arguments["emitter"]
+        state_container = bound.arguments["state_container"]
+        normalizing_emitter = _ChatFileMarkdownEmitter(
+            emitter, Packet, AgentResponseDelta
+        )
+        bound.arguments["emitter"] = normalizing_emitter
+        try:
+            result, has_reasoned = original_step(*bound.args, **bound.kwargs)
+        finally:
+            normalizing_emitter.flush()
+
+        normalized_answer = (
+            _normalize_chat_file_markdown(result.answer)
+            if isinstance(result.answer, str)
+            else result.answer
+        )
+        if normalized_answer != result.answer:
+            result = result.model_copy(update={"answer": normalized_answer})
+        if state_container is not None and normalized_answer is not None:
+            state_container.set_answer_tokens(normalized_answer)
+        return result, has_reasoned
+
+    _run_llm_step_with_chat_file_markdown._wrapper_chat_file_markdown = True
+    llm_loop.run_llm_step = _run_llm_step_with_chat_file_markdown
+    print("sitecustomize: enforced streamed Python chat-file Markdown", flush=True)
+
+    original_create_message_packets = session_loading.create_message_packets
+    packet_signature = inspect.signature(original_create_message_packets)
+    if tuple(packet_signature.parameters) != (
+        "message_text",
+        "final_documents",
+        "turn_index",
+    ):
+        _warn_or_raise(
+            "create_message_packets signature changed; cannot normalize saved "
+            "assistant Markdown safely"
+        )
+        return
+    translate_source = inspect.getsource(
+        session_loading.translate_assistant_message_to_packets
+    )
+    if translate_source.count("create_message_packets(") != 1:
+        _warn_or_raise(
+            "assistant session loader no longer has exactly one message packet site"
+        )
+        return
+
+    @functools.wraps(original_create_message_packets)
+    def _create_message_packets_with_chat_file_markdown(
+        message_text, final_documents, turn_index
+    ):
+        return original_create_message_packets(
+            _normalize_chat_file_markdown(message_text),
+            final_documents,
+            turn_index,
+        )
+
+    _create_message_packets_with_chat_file_markdown._wrapper_chat_file_markdown = True
+    session_loading.create_message_packets = (
+        _create_message_packets_with_chat_file_markdown
+    )
+    print("sitecustomize: normalized saved Python chat-file Markdown", flush=True)
+
+
 def apply_python_file_link_prompt_patches() -> None:
     """Make generated-file response links explicit, portable, and prominent.
 
@@ -3713,17 +4072,17 @@ def apply_code_interpreter_network_description_patches() -> None:
 
     # ── PythonTool description ──────────────────────────────────────────
     # The unconditional package patch has already extended the upstream
-    # description. Replace only its sandbox phrase with the network and pip
-    # capability text so the package list retains one owner.
+    # description. Replace its complete article/sandbox phrase with the network
+    # and pip capability text so the package list retains one owner.
     try:
         from onyx.tools.tool_implementations.python.python_tool import PythonTool
 
         PythonTool.DESCRIPTION = _replace_or_warn(
             owner_name="PythonTool.DESCRIPTION",
             current=PythonTool.DESCRIPTION,
-            old="isolated sandbox environment.",
+            old="an isolated sandbox environment.",
             new=(
-                "sandbox environment. "
+                "a sandbox environment. "
                 + _RESTRICTED_NETWORK_TEXT
                 + " pip package installation is NOT "
                 "supported. For tasks requiring "

@@ -724,7 +724,11 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
   ordinary link must render from the relative endpoint through every frontend;
   confirm the strict patch still rejects drift in the function description,
   broader guidance, post-execution reminder, imported URL helper, and
-  `PythonTool.run` signature;
+  `PythonTool.run` signature; confirm replace-base Agents retain the Python
+  guidance; split Markdown image and ordinary links at every stream boundary
+  and verify both emitted and saved answers normalize exact chat-file paths,
+  legacy absolute origins become relative, unrelated/incomplete Markdown is
+  lossless, and reloaded historical assistant messages use the same rule;
 - uploaded/local/background images, a `blob:` image preview, and an embedded
   `data:` DOCX image must still render;
 - login, chat hydration/streaming, same-origin fetches, voice HTTP/WebSockets,
@@ -796,7 +800,10 @@ its user-visible behavior:
   unconditional Python tool description and guidance list only packages the
   executor actually contains. Confirm the LLM-facing tool name, built-in map,
   saved-row remapping, and prompt use only `run_python`, while the display name
-  remains `Code Interpreter`. Then exercise a real `run_python` tool call.
+  remains `Code Interpreter`. Confirm generated-file Markdown normalization is
+  installed on the top-level streamed LLM step and saved-message reconstruction,
+  and that the network-enabled description has a grammatically valid sandbox
+  phrase. Then exercise a real `run_python` tool call.
 - **Lite `open_url`, helper routes, embedding tokenizer/shim, privacy settings,
   and CSP:** retain their dedicated audits elsewhere in this checklist.
 

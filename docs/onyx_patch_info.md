@@ -396,12 +396,27 @@ unconditional strict API patch changes generated-file links to relative
 same-origin `/api/chat/file/{id}` values, adds a ready-to-copy
 `response_markdown` ordinary link to each LLM-facing generated-file result, and
 requires every user-requested file in the Python function description, Python
-guidance, and post-execution reminder. For an image filename, the WebUI extracts
-the ID from the ordinary link and renders the relative endpoint. Accidental
-Markdown image syntax also remains same-origin, although prompts require the
-supplied ordinary link so Onyx can consistently recognize and retain the
-reference. Custom prompts should copy `response_markdown` rather than construct
-a file URL.
+guidance, and post-execution reminder. An Agent that replaces the base system
+prompt still receives the Python guidance whenever `run_python` is available;
+the replacement suppresses general Onyx guidance, not this tool protocol.
+
+Prompting is not treated as enforcement. A streaming API patch recognizes
+Markdown links whose parsed path is exactly `/api/chat/file/{id}`, removes image
+syntax so the WebUI uses its generated-image component, and reduces legacy
+absolute HTTP(S) destinations to the relative path. It transforms deltas before
+the browser receives them, writes the same normalized answer into incremental
+chat state for persistence and non-streaming callers, and applies the same rule
+when saved assistant messages are reconstructed. Chunk boundaries, inline and
+fenced code, incomplete Markdown, unrelated links, non-HTTP schemes, and paths
+outside the exact chat-file endpoint are handled without loss or rewriting.
+Relative URLs deliberately use the browser's current origin, so localhost,
+Tailscale, and onion access keep
+working even when `WEBUI_CANONICAL_ORIGIN` names a different frontend.
+
+For an image filename, the WebUI extracts the ID from the resulting ordinary
+link and renders the relative endpoint. Custom prompts should still copy
+`response_markdown` rather than construct a file URL; deterministic
+normalization is a final boundary, not a reason to weaken the instruction.
 
 The pinned Python tool renderer has an unsafe error fallback: if highlight.js
 throws, it passes raw model-emitted Python text to `dangerouslySetInnerHTML`.

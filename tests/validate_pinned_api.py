@@ -20,6 +20,7 @@ def _install_wrapper_patches() -> None:
     patches.apply_reasoning_content_preservation_patch()
     patches.apply_coding_agent_final_answer_fallback_patch()
     patches.apply_preserve_tool_results_patch()
+    patches.apply_python_file_link_enforcement_patches()
     patches.apply_searxng_single_attempt_patch()
 
 
@@ -41,8 +42,58 @@ def _validate_python_tool_identity() -> None:
     assert "Use the `run_python` tool" in PYTHON_TOOL_GUIDANCE
     assert "response_markdown" in PythonTool.DESCRIPTION
     assert "response_markdown" in PYTHON_TOOL_GUIDANCE
+    assert "an sandbox" not in PythonTool.DESCRIPTION
     assert getattr(PythonTool.run, "_wrapper_python_file_link_patch", False)
     assert python_tool.build_full_frontend_file_url is build_frontend_file_url
+
+
+def _validate_python_file_link_enforcement() -> None:
+    from onyx.chat import llm_loop
+    from onyx.server.query_and_chat import session_loading
+    from onyx.server.query_and_chat.streaming_models import AgentResponseDelta
+    from onyx.tools.tool_implementations.python.python_tool import PythonTool
+
+    assert getattr(llm_loop.run_llm_step, "_wrapper_chat_file_markdown", False)
+    assert getattr(
+        session_loading.create_message_packets,
+        "_wrapper_chat_file_markdown",
+        False,
+    )
+
+    tool = PythonTool(1, None)
+    replacement_prompt = llm_loop._wrapper_append_python_guidance(
+        "replacement prompt", [tool]
+    )
+    assert "## run_python" in replacement_prompt
+    assert "response_markdown" in replacement_prompt
+
+    raw = (
+        "before ![graph.png](https://tail.example/api/chat/file/file-id) "
+        "and [data.csv](http://localhost:3000/api/chat/file/data-id) after"
+    )
+    expected = (
+        "before [graph.png](/api/chat/file/file-id) "
+        "and [data.csv](/api/chat/file/data-id) after"
+    )
+    assert patches._normalize_chat_file_markdown(raw) == expected
+    literal = "`![literal](/api/chat/file/literal)`"
+    assert patches._normalize_chat_file_markdown(literal) == literal
+    for split in range(len(raw) + 1):
+        stream = patches._ChatFileMarkdownStream()
+        actual = (
+            stream.feed(raw[:split])
+            + stream.feed(raw[split:])
+            + stream.flush()
+        )
+        assert actual == expected
+
+    packets = session_loading.create_message_packets(raw, None, 3)
+    deltas = [
+        packet.obj.content
+        for packet in packets
+        if isinstance(packet.obj, AgentResponseDelta)
+    ]
+    assert deltas == [expected]
 
 
 def _validate_indexed_open_url_contract() -> None:
@@ -192,6 +243,7 @@ def _validate_litellm_contract() -> None:
 if __name__ == "__main__":
     _install_wrapper_patches()
     _validate_python_tool_identity()
+    _validate_python_file_link_enforcement()
     _validate_indexed_open_url_contract()
     _validate_lite_open_url_contract()
     _validate_web_search_timeout_contract()

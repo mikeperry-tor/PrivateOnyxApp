@@ -27,6 +27,7 @@ def _install() -> None:
     from wrapper_env_patches import apply_open_url_char_limit_patches
     from wrapper_env_patches import apply_playwright_helper_proxy_patch
     from wrapper_env_patches import apply_preserve_tool_results_patch
+    from wrapper_env_patches import apply_python_file_link_enforcement_patches
     from wrapper_env_patches import apply_python_file_link_prompt_patches
     from wrapper_env_patches import apply_python_package_capability_patches
     from wrapper_env_patches import apply_reasoning_content_preservation_patch
@@ -61,6 +62,7 @@ def _install() -> None:
     apply_reasoning_content_preservation_patch()
     apply_coding_agent_final_answer_fallback_patch()
     apply_preserve_tool_results_patch()
+    apply_python_file_link_enforcement_patches()
     apply_searxng_single_attempt_patch()
     install_url_identity_preservation()
     install_open_url_failure_reporting()
