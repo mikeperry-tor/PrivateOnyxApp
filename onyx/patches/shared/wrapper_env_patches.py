@@ -3938,8 +3938,10 @@ def apply_python_file_link_prompt_patches() -> None:
     link_instruction = (
         "In the final answer, include every user-requested generated file by "
         "copying its `response_markdown` value exactly. This is an ordinary "
-        "Markdown link `[filename](file_link)`. Never construct or hard-code a "
-        "file URL."
+        "Markdown link `[filename](file_link)`. Treat the entire value, including "
+        "its filename and opaque per-execution file ID, as immutable: do not "
+        "retype, rename, shorten, describe, or alter any character. Never "
+        "construct or hard-code a file URL."
     )
 
     try:

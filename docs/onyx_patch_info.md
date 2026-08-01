@@ -414,8 +414,11 @@ chat-file link as an inline image from that label. Live metadata comes from the
 chat state; saved metadata comes from the persisted Python tool response. If a
 model inserts an underscore into a generated UUID, the normalizer restores the
 canonical destination only when removing that underscore identifies exactly
-one authoritative generated-file ID. It does not guess among files or rewrite
-an unrelated/fabricated ID.
+one authoritative generated-file ID. A wholly different model-written ID is
+left visible and requestable: its resulting 404 is useful diagnostic evidence,
+and replacing it would disguise the model's actual output. The normalizer also
+does not append generated files that the model omitted, because tool workspaces
+can contain scratch artifacts that were not intended for display.
 Chunk boundaries, inline and fenced code, incomplete Markdown, unrelated links,
 non-HTTP schemes, and paths outside the exact chat-file endpoint are handled
 without loss or rewriting.
@@ -425,12 +428,22 @@ working even when `WEBUI_CANONICAL_ORIGIN` names a different frontend.
 
 For an image filename, the WebUI extracts the ID from the resulting ordinary
 link and renders the relative endpoint. Custom prompts should still copy
-`response_markdown` rather than construct a file URL; deterministic
-normalization is a final boundary, not a reason to weaken the instruction.
+`response_markdown` as one opaque per-execution value rather than retyping its
+filename or ID or constructing a file URL. Deterministic normalization handles
+syntax, origins, authoritative exact matches, and narrow underscore corruption;
+it deliberately does not conceal a wholly fabricated destination.
 If such a canonical `.png` link renders as a broken image, rewriting has already
 succeeded: inspect the authenticated `GET /api/chat/file/{id}` response and API
 logs for a 404 or file-store read failure. URL or label rewriting cannot restore
 missing bytes from another instance or a deleted chat/file-store volume.
+
+The executor workspace is ephemeral, but generated output is not served from
+it. Before cleanup, `PythonTool` downloads each output, saves it in Onyx's
+selected file store, and uses the returned file-store ID in the tool delta,
+rich response, `file_link`, and `response_markdown`. Lite mode stores those
+bytes in PostgreSQL under `docker-data/postgres`; full mode stores them in
+MinIO under `docker-data/minio`. A different UUID in assistant Markdown
+therefore came from model output, not from a second executor or storage ID.
 
 The chat-file endpoint also receives both UUID `UserFile.id` values and opaque
 file-store IDs. Upstream tries every value in the UUID-only `user_file.id`

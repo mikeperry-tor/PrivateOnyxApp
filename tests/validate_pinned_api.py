@@ -45,9 +45,101 @@ def _validate_python_tool_identity() -> None:
     assert "Use the `run_python` tool" in PYTHON_TOOL_GUIDANCE
     assert "response_markdown" in PythonTool.DESCRIPTION
     assert "response_markdown" in PYTHON_TOOL_GUIDANCE
+    assert "opaque per-execution file ID" in PythonTool.DESCRIPTION
+    assert "opaque per-execution file ID" in PYTHON_TOOL_GUIDANCE
     assert "an sandbox" not in PythonTool.DESCRIPTION
     assert getattr(PythonTool.run, "_wrapper_python_file_link_patch", False)
     assert python_tool.build_full_frontend_file_url is build_frontend_file_url
+
+
+def _validate_python_tool_generated_id_identity() -> None:
+    """Prove one saved ID reaches every Python-tool response channel unchanged."""
+    from onyx.tools.models import PythonToolOverrideKwargs
+    from onyx.server.query_and_chat.streaming_models import Placement
+    from onyx.tools.tool_implementations.python import python_tool
+    from onyx.tools.tool_implementations.python.python_tool import PythonTool
+
+    saved_id = "11111111-1111-4111-8111-111111111111"
+    executor_id = "executor-opaque-id"
+    file_bytes = b"\x89PNG\r\n\x1a\nwrapper-contract"
+    emitted: list[object] = []
+
+    class FakeResultEvent:
+        files = [
+            SimpleNamespace(
+                kind="file", file_id=executor_id, path="/workspace/graph.png"
+            )
+        ]
+        exit_code = 0
+        timed_out = False
+
+    class FakeClient:
+        deleted: list[str] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def execute_streaming(self, **kwargs):
+            assert kwargs["code"] == "generate graph"
+            yield FakeResultEvent()
+
+        def download_file(self, file_id):
+            assert file_id == executor_id
+            return file_bytes
+
+        def delete_file(self, file_id):
+            self.deleted.append(file_id)
+
+    class FakeStore:
+        def save_file(self, content, **kwargs):
+            assert content.read() == file_bytes
+            assert kwargs["display_name"] == "graph.png"
+            assert kwargs["file_type"] == "image/png"
+            return saved_id
+
+    originals = (
+        python_tool.CodeInterpreterClient,
+        python_tool.StreamResultEvent,
+        python_tool.get_default_file_store,
+    )
+    try:
+        python_tool.CodeInterpreterClient = FakeClient
+        python_tool.StreamResultEvent = FakeResultEvent
+        python_tool.get_default_file_store = lambda: FakeStore()
+        tool = PythonTool(1, SimpleNamespace(emit=emitted.append))
+        response = tool.run(
+            Placement(turn_index=0),
+            PythonToolOverrideKwargs(),
+            code="generate graph",
+        )
+    finally:
+        (
+            python_tool.CodeInterpreterClient,
+            python_tool.StreamResultEvent,
+            python_tool.get_default_file_store,
+        ) = originals
+
+    payload = json.loads(response.llm_facing_response)
+    generated = payload["generated_files"]
+    expected_link = f"/api/chat/file/{saved_id}"
+    assert generated == [
+        {
+            "filename": "graph.png",
+            "file_link": expected_link,
+            "response_markdown": f"[graph.png]({expected_link})",
+        }
+    ]
+    assert response.rich_response.generated_files[0].file_link == expected_link
+    emitted_ids = [
+        file_id
+        for packet in emitted
+        for file_id in (getattr(packet.obj, "file_ids", None) or [])
+    ]
+    assert emitted_ids == [saved_id]
+    assert FakeClient.deleted == [executor_id]
 
 
 def _validate_python_file_link_enforcement() -> None:
@@ -88,6 +180,15 @@ def _validate_python_file_link_enforcement() -> None:
         "0ad5_8c02-1c2d-4e22-9c41-d9e13a5e1d7b)",
         {canonical_id: "graph.png"},
     ) == f"[graph.png](/api/chat/file/{canonical_id})"
+    fabricated_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert patches._normalize_chat_file_markdown(
+        f"![graph.png](/api/chat/file/{fabricated_id})",
+        {canonical_id: "graph.png"},
+    ) == f"[graph.png](/api/chat/file/{fabricated_id})"
+    assert patches._normalize_chat_file_markdown(
+        f"[descriptive label](/api/chat/file/{fabricated_id})",
+        {canonical_id: "graph.png"},
+    ) == f"[descriptive label](/api/chat/file/{fabricated_id})"
     saved_tool_call = SimpleNamespace(
         generated_files=None,
         tool_call_response=json.dumps(
@@ -276,6 +377,7 @@ def _validate_litellm_contract() -> None:
 if __name__ == "__main__":
     _install_wrapper_patches()
     _validate_python_tool_identity()
+    _validate_python_tool_generated_id_identity()
     _validate_python_file_link_enforcement()
     _validate_indexed_open_url_contract()
     _validate_lite_open_url_contract()

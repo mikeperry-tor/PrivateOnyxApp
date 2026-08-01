@@ -321,6 +321,8 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             self.assertIn("response_markdown", prompt)
             self.assertIn("every user-requested generated file", prompt)
             self.assertIn("Never construct or hard-code a file URL", prompt)
+            self.assertIn("opaque per-execution file ID", prompt)
+            self.assertIn("do not retype, rename, shorten, describe", prompt)
         self.assertIn(
             "do not substitute Markdown image syntax",
             tool_prompts.PYTHON_TOOL_GUIDANCE,
@@ -437,6 +439,38 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             ),
             "[unknown](/api/chat/file/0ad5_8c02-1c2d-4e22-9c41-d9e13a5e1d7b)",
         )
+
+    def test_fabricated_python_file_ids_remain_visible_for_diagnostics(self) -> None:
+        wrapper = _load_wrapper()
+        filenames = {
+            "11111111-1111-4111-8111-111111111111": "graph_x_squared.png",
+            "22222222-2222-4222-8222-222222222222": "graph_sin_x.png",
+            "33333333-3333-4333-8333-333333333333": "graph_combined.png",
+        }
+        raw = (
+            "## y = x²\n"
+            "[y = x²](/api/chat/file/8ea7c9d2-b6e5-4d08-acdc-1dcfbfbd8e6d)\n"
+            "## y = sin(x)\n"
+            "![y = sin(x)](/api/chat/file/4d21d9e6-c4e8-4dce-9a89-6e2919bf9e3a)\n"
+            "## Combined\n"
+            "[Combined](/api/chat/file/c0e5e2ed-0e5f-4d18-9e95-d9830d1e7f5e)"
+        )
+        expected = (
+            "## y = x²\n"
+            "[y = x²](/api/chat/file/8ea7c9d2-b6e5-4d08-acdc-1dcfbfbd8e6d)\n"
+            "## y = sin(x)\n"
+            "[y = sin(x)](/api/chat/file/4d21d9e6-c4e8-4dce-9a89-6e2919bf9e3a)\n"
+            "## Combined\n"
+            "[Combined](/api/chat/file/c0e5e2ed-0e5f-4d18-9e95-d9830d1e7f5e)"
+        )
+
+        self.assertEqual(wrapper._normalize_chat_file_markdown(raw, filenames), expected)
+        for split in range(len(raw) + 1):
+            stream = wrapper._ChatFileMarkdownStream(filenames)
+            actual = stream.feed(raw[:split]) + stream.feed(raw[split:])
+            actual += stream.flush()
+            self.assertEqual(actual, expected, f"fabricated IDs split={split}")
+            self.assertEqual(stream.flush(), "", f"second flush split={split}")
 
     def test_generated_chat_file_filenames_support_live_and_saved_tool_calls(self) -> None:
         wrapper = _load_wrapper()

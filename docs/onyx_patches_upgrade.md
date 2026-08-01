@@ -731,7 +731,11 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
   lossless, extensionless model labels are replaced with the authoritative
   generated filename from live and persisted tool metadata, an underscore-
   corrupted generated UUID is restored only by an exact authoritative match,
-  and reloaded historical assistant messages use the same rule; verify a
+  wholly fabricated IDs remain visible and requestable for 404 diagnostics,
+  omitted tool artifacts are not appended, and reloaded historical assistant
+  messages use the same rule; use arbitrary valid UUIDs, multiple files,
+  omissions, duplicate flushes, and every stream split in this test matrix;
+  verify a
   non-UUID opaque chat-file ID bypasses the UUID-only `UserFile.id` lookup
   without weakening subsequent authorization or unknown-file handling;
 - uploaded/local/background images, a `blob:` image preview, and an embedded
