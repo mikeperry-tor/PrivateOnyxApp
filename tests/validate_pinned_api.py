@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import inspect
+import json
 from importlib.metadata import version
+from types import SimpleNamespace
 
 import wrapper_env_patches as patches
 
@@ -50,12 +52,11 @@ def _validate_python_tool_identity() -> None:
 def _validate_python_file_link_enforcement() -> None:
     from onyx.chat import llm_loop
     from onyx.server.query_and_chat import session_loading
-    from onyx.server.query_and_chat.streaming_models import AgentResponseDelta
     from onyx.tools.tool_implementations.python.python_tool import PythonTool
 
     assert getattr(llm_loop.run_llm_step, "_wrapper_chat_file_markdown", False)
     assert getattr(
-        session_loading.create_message_packets,
+        session_loading.translate_assistant_message_to_packets,
         "_wrapper_chat_file_markdown",
         False,
     )
@@ -76,6 +77,29 @@ def _validate_python_file_link_enforcement() -> None:
         "and [data.csv](/api/chat/file/data-id) after"
     )
     assert patches._normalize_chat_file_markdown(raw) == expected
+    assert patches._normalize_chat_file_markdown(
+        "![Simple Function Graphs](/api/chat/file/file-id)",
+        {"file-id": "graph.png"},
+    ) == "[graph.png](/api/chat/file/file-id)"
+    saved_tool_call = SimpleNamespace(
+        generated_files=None,
+        tool_call_response=json.dumps(
+            {
+                "generated_files": [
+                    {
+                        "filename": "saved.png",
+                        "file_link": "/api/chat/file/saved-id",
+                    }
+                ]
+            }
+        ),
+    )
+    assert patches._generated_chat_file_filenames([saved_tool_call]) == {
+        "saved-id": "saved.png"
+    }
+    assert session_loading._wrapper_normalize_saved_chat_file_markdown(
+        "![Saved chart](/api/chat/file/saved-id)", [saved_tool_call]
+    ) == "[saved.png](/api/chat/file/saved-id)"
     literal = "`![literal](/api/chat/file/literal)`"
     assert patches._normalize_chat_file_markdown(literal) == literal
     for split in range(len(raw) + 1):
@@ -86,15 +110,6 @@ def _validate_python_file_link_enforcement() -> None:
             + stream.flush()
         )
         assert actual == expected
-
-    packets = session_loading.create_message_packets(raw, None, 3)
-    deltas = [
-        packet.obj.content
-        for packet in packets
-        if isinstance(packet.obj, AgentResponseDelta)
-    ]
-    assert deltas == [expected]
-
 
 def _validate_indexed_open_url_contract() -> None:
     from onyx.tools.tool_implementations.open_url import open_url_tool

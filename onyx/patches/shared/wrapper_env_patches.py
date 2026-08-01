@@ -3443,7 +3443,7 @@ _CHAT_FILE_PATH_RE = re.compile(r"^/api/chat/file/[^/?#]+$")
 _CHAT_FILE_MARKDOWN_CANDIDATE_LIMIT = 4096
 
 
-def _relative_chat_file_destination(destination: str) -> str | None:
+def _relative_chat_file_destination(destination: str) -> tuple[str, str] | None:
     """Return one browser-current-origin chat-file URL, or ``None``.
 
     Markdown destinations produced by older Onyx versions may contain the
@@ -3474,7 +3474,41 @@ def _relative_chat_file_destination(destination: str) -> str | None:
         relative += f"?{parsed.query}"
     if parsed.fragment:
         relative += f"#{parsed.fragment}"
-    return relative
+    return relative, parsed.path.rsplit("/", 1)[-1]
+
+
+def _markdown_link_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _generated_chat_file_filenames(tool_calls: Any) -> dict[str, str]:
+    """Map generated chat-file IDs to their authoritative stored filenames."""
+    filenames: dict[str, str] = {}
+    for tool_call in tool_calls or ():
+        generated_files = getattr(tool_call, "generated_files", None)
+        if not generated_files:
+            response = getattr(tool_call, "tool_call_response", None)
+            try:
+                response_data = json.loads(response) if isinstance(response, str) else response
+            except (TypeError, json.JSONDecodeError):
+                response_data = None
+            if isinstance(response_data, dict):
+                generated_files = response_data.get("generated_files")
+
+        for generated_file in generated_files or ():
+            if isinstance(generated_file, dict):
+                filename = generated_file.get("filename")
+                file_link = generated_file.get("file_link")
+            else:
+                filename = getattr(generated_file, "filename", None)
+                file_link = getattr(generated_file, "file_link", None)
+            if not isinstance(filename, str) or not isinstance(file_link, str):
+                continue
+            destination = _relative_chat_file_destination(file_link)
+            if destination is not None:
+                _, file_id = destination
+                filenames[file_id] = filename
+    return filenames
 
 
 def _find_unescaped(value: str, character: str, start: int) -> int:
@@ -3505,9 +3539,10 @@ def _is_escaped(value: str, index: int) -> bool:
 class _ChatFileMarkdownStream:
     """Incrementally canonicalize Markdown links to generated chat files."""
 
-    def __init__(self) -> None:
+    def __init__(self, filenames: dict[str, str] | None = None) -> None:
         self._pending = ""
         self._code_ticks: int | None = None
+        self._filenames = filenames or {}
 
     def feed(self, content: str, *, final: bool = False) -> str:
         self._pending += content
@@ -3601,13 +3636,18 @@ class _ChatFileMarkdownStream:
                 break
 
             destination = self._pending[label_end + 2 : destination_end]
-            relative = _relative_chat_file_destination(destination)
+            resolved = _relative_chat_file_destination(destination)
             complete = self._pending[: destination_end + 1]
-            if relative is None:
+            if resolved is None:
                 output.append(complete)
             else:
+                relative, file_id = resolved
                 label_start = bracket_index + 1
-                label = self._pending[label_start:label_end]
+                label = (
+                    _markdown_link_label(self._filenames[file_id])
+                    if file_id in self._filenames
+                    else self._pending[label_start:label_end]
+                )
                 output.append(f"[{label}]({relative})")
             self._pending = self._pending[destination_end + 1 :]
 
@@ -3617,8 +3657,10 @@ class _ChatFileMarkdownStream:
         return self.feed("", final=True)
 
 
-def _normalize_chat_file_markdown(content: str) -> str:
-    stream = _ChatFileMarkdownStream()
+def _normalize_chat_file_markdown(
+    content: str, filenames: dict[str, str] | None = None
+) -> str:
+    stream = _ChatFileMarkdownStream(filenames)
     return stream.feed(content) + stream.flush()
 
 
@@ -3638,11 +3680,17 @@ def _append_python_guidance_to_replacement_prompt(
 
 
 class _ChatFileMarkdownEmitter:
-    def __init__(self, emitter: Any, packet_type: Any, delta_type: Any) -> None:
+    def __init__(
+        self,
+        emitter: Any,
+        packet_type: Any,
+        delta_type: Any,
+        filenames: dict[str, str],
+    ) -> None:
         self._emitter = emitter
         self._packet_type = packet_type
         self._delta_type = delta_type
-        self._stream = _ChatFileMarkdownStream()
+        self._stream = _ChatFileMarkdownStream(filenames)
         self._placement = None
 
     def _emit_content(self, content: str) -> None:
@@ -3735,8 +3783,11 @@ def apply_python_file_link_enforcement_patches() -> None:
         bound = signature.bind(*args, **kwargs)
         emitter = bound.arguments["emitter"]
         state_container = bound.arguments["state_container"]
+        filenames = _generated_chat_file_filenames(
+            state_container.get_tool_calls() if state_container is not None else ()
+        )
         normalizing_emitter = _ChatFileMarkdownEmitter(
-            emitter, Packet, AgentResponseDelta
+            emitter, Packet, AgentResponseDelta, filenames
         )
         bound.arguments["emitter"] = normalizing_emitter
         try:
@@ -3745,7 +3796,7 @@ def apply_python_file_link_enforcement_patches() -> None:
             normalizing_emitter.flush()
 
         normalized_answer = (
-            _normalize_chat_file_markdown(result.answer)
+            _normalize_chat_file_markdown(result.answer, filenames)
             if isinstance(result.answer, str)
             else result.answer
         )
@@ -3759,40 +3810,35 @@ def apply_python_file_link_enforcement_patches() -> None:
     llm_loop.run_llm_step = _run_llm_step_with_chat_file_markdown
     print("sitecustomize: enforced streamed Python chat-file Markdown", flush=True)
 
-    original_create_message_packets = session_loading.create_message_packets
-    packet_signature = inspect.signature(original_create_message_packets)
-    if tuple(packet_signature.parameters) != (
-        "message_text",
-        "final_documents",
-        "turn_index",
-    ):
-        _warn_or_raise(
-            "create_message_packets signature changed; cannot normalize saved "
-            "assistant Markdown safely"
-        )
-        return
     translate_source = inspect.getsource(
         session_loading.translate_assistant_message_to_packets
     )
-    if translate_source.count("create_message_packets(") != 1:
+    history_anchor = "                message_text=chat_message.message,\n"
+    if translate_source.count(history_anchor) != 1:
         _warn_or_raise(
-            "assistant session loader no longer has exactly one message packet site"
+            "assistant session loader no longer has exactly one saved message site"
         )
         return
-
-    @functools.wraps(original_create_message_packets)
-    def _create_message_packets_with_chat_file_markdown(
-        message_text, final_documents, turn_index
-    ):
-        return original_create_message_packets(
-            _normalize_chat_file_markdown(message_text),
-            final_documents,
-            turn_index,
+    session_loading._wrapper_normalize_saved_chat_file_markdown = (
+        lambda content, tool_calls: _normalize_chat_file_markdown(
+            content, _generated_chat_file_filenames(tool_calls)
         )
-
-    _create_message_packets_with_chat_file_markdown._wrapper_chat_file_markdown = True
-    session_loading.create_message_packets = (
-        _create_message_packets_with_chat_file_markdown
+    )
+    _patch_function_source(
+        module=session_loading,
+        function_name="translate_assistant_message_to_packets",
+        patch_name="saved Python chat-file Markdown",
+        replacements={
+            history_anchor: (
+                "                message_text="
+                "_wrapper_normalize_saved_chat_file_markdown(\n"
+                "                    chat_message.message, chat_message.tool_calls\n"
+                "                ),\n"
+            )
+        },
+    )
+    session_loading.translate_assistant_message_to_packets._wrapper_chat_file_markdown = (
+        True
     )
     print("sitecustomize: normalized saved Python chat-file Markdown", flush=True)
 

@@ -728,7 +728,9 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
   guidance; split Markdown image and ordinary links at every stream boundary
   and verify both emitted and saved answers normalize exact chat-file paths,
   legacy absolute origins become relative, unrelated/incomplete Markdown is
-  lossless, and reloaded historical assistant messages use the same rule;
+  lossless, extensionless model labels are replaced with the authoritative
+  generated filename from live and persisted tool metadata, and reloaded
+  historical assistant messages use the same rule;
 - uploaded/local/background images, a `blob:` image preview, and an embedded
   `data:` DOCX image must still render;
 - login, chat hydration/streaming, same-origin fetches, voice HTTP/WebSockets,

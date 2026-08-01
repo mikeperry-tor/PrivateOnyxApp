@@ -401,6 +401,42 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             normalize("![graph.png](</api/chat/file/file-id>)"),
             "[graph.png](/api/chat/file/file-id)",
         )
+        self.assertEqual(
+            normalize(
+                "![Simple Function Graphs](/api/chat/file/file-id)",
+                {"file-id": "math_[functions].png"},
+            ),
+            r"[math_\[functions\].png](/api/chat/file/file-id)",
+        )
+
+    def test_generated_chat_file_filenames_support_live_and_saved_tool_calls(self) -> None:
+        wrapper = _load_wrapper()
+        expected = {"live-id": "live.png", "saved-id": "saved chart.png"}
+        tool_calls = [
+            SimpleNamespace(
+                generated_files=[
+                    SimpleNamespace(
+                        filename="live.png",
+                        file_link="https://tail/api/chat/file/live-id",
+                    )
+                ],
+                tool_call_response=None,
+            ),
+            SimpleNamespace(
+                generated_files=None,
+                tool_call_response=json.dumps(
+                    {
+                        "generated_files": [
+                            {
+                                "filename": "saved chart.png",
+                                "file_link": "/api/chat/file/saved-id",
+                            }
+                        ]
+                    }
+                ),
+            ),
+        ]
+        self.assertEqual(wrapper._generated_chat_file_filenames(tool_calls), expected)
 
     def test_chat_file_markdown_normalization_is_narrow(self) -> None:
         wrapper = _load_wrapper()
@@ -506,7 +542,7 @@ def run_llm_loop(tools, persona):
     return None
 
 def run_llm_step(emitter, state_container):
-    raw = "before ![graph.png](https://tail.example/api/chat/file/file-id) after"
+    raw = "before ![Simple Function Graphs](https://tail.example/api/chat/file/file-id) after"
     state_container.set_answer_tokens(raw)
     emitter.emit(Packet(placement=Placement(2), obj=AgentResponseDelta(content=raw[:19])))
     emitter.emit(Packet(placement=Placement(2), obj=AgentResponseDelta(content=raw[19:])))
@@ -521,11 +557,16 @@ def create_message_packets(message_text, final_documents, turn_index):
     return [message_text, final_documents, turn_index]
 
 def translate_assistant_message_to_packets(chat_message, db_session):
-    return create_message_packets(
-        message_text=chat_message.message,
-        final_documents=None,
-        turn_index=0,
-    )
+    packets = []
+    if chat_message.message:
+        packets.extend(
+            create_message_packets(
+                message_text=chat_message.message,
+                final_documents=None,
+                turn_index=0,
+            )
+        )
+    return packets
 """,
         )
 
@@ -552,6 +593,19 @@ def translate_assistant_message_to_packets(chat_message, db_session):
         class State:
             def __init__(self):
                 self.answer = None
+
+            def get_tool_calls(self):
+                return [
+                    SimpleNamespace(
+                        generated_files=[
+                            SimpleNamespace(
+                                filename="graph.png",
+                                file_link="/api/chat/file/file-id",
+                            )
+                        ],
+                        tool_call_response=None,
+                    )
+                ]
 
             def set_answer_tokens(self, answer):
                 self.answer = answer
@@ -622,13 +676,29 @@ def translate_assistant_message_to_packets(chat_message, db_session):
                 "".join(packet.obj.content for packet in collector.packets),
                 expected,
             )
+            saved_message = SimpleNamespace(
+                message="![Old chart](http://localhost:3000/api/chat/file/old-id)",
+                tool_calls=[
+                    SimpleNamespace(
+                        generated_files=None,
+                        tool_call_response=json.dumps(
+                            {
+                                "generated_files": [
+                                    {
+                                        "filename": "old.png",
+                                        "file_link": "/api/chat/file/old-id",
+                                    }
+                                ]
+                            }
+                        ),
+                    )
+                ],
+            )
             self.assertEqual(
-                session_loading.create_message_packets(
-                    "![old.png](http://localhost:3000/api/chat/file/old-id)",
-                    None,
-                    4,
+                session_loading.translate_assistant_message_to_packets(
+                    saved_message, None
                 ),
-                ["[old.png](/api/chat/file/old-id)", None, 4],
+                ["[old.png](/api/chat/file/old-id)", None, 0],
             )
 
     def test_python_file_link_description_drift_fails_strict(self) -> None:

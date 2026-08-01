@@ -406,9 +406,15 @@ syntax so the WebUI uses its generated-image component, and reduces legacy
 absolute HTTP(S) destinations to the relative path. It transforms deltas before
 the browser receives them, writes the same normalized answer into incremental
 chat state for persistence and non-streaming callers, and applies the same rule
-when saved assistant messages are reconstructed. Chunk boundaries, inline and
-fenced code, incomplete Markdown, unrelated links, non-HTTP schemes, and paths
-outside the exact chat-file endpoint are handled without loss or rewriting.
+when saved assistant messages are reconstructed. For each known generated file,
+the patch replaces a model-written label such as `Simple Function Graphs` with
+the authoritative generated filename such as `math_functions_graph.png`. The
+extension is a rendering contract: the pinned WebUI recognizes an ordinary
+chat-file link as an inline image from that label. Live metadata comes from the
+chat state; saved metadata comes from the persisted Python tool response.
+Chunk boundaries, inline and fenced code, incomplete Markdown, unrelated links,
+non-HTTP schemes, and paths outside the exact chat-file endpoint are handled
+without loss or rewriting.
 Relative URLs deliberately use the browser's current origin, so localhost,
 Tailscale, and onion access keep
 working even when `WEBUI_CANONICAL_ORIGIN` names a different frontend.
@@ -417,6 +423,10 @@ For an image filename, the WebUI extracts the ID from the resulting ordinary
 link and renders the relative endpoint. Custom prompts should still copy
 `response_markdown` rather than construct a file URL; deterministic
 normalization is a final boundary, not a reason to weaken the instruction.
+If such a canonical `.png` link renders as a broken image, rewriting has already
+succeeded: inspect the authenticated `GET /api/chat/file/{id}` response and API
+logs for a 404 or file-store read failure. URL or label rewriting cannot restore
+missing bytes from another instance or a deleted chat/file-store volume.
 
 The pinned Python tool renderer has an unsafe error fallback: if highlight.js
 throws, it passes raw model-emitted Python text to `dangerouslySetInnerHTML`.
