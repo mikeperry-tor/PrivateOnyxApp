@@ -15,6 +15,7 @@ def _strict() -> bool:
 
 def _install() -> None:
     from wrapper_env_patches import apply_code_interpreter_network_description_patches
+    from wrapper_env_patches import apply_chat_file_id_validation_patch
     from wrapper_env_patches import apply_coding_agent_final_answer_fallback_patch
     from wrapper_env_patches import apply_coding_agent_repo_download_limit_patch
     from wrapper_env_patches import apply_configured_inference_proxy_patch
@@ -63,6 +64,7 @@ def _install() -> None:
     apply_coding_agent_final_answer_fallback_patch()
     apply_preserve_tool_results_patch()
     apply_python_file_link_enforcement_patches()
+    apply_chat_file_id_validation_patch()
     apply_searxng_single_attempt_patch()
     install_url_identity_preservation()
     install_open_url_failure_reporting()

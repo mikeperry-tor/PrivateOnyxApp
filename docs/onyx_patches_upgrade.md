@@ -729,8 +729,11 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
   and verify both emitted and saved answers normalize exact chat-file paths,
   legacy absolute origins become relative, unrelated/incomplete Markdown is
   lossless, extensionless model labels are replaced with the authoritative
-  generated filename from live and persisted tool metadata, and reloaded
-  historical assistant messages use the same rule;
+  generated filename from live and persisted tool metadata, an underscore-
+  corrupted generated UUID is restored only by an exact authoritative match,
+  and reloaded historical assistant messages use the same rule; verify a
+  non-UUID opaque chat-file ID bypasses the UUID-only `UserFile.id` lookup
+  without weakening subsequent authorization or unknown-file handling;
 - uploaded/local/background images, a `blob:` image preview, and an embedded
   `data:` DOCX image must still render;
 - login, chat hydration/streaming, same-origin fetches, voice HTTP/WebSockets,

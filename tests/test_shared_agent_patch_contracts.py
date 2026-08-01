@@ -408,6 +408,35 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             ),
             r"[math_\[functions\].png](/api/chat/file/file-id)",
         )
+        canonical_id = "0ad58c02-1c2d-4e22-9c41-d9e13a5e1d7b"
+        corrupted = (
+            "![Simple Function Graphs](/api/chat/file/"
+            "0ad5_8c02-1c2d-4e22-9c41-d9e13a5e1d7b)"
+        )
+        recovered = (
+            "[simple_function_graphs.png](/api/chat/file/" f"{canonical_id})"
+        )
+        self.assertEqual(
+            normalize(
+                corrupted,
+                {canonical_id: "simple_function_graphs.png"},
+            ),
+            recovered,
+        )
+        for split in range(len(corrupted) + 1):
+            stream = wrapper._ChatFileMarkdownStream(
+                {canonical_id: "simple_function_graphs.png"}
+            )
+            actual = stream.feed(corrupted[:split])
+            actual += stream.feed(corrupted[split:]) + stream.flush()
+            self.assertEqual(actual, recovered, f"corrupted ID split={split}")
+        self.assertEqual(
+            normalize(
+                "[unknown](/api/chat/file/0ad5_8c02-1c2d-4e22-9c41-d9e13a5e1d7b)",
+                {"11111111-1111-4111-8111-111111111111": "other.png"},
+            ),
+            "[unknown](/api/chat/file/0ad5_8c02-1c2d-4e22-9c41-d9e13a5e1d7b)",
+        )
 
     def test_generated_chat_file_filenames_support_live_and_saved_tool_calls(self) -> None:
         wrapper = _load_wrapper()
@@ -710,6 +739,76 @@ def translate_assistant_message_to_packets(chat_message, db_session):
         ), patch.dict(sys.modules, modules):
             with self.assertRaisesRegex(RuntimeError, "did not match"):
                 wrapper.apply_python_file_link_prompt_patches()
+
+    def test_chat_file_user_file_lookup_skips_non_uuid_ids(self) -> None:
+        wrapper = _load_wrapper()
+        onyx = _package("onyx")
+        db = _package("onyx.db")
+        user_file = ModuleType("onyx.db.user_file")
+        _exec_module_source(
+            user_file,
+            "<chat_file_id_fake_user_file>",
+            """\
+class UserFile:
+    id = "id"
+
+def get_file_id_by_user_file_id(user_file_id, db_session):
+    user_file = db_session.query(UserFile).filter(UserFile.id == user_file_id).first()
+    if user_file:
+        return user_file.file_id
+    return None
+""",
+        )
+        onyx.db = db
+        db.user_file = user_file
+
+        class Query:
+            def __init__(self):
+                self.calls = 0
+
+            def filter(self, _condition):
+                self.calls += 1
+                return self
+
+            def first(self):
+                return None
+
+        class Session:
+            def __init__(self):
+                self.query_object = Query()
+
+            def query(self, _model):
+                return self.query_object
+
+        modules = {
+            "onyx": onyx,
+            "onyx.db": db,
+            "onyx.db.user_file": user_file,
+        }
+        with patch.dict(
+            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+        ), patch.dict(sys.modules, modules):
+            wrapper.apply_chat_file_id_validation_patch()
+            session = Session()
+            self.assertIsNone(
+                user_file.get_file_id_by_user_file_id(
+                    "0ad5_8c02-1c2d-4e22-9c41-d9e13a5e1d7b", session
+                )
+            )
+            self.assertEqual(session.query_object.calls, 0)
+            self.assertIsNone(
+                user_file.get_file_id_by_user_file_id(
+                    "0ad58c02-1c2d-4e22-9c41-d9e13a5e1d7b", session
+                )
+            )
+            self.assertEqual(session.query_object.calls, 1)
+            self.assertTrue(
+                getattr(
+                    user_file.get_file_id_by_user_file_id,
+                    "_wrapper_chat_file_id_guard",
+                    False,
+                )
+            )
 
     def test_python_file_link_prompt_drift_fails_strict(self) -> None:
         wrapper = _load_wrapper()

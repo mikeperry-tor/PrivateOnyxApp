@@ -16,6 +16,7 @@ def _install_wrapper_patches() -> None:
     patches.apply_internal_search_context_patches()
     patches.apply_native_reasoning_detection_override_patch()
     patches.apply_python_file_link_prompt_patches()
+    patches.apply_chat_file_id_validation_patch()
     patches.apply_python_package_capability_patches()
     patches.apply_vllm_glm_auto_tool_choice_patch()
     patches.apply_deep_research_chat_agent_tools_patch()
@@ -81,6 +82,12 @@ def _validate_python_file_link_enforcement() -> None:
         "![Simple Function Graphs](/api/chat/file/file-id)",
         {"file-id": "graph.png"},
     ) == "[graph.png](/api/chat/file/file-id)"
+    canonical_id = "0ad58c02-1c2d-4e22-9c41-d9e13a5e1d7b"
+    assert patches._normalize_chat_file_markdown(
+        "![Simple Function Graphs](/api/chat/file/"
+        "0ad5_8c02-1c2d-4e22-9c41-d9e13a5e1d7b)",
+        {canonical_id: "graph.png"},
+    ) == f"[graph.png](/api/chat/file/{canonical_id})"
     saved_tool_call = SimpleNamespace(
         generated_files=None,
         tool_call_response=json.dumps(
@@ -110,6 +117,17 @@ def _validate_python_file_link_enforcement() -> None:
             + stream.flush()
         )
         assert actual == expected
+
+    from onyx.db import user_file
+
+    assert getattr(
+        user_file.get_file_id_by_user_file_id,
+        "_wrapper_chat_file_id_guard",
+        False,
+    )
+    assert user_file.get_file_id_by_user_file_id(
+        "0ad5_8c02-1c2d-4e22-9c41-d9e13a5e1d7b", object()
+    ) is None
 
 def _validate_indexed_open_url_contract() -> None:
     from onyx.tools.tool_implementations.open_url import open_url_tool

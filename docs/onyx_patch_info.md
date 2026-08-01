@@ -411,7 +411,11 @@ the patch replaces a model-written label such as `Simple Function Graphs` with
 the authoritative generated filename such as `math_functions_graph.png`. The
 extension is a rendering contract: the pinned WebUI recognizes an ordinary
 chat-file link as an inline image from that label. Live metadata comes from the
-chat state; saved metadata comes from the persisted Python tool response.
+chat state; saved metadata comes from the persisted Python tool response. If a
+model inserts an underscore into a generated UUID, the normalizer restores the
+canonical destination only when removing that underscore identifies exactly
+one authoritative generated-file ID. It does not guess among files or rewrite
+an unrelated/fabricated ID.
 Chunk boundaries, inline and fenced code, incomplete Markdown, unrelated links,
 non-HTTP schemes, and paths outside the exact chat-file endpoint are handled
 without loss or rewriting.
@@ -427,6 +431,15 @@ If such a canonical `.png` link renders as a broken image, rewriting has already
 succeeded: inspect the authenticated `GET /api/chat/file/{id}` response and API
 logs for a 404 or file-store read failure. URL or label rewriting cannot restore
 missing bytes from another instance or a deleted chat/file-store volume.
+
+The chat-file endpoint also receives both UUID `UserFile.id` values and opaque
+file-store IDs. Upstream tries every value in the UUID-only `user_file.id`
+query first; a malformed model-written ID therefore raises PostgreSQL
+`InvalidTextRepresentation` and returns 500 before file-store lookup. A strict
+API patch skips only that UUID-specific lookup when parsing fails, allowing the
+normal opaque-ID authorization path to continue and ultimately return 404 for
+an unknown ID. This guard is independent of the selected PostgreSQL or S3 file
+backend and applies in both lite and full modes.
 
 The pinned Python tool renderer has an unsafe error fallback: if highlight.js
 throws, it passes raw model-emitted Python text to `dangerouslySetInnerHTML`.

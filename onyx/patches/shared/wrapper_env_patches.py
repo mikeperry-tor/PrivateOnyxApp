@@ -20,6 +20,7 @@ from contextvars import ContextVar
 from types import ModuleType
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
 
 # We cannot remove truncation logic entirely without editing upstream code, so
@@ -3511,6 +3512,27 @@ def _generated_chat_file_filenames(tool_calls: Any) -> dict[str, str]:
     return filenames
 
 
+def _canonical_generated_chat_file_id(
+    candidate: str, filenames: dict[str, str]
+) -> str:
+    """Recover an underscore-corrupted UUID only from authoritative metadata."""
+    if candidate in filenames or "_" not in candidate:
+        return candidate
+    try:
+        candidate_uuid = UUID(candidate.replace("_", ""))
+    except ValueError:
+        return candidate
+
+    matches: list[str] = []
+    for known_id in filenames:
+        try:
+            if UUID(known_id) == candidate_uuid:
+                matches.append(known_id)
+        except ValueError:
+            continue
+    return matches[0] if len(matches) == 1 else candidate
+
+
 def _find_unescaped(value: str, character: str, start: int) -> int:
     index = start
     while True:
@@ -3642,6 +3664,13 @@ class _ChatFileMarkdownStream:
                 output.append(complete)
             else:
                 relative, file_id = resolved
+                canonical_id = _canonical_generated_chat_file_id(
+                    file_id, self._filenames
+                )
+                if canonical_id != file_id:
+                    path_length = len(f"/api/chat/file/{file_id}")
+                    relative = f"/api/chat/file/{canonical_id}{relative[path_length:]}"
+                    file_id = canonical_id
                 label_start = bracket_index + 1
                 label = (
                     _markdown_link_label(self._filenames[file_id])
@@ -3841,6 +3870,54 @@ def apply_python_file_link_enforcement_patches() -> None:
         True
     )
     print("sitecustomize: normalized saved Python chat-file Markdown", flush=True)
+
+
+def apply_chat_file_id_validation_patch() -> None:
+    """Keep non-UUID chat-file IDs out of the UUID-only UserFile lookup."""
+    try:
+        from onyx.db import user_file
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing chat-file ID validation target: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    source = inspect.getsource(user_file.get_file_id_by_user_file_id)
+    anchor = (
+        "    user_file = db_session.query(UserFile).filter("
+        "UserFile.id == user_file_id).first()\n"
+    )
+    if source.count(anchor) != 1:
+        _warn_or_raise(
+            "chat-file UserFile resolver no longer has exactly one UUID lookup site"
+        )
+        return
+
+    user_file._wrapper_is_uuid = lambda value: _is_uuid(value)
+    _patch_function_source(
+        module=user_file,
+        function_name="get_file_id_by_user_file_id",
+        patch_name="non-UUID chat-file ID guard",
+        replacements={
+            anchor: (
+                "    if not _wrapper_is_uuid(user_file_id):\n"
+                "        return None\n"
+                + anchor
+            )
+        },
+    )
+    user_file.get_file_id_by_user_file_id._wrapper_chat_file_id_guard = True
+    print("sitecustomize: guarded chat-file UserFile UUID lookup", flush=True)
+
+
+def _is_uuid(value: Any) -> bool:
+    try:
+        UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
 
 
 def apply_python_file_link_prompt_patches() -> None:
