@@ -46,7 +46,7 @@ echo "Validating WebUI build-time privacy controls in $onyx_web_server_image"
     --network none \
     --entrypoint node \
     "$onyx_web_server_image" \
-    -e 'for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.4.4") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK");'
+    -e 'for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.4.8") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK");'
 
 echo "Validating API patch contracts in $onyx_backend_image"
 "$container_bin" run --rm \
@@ -106,7 +106,7 @@ echo "Validating explicit open_url call limit in $onyx_backend_image"
     --entrypoint python \
     -v "$repo_root/onyx/patches/sitecustomize_api_server:/api-patches:ro" \
     "$onyx_backend_image" \
-    -c "import sys; sys.path.insert(0, '/api-patches'); import open_url_failure_reporting_patch as f, open_url_limit_patch as m; f.install(); m.install(); from onyx.tools.models import OpenURLToolOverrideKwargs, ToolCallException; from onyx.tools.tool_implementations.open_url.open_url_tool import OpenURLTool; t=object.__new__(OpenURLTool); d=t.tool_definition(); assert d['function']['parameters']['properties']['urls']['maxItems'] == 10; o=OpenURLToolOverrideKwargs(starting_citation_num=1, citation_mapping={}, url_snippet_map={}); u=[f'https://example.com/{i}' for i in range(11)]; caught=False; message=''; exec('try:\\n t.run(None, o, urls=u)\\nexcept ToolCallException as e:\\n caught=True\\n message=e.llm_facing_message'); assert caught and 'at most 10 URLs' in message and 'No URLs from this call were opened' in message; print('PINNED_OPEN_URL_LIMIT_CONTRACT_OK')"
+    -c "import sys; sys.path.insert(0, '/api-patches'); import open_url_failure_reporting_patch as f, open_url_limit_patch as m; f.install(); m.install(); from onyx.tools.models import OpenURLToolOverrideKwargs, ToolCallException; from onyx.tools.tool_implementations.open_url.open_url_tool import OpenURLTool; t=object.__new__(OpenURLTool); t._web_fetch_disabled=False; d=t.tool_definition(); assert d['function']['parameters']['properties']['urls']['maxItems'] == 10; o=OpenURLToolOverrideKwargs(starting_citation_num=1, citation_mapping={}, url_snippet_map={}); u=[f'https://example.com/{i}' for i in range(11)]; caught=False; message=''; exec('try:\\n t.run(None, o, urls=u)\\nexcept ToolCallException as e:\\n caught=True\\n message=e.llm_facing_message'); assert caught and 'at most 10 URLs' in message and 'No URLs from this call were opened' in message; print('PINNED_OPEN_URL_LIMIT_CONTRACT_OK')"
 
 echo "Validating background PDF freshness contracts in $onyx_backend_image"
 "$container_bin" run --rm \

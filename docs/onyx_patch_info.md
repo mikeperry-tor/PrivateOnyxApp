@@ -147,12 +147,16 @@ HTML/XHTML DOM, while PDF/raw/binary paths remain strict. See
 
 ## Lite-mode `open_url` availability
 
-Onyx exposes `OpenURLTool` in both modes. With `DISABLE_VECTOR_DB=true`, its
-native crawl-only branch skips indexed and link-based retrieval, runs the
-configured content provider under the normal timeout, and represents indexed
-content as an empty result. Full mode retains parallel ACL-filtered indexed
-retrieval and crawling. Pinned-image validation checks this separation so lite
-mode cannot accidentally invoke its disabled document index or restore RAG.
+Onyx makes `OpenURLTool` available in both modes while Web Search is enabled.
+With `DISABLE_VECTOR_DB=true`, its native crawl-only branch skips indexed and
+link-based retrieval, runs the configured content provider under the normal
+timeout, and represents indexed content as an empty result. Full mode retains
+parallel ACL-filtered indexed retrieval and crawling. If Web Search is
+explicitly excluded for a conversation, pinned upstream disables live
+`open_url` fetching too: full mode is indexed-only and lite-mode Agent
+construction omits the unusable tool. Pinned-image validation checks both
+states so lite mode cannot invoke its disabled document index or restore RAG,
+and disabling Web Search cannot leave a hidden live crawler path.
 
 `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` controls only the built-in crawler. In
 stock mode it applies to requests-fetched PDF/HTML and rendered Chromium HTML;
@@ -446,8 +450,9 @@ MinIO under `docker-data/minio`. A different UUID in assistant Markdown
 therefore came from model output, not from a second executor or storage ID.
 
 The chat-file endpoint also receives both UUID `UserFile.id` values and opaque
-file-store IDs. Upstream tries every value in the UUID-only `user_file.id`
-query first; a malformed model-written ID therefore raises PostgreSQL
+file-store IDs. Upstream funnels every value through a shared helper that
+passes it to the UUID-only `user_file.id` query without validating it first; a
+malformed model-written ID therefore raises PostgreSQL
 `InvalidTextRepresentation` and returns 500 before file-store lookup. A strict
 API patch skips only that UUID-specific lookup when parsing fails, allowing the
 normal opaque-ID authorization path to continue and ultimately return 404 for

@@ -819,8 +819,11 @@ def translate_assistant_message_to_packets(chat_message, db_session):
 class UserFile:
     id = "id"
 
+def get_user_file_by_id(user_file_id, db_session):
+    return db_session.query(UserFile).filter(UserFile.id == user_file_id).first()
+
 def get_file_id_by_user_file_id(user_file_id, db_session):
-    user_file = db_session.query(UserFile).filter(UserFile.id == user_file_id).first()
+    user_file = get_user_file_by_id(user_file_id, db_session)
     if user_file:
         return user_file.file_id
     return None
@@ -872,6 +875,13 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
             self.assertTrue(
                 getattr(
                     user_file.get_file_id_by_user_file_id,
+                    "_wrapper_chat_file_id_guard",
+                    False,
+                )
+            )
+            self.assertTrue(
+                getattr(
+                    user_file.get_user_file_by_id,
                     "_wrapper_chat_file_id_guard",
                     False,
                 )

@@ -275,6 +275,28 @@ def _validate_indexed_open_url_contract() -> None:
     assert "(urls, override_kwargs.url_snippet_map)," in run_source
     assert "allow_failures=True" in run_source
 
+    from onyx.tools import tool_constructor
+
+    web_search_tool = SimpleNamespace(in_code_tool_id="WebSearchTool", id=17)
+    assert not tool_constructor.should_disable_open_url_web_fetch(
+        [web_search_tool], None
+    )
+    assert not tool_constructor.should_disable_open_url_web_fetch(
+        [web_search_tool], [17]
+    )
+    assert tool_constructor.should_disable_open_url_web_fetch(
+        [web_search_tool], []
+    )
+    constructor_source = inspect.getsource(tool_constructor._construct_tools_impl)
+    assert "open_url_web_fetch_disabled" in constructor_source
+    assert (
+        "if open_url_web_fetch_disabled and DISABLE_VECTOR_DB:"
+        in constructor_source
+    )
+    assert "web_fetch_disabled=open_url_web_fetch_disabled" in constructor_source
+    assert "if self._web_fetch_disabled:" in run_source
+    assert "WEB_FETCH_DISABLED_REASON" in run_source
+
 
 def _validate_lite_open_url_contract() -> None:
     from onyx.tools.tool_implementations.open_url import open_url_tool

@@ -3892,21 +3892,21 @@ def apply_chat_file_id_validation_patch() -> None:
         _raise_if_strict()
         return
 
-    source = inspect.getsource(user_file.get_file_id_by_user_file_id)
+    source = inspect.getsource(user_file.get_user_file_by_id)
     anchor = (
-        "    user_file = db_session.query(UserFile).filter("
+        "    return db_session.query(UserFile).filter("
         "UserFile.id == user_file_id).first()\n"
     )
     if source.count(anchor) != 1:
         _warn_or_raise(
-            "chat-file UserFile resolver no longer has exactly one UUID lookup site"
+            "chat-file UserFile helper no longer has exactly one UUID lookup site"
         )
         return
 
     user_file._wrapper_is_uuid = lambda value: _is_uuid(value)
     _patch_function_source(
         module=user_file,
-        function_name="get_file_id_by_user_file_id",
+        function_name="get_user_file_by_id",
         patch_name="non-UUID chat-file ID guard",
         replacements={
             anchor: (
@@ -3916,6 +3916,7 @@ def apply_chat_file_id_validation_patch() -> None:
             )
         },
     )
+    user_file.get_user_file_by_id._wrapper_chat_file_id_guard = True
     user_file.get_file_id_by_user_file_id._wrapper_chat_file_id_guard = True
     print("sitecustomize: guarded chat-file UserFile UUID lookup", flush=True)
 

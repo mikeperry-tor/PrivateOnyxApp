@@ -70,17 +70,28 @@ For each tool call in full mode, Onyx first normalizes every requested URL using
 connector-owned rules and checks the ordered canonical-ID candidates returned
 by that connector. This covers sources such as Google Drive where the pasted
 URL can identify a file without identifying which canonical document form was
-indexed. The first indexed candidate wins. Onyx then runs exact-ID chunk
-retrieval and a fresh crawler request
-as failure-tolerant parallel siblings. After both finish, it prefers the
-already-indexed representation for a matched URL and otherwise uses the fresh
-crawl. The crawl therefore still occurs even when an indexed copy is ultimately
-returned. A link-column lookup is a last resort only when ordinary ID resolution
-and the crawl both fail. Access filters apply to indexed retrieval.
+indexed. The first indexed candidate wins. When Web Search is enabled for the
+conversation, Onyx then runs exact-ID chunk retrieval and a fresh crawler
+request as failure-tolerant parallel siblings. After both finish, it prefers
+the already-indexed representation for a matched URL and otherwise uses the
+fresh crawl. The crawl therefore still occurs even when an indexed copy is
+ultimately returned. A link-column lookup is a last resort only when ordinary
+ID resolution and the crawl both fail. Access filters apply to indexed
+retrieval.
 
-Lite mode has no usable document index. Its availability patch leaves the
-crawler sibling operational while the indexed sibling fails into an empty
-result; it does not restore ingestion, RAG, or indexed retrieval.
+Explicitly excluding Web Search for a conversation also disables live
+`open_url` fetching. Full mode keeps `open_url` indexed-only and reports an
+unavailable URL instead of crawling when neither exact-ID nor link-based
+retrieval can serve it. Lite mode has no index, so Agent tool construction
+omits `open_url` in this state. The stock and direct-Obscura crawler patches
+are not invoked on either disabled-web path.
+
+Lite mode has no usable document index. While Web Search is enabled, its
+availability patch leaves the crawler sibling operational while the indexed
+sibling fails into an empty result; it does not restore ingestion, RAG, or
+indexed retrieval. When Web Search is explicitly excluded, Agent construction
+omits `open_url` rather than exposing a tool that could only return the
+disabled-web failure.
 
 The limits apply at distinct boundaries:
 
