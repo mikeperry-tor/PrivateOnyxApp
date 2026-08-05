@@ -24,7 +24,9 @@ def _install() -> None:
     from wrapper_env_patches import apply_internal_search_context_patches
     from wrapper_env_patches import apply_llm_max_tokens_override_patch
     from wrapper_env_patches import apply_mcp_egress_proxy_patch
+    from wrapper_env_patches import apply_midstream_inference_continuation_patch
     from wrapper_env_patches import apply_native_reasoning_detection_override_patch
+    from wrapper_env_patches import apply_native_tool_calls_only_patch
     from wrapper_env_patches import apply_open_url_char_limit_patches
     from wrapper_env_patches import apply_playwright_helper_proxy_patch
     from wrapper_env_patches import apply_preserve_tool_results_patch
@@ -61,6 +63,8 @@ def _install() -> None:
     apply_reasoning_mode_trace_patch()
     apply_deep_research_chat_agent_tools_patch()
     apply_reasoning_content_preservation_patch()
+    apply_native_tool_calls_only_patch()
+    apply_midstream_inference_continuation_patch()
     apply_coding_agent_final_answer_fallback_patch()
     apply_preserve_tool_results_patch()
     apply_python_file_link_enforcement_patches()

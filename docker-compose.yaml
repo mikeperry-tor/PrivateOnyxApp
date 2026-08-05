@@ -472,6 +472,17 @@ services:
       ONYX_AGENT_PRESERVE_TURN_REASONING: "${ONYX_AGENT_PRESERVE_TURN_REASONING:-true}"
       # Optionally preserve assistant reasoning from all prior turns too.
       ONYX_AGENT_PRESERVE_ALL_REASONING: "${ONYX_AGENT_PRESERVE_ALL_REASONING:-false}"
+      # Let Onyx retry once before any output. If a retryable transport failure
+      # instead interrupts ordinary text, the wrapper continues from the
+      # preserved partial assistant response. Every continuation still inherits
+      # Onyx's one retry before its own first chunk. New answer or reasoning text
+      # permits another continuation; two failures without progress cannot run
+      # back to back.
+      LLM_FIRST_CHUNK_MAX_RETRIES: "1"
+      ONYX_LLM_MIDSTREAM_CONTINUATION_ENABLED: "true"
+      # Independently require provider-native structured tool-call deltas. Keep
+      # malformed/non-native JSON or XML visible as diagnostic answer text.
+      ONYX_LLM_NATIVE_TOOL_CALLS_ONLY: "true"
       # Give nested Deep Research agents the tools selected for the current chat
       # Agent; sitecustomize preserves all accepted calls with bounded workers.
       ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS: "${ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS:-true}"

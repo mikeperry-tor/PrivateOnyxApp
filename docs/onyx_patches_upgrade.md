@@ -844,6 +844,37 @@ wrappers.
   `convert_chat_history()` signature. Exercise a reasoning-bearing tool turn,
   a follow-up that needs saved tool output, successful final synthesis, and a
   final-synthesis-only failure.
+- **Interrupted inference streams:** re-audit `LitellmLLM.stream`'s complete
+  signature, first-chunk retry markers, response conversion, and exception
+  classes. Keep `LLM_FIRST_CHUNK_MAX_RETRIES=1`; prove the upstream stream makes
+  exactly two total attempts before first output and the wrapper does not add a
+  nested pre-chunk retry. Count provider calls separately from wrapper-level
+  continuations: each continuation inherits upstream's one pre-chunk retry and
+  can therefore make two provider calls before its first chunk. There is no
+  absolute continuation or provider-call cap; new reasoning or answer text
+  permits another continuation, while a continuation failure without progress
+  must terminate recovery so two no-progress continuations cannot run back to
+  back. Exercise at least three successive progress-bearing continuations with
+  an unchanged system/prompt prefix and retained reasoning; a continuation that
+  fails before progress; a clean EOF with no terminal finish marker that retains
+  pinned stock behavior; a post-finish exception that becomes a generic saved
+  warning; and a partial native tool-call failure that must not continue.
+  Confirm continuation requests preserve the original tools, `tool_choice`,
+  reasoning effort, and other applicable request controls without adding a
+  constraint; structured output and non-retryable failures must fail normally.
+  With both optional cross-turn reasoning settings disabled, confirm the
+  synthetic partial-assistant message still serializes its declared
+  `reasoning_content` across the continuation's user-role instruction. Re-audit
+  `_try_fallback_tool_extraction` and `_XmlToolCallContentFilter`; JSON/XML tool
+  text must remain visible and inert, split XML markers must pass through
+  exactly, and ordinary text must remain continuable when tools are supplied
+  but no native tool delta has begun. The pinned-image contract must drive
+  terminal recovery and post-finish failure through the real LLM-step
+  translator and `ChatStateContainer`, proving emitted, returned, and saved
+  answer identity. During live upgrade validation, confirm the stock WebUI
+  persists and reloads both visible recovery notices and malformed textual tool
+  payloads with partial output; the deterministic state-container contract does
+  not replace this browser/database integration check.
 - **Context and output limits:** re-audit both configured-token lookup source
   markers, the complete internal-search formatter signature/JSON construction,
   all three `open_url`/search positional defaults, and the repository downloader

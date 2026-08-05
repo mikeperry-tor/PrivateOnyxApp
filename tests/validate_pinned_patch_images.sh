@@ -55,6 +55,8 @@ echo "Validating API patch contracts in $onyx_backend_image"
     -e PYTHONPATH=/app:/wrapper \
     -e WRAPPER_PATCH_STRICT=true \
     -e LITELLM_LOCAL_MODEL_COST_MAP=true \
+    -e LLM_FIRST_CHUNK_MAX_RETRIES=1 \
+    -e ONYX_LLM_NATIVE_TOOL_CALLS_ONLY=true \
     -e GEN_AI_MAX_TOKENS=131072 \
     -e ONYX_AGENT_USE_NATIVE_REASONING=true \
     -e ONYX_AGENT_PRESERVE_TOOL_RESULTS=true \

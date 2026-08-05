@@ -507,6 +507,447 @@ def _attach_reasoning_fields(
     _set_extra_attr(message, "provider_specific_fields", provider_specific_fields)
 
 
+_MIDSTREAM_CONTINUATION_NOTICE = (
+    "\n\n> ⚠️ The inference stream was interrupted. The response continues "
+    "below from a recovery request and may contain a repeated or omitted "
+    "fragment.\n\n"
+)
+_MIDSTREAM_CONTINUATION_FAILED_NOTICE = (
+    "\n\n> ⚠️ Recovery also failed before the response completed. The generation "
+    "above is partial and may end in corrupted reasoning, a sentence, or a "
+    "Markdown structure.\n"
+)
+_MIDSTREAM_FINALIZATION_FAILED_NOTICE = (
+    "\n\n> ⚠️ The model signaled that this response was complete, but stream "
+    "finalization then failed. The response above was preserved, but its "
+    "delivery or accounting could not be fully verified.\n"
+)
+_MIDSTREAM_REASONING_CONTINUATION_NOTICE = (
+    "\n\n⚠️ The inference reasoning stream was interrupted. Reasoning continues "
+    "below from a recovery request and may contain a repeated or omitted "
+    "fragment.\n\n"
+)
+_MIDSTREAM_CONTINUATION_INSTRUCTION = (
+    "The preceding assistant generation was interrupted by a transport failure. "
+    "Continue its reasoning or response directly from its final character. Do "
+    "not restart, summarize, or repeat completed material. Complete any "
+    "unfinished sentence or Markdown structure, following the original request "
+    "and tool policy."
+)
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """Return a bounded exception chain without trusting provider wrapper shape."""
+    chain: list[BaseException] = []
+    pending = [exc]
+    seen: set[int] = set()
+    while pending and len(chain) < 12:
+        current = pending.pop(0)
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        chain.append(current)
+        for nested in (current.__cause__, current.__context__):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+        if len(current.args) == 1 and isinstance(current.args[0], BaseException):
+            pending.append(current.args[0])
+    return chain
+
+
+def _midstream_retryable_exception(exc: BaseException) -> bool:
+    from litellm.exceptions import APIConnectionError as LiteLLMAPIConnectionError
+    from litellm.exceptions import InternalServerError as LiteLLMInternalServerError
+    from litellm.exceptions import (
+        ServiceUnavailableError as LiteLLMServiceUnavailableError,
+    )
+    from litellm.exceptions import Timeout as LiteLLMTimeout
+
+    retryable_types: tuple[type[BaseException], ...] = (
+        LiteLLMTimeout,
+        LiteLLMAPIConnectionError,
+        LiteLLMServiceUnavailableError,
+        LiteLLMInternalServerError,
+    )
+    try:
+        from openai import APIConnectionError as OpenAIAPIConnectionError
+        from openai import APITimeoutError as OpenAIAPITimeoutError
+
+        retryable_types += (OpenAIAPIConnectionError, OpenAIAPITimeoutError)
+    except ImportError:  # pragma: no cover - LiteLLM normally installs OpenAI
+        pass
+    return any(isinstance(item, retryable_types) for item in _exception_chain(exc))
+
+
+def apply_native_tool_calls_only_patch() -> None:
+    """Leave JSON/XML-looking tool text visible and never execute it as a tool."""
+    if not _env_flag_default_true("ONYX_LLM_NATIVE_TOOL_CALLS_ONLY"):
+        return
+
+    try:
+        from onyx.chat import llm_loop
+        from onyx.chat import llm_step
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing textual tool fallback modules: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    current_fallback = llm_loop._try_fallback_tool_extraction
+    current_process = llm_step._XmlToolCallContentFilter.process
+    current_flush = llm_step._XmlToolCallContentFilter.flush
+    if (
+        getattr(current_fallback, "_wrapper_native_tool_calls_only", False)
+        and getattr(current_process, "_wrapper_xml_tool_text_passthrough", False)
+        and getattr(current_flush, "_wrapper_xml_tool_text_passthrough", False)
+    ):
+        return
+
+    expected_fallback_parameters = (
+        "llm_step_result",
+        "tool_choice",
+        "fallback_extraction_attempted",
+        "tool_defs",
+        "turn_index",
+    )
+    if (
+        tuple(inspect.signature(current_fallback).parameters)
+        != expected_fallback_parameters
+    ):
+        _warn_or_raise(
+            "llm_loop._try_fallback_tool_extraction signature changed; refusing "
+            "native-tool-only patch"
+        )
+        return
+    if tuple(inspect.signature(current_process).parameters) != ("self", "content"):
+        _warn_or_raise(
+            "llm_step._XmlToolCallContentFilter.process signature changed; "
+            "refusing XML tool-text passthrough patch"
+        )
+        return
+    if tuple(inspect.signature(current_flush).parameters) != ("self",):
+        _warn_or_raise(
+            "llm_step._XmlToolCallContentFilter.flush signature changed; refusing "
+            "XML tool-text passthrough patch"
+        )
+        return
+
+    try:
+        fallback_source = inspect.getsource(current_fallback)
+        process_source = inspect.getsource(current_process)
+        flush_source = inspect.getsource(current_flush)
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(f"could not inspect textual tool fallback helpers: {e}")
+        return
+
+    fallback_markers = (
+        "extract_tool_calls_from_response_text(",
+        "xml_tool_call_text_detected",
+        "return llm_step_result, True",
+    )
+    process_markers = (
+        "self._inside_function_calls_block",
+        "_find_function_calls_open_marker",
+        "Drop the whole function_calls block",
+    )
+    flush_markers = (
+        "if self._inside_function_calls_block:",
+        "Drop any incomplete block at stream end",
+        "remaining = self._pending",
+    )
+    missing = [marker for marker in fallback_markers if marker not in fallback_source]
+    missing += [
+        marker for marker in process_markers if marker not in process_source
+    ]
+    missing += [marker for marker in flush_markers if marker not in flush_source]
+    if missing:
+        _warn_or_raise(
+            "textual tool fallback no longer matches the expected extraction/filter "
+            f"contract; missing {missing!r}"
+        )
+        return
+
+    @functools.wraps(current_fallback)
+    def _native_tool_calls_only(
+        llm_step_result,
+        tool_choice,
+        fallback_extraction_attempted,
+        tool_defs,
+        turn_index,
+    ):
+        del tool_choice, fallback_extraction_attempted, tool_defs, turn_index
+        return llm_step_result, False
+
+    @functools.wraps(current_process)
+    def _pass_through_xml_tool_text(self, content: str) -> str:
+        del self
+        return content or ""
+
+    @functools.wraps(current_flush)
+    def _flush_no_buffered_xml_tool_text(self) -> str:
+        del self
+        return ""
+
+    _native_tool_calls_only._wrapper_native_tool_calls_only = True
+    _pass_through_xml_tool_text._wrapper_xml_tool_text_passthrough = True
+    _flush_no_buffered_xml_tool_text._wrapper_xml_tool_text_passthrough = True
+    llm_loop._try_fallback_tool_extraction = _native_tool_calls_only
+    llm_step._XmlToolCallContentFilter.process = _pass_through_xml_tool_text
+    llm_step._XmlToolCallContentFilter.flush = _flush_no_buffered_xml_tool_text
+    print(
+        "sitecustomize: disabled textual JSON/XML tool extraction and made XML "
+        "tool text visible",
+        flush=True,
+    )
+
+
+def _build_midstream_partial_assistant(
+    assistant_message_cls: type,
+    *,
+    content: str | None,
+    reasoning: str | None,
+):
+    """Build a Pydantic message whose reasoning survives stock serialization."""
+
+    class _MidstreamPartialAssistant(assistant_message_cls):
+        reasoning_content: str | None = None
+
+    message = _MidstreamPartialAssistant(content=content)
+    _attach_reasoning_fields(
+        message,
+        reasoning,
+        source="midstream_continuation",
+    )
+    return message
+
+
+def apply_midstream_inference_continuation_patch() -> None:
+    """Preserve and conditionally continue a partially streamed chat answer."""
+    if not _env_flag_default_true("ONYX_LLM_MIDSTREAM_CONTINUATION_ENABLED"):
+        return
+
+    try:
+        from onyx.llm import multi_llm
+        from onyx.llm.model_response import Delta
+        from onyx.llm.model_response import ModelResponseStream
+        from onyx.llm.model_response import StreamingChoice
+        from onyx.llm.models import AssistantMessage
+        from onyx.llm.models import ReasoningEffort
+        from onyx.llm.models import UserMessage
+    except Exception as e:  # pragma: no cover
+        print(
+            f"sitecustomize: failed importing mid-stream continuation modules: {e}",
+            flush=True,
+        )
+        _raise_if_strict()
+        return
+
+    current_stream = multi_llm.LitellmLLM.stream
+    if getattr(current_stream, "_wrapper_midstream_continuation", False):
+        return
+
+    expected_parameters = (
+        "self",
+        "prompt",
+        "tools",
+        "tool_choice",
+        "structured_response_format",
+        "timeout_override",
+        "max_tokens",
+        "reasoning_effort",
+        "user_identity",
+    )
+    if tuple(inspect.signature(current_stream).parameters) != expected_parameters:
+        _warn_or_raise(
+            "LitellmLLM.stream signature changed; refusing mid-stream continuation patch"
+        )
+        return
+    try:
+        stream_source = inspect.getsource(current_stream)
+    except Exception as e:  # pragma: no cover
+        _warn_or_raise(f"could not inspect LitellmLLM.stream: {e}")
+        return
+    expected_source_markers = (
+        "retryable_exceptions = (",
+        "LLM_FIRST_CHUNK_MAX_RETRIES",
+        "if yielded_any or attempt >= max_attempts - 1:",
+        "from_litellm_model_response_stream(chunk)",
+    )
+    missing = [
+        marker for marker in expected_source_markers if marker not in stream_source
+    ]
+    if missing:
+        _warn_or_raise(
+            "LitellmLLM.stream no longer matches the expected retry contract; "
+            f"missing {missing!r}"
+        )
+        return
+
+    original_stream = current_stream
+
+    def _synthetic_chunk(
+        last_packet,
+        content: str,
+        finish_reason: str | None = None,
+        *,
+        as_reasoning: bool = False,
+    ):
+        return ModelResponseStream(
+            id=last_packet.id,
+            created=last_packet.created,
+            choice=StreamingChoice(
+                finish_reason=finish_reason,
+                index=last_packet.choice.index,
+                delta=Delta(
+                    content=None if as_reasoning else content,
+                    reasoning_content=content if as_reasoning else None,
+                ),
+            ),
+        )
+
+    @functools.wraps(original_stream)
+    def _stream_with_midstream_continuation(
+        self,
+        prompt,
+        tools=None,
+        tool_choice=None,
+        structured_response_format=None,
+        timeout_override=None,
+        max_tokens=None,
+        reasoning_effort=ReasoningEffort.AUTO,
+        user_identity=None,
+    ):
+        original_prompt = list(prompt) if isinstance(prompt, list) else [prompt]
+        generated_answer_parts: list[str] = []
+        generated_reasoning_parts: list[str] = []
+        last_packet = None
+        saw_tool_delta = False
+        saw_terminal_finish = False
+        continuation_count = 0
+        continuation_prompt = prompt
+
+        while True:
+            is_continuation = continuation_count > 0
+            made_continuation_progress = False
+            try:
+                for packet in original_stream(
+                    self,
+                    prompt=continuation_prompt,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    structured_response_format=structured_response_format,
+                    timeout_override=timeout_override,
+                    max_tokens=max_tokens,
+                    reasoning_effort=reasoning_effort,
+                    user_identity=user_identity,
+                ):
+                    last_packet = packet
+                    delta = packet.choice.delta
+                    if delta.tool_calls:
+                        saw_tool_delta = True
+                    if delta.reasoning_content:
+                        generated_reasoning_parts.append(delta.reasoning_content)
+                        if is_continuation:
+                            made_continuation_progress = True
+                        if is_continuation and generated_answer_parts:
+                            # A second reasoning phase after answer output violates
+                            # Onyx's one-ReasoningStart stream contract. Retain it for
+                            # another continuation prompt, but do not emit it to UI.
+                            packet = packet.model_copy(deep=True)
+                            packet.choice.delta.reasoning_content = None
+                            delta = packet.choice.delta
+                    if delta.content:
+                        generated_answer_parts.append(delta.content)
+                        if is_continuation:
+                            made_continuation_progress = True
+                    if packet.choice.finish_reason:
+                        saw_terminal_finish = True
+                    if (
+                        delta.content
+                        or delta.reasoning_content is not None
+                        or delta.tool_calls
+                        or packet.usage
+                        or packet.choice.finish_reason
+                    ):
+                        yield packet
+                return
+            except Exception as exc:
+                if saw_terminal_finish:
+                    print(
+                        "sitecustomize: inference stream finalization failed after "
+                        "a terminal finish; preserving response with a warning",
+                        flush=True,
+                    )
+                    yield _synthetic_chunk(
+                        last_packet,
+                        _MIDSTREAM_FINALIZATION_FAILED_NOTICE,
+                        "stop",
+                    )
+                    return
+                can_preserve = (
+                    bool(generated_answer_parts or generated_reasoning_parts)
+                    and not saw_tool_delta
+                    and structured_response_format is None
+                    and _midstream_retryable_exception(exc)
+                )
+                if not can_preserve:
+                    raise
+
+                if is_continuation and not made_continuation_progress:
+                    print(
+                        "sitecustomize: mid-stream inference recovery exhausted; "
+                        f"preserving partial response after {continuation_count} "
+                        "continuation attempt(s)",
+                        flush=True,
+                    )
+                    yield _synthetic_chunk(
+                        last_packet,
+                        _MIDSTREAM_CONTINUATION_FAILED_NOTICE,
+                        "stop",
+                    )
+                    return
+
+                continuation_count += 1
+                print(
+                    "sitecustomize: continuing interrupted inference stream "
+                    f"({type(exc).__name__}); attempt "
+                    f"{continuation_count}",
+                    flush=True,
+                )
+                answer_started = bool(generated_answer_parts)
+                yield _synthetic_chunk(
+                    last_packet,
+                    (
+                        _MIDSTREAM_CONTINUATION_NOTICE
+                        if answer_started
+                        else _MIDSTREAM_REASONING_CONTINUATION_NOTICE
+                    ),
+                    as_reasoning=not answer_started,
+                )
+
+                partial_assistant = _build_midstream_partial_assistant(
+                    AssistantMessage,
+                    content="".join(generated_answer_parts) or None,
+                    reasoning="".join(generated_reasoning_parts) or None,
+                )
+                # Keep the original prefix and its objects unchanged for both
+                # reasoning preservation and provider-side prefix-cache reuse.
+                continuation_prompt = [
+                    *original_prompt,
+                    partial_assistant,
+                    UserMessage(content=_MIDSTREAM_CONTINUATION_INSTRUCTION),
+                ]
+
+    _stream_with_midstream_continuation._wrapper_midstream_continuation = True
+    multi_llm.LitellmLLM.stream = _stream_with_midstream_continuation
+    print(
+        "sitecustomize: patched progress-gated mid-stream inference continuation",
+        flush=True,
+    )
+
+
 def _dump_message_with_reasoning_fields(
     message: Any,
     *,

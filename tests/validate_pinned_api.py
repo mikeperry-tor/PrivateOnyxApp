@@ -21,6 +21,8 @@ def _install_wrapper_patches() -> None:
     patches.apply_vllm_glm_auto_tool_choice_patch()
     patches.apply_deep_research_chat_agent_tools_patch()
     patches.apply_reasoning_content_preservation_patch()
+    patches.apply_native_tool_calls_only_patch()
+    patches.apply_midstream_inference_continuation_patch()
     patches.apply_coding_agent_final_answer_fallback_patch()
     patches.apply_preserve_tool_results_patch()
     patches.apply_python_file_link_enforcement_patches()
@@ -344,11 +346,16 @@ def _validate_web_search_concurrency_contract() -> None:
 
 def _validate_litellm_contract() -> None:
     from onyx.chat import llm_loop
+    from onyx.chat import llm_step
+    from onyx.configs.chat_configs import LLM_FIRST_CHUNK_MAX_RETRIES
     from litellm.litellm_core_utils.get_model_cost_map import (
         get_model_cost_map_source_info,
     )
+    from litellm.exceptions import Timeout as LiteLLMTimeout
     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
     from litellm.types.utils import Message
+    from onyx.llm.multi_llm import LitellmLLM
+    from onyx.llm.models import AssistantMessage
 
     assert version("litellm") == "1.93.0"
     assert get_model_cost_map_source_info() == {
@@ -372,6 +379,85 @@ def _validate_litellm_contract() -> None:
         inspect.signature(OpenAIGPTConfig.async_transform_request).parameters
     ) == expected_parameters
     assert "reasoning_content" in Message.model_fields
+    assert getattr(LitellmLLM.stream, "_wrapper_midstream_continuation", False)
+    assert LLM_FIRST_CHUNK_MAX_RETRIES == 1
+    assert getattr(
+        llm_loop._try_fallback_tool_extraction,
+        "_wrapper_native_tool_calls_only",
+        False,
+    )
+    assert getattr(
+        llm_step._XmlToolCallContentFilter.process,
+        "_wrapper_xml_tool_text_passthrough",
+        False,
+    )
+
+    fallback_result = SimpleNamespace(tool_calls=None)
+    returned, attempted = llm_loop._try_fallback_tool_extraction(
+        fallback_result,
+        "required",
+        False,
+        [{"type": "function", "function": {"name": "search"}}],
+        0,
+    )
+    assert returned is fallback_result
+    assert attempted is False
+
+    xml_parts = [
+        "before <fun",
+        'ction_calls><invoke name="search">',
+        '<parameter name="q">onyx</parameter></invoke></function_calls> after',
+    ]
+    xml_filter = llm_step._XmlToolCallContentFilter()
+    assert (
+        "".join(xml_filter.process(part) for part in xml_parts)
+        + xml_filter.flush()
+        == "".join(xml_parts)
+    )
+
+    # The continuation suffix is a synthetic user turn. Its partial assistant
+    # must therefore declare reasoning_content so stock Pydantic serialization
+    # retains it even when the optional cross-turn reasoning patch is disabled.
+    partial = patches._build_midstream_partial_assistant(
+        AssistantMessage,
+        content="partial answer",
+        reasoning="forced continuation reasoning",
+    )
+    assert partial.model_dump(exclude_none=True)["reasoning_content"] == (
+        "forced continuation reasoning"
+    )
+
+    class ContractTimeout(LiteLLMTimeout):
+        def __init__(self) -> None:
+            super().__init__(
+                "contract timeout",
+                model="wrapper-contract-model",
+                llm_provider="wrapper-contract-provider",
+            )
+
+    llm = LitellmLLM(
+        api_key=None,
+        model_provider="wrapper-contract-provider",
+        model_name="wrapper-contract-model",
+        max_input_tokens=4096,
+        timeout=1,
+    )
+    completion_calls = 0
+
+    def fail_before_first_chunk(**_kwargs):
+        nonlocal completion_calls
+        completion_calls += 1
+        raise ContractTimeout()
+
+    llm._completion = fail_before_first_chunk
+    try:
+        list(LitellmLLM.stream(llm, prompt=[]))
+    except ContractTimeout:
+        pass
+    else:
+        raise AssertionError("pre-chunk retries unexpectedly hid terminal failure")
+    assert completion_calls == 2
+    assert "prechunk_retry_count" not in LitellmLLM.stream.__code__.co_varnames
 
     transformed = OpenAIGPTConfig().transform_request(
         "wrapper-contract-model",
@@ -403,6 +489,208 @@ def _validate_litellm_contract() -> None:
     assert "_wrapper_append_python_guidance" in final_loop_names
 
 
+def _validate_textual_tool_output_persistence() -> None:
+    from onyx.chat.chat_state import ChatStateContainer
+    from onyx.chat.llm_step import run_llm_step_pkt_generator
+    from onyx.llm.model_response import Delta
+    from onyx.llm.model_response import ModelResponseStream
+    from onyx.llm.model_response import StreamingChoice
+    from onyx.llm.models import ToolChoiceOptions
+    from onyx.server.query_and_chat.streaming_models import Placement
+
+    xml_parts = [
+        "before <fun",
+        'ction_calls><invoke name="search">',
+        '<parameter name="q">onyx</parameter></invoke></function_calls> after',
+    ]
+
+    class TextOnlyLLM:
+        config = SimpleNamespace(
+            model_provider="wrapper-contract-provider",
+            model_name="wrapper-contract-model",
+            api_base=None,
+        )
+
+        def stream(self, **_kwargs):
+            for index, content in enumerate(xml_parts):
+                yield ModelResponseStream(
+                    id="textual-tool-contract",
+                    created="now",
+                    choice=StreamingChoice(
+                        finish_reason="stop" if index == len(xml_parts) - 1 else None,
+                        delta=Delta(content=content),
+                    ),
+                )
+
+    state = ChatStateContainer()
+    generator = run_llm_step_pkt_generator(
+        history=[],
+        tool_definitions=[
+            {"type": "function", "function": {"name": "search"}}
+        ],
+        tool_choice=ToolChoiceOptions.AUTO,
+        llm=TextOnlyLLM(),
+        placement=Placement(turn_index=0),
+        state_container=state,
+        citation_processor=None,
+    )
+    packets = []
+    while True:
+        try:
+            packets.append(next(generator))
+        except StopIteration as stop:
+            llm_step_result, _has_reasoned = stop.value
+            break
+
+    expected = "".join(xml_parts)
+    visible = "".join(
+        content
+        for packet in packets
+        if isinstance((content := getattr(packet.obj, "content", None)), str)
+    )
+    assert visible == expected
+    assert state.get_answer_tokens() == expected
+    assert llm_step_result.answer == expected
+    assert llm_step_result.raw_answer == expected
+    assert llm_step_result.tool_calls is None
+
+
+def _validate_midstream_continuation_state_persistence() -> None:
+    from litellm.exceptions import Timeout as LiteLLMTimeout
+    from onyx.chat.chat_state import ChatStateContainer
+    from onyx.chat.llm_step import run_llm_step_pkt_generator
+    from onyx.llm import model_response
+    from onyx.llm.model_response import Delta
+    from onyx.llm.model_response import ModelResponseStream
+    from onyx.llm.model_response import StreamingChoice
+    from onyx.llm.models import ToolChoiceOptions
+    from onyx.llm.multi_llm import LitellmLLM
+    from onyx.server.query_and_chat.streaming_models import Placement
+
+    class ContractTimeout(LiteLLMTimeout):
+        def __init__(self) -> None:
+            super().__init__(
+                "contract timeout",
+                model="wrapper-contract-model",
+                llm_provider="wrapper-contract-provider",
+            )
+
+    def packet(content: str, finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="midstream-state-contract",
+            created="now",
+            choice=StreamingChoice(
+                finish_reason=finish_reason,
+                delta=Delta(content=content),
+            ),
+        )
+
+    def drain(llm: LitellmLLM):
+        state = ChatStateContainer()
+        generator = run_llm_step_pkt_generator(
+            history=[],
+            tool_definitions=[],
+            tool_choice=ToolChoiceOptions.AUTO,
+            llm=llm,
+            placement=Placement(turn_index=0),
+            state_container=state,
+            citation_processor=None,
+        )
+        packets = []
+        while True:
+            try:
+                packets.append(next(generator))
+            except StopIteration as stop:
+                llm_step_result, _has_reasoned = stop.value
+                break
+        visible = "".join(
+            content
+            for emitted in packets
+            if isinstance(
+                (content := getattr(emitted.obj, "content", None)), str
+            )
+        )
+        assert visible == state.get_answer_tokens()
+        assert visible == llm_step_result.answer
+        assert visible == llm_step_result.raw_answer
+        return visible, llm_step_result
+
+    def make_llm() -> LitellmLLM:
+        return LitellmLLM(
+            api_key=None,
+            model_provider="wrapper-contract-provider",
+            model_name="wrapper-contract-model",
+            max_input_tokens=4096,
+            timeout=1,
+        )
+
+    original_converter = model_response.from_litellm_model_response_stream
+    model_response.from_litellm_model_response_stream = lambda chunk: chunk
+    try:
+        llm = make_llm()
+        completion_calls = 0
+
+        def fail_continuation(**_kwargs):
+            nonlocal completion_calls
+            completion_calls += 1
+            if completion_calls == 1:
+                def interrupted_stream():
+                    yield packet("partial answer")
+                    raise ContractTimeout()
+
+                return interrupted_stream()
+            raise ContractTimeout()
+
+        llm._completion = fail_continuation
+        visible, result = drain(llm)
+        assert completion_calls == 3
+        assert "partial answer" in visible
+        assert "inference stream was interrupted" in visible
+        assert "Recovery also failed" in visible
+        assert result.finish_reason == "stop"
+
+        progressing_llm = make_llm()
+        progressing_calls = 0
+
+        def keep_progressing(**_kwargs):
+            nonlocal progressing_calls
+            progressing_calls += 1
+            current_call = progressing_calls
+
+            def progressing_stream():
+                yield packet(f"part {current_call}")
+                if current_call < 4:
+                    raise ContractTimeout()
+                yield packet(" complete", "stop")
+
+            return progressing_stream()
+
+        progressing_llm._completion = keep_progressing
+        visible, result = drain(progressing_llm)
+        assert progressing_calls == 4
+        assert visible.count("inference stream was interrupted") == 3
+        assert "Recovery also failed" not in visible
+        assert "part 4 complete" in visible
+        assert result.finish_reason == "stop"
+
+        finalizing_llm = make_llm()
+
+        def fail_after_finish(**_kwargs):
+            def finishing_stream():
+                yield packet("complete answer", "stop")
+                raise ValueError("finalizer failed")
+
+            return finishing_stream()
+
+        finalizing_llm._completion = fail_after_finish
+        visible, result = drain(finalizing_llm)
+        assert "complete answer" in visible
+        assert "stream finalization then failed" in visible
+        assert result.finish_reason == "stop"
+    finally:
+        model_response.from_litellm_model_response_stream = original_converter
+
+
 if __name__ == "__main__":
     _install_wrapper_patches()
     _validate_python_tool_identity()
@@ -413,4 +701,6 @@ if __name__ == "__main__":
     _validate_web_search_timeout_contract()
     _validate_web_search_concurrency_contract()
     _validate_litellm_contract()
+    _validate_textual_tool_output_persistence()
+    _validate_midstream_continuation_state_persistence()
     print("PINNED_API_PATCH_CONTRACTS_OK")

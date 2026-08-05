@@ -558,6 +558,86 @@ replacing it. The saved-tool-result patch validates both the upstream response
 helper and complete `convert_chat_history()` signature before retaining stored
 responses and recomputing their token counts.
 
+The API bootstrap also wraps the pinned LiteLLM streaming boundary. Pinned
+Onyx owns failures before any chunk and `LLM_FIRST_CHUNK_MAX_RETRIES=1` gives
+that upstream path exactly one retry. The wrapper does not add another
+pre-chunk loop. Once ordinary answer text has been emitted, a retryable
+transport failure instead keeps the partial response visible, emits a warning
+that the seam can contain a repeat or omission, and makes a continuation
+request. The continuation prompt keeps the original message prefix and message
+objects unchanged, appends an assistant message containing only model-generated
+partial text with its accumulated reasoning fields, and then appends a fixed
+user-role continuation instruction. Its synthetic assistant type declares
+`reasoning_content`, so stock Pydantic serialization preserves the accumulated
+reasoning across that synthetic user turn even when the optional broader
+cross-turn reasoning setting is disabled. It never edits or replaces the
+system message. This leaves the original prefix available for provider
+prompt-cache reuse; the continuation suffix itself can still require uncached
+prefill.
+
+Continuation requests preserve the original tools, `tool_choice`, reasoning
+effort, timeout, token limit, and user identity without adding a forced tool
+policy. In particular, they do not send `tool_choice="none"`; that unnecessary
+request constraint has caused compatibility problems for GLM models behind
+vLLM. The fixed continuation instruction asks the model to follow the original
+request and tool policy. Structured-output streams remain excluded from
+continuation because concatenating two independently schema-constrained outputs
+cannot generically reconstruct one valid value; their original setting is never
+replaced with an unconstrained request.
+
+Reasoning-only output is preservable progress. Before an answer or tool-call
+delta, an interrupted reasoning stream gets a warning within the same reasoning
+phase, and the continuation can keep reasoning or select an originally
+available tool. Once answer text exists, new continuation reasoning is retained
+for another recovery prompt but not re-emitted after the answer, preserving
+Onyx's one-reasoning-phase stream contract. A stream that has started a
+tool-call delta is not replayed because Onyx has already accumulated its partial
+ID and arguments even though it has not executed the tool.
+
+Only provider-native structured tool-call deltas are executable. The API patch
+stubs Onyx's last-resort extraction of tool calls from assistant JSON/XML text
+and replaces its XML block-stripping filter with exact passthrough. A malformed
+or non-native textual tool payload is therefore visible in the saved answer
+instead of becoming a second parser exception or a tool execution. It remains
+ordinary continuable text when tools are supplied but no native tool-call delta
+has started. Startup validation covers both the extraction helper and XML
+filter so an upstream source change cannot silently restore fallback execution
+or hidden XML. This is an independent, explicitly configured policy under
+`ONYX_LLM_NATIVE_TOOL_CALLS_ONLY=true`, not an implicit part of continuation
+recovery; the supported Compose model enables it unconditionally.
+
+Wrapper continuations and provider calls are distinct. Every continuation is
+passed through the same pinned upstream stream method and therefore inherits
+`LLM_FIRST_CHUNK_MAX_RETRIES=1`: if a continuation fails before its first chunk,
+upstream can issue its provider request twice before returning the failure to
+the wrapper. Such a no-progress failure ends recovery, so two wrapper-level
+continuations cannot run back to back without new model output between them.
+Conversely, every continuation that produces new reasoning or answer text
+permits another continuation if a later retryable interruption occurs. There is
+no absolute continuation or provider-call cap: a response with repeated
+progress-bearing interruptions can keep recovering, and each continuation can
+make up to two provider calls before its first chunk. This progress gate and
+provider-call accounting are covered against both a deterministic upstream-
+retry fixture and pinned Onyx.
+
+If recovery fails without progress or exhausts that wrapper-level limit, the
+wrapper emits a terminal partial-generation warning as answer content and
+completes the Onyx stream normally so the stock WebUI retains the chat. If the
+model already emitted a terminal finish and later stream finalization raises,
+the wrapper likewise appends a generic saved warning instead of silently
+suppressing the problem or letting Onyx discard the chat; exception details
+remain operator-log-only. Non-retryable failures before a terminal finish,
+failures before any preservable output after upstream's one pre-chunk retry,
+structured-output streams, and incomplete tool calls retain upstream error
+handling.
+
+Like pinned stock Onyx, normal iterator exhaustion after answer text is treated
+as completion even when no terminal `finish_reason` was observed. Stock Onyx
+saves that accumulated answer without a warning or retry. Changing this requires
+a provider-wide terminal-marker audit because some serving paths may use clean
+EOF as their normal completion contract; the higher-layer recovery plan tracks
+that decision rather than making the LiteLLM wrapper infer corruption.
+
 Coding-agent final synthesis receives a plain-text transcript containing tool
 requests, tool output, and retained reasoning. If only final synthesis fails,
 the fallback returns sanitized, bounded tool output without disclosing the
@@ -565,10 +645,20 @@ exception message; setup and execution failures retain their normal failure
 semantics. The relevant upstream final-answer source is checked before
 wrapping.
 
-Focused tests cover reasoning attachment/serialization, native-detector drift,
-saved response selection/token recounting, and the bounded final-answer
-fallback. Strict installation of the complete composed reasoning and Deep
-Research rewrites is tested against the pinned backend image. Remove each patch
+Focused tests cover reasoning attachment/serialization, forced serialization
+on the synthetic continuation message, native-detector drift, saved response
+selection/token recounting, the bounded final-answer fallback, unchanged
+continuation prefixes/system messages, upstream pre-chunk retry delegation,
+unbounded progress-bearing continuations, back-to-back failure termination, structured and
+non-retryable exclusions, incomplete native-tool-call exclusion, and visible
+inert JSON/XML tool text. They also cover the inherited provider-call retry
+count, stock-compatible clean EOF, and visible post-finish finalization
+failure. Pinned-image validation drives recovery through the real Onyx LLM-step
+translator and `ChatStateContainer`, proving that terminal recovery and
+post-finish warnings become the returned, emitted, and incrementally saved
+answer. Strict installation and behavioral contracts for the complete composed
+reasoning, streaming, tool-text, and Deep Research patches are tested against
+the pinned backend image. Remove each patch
 only after the corresponding upstream model types and reconstruction paths
 preserve reasoning/tool results and finalization failures no longer discard
 successful tool evidence.
