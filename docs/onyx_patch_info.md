@@ -635,8 +635,9 @@ Like pinned stock Onyx, normal iterator exhaustion after answer text is treated
 as completion even when no terminal `finish_reason` was observed. Stock Onyx
 saves that accumulated answer without a warning or retry. Changing this requires
 a provider-wide terminal-marker audit because some serving paths may use clean
-EOF as their normal completion contract; the higher-layer recovery plan tracks
-that decision rather than making the LiteLLM wrapper infer corruption.
+EOF as their normal completion contract; the
+[deferred higher-layer recovery design](plans/deferred/onyx_inference_error_recovery.md)
+tracks that decision rather than making the LiteLLM wrapper infer corruption.
 
 Coding-agent final synthesis receives a plain-text transcript containing tool
 requests, tool output, and retained reasoning. If only final synthesis fails,
