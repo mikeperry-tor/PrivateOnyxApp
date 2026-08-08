@@ -2964,6 +2964,7 @@ def apply_embedding_tokenizer_alias_patch() -> None:
 
     fake_model = "nomic-ai/nomic-embed-text-v23"
     tokenizer_model = "nomic-ai/nomic-embed-text-v1"
+    tokenizer_file = os.environ.get("ONYX_EMBEDDING_TOKENIZER_FILE", "").strip()
 
     try:
         from onyx.natural_language_processing import utils as nlp_utils
@@ -2989,8 +2990,25 @@ def apply_embedding_tokenizer_alias_patch() -> None:
         )
         return
 
+    if tokenizer_file:
+        if not os.path.isabs(tokenizer_file):
+            _warn_or_raise("ONYX_EMBEDDING_TOKENIZER_FILE must be absolute")
+            return
+        if os.path.islink(tokenizer_file) or not os.path.isfile(tokenizer_file):
+            _warn_or_raise(
+                "offline embedding tokenizer is missing: "
+                "run the supported full-stack startup flow"
+            )
+            return
+        if not hasattr(nlp_utils.Tokenizer, "from_file"):
+            _warn_or_raise("Tokenizer.from_file is unavailable")
+            return
+
     @functools.wraps(original_init)
     def _aliased_init(self, model_name: str):
+        if model_name == fake_model and tokenizer_file:
+            self.encoder = nlp_utils.Tokenizer.from_file(tokenizer_file)
+            return None
         return original_init(
             self,
             tokenizer_model if model_name == fake_model else model_name,
@@ -2999,7 +3017,11 @@ def apply_embedding_tokenizer_alias_patch() -> None:
     nlp_utils.HuggingFaceTokenizer.__init__ = _aliased_init
     print(
         "sitecustomize: mapped fake nomic v23 tokenizer to bundled nomic v1 "
-        "without changing the saved embedding model name",
+        + (
+            "offline file without changing the saved embedding model name"
+            if tokenizer_file
+            else "without changing the saved embedding model name"
+        ),
         flush=True,
     )
 

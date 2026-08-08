@@ -381,9 +381,12 @@ Re-audit the exact fake embedding model contract. The saved
 bundled `nomic-ai/nomic-embed-text-v1` tokenizer. Confirm the strict
 `HuggingFaceTokenizer.__init__` source-shape check, both API and background
 installation points, no Hugging Face lookup for v23, and unchanged behavior
-for every other tokenizer model. The `nomic-ai` name prefix permits large
-chunks only when multipass indexing is enabled; test that condition explicitly
-if it is intended.
+for every other tokenizer model. Confirm the network-disabled pinned-image
+extraction into the shared cache, startup failure for a missing generated file,
+and local `Tokenizer.from_file` construction. Exercise a clean cache under
+both Docker and Podman as well as an idempotent populated-cache start. The
+`nomic-ai` name prefix permits large chunks only when multipass indexing is
+enabled; test that condition explicitly if it is intended.
 
 Re-audit Onyx's embedding caller failure contract on every pin. The wrapper
 currently relies on query embedding making one request, passage embedding

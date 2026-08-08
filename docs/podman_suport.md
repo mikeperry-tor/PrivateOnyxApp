@@ -215,6 +215,16 @@ preflight initializes a genuinely missing or empty PostgreSQL bind and refuses
 a nonempty bind without `PG_VERSION` as partial or unknown state. The same rule
 applies to OpenSearch: a genuinely missing or empty bind is initialized, while
 a nonempty bind without `nodes` is never overwritten.
+
+Full-mode startup also uses the shared `docker-data/model-cache` bind for the
+small wrapper-owned nomic tokenizer file. The Makefile extracts that file from
+the selected pinned Onyx image with networking disabled and writes it
+atomically as the invoking host user before either engine creates the
+application containers. This avoids Docker named-volume copy-up semantics,
+works the same under rootless Podman, and never overwrites unrelated cache
+entries. A missing tokenizer in the pinned image is a startup failure rather
+than permission to fetch it at runtime.
+
 The ownership guard inspects both native engines without the Podman
 `DOCKER_HOST` compatibility override used by the external Compose provider, so
 repeated Podman claims cannot misclassify Podman writers as Docker writers.

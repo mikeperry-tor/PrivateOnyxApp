@@ -605,7 +605,7 @@ To configure embedding support in Onyx:
 2. Select your embedding model as **Self-Hosted / Custom Model** (local)
 3. Enter `nomic-ai/nomic-embed-text-v23` as the model type. This synthetic name
    intentionally enables Onyx's hardcoded `nomic-ai` RAG features. The stack
-   maps only its tokenizer to the bundled nomic v1 tokenizer; the embedding
+   prepares and loads its bundled nomic v1 tokenizer offline; the embedding
    shim still sends requests to the configured real upstream model.
 4. For both `Harrier-OSS-V1-0.6B` and `Qwen3-Embedding-0.6B`, the embedding dimension is 1024.
 

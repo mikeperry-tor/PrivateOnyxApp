@@ -83,6 +83,9 @@ services:
       MODEL_SERVER_PORT: "9101"
       INDEXING_MODEL_SERVER_HOST: "local-embedding-shim"
       INDEXING_MODEL_SERVER_PORT: "9101"
+      # Generated from the pinned image before Compose starts. The synthetic
+      # v23 alias must never need external Hugging Face metadata at runtime.
+      ONYX_EMBEDDING_TOKENIZER_FILE: "/root/.cache/huggingface/private-onyx/nomic-embed-text-v1/tokenizer.json"
       WRAPPER_PATCH_STRICT: "true"
       PYTHONPATH: "/app/wrapper-patches-background:/app/wrapper-patches-shared:${PYTHONPATH:-}"
       ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED: "true"
@@ -266,6 +269,7 @@ services:
       MODEL_SERVER_PORT: "9101"
       INDEXING_MODEL_SERVER_HOST: "local-embedding-shim"
       INDEXING_MODEL_SERVER_PORT: "9101"
+      ONYX_EMBEDDING_TOKENIZER_FILE: "/root/.cache/huggingface/private-onyx/nomic-embed-text-v1/tokenizer.json"
       # Match the background/index-creation path for this single-node stack.
       OPENSEARCH_INDEX_NUM_REPLICAS: "0"
       WRAPPER_PATCH_STRICT: "true"
