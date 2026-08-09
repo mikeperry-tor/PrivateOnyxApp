@@ -287,7 +287,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             ),
             "bing2": (
                 "https://www.bing.com/",
-                'textarea[name="q"]',
+                'input[name="q"],textarea[name="q"]',
                 "q",
                 "/search",
                 "get",

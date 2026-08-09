@@ -208,6 +208,13 @@ Audit these current Obscura areas:
   surfaces across homepage, result, and later-query navigation. Remove
   `0002-target-fingerprint-seed.patch` only when upstream provides target- or
   context-stable fingerprint state with the same provider-session lifetime;
+- writable shadowing of legacy Window named-element properties, the
+  `PerformanceEntry`/`PerformanceResourceTiming`/`PerformanceNavigationTiming`
+  constructor hierarchy, the `SVGAElement` constructor and SVG-anchor wrapper,
+  and a readable `Response.body` stream that supports `pipeThrough()`. Remove
+  `0003-search-runtime-compatibility.patch` only when the tagged upstream runtime
+  provides all four contracts and the focused
+  provider fixtures pass without it;
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
@@ -223,6 +230,9 @@ Audit these current Obscura areas:
 - render versus no-render feature selection, ensuring the selected build keeps
   every JavaScript, DOM, charset, module, compressed-response, and CDP surface
   used by search and `open_url` without enabling unused raster capture work;
+- the populated-page ES-module budget under the slowest supported Tor route;
+  keep it inside the page script and caller attempt deadlines and prove a fast
+  module graph does not acquire an unconditional delay;
 - bounded structural challenge parsing that excludes script/style/template/
   noscript content; positive status, route, title, visible-prompt, and combined
   visible-plus-structure fixtures; and negative script-only, iframe-only, and

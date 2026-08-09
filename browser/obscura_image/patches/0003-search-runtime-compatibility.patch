@@ -1,0 +1,229 @@
+diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
+index 724e197..a565cf1 100644
+--- a/crates/obscura-js/js/bootstrap.js
++++ b/crates/obscura-js/js/bootstrap.js
+@@ -7015,6 +7015,7 @@ if (typeof Response === 'undefined') {
+   globalThis.Response = class Response {
+     constructor(body, init = {}) {
+       this._bodyBytes = _bodyToUint8Array(body); this.status = init.status || 200; this.statusText = init.statusText || '';
++      this._bodyStream = null;
+       this.ok = this.status >= 200 && this.status < 300;
+       this.headers = new Headers(init.headers);
+       this.type = init.type || 'basic'; this.url = init.url || ''; this.redirected = !!init.redirected;
+@@ -7023,6 +7024,18 @@ if (typeof Response === 'undefined') {
+     async json() { return JSON.parse(await this.text()); }
+     async arrayBuffer() { return _arrayBufferFromBytes(this._bodyBytes); }
+     async blob() { return new Blob([this._bodyBytes]); }
++    get body() {
++      if (!this._bodyStream) {
++        const bytes = this._bodyBytes.slice();
++        this._bodyStream = new ReadableStream({
++          start(controller) {
++            if (bytes.length) controller.enqueue(bytes);
++            controller.close();
++          },
++        });
++      }
++      return this._bodyStream;
++    }
+     clone() { return new Response(this._bodyBytes, { status: this.status, statusText: this.statusText, headers: this.headers, type: this.type, url: this.url, redirected: this.redirected }); }
+     static error() { return new Response(null, { status: 0 }); }
+     static redirect(url, status) { return new Response(null, { status: status || 302, headers: { Location: url } }); }
+@@ -9706,6 +9719,33 @@ globalThis.XMLSerializer = class XMLSerializer {
+     return "";
+   }
+ };
++const _performanceEntryConstructionKey = {};
++globalThis.PerformanceEntry = class PerformanceEntry {
++  constructor(key, name = "", entryType = "", startTime = 0, duration = 0) {
++    if (key !== _performanceEntryConstructionKey) throw new TypeError("Illegal constructor");
++    this.name = String(name);
++    this.entryType = String(entryType);
++    this.startTime = Number(startTime) || 0;
++    this.duration = Number(duration) || 0;
++  }
++  toJSON() {
++    return { name: this.name, entryType: this.entryType,
++      startTime: this.startTime, duration: this.duration };
++  }
++};
++globalThis.PerformanceResourceTiming = class PerformanceResourceTiming extends PerformanceEntry {
++  constructor(key, name = "", entryType = "resource", startTime = 0, duration = 0) {
++    super(key, name, entryType, startTime, duration);
++    this.initiatorType = "other";
++  }
++};
++globalThis.PerformanceNavigationTiming = class PerformanceNavigationTiming extends PerformanceResourceTiming {
++  constructor(key, name = "", startTime = 0, duration = 0) {
++    super(key, name, "navigation", startTime, duration);
++    this.type = "navigate";
++    this.redirectCount = 0;
++  }
++};
+ globalThis.performance = globalThis.performance || {
+   now: (function() {
+     // Monotonically non-decreasing: return the wall-clock offset, but never a
+@@ -10991,6 +11031,15 @@ function _ensureWindowNamedProperty(name) {
+   try {
+     Object.defineProperty(globalThis, name, {
+       get() { return _windowNamedValue(name); },
++      set(value) {
++        Object.defineProperty(globalThis, name, {
++          value,
++          writable: true,
++          configurable: true,
++          enumerable: true,
++        });
++        _windowNamedPropertyNames.delete(name);
++      },
+       configurable: true,
+       enumerable: true,
+     });
+diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
+index f3e435d..f53a480 100644
+--- a/crates/obscura-js/src/runtime.rs
++++ b/crates/obscura-js/src/runtime.rs
+@@ -4213,6 +4213,53 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn private_onyx_window_named_property_assignment_shadows_the_element_alias() {
++        let mut rt = setup_runtime(
++            r#"<html><body><script id="__NEXT_DATA__" type="application/json">{}</script></body></html>"#,
++        );
++        let result = rt
++            .evaluate(
++                r#"
++                const element = document.getElementById("__NEXT_DATA__");
++                const exposedBefore = window.__NEXT_DATA__ === element;
++                window.__NEXT_DATA__ = { ready: true };
++                return [
++                    exposedBefore,
++                    window.__NEXT_DATA__.ready,
++                    document.getElementById("__NEXT_DATA__") === element,
++                    Object.getOwnPropertyDescriptor(window, "__NEXT_DATA__").writable
++                ];
++                "#,
++            )
++            .unwrap();
++        assert_eq!(result, serde_json::json!([true, true, true, true]));
++    }
++
++    #[test]
++    fn private_onyx_navigation_timing_constructor_surface_is_available() {
++        let mut rt = setup_runtime("<html><body></body></html>");
++        let result = rt
++            .evaluate(
++                r#"
++                let illegalConstructor = false;
++                try { new PerformanceNavigationTiming(); }
++                catch (error) { illegalConstructor = error instanceof TypeError; }
++                return [
++                    typeof PerformanceNavigationTiming,
++                    PerformanceNavigationTiming.prototype instanceof PerformanceResourceTiming,
++                    PerformanceResourceTiming.prototype instanceof PerformanceEntry,
++                    illegalConstructor
++                ];
++                "#,
++            )
++            .unwrap();
++        assert_eq!(
++            result,
++            serde_json::json!(["function", true, true, true])
++        );
++    }
++
+     #[test]
+     fn window_named_access_tracks_dynamic_ids_and_fragment_parsing() {
+         let mut rt = setup_runtime("<html><body><div id='host'></div></body></html>");
+@@ -13575,6 +13622,26 @@ mod tests {
+         );
+     }
+ 
++    #[tokio::test(flavor = "current_thread")]
++    async fn private_onyx_response_body_stream_supports_pipe_through() {
++        let mut rt = setup_runtime("<html><body></body></html>");
++        let result = rt
++            .call_function_on_for_cdp(
++                r#"async () => {
++                const response = new Response(new TextEncoder().encode("streamed"));
++                const decoded = response.body.pipeThrough(new TextDecoderStream());
++                return (await decoded.getReader().read()).value;
++            }"#,
++                None,
++                &[],
++                true,
++                true,
++            )
++            .await
++            .unwrap();
++        assert_eq!(result.value.unwrap(), serde_json::json!("streamed"));
++    }
++
+     #[tokio::test(flavor = "current_thread")]
+     async fn test_wasm_instantiate_streaming_uses_response_array_buffer() {
+         let mut rt = setup_runtime("<html><body></body></html>");
+diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
+index a565cf1..cad75f6 100644
+--- a/crates/obscura-js/js/bootstrap.js
++++ b/crates/obscura-js/js/bootstrap.js
+@@ -5850,6 +5850,7 @@ function _elementClassFor(nid) {
+       && _domParse("namespace_uri", nid) === "http://www.w3.org/2000/svg") {
+     if (tag === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
+     if (tag === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
++    if (tag === "a" && globalThis.SVGAElement) return globalThis.SVGAElement;
+     if (globalThis.SVGElement) return globalThis.SVGElement;
+   }
+   if (tag === "FORM" && globalThis.HTMLFormElement) return globalThis.HTMLFormElement;
+@@ -5867,6 +5868,7 @@ function _elementClassForKnownName(namespace, qualifiedName) {
+   if (namespace === "http://www.w3.org/2000/svg") {
+     if (localName === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
+     if (localName === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
++    if (localName === "a" && globalThis.SVGAElement) return globalThis.SVGAElement;
+     if (globalThis.SVGElement) return globalThis.SVGElement;
+   }
+   if (namespace === "http://www.w3.org/1999/xhtml") {
+@@ -10846,11 +10848,13 @@ class SVGGraphicsElement extends SVGElement {}
+ class SVGGeometryElement extends SVGGraphicsElement {}
+ class SVGPathElement extends SVGGeometryElement {}
+ class SVGSVGElement extends SVGGraphicsElement {}
++class SVGAElement extends SVGGraphicsElement {}
+ globalThis.SVGElement = SVGElement;
+ globalThis.SVGGraphicsElement = SVGGraphicsElement;
+ globalThis.SVGGeometryElement = SVGGeometryElement;
+ globalThis.SVGPathElement = SVGPathElement;
+ globalThis.SVGSVGElement = SVGSVGElement;
++globalThis.SVGAElement = SVGAElement;
+ globalThis.CharacterData = CharacterData;
+ globalThis.Text = Text;
+ globalThis.Comment = Comment;
+diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
+index f53a480..c67bf87 100644
+--- a/crates/obscura-js/src/runtime.rs
++++ b/crates/obscura-js/src/runtime.rs
+@@ -4260,6 +4260,24 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn private_onyx_svg_anchor_constructor_surface_is_available() {
++        let mut rt = setup_runtime("<html><body></body></html>");
++        let result = rt
++            .evaluate(
++                r#"
++                const anchor = document.createElementNS("http://www.w3.org/2000/svg", "a");
++                return [typeof SVGAElement, anchor instanceof SVGAElement,
++                        anchor instanceof SVGGraphicsElement, anchor instanceof SVGElement];
++                "#,
++            )
++            .unwrap();
++        assert_eq!(
++            result,
++            serde_json::json!(["function", true, true, true])
++        );
++    }
++
+     #[test]
+     fn window_named_access_tracks_dynamic_ids_and_fragment_parsing() {
+         let mut rt = setup_runtime("<html><body><div id='host'></div></body></html>");

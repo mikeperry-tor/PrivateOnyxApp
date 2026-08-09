@@ -274,6 +274,71 @@ async def validate_connection_isolation() -> None:
         first_target, first_session = await create_target(first)
         second_target, second_session = await create_target(second)
 
+        async def evaluate(cdp, session_id: str, expression: str):
+            result = await cdp.send(
+                "Runtime.evaluate",
+                {
+                    "expression": expression,
+                    "returnByValue": True,
+                    "awaitPromise": True,
+                },
+                session_id=session_id,
+                timeout_seconds=15,
+            )
+            assert "exceptionDetails" not in result, result
+            return result["result"].get("value")
+
+        created_context = await first.send("Target.createBrowserContext")
+        context_id = created_context["browserContextId"]
+        first_contexts = await first.send("Target.getBrowserContexts")
+        second_contexts = await second.send("Target.getBrowserContexts")
+        assert context_id in first_contexts["browserContextIds"]
+        assert context_id not in second_contexts["browserContextIds"]
+
+        for cdp, session_id in (
+            (first, first_session),
+            (second, second_session),
+        ):
+            await cdp.send("Network.enable", session_id=session_id)
+            await cdp.send("Page.enable", session_id=session_id)
+            await cdp.send(
+                "Page.navigate",
+                {"url": f"{BASE_URL}/static", "waitUntil": "load"},
+                session_id=session_id,
+                timeout_seconds=15,
+            )
+
+        assert await evaluate(
+            first,
+            first_session,
+            "(() => { globalThis.__privateOnyxIsolation='first'; "
+            "return globalThis.__privateOnyxIsolation; })()",
+        ) == "first"
+        assert await evaluate(
+            second,
+            second_session,
+            "typeof globalThis.__privateOnyxIsolation",
+        ) == "undefined"
+
+        for cdp, session_id in (
+            (first, first_session),
+            (second, second_session),
+        ):
+            await cdp.send(
+                "Page.navigate",
+                {"url": f"{BASE_URL}/connection-state/cache-page", "waitUntil": "load"},
+                session_id=session_id,
+                timeout_seconds=15,
+            )
+        first_cache = await evaluate(
+            first, first_session, "globalThis.__privateOnyxCacheObservations"
+        )
+        second_cache = await evaluate(
+            second, second_session, "globalThis.__privateOnyxCacheObservations"
+        )
+        assert first_cache == [1, 1], first_cache
+        assert second_cache == [2, 2], second_cache
+
         cookie_result = await first.send(
             "Network.setCookie",
             {
@@ -328,6 +393,14 @@ async def validate_connection_isolation() -> None:
         assert [target["targetId"] for target in third_targets["targetInfos"]] == [
             third_target
         ]
+        assert await third.send("Target.getBrowserContexts") == {
+            "browserContextIds": []
+        }
+        assert await evaluate(
+            third,
+            third_session,
+            "typeof globalThis.__privateOnyxIsolation",
+        ) == "undefined"
     finally:
         await third_ws.close()
 
@@ -465,6 +538,11 @@ def validate_navigation_contracts() -> None:
     assert "custom-event" in modern_html, modern_html
     assert "rgb(4, 5, 6)" in modern_html, modern_html
     assert 'class="clone">cloned<' in modern_html, modern_html
+    assert 'id="named-state">named-shadow<' in modern_html, modern_html
+    assert 'id="timing-state">function<' in modern_html, modern_html
+    assert 'id="svg-state">true<' in modern_html, modern_html
+    assert 'id="stream-state">streamed<' in modern_html, modern_html
+    assert 'id="module-state">module-graph<' in modern_html, modern_html
 
     compressed = fetch("/compressed")
     assert "id=\"compressed\">decoded gzip<" in (compressed.rendered_html or "")

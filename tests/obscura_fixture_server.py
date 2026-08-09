@@ -122,7 +122,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(
                 b"<html><head><title>Modern JavaScript</title></head><body>"
                 b"<template id='source'><span class='clone'>pending</span></template>"
-                b"<main id='state'>initial</main><script>"
+                b"<script id='__NEXT_DATA__' type='application/json'>{}</script>"
+                b"<main id='state'>initial</main>"
+                b"<main id='named-state'>initial</main>"
+                b"<main id='timing-state'>initial</main>"
+                b"<main id='svg-state'>initial</main>"
+                b"<main id='stream-state'>initial</main>"
+                b"<main id='module-state'>initial</main><script>"
+                b"'use strict';"
+                b"window.__NEXT_DATA__={ready:'named-shadow'};"
+                b"document.getElementById('named-state').textContent=window.__NEXT_DATA__.ready;"
+                b"document.getElementById('timing-state').textContent="
+                b"typeof PerformanceNavigationTiming;"
+                b"const svgAnchor=document.createElementNS('http://www.w3.org/2000/svg','a');"
+                b"document.getElementById('svg-state').textContent="
+                b"String(svgAnchor instanceof SVGAElement);"
+                b"const response=new Response(new TextEncoder().encode('streamed'));"
+                b"response.body.pipeThrough(new TextDecoderStream()).getReader().read()"
+                b".then(item=>document.getElementById('stream-state').textContent=item.value);"
                 b"const clone=document.getElementById('source').content.cloneNode(true);"
                 b"clone.querySelector('.clone').textContent='cloned';"
                 b"document.body.appendChild(clone);"
@@ -130,8 +147,44 @@ class Handler(BaseHTTPRequestHandler):
                 b"state.addEventListener('ready',event=>state.textContent=event.detail);"
                 b"state.dispatchEvent(new CustomEvent('ready',{detail:'custom-event'}));"
                 b"state.style.cssText='color: rgb(4, 5, 6)';"
-                b"</script></body></html>",
+                b"</script><script type='module' src='/search-module.js'></script>"
+                b"</body></html>",
                 content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/search-module.js":
+            self._send(
+                b"import {value} from './search-module-dependency.js';"
+                b"document.getElementById('module-state').textContent=value;",
+                content_type="application/javascript; charset=utf-8",
+            )
+            return
+        if path == "/search-module-dependency.js":
+            self._send(
+                b"export const value='module-graph';",
+                content_type="application/javascript; charset=utf-8",
+            )
+            return
+        if path == "/connection-state/cache-page":
+            self._send(
+                b"<html><body>"
+                b"<script src='/connection-state/cache-script.js'></script>"
+                b"<script src='/connection-state/cache-script.js'></script>"
+                b"</body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/connection-state/cache-script.js":
+            with _COUNTS_LOCK:
+                count = _COUNTS.get(path, 0) + 1
+                _COUNTS[path] = count
+            self._send(
+                (
+                    "globalThis.__privateOnyxCacheObservations ||= [];"
+                    f"globalThis.__privateOnyxCacheObservations.push({count});"
+                ).encode(),
+                content_type="application/javascript; charset=utf-8",
+                headers={"Cache-Control": "public, max-age=3600"},
             )
             return
         if path == "/compressed":

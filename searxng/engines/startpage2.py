@@ -84,6 +84,12 @@ captcha_xpath = (
     '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "startpage\'s captcha page")]'
     ' | //form[contains(@action, "/sp/captcha")]'
 )
+anubis_verification_xpath = (
+    '//script[contains(@src, "/.within.website/x/cmd/anubis/")]'
+    ' and //*[contains(concat(" ", normalize-space(@class), " "), " sp-message ")'
+    ' and contains(translate(normalize-space(.), '
+    '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "verifying your request")]'
+)
 
 
 def search(query: str, params: "RequestParams"):
@@ -123,7 +129,7 @@ def _strip_startpage_redirect(href: str) -> str:
 
 def _raise_if_captcha(dom) -> None:
     """Startpage can return a captcha page with HTTP 200."""
-    if eval_xpath(dom, captcha_xpath):
+    if eval_xpath(dom, captcha_xpath) or eval_xpath(dom, anubis_verification_xpath):
         raise SearxEngineCaptchaException(
             message="startpage2: Startpage returned a captcha page",
         )

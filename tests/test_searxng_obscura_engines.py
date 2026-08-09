@@ -470,6 +470,13 @@ class SearxngObscuraEngineTests(unittest.TestCase):
             self.startpage._parse_html(
                 '<html><body><form action="/sp/captcha"></form></body></html>'
             )
+        with self.assertRaisesRegex(RuntimeError, "captcha page"):
+            self.startpage._parse_html(
+                """<html><body><div class="sp-message">Verifying your request...</div>
+                <script type="module"
+                  src="/.within.website/x/cmd/anubis/static/js/main.mjs"></script>
+                </body></html>"""
+            )
 
     def test_every_custom_engine_declares_offline_contract(self):
         for path in sorted((ROOT / "searxng/engines").glob("*2.py")):

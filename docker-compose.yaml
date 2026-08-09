@@ -141,6 +141,10 @@ services:
       # Request timeout for scripted fetch()/XHR/ES-module loads. Default
       # 30s; bump to 45000 for slow proxy paths.
       OBSCURA_FETCH_TIMEOUT_MS: "45000"
+      # Obscura gives modules on an already-populated page only 3s by default.
+      # That is too short for search-provider graphs over Tor and can strand
+      # result hydration even though the enclosing 30s script budget remains.
+      OBSCURA_MODULE_BUDGET_MS: "10000"
       OBSCURA_NETWORK_BODY_BUFFER_ENTRIES: "16"
       OBSCURA_NETWORK_BODY_BUFFER_BYTES: "${OBSCURA_RETENTION_FLOOR_BYTES:-52428800}"
       # Every browser connection owns its IO store and the wrapper opens at

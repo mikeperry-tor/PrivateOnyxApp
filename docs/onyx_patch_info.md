@@ -193,7 +193,7 @@ validation separately proves Playwright's public page-session attachment path.
 The Obscura image is built from the digest-verified archive for exact commit
 `97124edeb2ea610615e78f43e097454e3b221f6b`, using a digest-pinned Rust/Debian
 builder and the upstream locked dependency graph. The build applies exactly
-two ordered patches with `git apply --check` before compiling both runtime
+three ordered patches with `git apply --check` before compiling both runtime
 binaries with the no-render `stealth` feature set:
 
 - `0001-stealth-native-post.patch` routes native form POST through the
@@ -207,6 +207,12 @@ binaries with the no-render `stealth` feature set:
   every page-realm initialization, so seed-derived screen/GPU/canvas/audio
   surfaces remain stable for that target without exposing the seed to page
   code or CDP. Profile-owned hardware and memory values remain stable too.
+- `0003-search-runtime-compatibility.patch` lets assignment shadow a legacy
+  getter-backed Window named element, exposes the navigation-timing constructor
+  hierarchy and SVG anchor constructor used by provider scripts, and gives
+  `Response.body` a readable stream compatible with `pipeThrough()`. These are
+  narrow fixes for failures reproduced on DuckDuckGo and Brave with the tagged
+  v0.2.0 runtime.
 
 The v0.2.0 tagged runtime includes the native raster renderer, but this stack
 does not expose screenshot, screencast, or PDF-export features. Its derived
@@ -217,7 +223,7 @@ stealth-response, and CDP compatibility improvements used by these paths.
 
 Source, patches, compiler, Cargo cache, and build tools remain in builder
 stages. The final image retains the audited upstream hardened runtime base and
-only replaces its two binaries. Remove either patch only at its separate
+only replaces its two binaries. Remove any patch only at its separate
 upgrade gate in [the patch checklist](onyx_patches_upgrade.md).
 
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are offline

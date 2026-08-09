@@ -194,6 +194,13 @@ Obscura also has a finite navigation deadline. Lowering the search wait to
 organic rows exist; `networkidle0` waits more strictly and can add substantial
 latency.
 
+The wrapper raises Obscura's populated-page ES-module active-work budget from
+three to ten seconds. DuckDuckGo's result module graph can exceed the upstream
+default over Tor even while the complete page remains within Obscura's
+30-second script deadline and the caller's 50-second attempt deadline. This is
+not an added sleep: fast module graphs return immediately, and all enclosing
+deadlines remain authoritative.
+
 Connection, target creation, attachment, and CDP domain setup share one
 absolute 45-second pre-navigation deadline. It is not a fresh 45-second
 allowance for each command. Expiry closes the connection, returns a typed
@@ -472,12 +479,26 @@ and an unfinished `deep_preload_link` after the network-idle wait, are typed
 CAPTCHA failures. They enter the ordinary one-hour blocking suspension instead
 of surfacing as parser drift.
 
+Startpage's explicit CAPTCHA route and its Anubis `sp-message` page containing
+the visible `Verifying your request` state plus the same-origin Anubis module
+marker are typed CAPTCHA failures. The latter proof-of-work flow depends on a
+broader blob-module/worker execution surface than this stack patches into
+Obscura; it is not treated as ordinary result-DOM drift or retried through a
+constructed result URL.
+
 Bing's rendered `One last step` / `solve the challenge below to continue`
 interstitial is a CAPTCHA failure, even when it contains none of Bing's older
 challenge selectors. Detection uses visible body text only; matching text in
 script, style, template, or noscript content does not block a valid results
 page. This typed failure enters SearXNG's ordinary provider-suspension path
 instead of being reported as a parser crash.
+
+Bing currently serves both `input[type=search]` and `textarea` query controls,
+so its exact selector admits either while still requiring exactly one enabled,
+visible `q` control owned by the declared HTTPS `/search` GET form. Some Bing
+homepage variants omit the search form entirely after rendering; those remain
+visible parser/protocol failures and are never replaced with a constructed
+result URL or same-engine retry.
 
 Bing can also return a coherent but unrelated set of ordinary `b_algo` cards
 while leaving the requested query in the page title and search box. This has no
@@ -757,10 +778,11 @@ engine name, provider-local query sequence, and whether the retained browser
 session was reused.
 The wrapper-selected image retains the digest-pinned upstream runtime but
 builds the exact SHA-256-verified upstream source revision with the no-render
-`stealth` feature set and the two strict wrapper patch-series entries, then
+`stealth` feature set and the three strict wrapper patch-series entries, then
 copies only the resulting server binaries into that runtime. This is required
 for wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
-fingerprint seed plus stealth-native form POST contracts. The stack consumes
+fingerprint seed, stealth-native form POST, and focused provider JavaScript
+runtime-compatibility contracts. The stack consumes
 DOM and response-body CDP surfaces, not screenshots, screencasts, or PDF
 export, so it does not compile the v0.2.0 raster renderer or incur its image,
 font, layout, and capture resource work. JavaScript, DOM, module, charset, and

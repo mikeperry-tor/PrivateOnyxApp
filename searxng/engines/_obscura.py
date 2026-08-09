@@ -88,7 +88,7 @@ INTERACTIONS = {
         homepage_url="https://www.bing.com/",
         allowed_homepage_hosts=frozenset({"www.bing.com", "bing.com"}),
         allowed_result_hosts=frozenset({"www.bing.com", "bing.com"}),
-        query_selector='textarea[name="q"]',
+        query_selector='input[name="q"],textarea[name="q"]',
         query_field_name="q",
         form_action_path="/search",
         form_method="get",

@@ -122,6 +122,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             [
                 "0001-stealth-native-post.patch",
                 "0002-target-fingerprint-seed.patch",
+                "0003-search-runtime-compatibility.patch",
             ],
         )
         self.assertIn("cargo build --release --locked --features stealth", self.obscura_dockerfile)
@@ -139,6 +140,14 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         fingerprint = self.obscura_patches["0002-target-fingerprint-seed.patch"]
         self.assertIn("__obscura_registerLinkedStylesheet", fingerprint)
         self.assertIn("set_fingerprint_seed(self.fingerprint_seed)", fingerprint)
+        compatibility = self.obscura_patches[
+            "0003-search-runtime-compatibility.patch"
+        ]
+        self.assertIn("PerformanceNavigationTiming", compatibility)
+        self.assertIn("SVGAElement", compatibility)
+        self.assertIn("_windowNamedPropertyNames.delete(name)", compatibility)
+        self.assertIn("private_onyx_window_named_property_assignment", compatibility)
+        self.assertIn('OBSCURA_MODULE_BUDGET_MS: "10000"', self.compose)
 
     def test_new_manifest_and_no_proxy_names(self):
         self.assertIn("SEARXNG_WRAPPER_IMAGE_REPOSITORY=", self.manifest)
