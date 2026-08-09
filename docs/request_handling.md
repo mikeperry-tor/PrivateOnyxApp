@@ -499,10 +499,30 @@ must not suspend the provider as though an IP challenge had been proved.
 
 Startpage's explicit CAPTCHA route and its Anubis `sp-message` page containing
 the visible `Verifying your request` state plus the same-origin Anubis module
-marker are typed CAPTCHA failures. The latter proof-of-work flow depends on a
-broader blob-module/worker execution surface than this stack patches into
-Obscura; it is not treated as ordinary result-DOM drift or retried through a
-constructed result URL.
+marker are typed CAPTCHA failures. During the v0.2.0 audit Startpage served
+Anubis v1.25.0's `fast` algorithm at difficulty 5: its main ES module creates
+four same-origin classic workers from direct `.mjs` URLs under Obscura's
+advertised hardware profile. Obscura's current `Worker` compatibility shim
+executes those worker bodies cooperatively in the page's V8 isolate rather
+than in dedicated isolates. A live wait through the existing 50-second browser
+transaction budget starved the page-runtime CDP inspection and expired at
+`result-readiness`; adding an Anubis pending selector is therefore not a
+working continuation.
+
+The live v1.25.0 flow does not create blob workers, but newer Anubis releases
+prefetch one worker source and create workers from a blob URL. Forward-compatible
+browser execution consequently requires both direct and blob-backed dedicated
+workers. It also requires a bounded multi-document continuation: successful
+proof submission navigates through the same-origin Anubis pass endpoint and a
+redirect, while the original Startpage search is a POST whose body is not
+preserved by that GET redirect. The current client owns neither that
+continuation nor an authorized one-time form resubmission. It returns the
+captured verification DOM to the provider parser, which records the explicit
+challenge through the ordinary CAPTCHA suspension path; it does not treat the
+page as result-DOM drift, wait on a separate allowance, construct a result URL,
+or retry the failed transaction. The deferred implementation alternatives and
+their ownership constraints are recorded in
+[`docs/plans/deferred/anubis_pow_support.md`](plans/deferred/anubis_pow_support.md).
 
 Bing's rendered `One last step` / `solve the challenge below to continue`
 interstitial is a CAPTCHA failure, even when it contains none of Bing's older
