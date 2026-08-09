@@ -125,11 +125,10 @@ def _parse_html(text: str):
         if eval_xpath(dom, no_results_xpath):
             return []
         if eval_xpath(dom, unfinished_deep_load_xpath):
-            raise SearxEngineCaptchaException(
-                message=(
-                    "duckduckgo2: DuckDuckGo did not complete its "
-                    "JavaScript result verification"
-                ),
+            _obscura.parser_mismatch(
+                "duckduckgo2",
+                text,
+                "JavaScript result hydration did not complete",
             )
         _obscura.parser_mismatch("duckduckgo2", text, "zero result cards")
 

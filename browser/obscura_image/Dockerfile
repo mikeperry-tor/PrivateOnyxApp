@@ -51,6 +51,9 @@ RUN cargo test --locked --features stealth \
 RUN cargo test --locked --features stealth \
         -p obscura-js private_onyx_
 
+RUN cargo test --locked --features stealth \
+        -p obscura-browser private_onyx_
+
 RUN OBSCURA_VERSION="${OBSCURA_RELEASE_VERSION}-private-onyx-search-v1" \
         cargo build --release --locked --features stealth \
         -p obscura-cli --bin obscura --bin obscura-worker

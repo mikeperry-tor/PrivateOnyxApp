@@ -211,9 +211,11 @@ Audit these current Obscura areas:
 - writable shadowing of legacy Window named-element properties, the
   `PerformanceEntry`/`PerformanceResourceTiming`/`PerformanceNavigationTiming`
   constructor hierarchy, the `SVGAElement` constructor and SVG-anchor wrapper,
-  and a readable `Response.body` stream that supports `pipeThrough()`. Remove
+  a readable `Response.body` stream that supports `pipeThrough()`, and
+  module-capable `nomodule` suppression for parser-discovered and dynamic
+  scripts. Remove
   `0003-search-runtime-compatibility.patch` only when the tagged upstream runtime
-  provides all four contracts and the focused
+  provides all five contracts and the focused
   provider fixtures pass without it;
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
@@ -230,6 +232,11 @@ Audit these current Obscura areas:
 - render versus no-render feature selection, ensuring the selected build keeps
   every JavaScript, DOM, charset, module, compressed-response, and CDP surface
   used by search and `open_url` without enabling unused raster capture work;
+  the wrapper currently builds `--features stealth` against a tag whose CLI
+  default feature set is empty rather than treating `--no-default-features` as
+  a permanent Cargo contract. Re-audit both the tag's declared defaults and
+  Cargo flag semantics on every upgrade, and prove the built binary rejects
+  render-only capture commands;
 - the populated-page ES-module budget under the slowest supported Tor route;
   keep it inside the page script and caller attempt deadlines and prove a fast
   module graph does not acquire an unconditional delay;

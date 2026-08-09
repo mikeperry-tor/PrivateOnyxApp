@@ -145,6 +145,15 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         ]
         self.assertIn("PerformanceNavigationTiming", compatibility)
         self.assertIn("SVGAElement", compatibility)
+        self.assertIn("nomodule", compatibility)
+        self.assertIn(
+            "private_onyx_module_capable_runtime_skips_parser_nomodule",
+            compatibility,
+        )
+        self.assertIn(
+            "private_onyx_module_capable_runtime_skips_dynamic_nomodule",
+            compatibility,
+        )
         self.assertIn("_windowNamedPropertyNames.delete(name)", compatibility)
         self.assertIn("private_onyx_window_named_property_assignment", compatibility)
         self.assertIn('OBSCURA_MODULE_BUDGET_MS: "10000"', self.compose)

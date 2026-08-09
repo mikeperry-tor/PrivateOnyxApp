@@ -86,7 +86,7 @@ index f3e435d..f53a480 100644
 @@ -4213,6 +4213,53 @@ mod tests {
          );
      }
- 
+
 +    #[test]
 +    fn private_onyx_window_named_property_assignment_shadows_the_element_alias() {
 +        let mut rt = setup_runtime(
@@ -137,10 +137,138 @@ index f3e435d..f53a480 100644
      #[test]
      fn window_named_access_tracks_dynamic_ids_and_fragment_parsing() {
          let mut rt = setup_runtime("<html><body><div id='host'></div></body></html>");
+diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
+index 5f7f34e..34b4567 100644
+--- a/crates/obscura-browser/src/page.rs
++++ b/crates/obscura-browser/src/page.rs
+@@ -1587,6 +1587,15 @@ impl Page {
+                                 }
+                                 _ => continue,
+                             };
++                            // This runtime supports ES modules, so the HTML
++                            // `nomodule` contract suppresses the legacy
++                            // classic fallback. Executing both builds can
++                            // corrupt shared webpack chunk registries.
++                            if matches!(kind, ScriptKind::Classic)
++                                && node.get_attribute("nomodule").is_some()
++                            {
++                                continue;
++                            }
+
+                             let inline_code = if src.is_none() {
+                                 dom.text_content(sid)
+@@ -4629,6 +4638,32 @@ mod tests {
+         page
+     }
+
++    #[tokio::test(flavor = "current_thread")]
++    async fn private_onyx_module_capable_runtime_skips_parser_nomodule_fallback() {
++        let mut page = import_map_test_page(
++            "parser-nomodule",
++            "http://example.com",
++            r#"<html><head>
++                <script type="module">
++                    globalThis.__selected_script_build = "module";
++                </script>
++                <script nomodule>
++                    globalThis.__selected_script_build = "legacy";
++                </script>
++            </head><body></body></html>"#,
++        );
++        page.execute_scripts().await;
++
++        assert_eq!(
++            page.js
++                .as_mut()
++                .unwrap()
++                .evaluate("globalThis.__selected_script_build")
++                .unwrap(),
++            serde_json::json!("module"),
++        );
++    }
++
+     #[tokio::test(flavor = "current_thread")]
+     async fn module_graph_and_evaluation_share_one_active_budget() {
+         use std::io::{Read as _, Write as _};
+diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
+index cad75f6..3dadf97 100644
+--- a/crates/obscura-js/js/bootstrap.js
++++ b/crates/obscura-js/js/bootstrap.js
+@@ -1682,6 +1682,9 @@ function __prepareInsertedScript(script) {
+   const scriptType = (script.getAttribute('type') || '').trim().toLowerCase();
+   const isModule = scriptType === 'module';
+   const isImportMap = scriptType === 'importmap';
++  // The runtime supports ES modules. Match HTML's `nomodule` selection and
++  // never execute a dynamically inserted legacy fallback alongside them.
++  if (!isModule && (script.hasAttribute('nomodule') || script.noModule === true)) return;
+   if (isImportMap) {
+     const src = script.getAttribute('src');
+     let error = '';
+diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
+index c67bf87..7d26be3 100644
+--- a/crates/obscura-js/src/runtime.rs
++++ b/crates/obscura-js/src/runtime.rs
+@@ -13558,6 +13558,56 @@ mod tests {
+         );
+     }
+
++    #[tokio::test(flavor = "current_thread")]
++    async fn private_onyx_module_capable_runtime_skips_dynamic_nomodule_fallback() {
++        let mut rt = setup_runtime("<html><head></head><body></body></html>");
++        let result = rt
++            .call_function_on_for_cdp(
++                r#"async () => {
++                    const originalFetchOp = Deno.core.ops.op_fetch_url;
++                    let fetches = 0;
++                    try {
++                        Deno.core.ops.op_fetch_url = (url) => {
++                            fetches++;
++                            return JSON.stringify({
++                                status: 200,
++                                headers: { "content-type": "text/javascript" },
++                                body: "globalThis.__legacyFallbackRan = true",
++                                url,
++                            });
++                        };
++                        const script = document.createElement("script");
++                        script.noModule = true;
++                        script.src = "/legacy-fallback.js";
++                        document.head.appendChild(script);
++                        await new Promise(resolve => setTimeout(resolve, 10));
++                        return {
++                            fetches,
++                            executed: globalThis.__legacyFallbackRan === true,
++                            pending: globalThis.__obscura_hasPendingDynamicScripts(),
++                        };
++                    } finally {
++                        Deno.core.ops.op_fetch_url = originalFetchOp;
++                    }
++                }"#,
++                None,
++                &[],
++                true,
++                true,
++            )
++            .await
++            .unwrap();
++
++        assert_eq!(
++            result.value.unwrap(),
++            serde_json::json!({
++                "fetches": 0,
++                "executed": false,
++                "pending": false,
++            })
++        );
++    }
++
+     #[tokio::test(flavor = "current_thread")]
+     async fn dynamic_classic_scripts_are_async_by_default_but_honor_async_false_order() {
+         let mut rt = setup_runtime("<html><head></head><body></body></html>");
 @@ -13575,6 +13622,26 @@ mod tests {
          );
      }
- 
+
 +    #[tokio::test(flavor = "current_thread")]
 +    async fn private_onyx_response_body_stream_supports_pipe_through() {
 +        let mut rt = setup_runtime("<html><body></body></html>");
@@ -205,7 +333,7 @@ index f53a480..c67bf87 100644
 @@ -4260,6 +4260,24 @@ mod tests {
          );
      }
- 
+
 +    #[test]
 +    fn private_onyx_svg_anchor_constructor_surface_is_available() {
 +        let mut rt = setup_runtime("<html><body></body></html>");

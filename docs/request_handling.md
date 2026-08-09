@@ -474,10 +474,11 @@ or a recognized DuckDuckGo host and is decoded exactly once by query parsing;
 the resulting URL is not decoded again, because its remaining escapes can be
 meaningful nested URL values, signatures, or encoded separators. SearXNG's
 optional tracker-remover plugin remains disabled and does not rewrite results.
-DuckDuckGo's form-based and rendered `anomaly-modal__modal` verification pages,
-and an unfinished `deep_preload_link` after the network-idle wait, are typed
-CAPTCHA failures. They enter the ordinary one-hour blocking suspension instead
-of surfacing as parser drift.
+DuckDuckGo's form-based and rendered `anomaly-modal__modal` verification pages
+are typed CAPTCHA failures and enter the ordinary one-hour blocking suspension.
+An unfinished `deep_preload_link` without one of those explicit challenge
+markers is instead a parser/runtime failure: incomplete JavaScript hydration
+must not suspend the provider as though an IP challenge had been proved.
 
 Startpage's explicit CAPTCHA route and its Anubis `sp-message` page containing
 the visible `Verifying your request` state plus the same-origin Anubis module

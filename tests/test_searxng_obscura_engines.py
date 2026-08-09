@@ -391,8 +391,8 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         self.assertIsNone(guard)
         self.assertFalse(self.duckduckgo.paging)
 
-    def test_duckduckgo_unfinished_deep_verification_is_typed_captcha(self):
-        challenge = """
+    def test_duckduckgo_unfinished_deep_hydration_is_parser_failure(self):
+        unfinished = """
         <html><head>
           <link id="deep_preload_link" rel="preload" as="script"
                 href="https://links.duckduckgo.com/d.js?q=example&amp;a=noai">
@@ -400,8 +400,10 @@ class SearxngObscuraEngineTests(unittest.TestCase):
           <section data-testid="mainline"><ol class="react-results--main"></ol></section>
         </body></html>
         """
-        with self.assertRaisesRegex(RuntimeError, "JavaScript result verification"):
-            self.duckduckgo._parse_html(challenge)
+        with self.assertRaisesRegex(
+            ParserMismatch, "JavaScript result hydration did not complete"
+        ):
+            self.duckduckgo._parse_html(unfinished)
 
     def test_duckduckgo_redirect_preserves_result_query_and_fragment(self):
         destination = (

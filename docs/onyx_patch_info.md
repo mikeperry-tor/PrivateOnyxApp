@@ -145,6 +145,13 @@ rejection to `body-unavailable`; Onyx may continue only with same-navigation
 HTML/XHTML DOM, while PDF/raw/binary paths remain strict. See
 [Request handling](request_handling.md).
 
+The derived Obscura image also suppresses classic scripts carrying `nomodule`
+because its runtime supports ES modules. This prevents modern and legacy
+webpack builds from sharing and corrupting one global chunk registry. The
+no-render build currently uses `--features stealth` with the pinned tag's empty
+CLI default feature set. Upgrade validation must re-audit those Cargo defaults
+and flag semantics and confirm that render-only capture remains unavailable.
+
 ## Lite-mode `open_url` availability
 
 Onyx makes `OpenURLTool` available in both modes while Web Search is enabled.
