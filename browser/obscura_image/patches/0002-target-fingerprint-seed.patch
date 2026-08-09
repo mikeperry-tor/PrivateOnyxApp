@@ -1,37 +1,37 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index fc3c366..5ae19fe 100644
+index 7decb18..485255b 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -1655,6 +1655,7 @@ dependencies = [
+@@ -1879,6 +1879,7 @@ dependencies = [
   "tokio",
   "tracing",
   "url",
 + "uuid",
  ]
- 
+
  [[package]]
 diff --git a/crates/obscura-browser/Cargo.toml b/crates/obscura-browser/Cargo.toml
-index 1ed64cd..f6acbb9 100644
+index ab87de7..d23fcd5 100644
 --- a/crates/obscura-browser/Cargo.toml
 +++ b/crates/obscura-browser/Cargo.toml
-@@ -19,3 +19,4 @@ thiserror = { workspace = true }
- anyhow = { workspace = true }
+@@ -21,3 +21,4 @@ anyhow = { workspace = true }
  serde_json = { workspace = true }
  base64 = { workspace = true }
+ image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
 +uuid = { workspace = true }
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index 7ad3875..001699c 100644
+index 975c6ec..5f7f34e 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -200,6 +200,7 @@ pub struct Page {
+@@ -287,6 +287,7 @@ pub struct Page {
      callbacks: Arc<CallbackRegistry>,
      #[cfg(feature = "stealth")]
      pub stealth_client: Option<Arc<StealthHttpClient>>,
 +    fingerprint_seed: u32,
  }
- 
- impl Page {
-@@ -226,6 +227,13 @@ impl Page {
+
+ const MAX_STYLESHEET_IMPORT_DEPTH: u8 = 4;
+@@ -882,6 +883,13 @@ impl Page {
          } else {
              None
          };
@@ -42,63 +42,64 @@ index 7ad3875..001699c 100644
 +                break seed;
 +            }
 +        };
- 
+
          Page {
              id,
-@@ -252,6 +260,7 @@ impl Page {
+@@ -918,6 +926,7 @@ impl Page {
              callbacks: Arc::new(CallbackRegistry::new()),
              #[cfg(feature = "stealth")]
              stealth_client,
 +            fingerprint_seed,
          }
      }
- 
-@@ -374,6 +383,7 @@ impl Page {
+
+@@ -1154,6 +1163,7 @@ impl Page {
              rt.set_dom(dom);
          }
- 
+
 +        rt.set_fingerprint_seed(self.fingerprint_seed);
          rt.run_page_init();
- 
-         self.js = Some(rt);
+         let _ = rt.execute_script(
+             "<device-metrics>",
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index 3ef371a..4cc2f35 100644
+index add5e8a..724e197 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -14,6 +14,6 @@
+@@ -15,7 +15,7 @@
+     '__obscura_errors', '__obscura_init', '__obscura_hide_list',
      '__obscura_objects', '__obscura_oid', '__obscura_ua',
      '__obscura_platform', '__obscura_ua_platform', '__obscura_ua_platform_version',
 -    '__obscura_stealth', '__obscura_markTrusted',
 +    '__obscura_stealth', '__obscura_markTrusted', '__obscura_set_fingerprint_seed',
-     '__obscura_hw', '__obscura_mem',
-     '__documentReadyState__', '__currentUrl',
-     // internal helpers (var-declared throughout the file)
-@@ -158,6 +158,9 @@ Object.defineProperty(Error.prototype, 'stack', {
+     '__obscura_registerLinkedStylesheet',
+     '__markParserScripts', '__obscura_hasPendingDynamicScripts',
+     '__obscura_hasPendingLoadDelayingScripts',
+@@ -214,6 +214,9 @@ if (_origStackDesc && _origStackDesc.get) {
  }
- 
+
  let _fpSeed = 0;
 +globalThis.__obscura_set_fingerprint_seed = function(seed) {
 +  _fpSeed = seed >>> 0;
 +};
- // Dynamic script import queue — serializes concurrent import() calls
- // to prevent re-entrant RefCell panic in deno_core's futures_unordered_driver
- // when SPAs dynamically insert multiple <script module> tags at once.
-@@ -8136,7 +8139,6 @@ if (typeof ShadowRoot !== 'undefined' && !ShadowRoot.prototype.elementFromPoint)
+ // Dynamic module/in-order script queue. Module evaluation remains serialized
+ // to prevent a re-entrant RefCell panic in deno_core's
+ // futures_unordered_driver when SPAs insert multiple <script type=module>
+@@ -13884,7 +13887,6 @@ if (typeof ShadowRoot !== 'undefined' && !ShadowRoot.prototype.elementFromPoint)
  }
- 
+
  globalThis.__obscura_init = function() {
 -  _fpSeed = Date.now() ^ (Math.random() * 0xFFFFFFFF >>> 0);
    _fpCache = null;
    // A real navigation just completed (this runs after set_url), so drop any
    // URL a location setter previewed synchronously and let document_url drive
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index fdfeb4d..9e7a546 100644
+index 0e6c29f..0ac069c 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -271,6 +271,18 @@ impl ObscuraJsRuntime {
-         );
+@@ -493,6 +493,18 @@ impl ObscuraJsRuntime {
+         let _ = self.runtime.execute_script("<set-screen-size>", script);
      }
- 
+
 +    pub fn set_fingerprint_seed(&mut self, seed: u32) {
 +        debug_assert_ne!(seed, 0);
 +        let _ = self.runtime.execute_script(
@@ -111,13 +112,13 @@ index fdfeb4d..9e7a546 100644
 +        );
 +    }
 +
-     /// Run __obscura_init() after all per-page properties (UA, platform, stealth, etc.)
-     /// have been set. Must be called once per page setup, after all set_* methods.
-     pub fn run_page_init(&mut self) {
-@@ -2630,6 +2642,32 @@ mod tests {
-         }
+     /// Current clamped root scroll offset shared by CSSOM geometry and paint.
+     #[cfg(feature = "render")]
+     pub fn scroll_offset(&self) -> (f32, f32) {
+@@ -2549,6 +2561,31 @@ mod tests {
+         rt
      }
- 
+
 +    #[test]
 +    fn private_onyx_target_seed_is_stable_across_realms() {
 +        fn bundle(seed: u32) -> serde_json::Value {
@@ -133,9 +134,8 @@ index fdfeb4d..9e7a546 100644
 +                serde_json::Value::String("undefined".to_string()),
 +            );
 +            rt.evaluate(
-+                "[_fp('screen'),_fp('gpu'),_fp('canvasFingerprint'),\
-+                 _fp('audioSampleRate'),_fp('audioBaseLatency'),\
-+                 _fp('batteryLevel'),_fp('batteryCharging')]",
++                "[screen.width,screen.height,new AudioContext().sampleRate,\
++                 new AudioContext().baseLatency]",
 +            )
 +            .unwrap()
 +        }
@@ -145,5 +145,5 @@ index fdfeb4d..9e7a546 100644
 +    }
 +
      #[test]
-     fn test_checkbox_checked() {
-         let mut rt = setup_runtime(r#"<input id="cb" type="checkbox" checked>"#);
+     fn document_domain_getter_and_valid_relaxation_match_effective_host() {
+         let dom = parse_html("<html><body></body></html>");

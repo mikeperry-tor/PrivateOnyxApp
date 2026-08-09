@@ -56,7 +56,7 @@ apply in every selected mode.
 | optional `tor` | `tor-ingress` only when onion ingress is enabled; private control tmpfs and optional SOCKS runtime volume are mounts, not networks | dedicated `tor-uplink`; applications never join it |
 | optional `tor-frontend-gateway` | spans only `tor-ingress` and `onyx-frontend`, with fixed nginx forwarding | none |
 
-CDP is powerful browser authority. Obscura v0.1.11 gives every WebSocket its
+CDP is powerful browser authority. Obscura v0.2.0 gives every WebSocket its
 own browser context, HTTP client, cookie jar, targets, headers, User-Agent
 state, thread, and V8 isolates. The API and SearXNG therefore do not share
 browser state across their request connections, but they still share one

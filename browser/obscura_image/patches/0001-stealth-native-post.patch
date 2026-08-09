@@ -1,8 +1,8 @@
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index 2e169fd..f47461a 100644
+index 975c6ec..5f7f34e 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -280,6 +280,21 @@ impl Page {
+@@ -1062,6 +1062,23 @@ impl Page {
              .fetch_with_callbacks(url, Some(&self.callbacks))
              .await
      }
@@ -14,7 +14,9 @@ index 2e169fd..f47461a 100644
 +    ) -> Result<(Response, String), ObscuraNetError> {
 +        #[cfg(feature = "stealth")]
 +        if let Some(ref stealth) = self.stealth_client {
-+            return stealth.post_form(url, body).await;
++            return stealth
++                .post_form_with_callbacks(url, body, Some(&self.callbacks))
++                .await;
 +        }
 +        self.http_client
 +            .post_form_with_callbacks(url, body, Some(&self.callbacks))
@@ -22,30 +24,31 @@ index 2e169fd..f47461a 100644
 +            .map(|response| (response, "POST".to_string()))
 +    }
      fn init_js(&mut self) {
-         // Drop any existing runtime so the JS realm starts clean on
-         // every navigation. The old code reused the V8 isolate and
-@@ -934,7 +949,7 @@ impl Page {
-                     );
+         // init_js is also the new-document path.  Only resume_js explicitly
+         // takes these IDs out before entering here and restores them after the
+@@ -2409,10 +2426,8 @@ impl Page {
                      break;
                  }
--                tracing::info!("JS-triggered navigation chain: {} {} -> {}", current_method, current_url, next_url);
-+                tracing::info!("JS-triggered navigation chain: method={}", current_method);
-                 current_url = next_url;
-                 current_method = next_method;
-                 current_body = next_body;
-@@ -1015,7 +1030,8 @@ impl Page {
+                 tracing::info!(
+-                    "JS-triggered navigation chain: {} {} -> {}",
++                    "JS-triggered navigation chain: method={}",
+                     current_method,
+-                    current_url,
+-                    next_url
+                 );
+                 document_referrer = self
+                     .url
+@@ -2505,6 +2520,7 @@ impl Page {
              return Ok(());
          }
 
--        let response = if url.scheme() == "data" {
 +        let mut document_method = method.to_string();
-+        let response = if url.scheme() == "data" {
-             let content_type = url_str.strip_prefix("data:")
-                 .and_then(|s| s.split(',').next())
-                 .unwrap_or("text/html")
-@@ -1027,9 +1043,10 @@ impl Page {
-             headers.insert("content-type".to_string(), content_type);
-             Ok(obscura_net::Response { url: url.clone(), status: 200, headers, body: body_bytes, redirected_from: Vec::new() })
+         let response = if url.scheme() == "data" {
+             let content_type = url_str
+                 .strip_prefix("data:")
+@@ -2525,9 +2541,10 @@ impl Page {
+                 redirected_from: Vec::new(),
+             })
          } else if method == "POST" {
 -            self.http_client
 -                .post_form_with_callbacks(&url, body, Some(&self.callbacks))
@@ -56,34 +59,40 @@ index 2e169fd..f47461a 100644
 +            })
          } else {
              self.do_fetch(&url).await
-         }.map_err(|e| {
-@@ -1043,7 +1060,7 @@ impl Page {
+         }
+@@ -2541,8 +2558,8 @@ impl Page {
+         // corrupts them (issue #340). Text-like types stay as text.
          let main_is_binary = !is_text_like_content_type(response.content_type());
          self.record_network_event_with_body(
-             url.as_str(),
+-            url.as_str(),
 -            "GET",
++            response.url.as_str(),
 +            &document_method,
              "Document",
              response.status,
              &response.headers,
 diff --git a/crates/obscura-cdp/src/server.rs b/crates/obscura-cdp/src/server.rs
-index 9570328..421c1cd 100644
+index 9ee1594..c8010e1 100644
 --- a/crates/obscura-cdp/src/server.rs
 +++ b/crates/obscura-cdp/src/server.rs
-@@ -1176,7 +1176,7 @@ async fn process_cdp_request(
+@@ -1423,7 +1423,11 @@ async fn process_cdp_message(
      }
 
      if let Some((nav_url, nav_method, nav_body)) = check_pending_navigation(ctx, &req.session_id) {
 -        tracing::info!("JS-triggered nav: {} {} (body: {} bytes)", nav_method, nav_url, nav_body.len());
-+        tracing::info!("JS-triggered nav: method={} body_bytes={}", nav_method, nav_body.len());
++        tracing::info!(
++            "JS-triggered nav: method={} body_bytes={}",
++            nav_method,
++            nav_body.len(),
++        );
          let nav_req = CdpRequest {
              id: 0,
              method: "Page.navigate".to_string(),
 diff --git a/crates/obscura-cli/src/main.rs b/crates/obscura-cli/src/main.rs
-index 5b8d63f..a7a95f3 100644
+index 21a2d96..1c94523 100644
 --- a/crates/obscura-cli/src/main.rs
 +++ b/crates/obscura-cli/src/main.rs
-@@ -353,9 +353,12 @@ async fn main() -> anyhow::Result<()> {
+@@ -386,9 +386,12 @@ async fn main() -> anyhow::Result<()> {
              }
              if stealth {
                  #[cfg(feature = "stealth")]
@@ -100,59 +109,99 @@ index 5b8d63f..a7a95f3 100644
                  tracing::info!("Stealth mode enabled (tracker blocking)");
              }
 diff --git a/crates/obscura-net/src/wreq_client.rs b/crates/obscura-net/src/wreq_client.rs
-index bf56a9a..06d2837 100644
+index a4661f7..c4a97fa 100644
 --- a/crates/obscura-net/src/wreq_client.rs
 +++ b/crates/obscura-net/src/wreq_client.rs
-@@ -32,6 +32,19 @@ pub const STEALTH_UA_PLATFORM: &str = "Windows";
+@@ -39,6 +39,19 @@ pub const STEALTH_UA_PLATFORM: &str = "Windows";
  #[cfg(feature = "stealth")]
  pub const STEALTH_UA_PLATFORM_VERSION: &str = "15.0.0";
 
 +#[cfg(feature = "stealth")]
 +fn redirected_navigation_method(
 +    status: u16,
-+    method: &str,
-+    body: &str,
-+) -> (String, String) {
++    method: wreq::Method,
++    body: Option<Vec<u8>>,
++) -> (wreq::Method, Option<Vec<u8>>) {
 +    if matches!(status, 301 | 302 | 303) {
-+        ("GET".to_string(), String::new())
++        (wreq::Method::GET, None)
 +    } else {
-+        (method.to_string(), body.to_string())
++        (method, body)
 +    }
 +}
 +
  #[cfg(feature = "stealth")]
- pub struct StealthHttpClient {
-     client: wreq::Client,
-@@ -74,7 +87,28 @@ impl StealthHttpClient {
+ fn wreq_response_header_value<'a>(
+     headers: &'a wreq::header::HeaderMap,
+@@ -203,8 +216,32 @@ impl StealthHttpClient {
+         url: &Url,
+         callbacks: Option<&CallbackRegistry>,
+     ) -> Result<Response, ObscuraNetError> {
+-        self.fetch_with_profile(url, ResourceRequest::navigation(), callbacks)
+-            .await
++        self.navigate_with_profile(
++            url,
++            wreq::Method::GET,
++            None,
++            ResourceRequest::navigation(),
++            callbacks,
++        )
++        .await
++        .map(|(response, _)| response)
++    }
++
++    pub async fn post_form_with_callbacks(
++        &self,
++        url: &Url,
++        body: &str,
++        callbacks: Option<&CallbackRegistry>,
++    ) -> Result<(Response, String), ObscuraNetError> {
++        self.navigate_with_profile(
++            url,
++            wreq::Method::POST,
++            Some(body.as_bytes().to_vec()),
++            ResourceRequest::navigation(),
++            callbacks,
++        )
++        .await
++        .map(|(response, method)| (response, method.to_string()))
      }
- 
-     pub async fn fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
-+        self.navigate(url, "GET", "")
+
+     pub async fn fetch_resource_with_callbacks(
+@@ -213,33 +250,41 @@ impl StealthHttpClient {
+         request: ResourceRequest,
+         callbacks: Option<&CallbackRegistry>,
+     ) -> Result<Response, ObscuraNetError> {
+-        self.fetch_with_profile(url, request, callbacks).await
++        self.navigate_with_profile(url, wreq::Method::GET, None, request, callbacks)
 +            .await
-+            .map(|(response, _final_method)| response)
-+    }
-+
-+    pub async fn post_form(
-+        &self,
-+        url: &Url,
-+        body: &str,
-+    ) -> Result<(Response, String), ObscuraNetError> {
-+        self.navigate(url, "POST", body).await
-+    }
-+
-+    async fn navigate(
-+        &self,
-+        url: &Url,
-+        method: &str,
-+        body: &str,
-+    ) -> Result<(Response, String), ObscuraNetError> {
++            .map(|(response, _)| response)
+     }
+
+-    async fn fetch_with_profile(
++    async fn navigate_with_profile(
+         &self,
+         url: &Url,
++        initial_method: wreq::Method,
++        initial_body: Option<Vec<u8>>,
+         request: ResourceRequest,
+         callbacks: Option<&CallbackRegistry>,
+-    ) -> Result<Response, ObscuraNetError> {
++    ) -> Result<(Response, wreq::Method), ObscuraNetError> {
+         validate_url(url, false)?;
+         validate_request_mode(&request, url)?;
+         if url.scheme() == "file" {
+-            return fetch_file_url(url, request.max_response_bytes).await;
++            return fetch_file_url(url, request.max_response_bytes)
++                .await
++                .map(|response| (response, initial_method));
+         }
+
          let mut current_url = url.clone();
-+        let mut current_method = method.to_string();
-+        let mut current_body = body.to_string();
- 
++        let mut method = initial_method;
++        let mut body = initial_body;
+
          if let Some(host) = current_url.host_str() {
              if crate::blocklist::is_blocked(host) {
-@@ -82,10 +116,10 @@ impl StealthHttpClient {
                  tracing::debug!("Blocked tracker: {}", current_url);
 -                return Ok(Response {
 +                return Ok((Response {
@@ -162,83 +211,95 @@ index bf56a9a..06d2837 100644
                      body: Vec::new(),
                      redirected_from: Vec::new(),
 -                });
-+                }, current_method));
++                }, method));
              }
          }
-@@ -92,16 +126,24 @@ impl StealthHttpClient {
-         let mut redirects = Vec::new();
- 
+
+@@ -249,7 +294,7 @@ impl StealthHttpClient {
+
          for _ in 0..20 {
+             validate_request_mode(&request, &current_url)?;
 -            let mut req = self.client.get(current_url.as_str());
-+            let request_method = current_method.parse::<wreq::Method>().map_err(|e| {
-+                ObscuraNetError::Network(format!("invalid navigation method: {}", e))
-+            })?;
-+            let mut req = self.client.request(request_method, current_url.as_str());
- 
-             let cookie_header = self.cookie_jar.get_cookie_header(&current_url);
-             if !cookie_header.is_empty() {
--                req = req.header("Cookie", &cookie_header);
-+                req = req.header("cookie", &cookie_header);
++            let mut req = self.client.request(method.clone(), current_url.as_str());
+
+             req = req
+                 .header("accept", request.accept())
+@@ -284,10 +329,19 @@ impl StealthHttpClient {
+             if cors_required(&request, &current_url) {
+                 req = req.header("origin", &request_origin);
              }
- 
-             for (k, v) in self.extra_headers.read().await.iter() {
-                 req = req.header(k.as_str(), v.as_str());
-             }
-+            if current_method == "POST" {
-+                req = req
-+                    .header("content-type", "application/x-www-form-urlencoded")
-+                    .body(current_body.clone());
++            if let Some(ref request_body) = body {
++                if method == wreq::Method::POST {
++                    req = req.header(
++                        "content-type",
++                        "application/x-www-form-urlencoded",
++                    );
++                }
++                req = req.body(request_body.clone());
 +            }
- 
-             self.in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-             let resp = req.send().await.map_err(|e| {
-@@ -134,6 +176,11 @@ impl StealthHttpClient {
-                     })?;
+
+             let request_info = RequestInfo {
+                 url: current_url.clone(),
+-                method: "GET".to_string(),
++                method: method.to_string(),
+                 headers: self.extra_headers.read().await.clone(),
+                 resource_type: request.resource_type,
+             };
+@@ -339,6 +393,11 @@ impl StealthHttpClient {
+                         redirect_taints_origin(&request, &current_url, &next_url);
                      redirects.push(current_url.clone());
                      current_url = next_url;
-+                    (current_method, current_body) = redirected_navigation_method(
++                    (method, body) = redirected_navigation_method(
 +                        status.as_u16(),
-+                        &current_method,
-+                        &current_body,
++                        method,
++                        body,
 +                    );
                      continue;
                  }
              }
-@@ -145,8 +192,8 @@ impl StealthHttpClient {
--            return Ok(Response {
-+            return Ok((Response {
-                 url: current_url,
-                 status: status.as_u16(),
-                 headers: response_headers,
-                 body,
-                 redirected_from: redirects,
--            });
-+            }, current_method));
+@@ -357,7 +416,7 @@ impl StealthHttpClient {
+             if let Some(callbacks) = callbacks {
+                 callbacks.fire_response(&request_info, &response).await;
+             }
+-            return Ok(response);
++            return Ok((response, method));
          }
-@@ -245,3 +292,34 @@ impl StealthHttpClient {
-         self.active_requests() == 0
-     }
- }
-+
-+#[cfg(all(test, feature = "stealth"))]
-+mod private_onyx_patch_tests {
+
+         Err(ObscuraNetError::TooManyRedirects(url.to_string()))
+@@ -459,7 +518,7 @@ mod tests {
+     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+     use url::Url;
+
+-    use super::StealthHttpClient;
 +    use super::{redirected_navigation_method, StealthHttpClient};
-+    use crate::cookies::CookieJar;
-+    use std::sync::Arc;
+     use crate::cookies::CookieJar;
+
+     const PLAIN_BODY: &str = "<!DOCTYPE html><html><body><p id=\"mark\">gzip ok</p></body></html>";
+@@ -512,4 +571,35 @@ mod tests {
+         assert_eq!(resp.status, 200);
+         assert_eq!(resp.text(), PLAIN_BODY, "gzip body must be decompressed");
+     }
 +
 +    #[test]
 +    fn private_onyx_stealth_form_redirect_semantics() {
 +        for status in [301, 302, 303] {
-+            assert_eq!(
-+                redirected_navigation_method(status, "POST", "q=private"),
-+                ("GET".to_string(), String::new())
++            let (method, body) = redirected_navigation_method(
++                status,
++                wreq::Method::POST,
++                Some(b"q=private".to_vec()),
 +            );
++            assert_eq!(method, wreq::Method::GET);
++            assert_eq!(body, None);
 +        }
 +        for status in [307, 308] {
-+            assert_eq!(
-+                redirected_navigation_method(status, "POST", "q=private"),
-+                ("POST".to_string(), "q=private".to_string())
++            let expected = b"q=private".to_vec();
++            let (method, body) = redirected_navigation_method(
++                status,
++                wreq::Method::POST,
++                Some(expected.clone()),
 +            );
++            assert_eq!(method, wreq::Method::POST);
++            assert_eq!(body, Some(expected));
 +        }
 +    }
 +
@@ -249,4 +310,4 @@ index bf56a9a..06d2837 100644
 +        assert!(Arc::ptr_eq(&client.cookie_jar, &jar));
 +        assert_eq!(client.active_requests(), 0);
 +    }
-+}
+ }

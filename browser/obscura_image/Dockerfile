@@ -1,5 +1,5 @@
 ARG OBSCURA_BUILDER_IMAGE=docker.io/library/rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0
-ARG OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.1.11@sha256:e5fd7b8032a5fedc6e8e27f9d4f2e35327ea08b2548ab1372775974add171547
+ARG OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.0@sha256:78c99ac89d010d444d96d85c183a2db912c41f807b7807d697df98ab7e4bd3c2
 
 FROM ${OBSCURA_BUILDER_IMAGE} AS builder
 
@@ -44,10 +44,12 @@ RUN set -eu; \
 WORKDIR /build
 
 RUN cargo test --locked --features stealth \
-        -p obscura-net private_onyx_stealth_ \
-    && cargo test --locked --features stealth \
-        -p obscura-js private_onyx_target_seed_is_stable_across_realms \
-    && OBSCURA_VERSION="${OBSCURA_RELEASE_VERSION}-private-onyx-search-v1" \
+        -p obscura-net private_onyx_stealth_
+
+RUN cargo test --locked --features stealth \
+        -p obscura-js private_onyx_target_seed_is_stable_across_realms
+
+RUN OBSCURA_VERSION="${OBSCURA_RELEASE_VERSION}-private-onyx-search-v1" \
         cargo build --release --locked --features stealth \
         -p obscura-cli --bin obscura --bin obscura-worker
 

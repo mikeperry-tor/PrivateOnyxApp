@@ -143,7 +143,7 @@ services:
       OBSCURA_FETCH_TIMEOUT_MS: "45000"
       OBSCURA_NETWORK_BODY_BUFFER_ENTRIES: "16"
       OBSCURA_NETWORK_BODY_BUFFER_BYTES: "${OBSCURA_RETENTION_FLOOR_BYTES:-52428800}"
-      # Every v0.1.11 connection owns its IO store and the wrapper opens at
+      # Every browser connection owns its IO store and the wrapper opens at
       # most one response stream on that connection.
       OBSCURA_IO_STREAM_MAX_ENTRIES: "1"
       OBSCURA_IO_STREAM_MAX_BYTES: "${OBSCURA_IO_STREAM_MAX_BYTES:-52428800}"

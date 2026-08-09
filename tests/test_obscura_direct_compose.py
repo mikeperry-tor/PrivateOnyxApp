@@ -25,6 +25,10 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         cls.obscura_patch_series = (
             ROOT / "browser/obscura_image/patches/series"
         ).read_text().splitlines()
+        cls.obscura_patches = {
+            name: (ROOT / "browser/obscura_image/patches" / name).read_text()
+            for name in cls.obscura_patch_series
+        }
         cls.searxng_compose = (ROOT / "searxng/docker-compose.yml").read_text()
         cls.makefile = (ROOT / "Makefile").read_text()
 
@@ -48,18 +52,27 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertNotIn("--storage-dir", self.compose)
         self.assertNotIn("--allow-file-access", self.compose)
 
-    def test_manifest_pins_obscura_0_1_11(self):
+    def test_manifest_pins_obscura_0_2_0(self):
         self.assertIn(
-            "OBSCURA_RELEASE_VERSION=0.1.11",
+            "OBSCURA_RELEASE_VERSION=0.2.0",
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.1.11"
-            "@sha256:e5fd7b8032a5fedc6e8e27f9d4f2e35327ea08b2548ab1372775974add171547",
+            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.0"
+            "@sha256:78c99ac89d010d444d96d85c183a2db912c41f807b7807d697df98ab7e4bd3c2",
             self.manifest,
         )
         self.assertIn(
             "OBSCURA_WRAPPER_IMAGE_REPOSITORY=local/private-onyx-obscura",
+            self.manifest,
+        )
+        self.assertIn(
+            "OBSCURA_SOURCE_REF=97124edeb2ea610615e78f43e097454e3b221f6b",
+            self.manifest,
+        )
+        self.assertIn(
+            "OBSCURA_SOURCE_SHA256="
+            "e9fa0387f51afc6f33a0e16b0aa31c2da071151fd70cea83583b176e6d0f79bc",
             self.manifest,
         )
         self.assertNotIn("\nOBSCURA_IMAGE=", self.manifest)
@@ -93,8 +106,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         )
         self.assertIn(
             "ARG OBSCURA_UPSTREAM_IMAGE="
-            "docker.io/h4ckf0r0day/obscura:0.1.11"
-            "@sha256:e5fd7b8032a5fedc6e8e27f9d4f2e35327ea08b2548ab1372775974add171547",
+            "docker.io/h4ckf0r0day/obscura:0.2.0"
+            "@sha256:78c99ac89d010d444d96d85c183a2db912c41f807b7807d697df98ab7e4bd3c2",
             self.obscura_dockerfile,
         )
         self.assertIn("obscura/archive/{ref}.tar.gz", self.obscura_fetcher)
@@ -112,10 +125,20 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             ],
         )
         self.assertIn("cargo build --release --locked --features stealth", self.obscura_dockerfile)
+        self.assertNotIn("--features render", self.obscura_dockerfile)
+        self.assertNotIn("--features render,stealth", self.obscura_dockerfile)
         self.assertIn("--bin obscura --bin obscura-worker", self.obscura_dockerfile)
         self.assertNotIn("fetch_release.py", self.makefile + self.obscura_dockerfile)
         self.assertNotIn("OBSCURA_RELEASE_AMD64_SHA256", self.manifest + self.makefile)
         self.assertIn("obscura-build:", self.makefile)
+        native_post = self.obscura_patches["0001-stealth-native-post.patch"]
+        self.assertIn("navigate_with_profile", native_post)
+        self.assertIn("post_form_with_callbacks", native_post)
+        self.assertIn("response.url.as_str()", native_post)
+        self.assertIn("redirected_navigation_method", native_post)
+        fingerprint = self.obscura_patches["0002-target-fingerprint-seed.patch"]
+        self.assertIn("__obscura_registerLinkedStylesheet", fingerprint)
+        self.assertIn("set_fingerprint_seed(self.fingerprint_seed)", fingerprint)
 
     def test_new_manifest_and_no_proxy_names(self):
         self.assertIn("SEARXNG_WRAPPER_IMAGE_REPOSITORY=", self.manifest)

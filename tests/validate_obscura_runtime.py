@@ -48,6 +48,31 @@ async def create_target(cdp: _RawCdp) -> tuple[str, str]:
     return target_id, str(attached["params"]["sessionId"])
 
 
+async def validate_playwright_session_attachment() -> None:
+    """Prove the public Playwright page-session path uses a distinct ID."""
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.connect_over_cdp(CDP_URL)
+        try:
+            context = browser.contexts[0]
+            page = await context.new_page()
+            try:
+                session = await context.new_cdp_session(page)
+                try:
+                    result = await session.send(
+                        "Runtime.evaluate",
+                        {"expression": "6 * 7", "returnByValue": True},
+                    )
+                    assert result["result"]["value"] == 42
+                finally:
+                    await session.detach()
+            finally:
+                await page.close()
+        finally:
+            await browser.close()
+
+
 async def validate_patched_search_runtime() -> None:
     """Exercise retained-target GET/POST and fingerprint contracts."""
     websocket = await connect(CDP_URL, proxy=None)
@@ -435,6 +460,19 @@ def validate_navigation_contracts() -> None:
     javascript = fetch("/javascript", want="dom")
     assert "id=\"state\">rendered<" in (javascript.rendered_html or "")
 
+    modern_javascript = fetch("/modern-javascript", want="dom")
+    modern_html = modern_javascript.rendered_html or ""
+    assert "custom-event" in modern_html, modern_html
+    assert "rgb(4, 5, 6)" in modern_html, modern_html
+    assert 'class="clone">cloned<' in modern_html, modern_html
+
+    compressed = fetch("/compressed")
+    assert "id=\"compressed\">decoded gzip<" in (compressed.rendered_html or "")
+    assert b"decoded gzip" in (compressed.body or b"")
+
+    charset = fetch("/charset", want="dom")
+    assert "id=\"charset\">café €<" in (charset.rendered_html or "")
+
     redirected = fetch("/redirect")
     assert redirected.final_url == f"{BASE_URL}/final"
     assert b"redirect terminal" in (redirected.body or b"")
@@ -488,6 +526,7 @@ def validate_navigation_contracts() -> None:
 
 
 def main() -> None:
+    asyncio.run(validate_playwright_session_attachment())
     asyncio.run(validate_patched_search_runtime())
     asyncio.run(validate_connection_isolation())
     asyncio.run(validate_connection_limit())

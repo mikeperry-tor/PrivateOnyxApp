@@ -134,7 +134,7 @@ terminal main-frame Document request, reads retained body streams with actual
 byte accounting, obtains rendered DOM, returns typed warning-level failures,
 redacts wrapper diagnostics, and cleans up streams and targets on every path.
 Its default mode, used by direct `open_url`, opens and closes one
-v0.1.11-isolated browser connection per request. Its explicit reusable-session
+v0.2.0-isolated browser connection per request. Its explicit reusable-session
 mode is owned only by the SearXNG provider adapter: each provider serializes
 two-stage searches on one retained connection and target generation and
 discards the generation after an ambiguous client or cleanup failure. Neither
@@ -186,15 +186,15 @@ and engine inputs, preventing a stale manually tagged image from surviving a
 source-only change. Compose explicitly exposes the wrapper patch directory,
 the SearXNG application root, and the shared client directory to the embedded
 Python interpreter so patch or client import failure remains startup-visible.
-The runtime direct client uses pinned WebSockets because Playwright's public
-page session attachment is incompatible with the pinned Obscura server's
-reused flattened session identifier.
+The runtime direct client uses pinned WebSockets to own its exact event,
+retained-body, deadline, redaction, and cleanup contracts directly. Tagged-image
+validation separately proves Playwright's public page-session attachment path.
 
 The Obscura image is built from the digest-verified archive for exact commit
-`e78b5e60261599a850c053eaecc2de92625496d7`, using a digest-pinned Rust/Debian
+`97124edeb2ea610615e78f43e097454e3b221f6b`, using a digest-pinned Rust/Debian
 builder and the upstream locked dependency graph. The build applies exactly
 two ordered patches with `git apply --check` before compiling both runtime
-binaries with the `stealth` feature:
+binaries with the no-render `stealth` feature set:
 
 - `0001-stealth-native-post.patch` routes native form POST through the
   target-owned stealth client used by GET, preserves its cookies, proxy,
@@ -207,6 +207,13 @@ binaries with the `stealth` feature:
   every page-realm initialization, so seed-derived screen/GPU/canvas/audio
   surfaces remain stable for that target without exposing the seed to page
   code or CDP. Profile-owned hardware and memory values remain stable too.
+
+The v0.2.0 tagged runtime includes the native raster renderer, but this stack
+does not expose screenshot, screencast, or PDF-export features. Its derived
+binary omits rendering so browser searches and direct `open_url` do not add
+renderer-only image, font, layout, or capture work. The no-render feature set
+still includes the release's JavaScript, DOM, module, charset, compressed
+stealth-response, and CDP compatibility improvements used by these paths.
 
 Source, patches, compiler, Cargo cache, and build tools remain in builder
 stages. The final image retains the audited upstream hardened runtime base and
@@ -787,7 +794,7 @@ background supervisor, so neither setting creates a bot process there.
 
 The base wrapper adds the hardened single-process Obscura service, direct
 control networks, API-only CDP gateway, derived SearXNG service, distinct fixed
-egress bridges, and shared public/host final-hop policies. Obscura v0.1.11
+egress bridges, and shared public/host final-hop policies. Obscura v0.2.0
 isolates every live WebSocket browser context and rejects connections above the
 aggregate capacity of 15. Direct `open_url` connections remain request-scoped;
 each SearXNG provider instead lazily retains one connection for one hour after

@@ -124,7 +124,7 @@ implementation from `browser/obscura_client`. SearXNG connects on
 connect only through `obscura-cdp-gateway` on `onyx-obscura-control`. CDP is
 not published on the host or attached to an Onyx data/backend network.
 
-Obscura v0.1.11 gives every WebSocket connection its own browser context, HTTP
+Obscura v0.2.0 gives every WebSocket connection its own browser context, HTTP
 client, cookie jar, targets, headers, User-Agent state, OS thread, and V8
 isolates. Direct `open_url` uses one fresh connection and target per navigation.
 SearXNG instead gives each of its five providers one lazy connection and one
@@ -142,7 +142,7 @@ receive HTTP 503 instead of entering a server queue as a fail-closed guard
 against a changed worker/process model or another unexpected CDP caller; normal
 Onyx tool execution is expected to remain within the 15-slot composition.
 
-In the full-stealth build, upstream v0.1.11 accepts
+In the stealth-feature build, upstream v0.2.0 accepts
 `Network.setExtraHTTPHeaders` and `Network.setUserAgentOverride` but applies
 them to the ordinary context HTTP client while navigation uses its separate
 wreq client, so those overrides do not reach the wire. The wrapper does not
@@ -150,14 +150,15 @@ call either command; its isolation contract therefore covers the cookie jar,
 targets, contexts, V8 state, and connection cleanup actually used by this
 stack. Re-audit this upstream split before depending on either override.
 
-The client still uses flattened CDP messages over the pinned WebSocket
-transport. Attaching Playwright 1.58's public `new_cdp_session(page)` to an
-Obscura-created target reuses the already attached session identifier and
-crashes the Playwright driver as a duplicate target. The audited raw transport
-avoids that incompatible second attachment. Direct `open_url` preserves the
-exact one-`Page.navigate` contract; SearXNG uses the separate two-document
-transaction below. The derived SearXNG image pins the audited
-Playwright package for compatibility checks and contains no browser binary.
+The client uses flattened CDP messages over the pinned WebSocket transport so
+it can own event correlation, retained-body streaming, deadlines, redaction,
+and cleanup directly. Obscura assigns distinct identifiers to explicit target
+attachments, and the tagged-image gate exercises Playwright 1.58's public
+`new_cdp_session(page)` path. The raw transport remains the smaller exact
+implementation of the wrapper's request contracts; it is not a workaround for
+session-identifier reuse. Direct `open_url` preserves the exact
+one-`Page.navigate` contract; SearXNG uses the separate two-document
+transaction below.
 
 ## Obscura `open_url` one-navigation contract
 
@@ -755,13 +756,16 @@ visible under its otherwise warning-oriented default logger and adds only the
 engine name, provider-local query sequence, and whether the retained browser
 session was reused.
 The wrapper-selected image retains the digest-pinned upstream runtime but
-builds the exact SHA-256-verified upstream source revision with the `stealth`
-feature and the two strict wrapper patch-series entries, then copies only the
-resulting server binaries into that runtime. This is required for
-wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
-fingerprint seed plus stealth-native form POST contracts; the upstream tagged
-Docker image enables tracker blocking under `--stealth` but is built without
-the full feature.
+builds the exact SHA-256-verified upstream source revision with the no-render
+`stealth` feature set and the two strict wrapper patch-series entries, then
+copies only the resulting server binaries into that runtime. This is required
+for wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
+fingerprint seed plus stealth-native form POST contracts. The stack consumes
+DOM and response-body CDP surfaces, not screenshots, screencasts, or PDF
+export, so it does not compile the v0.2.0 raster renderer or incur its image,
+font, layout, and capture resource work. JavaScript, DOM, module, charset, and
+compressed-stealth-response improvements remain present in the no-render
+build.
 The patch removes the submitted URL and body from Obscura's JS-triggered
 main-navigation diagnostics so search queries are not written there. Obscura
 does not offer equivalent end-to-end redaction for every upstream subresource

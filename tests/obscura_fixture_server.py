@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import gzip
 import threading
 import time
 from http import HTTPStatus
@@ -115,6 +116,40 @@ class Handler(BaseHTTPRequestHandler):
                 b"<script>document.getElementById('state').textContent='rendered';</script>"
                 b"</body></html>",
                 content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/modern-javascript":
+            self._send(
+                b"<html><head><title>Modern JavaScript</title></head><body>"
+                b"<template id='source'><span class='clone'>pending</span></template>"
+                b"<main id='state'>initial</main><script>"
+                b"const clone=document.getElementById('source').content.cloneNode(true);"
+                b"clone.querySelector('.clone').textContent='cloned';"
+                b"document.body.appendChild(clone);"
+                b"const state=document.getElementById('state');"
+                b"state.addEventListener('ready',event=>state.textContent=event.detail);"
+                b"state.dispatchEvent(new CustomEvent('ready',{detail:'custom-event'}));"
+                b"state.style.cssText='color: rgb(4, 5, 6)';"
+                b"</script></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/compressed":
+            body = gzip.compress(
+                b"<html><body><main id='compressed'>decoded gzip</main></body></html>"
+            )
+            self._send(
+                body,
+                content_type="text/html; charset=utf-8",
+                headers={"Content-Encoding": "gzip"},
+            )
+            return
+        if path == "/charset":
+            self._send(
+                "<html><body><main id='charset'>café €</main></body></html>".encode(
+                    "cp1252"
+                ),
+                content_type="text/html; charset=windows-1252",
             )
             return
         if path == "/session/set":

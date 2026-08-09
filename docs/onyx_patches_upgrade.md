@@ -167,16 +167,17 @@ Treat the [one-navigation contract](request_handling.md#obscura-one-navigation-c
 as acceptance criteria whenever the Obscura image, client, Playwright
 integration, or bridge changes.
 
-Audit these Obscura v0.1.11 areas (or their new equivalents):
+Audit these current Obscura areas:
 
 - exact source commit/archive digest, digest-pinned multi-architecture builder
   and hardened runtime identities, safe archive extraction, ordered patch
   series, and zero-fuzz `git apply --check` plus application. Rebase each patch
   against the exact candidate source; do not carry an offset, already-applied
   hunk, or source-shape fallback into a release build;
-- flattened Target attachment/session identifiers, target creation/closure,
-  per-WebSocket context ownership, connection-thread cleanup, and the atomic
-  live-connection cap;
+- flattened Target attachment/session identifiers, including the distinct
+  explicit page-session ID required by Playwright `new_cdp_session(page)`,
+  target creation/closure, per-WebSocket context ownership, connection-thread
+  cleanup, and the atomic live-connection cap;
 - `Page.navigate` command-response/event ordering and lifecycle wait values;
 - Network request/response/loading events, redirect collapse, main-frame
   Document selection, JavaScript navigation, request-id/loader-id aliases,
@@ -186,8 +187,8 @@ Audit these Obscura v0.1.11 areas (or their new equivalents):
 - per-body network retention, entry/alias/base64 amplification, per-connection
   IO stream accounting, and initial full-body allocation before retention;
 - two-client isolation of cookies, HTTP clients, targets, browser contexts, and
-  V8 isolates without a cookie-clear command; also re-audit the v0.1.11
-  full-stealth split where accepted extra-header and User-Agent CDP overrides
+  V8 isolates without a cookie-clear command; also re-audit the stealth-feature
+  split where accepted extra-header and User-Agent CDP overrides
   update the ordinary HTTP client rather than the wreq navigation client;
 - repeated homepage/result and later-query navigation on one retained provider
   target/connection generation; native cookie, selected-profile,
@@ -219,6 +220,9 @@ Audit these Obscura v0.1.11 areas (or their new equivalents):
   independent fixed 20 MiB search-DOM ceiling;
 - proxy resolution, redirect/subresource enforcement, logging/full-URL
   exposure, file-access guards, and the accepted ES-module local-file path.
+- render versus no-render feature selection, ensuring the selected build keeps
+  every JavaScript, DOM, charset, module, compressed-response, and CDP surface
+  used by search and `open_url` without enabling unused raster capture work;
 - bounded structural challenge parsing that excludes script/style/template/
   noscript content; positive status, route, title, visible-prompt, and combined
   visible-plus-structure fixtures; and negative script-only, iframe-only, and
@@ -255,13 +259,7 @@ passes:
   configured entry count. Remove the HTML exception when the tagged image
   proves the main body remains retrievable. Do not substitute a larger entry
   count, which multiplies the per-entry memory bound.
-- **Flattened duplicate session IDs.** The pinned server reuses the attached
-  target session ID when Playwright 1.58 calls `new_cdp_session(page)`, causing
-  the driver to reject a duplicate target. The shared client uses one minimal
-  raw WebSocket CDP session. Re-test the high-level API on either pin change and
-  remove the raw transport only if one navigation, event ordering, actual-body
-  access, deadlines, redaction, and cleanup remain equivalent.
-- **Connection isolation.** The wrapper relies on v0.1.11 creating an isolated
+- **Connection isolation.** The wrapper relies on Obscura creating an isolated
   browser context and HTTP client for every WebSocket and does not clear
   cookies. Re-audit the immutable connection template, cookie-delta persistence
   behavior, every state-bearing CDP domain, two-client interleavings, repeated
@@ -288,9 +286,11 @@ passes:
   source paths on upgrade.
 
 Playwright Python remains pinned to the version supplied by Onyx (1.58.0) for
-compatibility auditing and derived-image validation.
-The current duplicate-session restriction and its removal criteria are tracked
-in the pinned-limitations list above.
+compatibility auditing and derived-image validation. The tagged-image gate
+must connect over CDP, create a page, open a public page CDP session, execute a
+command through it, detach, and close cleanly. The wrapper's raw transport may
+be removed only if a replacement preserves one-navigation behavior, event
+ordering, actual-body access, deadlines, redaction, and cleanup.
 
 ## Onyx API patch audit
 
@@ -1145,7 +1145,8 @@ SearXNG contracts plus the image-dependent SearXNG parser tests.
 fixture network and proves connection isolation/capacity, repeated-target
 provider continuity, concurrent navigation, static and JavaScript HTML,
 redirect, PDF/raw/binary handling, main-body eviction behavior, full
-TLS-impersonating stealth startup, and cleanup. The separate Tor and OpenSearch
+TLS-impersonating stealth startup, public Playwright page-session attachment,
+and cleanup. The separate Tor and OpenSearch
 targets validate their own image families.
 `make test-all-images` aggregates all four focused image targets, and
 `make check-upgrade` runs `make check` followed by that aggregate. Use the

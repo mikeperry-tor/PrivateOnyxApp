@@ -228,7 +228,7 @@ Select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Pa
 3. Set the **SearXNG Base URL** to `http://searxng-service-gateway:8888`.
 4. Open **Onyx Web Crawler**, click **Connect**, then **Set as Default**.
 
-The stock Onyx Web Crawler appears to be blocked less often than Obscura v0.1.10 by websites, but you can set `ONYX_AGENT_USE_OBSCURA_BROWSER=true` to cause the Onyx Web Crawler to use the Obscura Browser instead of Onyx's internal fetch + Chromium Playwrite fallback.
+The stock Onyx Web Crawler is the default reliability-oriented path, but you can set `ONYX_AGENT_USE_OBSCURA_BROWSER=true` to cause the Onyx Web Crawler to use the more isolated Obscura Browser instead of Onyx's internal fetch plus Chromium Playwright fallback.
 
 SearXNG always uses Obscura. Each search provider keeps its own browser session
 for up to one hour after its last query, preserving provider cookies,

@@ -562,10 +562,9 @@ async def _drain_body(
 class _RawCdp:
     """Minimal flattened CDP transport for the audited Obscura surface.
 
-    The pinned server reuses its target's attached session id. Playwright
-    1.58's public ``new_cdp_session(page)`` asks for a second attachment with
-    that same id and its driver aborts on the duplicate. This transport keeps
-    the exact one-session protocol contract without a compatibility shim.
+    The shared client owns event correlation, response-body streaming, strict
+    deadlines, and cleanup directly. Keeping that small protocol surface avoids
+    a local browser dependency or a second abstraction over these contracts.
     """
 
     def __init__(self, websocket):

@@ -10,7 +10,7 @@
 > [Request handling](../../request_handling.md) until this plan is implemented,
 > validated, documented, and moved to `docs/plans/implemented/`.
 >
-> Do not enable the Obscura part of this plan against Obscura v0.1.11. Its CDP
+> Do not enable the Obscura part of this plan against the selected image. Its CDP
 > cookie export/import path does not preserve whether a cookie is host-only,
 > and its cookie-domain validation does not use a complete Public Suffix List.
 > Re-importing an exported host-only cookie can therefore widen it to
@@ -101,16 +101,16 @@ specified below.
 
 | Component | Consulted version | Why it matters for this plan |
 | --- | --- | --- |
-| Obscura | `OBSCURA_IMAGE=docker.io/h4ckf0r0day/obscura:0.1.11`; `reference_repos/obscura` at `v0.1.11` | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. |
+| Obscura | Derived v0.2.0 image; `reference_repos/obscura` at `v0.2.0` | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. |
 | Onyx application | Current `ONYX_IMAGE_TAG`; matching `reference_repos/onyx` checkout | Owns `open_url()` orchestration, the stock Requests-first/Playwright-fallback flow, the five-worker stock crawler, the 120-second tool deadline, and the runtime symbols wrapped by both Onyx patches. |
 | Onyx crawler libraries | Requests `2.33.0`, Playwright `1.58.0`, and `publicsuffix2` `2.20191221` in the Onyx `uv.lock` | Determine Requests cookie-jar metadata, Chromium context cookie conversion, and the parser available to runtime patches. The old parser package's implicit PSL data is not accepted as the shared current snapshot proposed here. |
 | Egress identity components | `MYST_IMAGE=local/private-onyx-myst:2d6e87618f9f-20260719` and `TOR_BASE_IMAGE=docker.io/dockurr/tor:0.4.9.11@sha256:446881b3366cbc2cc5cf8d13a76e3104f60824b7c15343d14defe903ded18f0d` | Myst reconnects and Tor circuit/exit changes can separate a retained cookie from the public IP that established it. Neither currently supplies an authoritative route-generation signal to the cookie store, so this plan deliberately relies on the fixed one-hour ceiling instead of heuristic route coupling. |
 
 ## Current Behavior and Blockers
 
-### Obscura v0.1.11 improvements that are useful
+### Current Obscura capabilities that are useful
 
-Obscura v0.1.11 gives each CDP WebSocket connection an isolated live browser
+Obscura gives each CDP WebSocket connection an isolated live browser
 context, cookie jar, HTTP client, target set, event thread, and V8 state. The
 wrapper's client already opens one WebSocket per navigation, and the
 direct-Obscura crawler permits up to ten concurrent `open_url()` fetches
@@ -131,7 +131,7 @@ The relevant pinned source is under `reference_repos/obscura/`:
 
 Those capabilities are enough to inject a cookie snapshot into one isolated
 navigation and extract its final cookie state. They are not enough to persist
-that state safely between connections in v0.1.11.
+that state safely between connections.
 
 ### Blocking Obscura cookie defects
 
@@ -174,7 +174,7 @@ leave it unimplemented; do not activate a reduced cookie model.
 
 ### Why Obscura persistence and long-lived connections are not substitutes
 
-Do not enable Obscura `--storage-dir`. In v0.1.11 it is one browser-wide
+Do not enable Obscura `--storage-dir`. It is one browser-wide
 persistence destination, not a first-party partition. Connection-close deltas
 are merged into persistence state on disk, while newly accepted live
 connections continue to clone the startup snapshot rather than another live

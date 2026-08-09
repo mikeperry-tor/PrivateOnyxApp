@@ -204,7 +204,7 @@ def main() -> int:
         assert "PINNED_OBSCURA_RUNTIME_CONTRACTS_OK" in output
 
         logs = run(args.container_bin, "logs", obscura)
-        assert "Headless Browser v0.1.11-private-onyx-search-v1" in logs
+        assert "Headless Browser v0.2.0-private-onyx-search-v1" in logs
         assert "Private Onyx patchset: search-submission-v1" in logs
         assert (
             "Stealth mode enabled "
