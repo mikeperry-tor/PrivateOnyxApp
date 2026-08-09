@@ -19,10 +19,12 @@ from private_onyx_obscura import is_text_like_content_type  # noqa: E402
 from private_onyx_obscura import normalize_public_url  # noqa: E402
 from private_onyx_obscura import validate_wait_until  # noqa: E402
 from private_onyx_obscura.client import _RawCdp  # noqa: E402
+from private_onyx_obscura.client import _SEARCH_RESULT_STATE_FUNCTION  # noqa: E402
 from private_onyx_obscura.client import _can_preserve_html_dom_without_body  # noqa: E402
 from private_onyx_obscura.client import _challenge_details  # noqa: E402
 from private_onyx_obscura.client import _drain_body  # noqa: E402
 from private_onyx_obscura.client import _SEARCH_FORM_FUNCTION  # noqa: E402
+from private_onyx_obscura.client import _wait_for_search_result_dom  # noqa: E402
 
 
 class ObscuraClientTests(unittest.TestCase):
@@ -37,6 +39,8 @@ class ObscuraClientTests(unittest.TestCase):
             form_action_path="/search",
             form_method=method,
             allowed_fixed_field_names=frozenset({"lang"}),
+            result_terminal_selector=".terminal",
+            result_pending_selector=".pending",
         )
 
     def test_search_spec_validation_is_strict(self):
@@ -57,6 +61,11 @@ class ObscuraClientTests(unittest.TestCase):
             {"form_action_path": "//other.example/search"},
             {"form_action_path": "/search?fixed=1"},
             {"allowed_fixed_field_names": frozenset({"q"})},
+            {"result_terminal_selector": ".result"},
+            {
+                "result_terminal_selector": ".result",
+                "result_pending_selector": "pending\nselector",
+            },
         ):
             values = {
                 "homepage_url": spec.homepage_url,
@@ -71,6 +80,115 @@ class ObscuraClientTests(unittest.TestCase):
             values.update(changes)
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 SearchInteractionSpec(**values)
+
+    def test_search_result_readiness_uses_protocol_arguments(self):
+        self.assertNotIn("deep_preload", _SEARCH_RESULT_STATE_FUNCTION)
+        source = (
+            ROOT
+            / "browser/obscura_client/private_onyx_obscura/client.py"
+        ).read_text()
+        self.assertIn('{"value": terminal_selector}', source)
+        self.assertIn('{"value": pending_selector}', source)
+
+    def test_search_result_readiness_uses_existing_absolute_deadline(self):
+        class Clock:
+            def __init__(self):
+                self.now = 10.0
+
+            def __call__(self):
+                return self.now
+
+            async def sleep(self, delay):
+                self.now += delay
+
+        class Session:
+            def __init__(self, states):
+                self.states = list(states)
+                self.calls = []
+
+            async def send(self, method, params=None, **_kwargs):
+                self.calls.append((method, params))
+                if method == "Runtime.callFunctionOn":
+                    state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
+                    return {"result": {"value": state}}
+                if method == "DOM.getDocument":
+                    return {"root": {"nodeId": 1}}
+                if method == "DOM.getOuterHTML":
+                    return {"outerHTML": "<html>settled</html>"}
+                raise AssertionError(method)
+
+        async def exercise(states, deadline):
+            clock = Clock()
+            session = Session(states)
+
+            def remaining(_stage, _category):
+                value = deadline - clock()
+                self.assertGreater(value, 0)
+                return value
+
+            result = await _wait_for_search_result_dom(
+                session,
+                initial_html="<html>pending</html>",
+                terminal_selector=".terminal",
+                pending_selector=".pending",
+                dom_limit=1024,
+                request_deadline=deadline,
+                remaining=remaining,
+                _clock=clock,
+                _sleep=clock.sleep,
+            )
+            return result, clock, session
+
+        settled, clock, session = asyncio.run(
+            exercise(
+                [
+                    {"terminal": False, "pending": True},
+                    {"terminal": True, "pending": True},
+                ],
+                11.0,
+            )
+        )
+        self.assertEqual(settled, "<html>settled</html>")
+        self.assertEqual(clock.now, 10.1)
+        self.assertEqual(
+            [call[0] for call in session.calls],
+            [
+                "Runtime.callFunctionOn",
+                "Runtime.callFunctionOn",
+                "DOM.getDocument",
+                "DOM.getOuterHTML",
+            ],
+        )
+
+        pending, clock, session = asyncio.run(
+            exercise([{"terminal": False, "pending": True}], 10.25)
+        )
+        self.assertEqual(pending, "<html>pending</html>")
+        self.assertEqual(clock.now, 10.25)
+        self.assertNotIn("DOM.getDocument", [call[0] for call in session.calls])
+
+        immediate, clock, session = asyncio.run(
+            exercise([{"terminal": True, "pending": True}], 11.0)
+        )
+        self.assertEqual(immediate, "<html>settled</html>")
+        self.assertEqual(clock.now, 10.0)
+        self.assertEqual(
+            [call[0] for call in session.calls],
+            [
+                "Runtime.callFunctionOn",
+                "DOM.getDocument",
+                "DOM.getOuterHTML",
+            ],
+        )
+
+        unchanged, clock, session = asyncio.run(
+            exercise([{"terminal": False, "pending": False}], 11.0)
+        )
+        self.assertEqual(unchanged, "<html>pending</html>")
+        self.assertEqual(clock.now, 10.0)
+        self.assertEqual(
+            [call[0] for call in session.calls], ["Runtime.callFunctionOn"]
+        )
 
     def test_search_form_data_is_passed_as_protocol_arguments(self):
         self.assertNotIn("private query", _SEARCH_FORM_FUNCTION)
@@ -227,6 +345,12 @@ class ObscuraClientTests(unittest.TestCase):
                         )
                     }
                 if method == "Runtime.callFunctionOn":
+                    if params["functionDeclaration"] == _SEARCH_RESULT_STATE_FUNCTION:
+                        return {
+                            "result": {
+                                "value": {"terminal": True, "pending": False}
+                            }
+                        }
                     operation = params["arguments"][0]["value"]
                     if operation == "submit":
                         # Result events deliberately precede the command

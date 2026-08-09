@@ -308,6 +308,26 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
                 ),
                 values,
             )
+            if name == "duckduckgo2":
+                self.assertIn(
+                    'li[data-layout="organic"]',
+                    spec.result_terminal_selector,
+                )
+                self.assertIn(
+                    "anomaly-modal__modal",
+                    spec.result_terminal_selector,
+                )
+                self.assertIn(
+                    "deep_preload_link",
+                    spec.result_pending_selector,
+                )
+                self.assertIn(
+                    "links.duckduckgo.com/d.js",
+                    spec.result_pending_selector,
+                )
+            else:
+                self.assertIsNone(spec.result_terminal_selector)
+                self.assertIsNone(spec.result_pending_selector)
 
     def test_timed_provider_setting_is_parsed_at_import(self):
         with patch.dict(

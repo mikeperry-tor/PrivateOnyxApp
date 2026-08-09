@@ -192,7 +192,18 @@ validated by the shared client. These are event conditions, not sleeps;
 Obscura also has a finite navigation deadline. Lowering the search wait to
 `load` or `domcontentloaded` can capture DuckDuckGo No-AI's shell before its
 organic rows exist; `networkidle0` waits more strictly and can add substantial
-latency.
+latency without proving that application JavaScript has committed its result
+DOM.
+
+A search interaction may therefore declare paired pending and terminal DOM
+selectors. After the initial bounded result-DOM capture, the shared client
+waits only when the pending selector exists and no terminal selector exists.
+It polls on the provider's existing event-loop task until a terminal selector
+appears, the pending selector disappears, or the existing absolute browser
+transaction deadline is spent. There is no separate readiness timeout. A
+terminal observation causes one new bounded DOM capture; spending the browser
+deadline returns the already-captured pending DOM so provider parsing and
+outcome recording still receive their reserved engine-window headroom.
 
 The wrapper raises Obscura's populated-page ES-module active-work budget from
 three to ten seconds. DuckDuckGo's result module graph can exceed the upstream
@@ -467,8 +478,14 @@ fields fail visibly.
 
 Provider result URLs retain their complete query strings and fragments.
 `duckduckgo2` starts at `https://noai.duckduckgo.com/`, submits its homepage
-form, waits for the JavaScript `d.js` result payload, and parses organic
-`data-layout` / `data-testid` rows rather than generated class names.
+form, and parses organic `data-layout` / `data-testid` rows rather than
+generated class names. Obscura's network-idle lifecycle can complete after a
+successful `d.js` response but before DuckDuckGo commits those rows. While the
+`deep_preload` marker is present without organic, no-results, or explicit
+challenge structure, the shared client therefore waits through the remaining
+browser transaction window described below. The marker remains present after
+successful hydration and is only a pending-state gate, never proof that
+hydration is still incomplete by itself.
 DuckDuckGo's `/l/` `uddg` result wrapper is unwrapped only on a relative link
 or a recognized DuckDuckGo host and is decoded exactly once by query parsing;
 the resulting URL is not decoded again, because its remaining escapes can be
@@ -657,8 +674,10 @@ carried from one provider rotation into another:
   50-second absolute deadline, capped to the remaining engine window minus one
   second of outcome-processing headroom. Connection/target setup, homepage
   navigation, entry events and optional 45–135 ms timed-entry delays, form
-  submission, result navigation, completion events, and both DOM reads consume
-  that transaction's deadline. No browser stage receives a fresh deadline.
+  submission, result navigation, completion events, the homepage and initial
+  result DOM reads, and any declared terminal-DOM readiness wait and recapture
+  consume that transaction's deadline. No browser stage receives a fresh
+  deadline or fixed readiness allowance.
   Bing's page-two transaction shares the original 60-second engine window; it
   does not receive a fresh engine budget, and its deadline is only the
   remaining bounded portion.

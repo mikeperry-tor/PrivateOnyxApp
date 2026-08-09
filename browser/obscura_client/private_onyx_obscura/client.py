@@ -146,6 +146,8 @@ class SearchInteractionSpec:
     form_action_path: str
     form_method: Literal["get", "post"]
     allowed_fixed_field_names: frozenset[str]
+    result_terminal_selector: str | None = None
+    result_pending_selector: str | None = None
 
     def __post_init__(self) -> None:
         if not self.allowed_homepage_hosts or not self.allowed_result_hosts:
@@ -189,6 +191,22 @@ class SearchInteractionSpec:
                 or not re.fullmatch(r"[A-Za-z0-9_.:-]+", name)
             ):
                 raise ValueError("fixed field names must be nonempty ASCII form names")
+        readiness_selectors = (
+            self.result_terminal_selector,
+            self.result_pending_selector,
+        )
+        if (readiness_selectors[0] is None) != (readiness_selectors[1] is None):
+            raise ValueError("search result readiness selectors must be paired")
+        for selector in readiness_selectors:
+            if selector is None:
+                continue
+            if (
+                not isinstance(selector, str)
+                or not selector
+                or len(selector) > 4096
+                or any(ord(character) < 0x20 for character in selector)
+            ):
+                raise ValueError("search result readiness selector is invalid")
 
 
 @dataclass(frozen=True)
@@ -1422,6 +1440,16 @@ function(operation, selector, fieldName, fixedFields, query) {
 """
 
 
+_SEARCH_RESULT_STATE_FUNCTION = r"""
+function(terminalSelector, pendingSelector) {
+  return {
+    terminal: document.querySelector(terminalSelector) !== null,
+    pending: document.querySelector(pendingSelector) !== null
+  };
+}
+"""
+
+
 def _validate_search_terminal_url(
     url: str, allowed_hosts: frozenset[str], *, stage: str
 ) -> None:
@@ -1614,6 +1642,99 @@ async def _search_form_call(
             FetchFailure.PROTOCOL, stage, "search form operation failed"
         )
     _validate_form_policy(remote.get("value"), spec, stage=stage)
+
+
+async def _search_result_state(
+    session: _Session,
+    *,
+    terminal_selector: str,
+    pending_selector: str,
+    remaining: Callable[[str, FetchFailure], float],
+) -> tuple[bool, bool]:
+    result = await session.send(
+        "Runtime.callFunctionOn",
+        {
+            "functionDeclaration": _SEARCH_RESULT_STATE_FUNCTION,
+            "arguments": [
+                {"value": terminal_selector},
+                {"value": pending_selector},
+            ],
+            "returnByValue": True,
+            "awaitPromise": True,
+        },
+        timeout_seconds=remaining(
+            "result-readiness", FetchFailure.POST_NAVIGATION_TIMEOUT
+        ),
+        timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+        timeout_stage="result-readiness",
+    )
+    remote = result.get("result", {})
+    value = remote.get("value") if isinstance(remote, dict) else None
+    if (
+        result.get("exceptionDetails") is not None
+        or not isinstance(remote, dict)
+        or remote.get("subtype") == "error"
+        or not isinstance(value, dict)
+        or type(value.get("terminal")) is not bool
+        or type(value.get("pending")) is not bool
+    ):
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "result-readiness",
+            "search result readiness inspection failed",
+        )
+    return value["terminal"], value["pending"]
+
+
+async def _wait_for_search_result_dom(
+    session: _Session,
+    *,
+    initial_html: str,
+    terminal_selector: str,
+    pending_selector: str,
+    dom_limit: int,
+    request_deadline: float,
+    remaining: Callable[[str, FetchFailure], float],
+    _clock=time.monotonic,
+    _sleep=asyncio.sleep,
+) -> str:
+    """Wait for a provider terminal state within the existing browser budget."""
+    terminal, pending = await _search_result_state(
+        session,
+        terminal_selector=terminal_selector,
+        pending_selector=pending_selector,
+        remaining=remaining,
+    )
+    if terminal:
+        return await _search_dom(
+            session,
+            dom_limit=dom_limit,
+            remaining=remaining,
+            stage_prefix="result-ready",
+        )
+    if not pending:
+        return initial_html
+
+    while True:
+        delay = min(0.1, request_deadline - _clock())
+        if delay <= 0:
+            return initial_html
+        await _sleep(delay)
+        if _clock() >= request_deadline:
+            return initial_html
+        terminal, pending = await _search_result_state(
+            session,
+            terminal_selector=terminal_selector,
+            pending_selector=pending_selector,
+            remaining=remaining,
+        )
+        if terminal or not pending:
+            return await _search_dom(
+                session,
+                dom_limit=dom_limit,
+                remaining=remaining,
+                stage_prefix="result-ready",
+            )
 
 
 async def submit_search(
@@ -2025,6 +2146,23 @@ async def submit_search(
             stage_prefix="result",
         )
         challenge = _challenge(result_status, result_url, result_html)
+        if (
+            challenge is None
+            and result_status != 404
+            and result_status < 500
+            and spec.result_terminal_selector is not None
+            and spec.result_pending_selector is not None
+        ):
+            result_html = await _wait_for_search_result_dom(
+                session,
+                initial_html=result_html,
+                terminal_selector=spec.result_terminal_selector,
+                pending_selector=spec.result_pending_selector,
+                dom_limit=dom_limit,
+                request_deadline=request_deadline,
+                remaining=remaining,
+            )
+            challenge = _challenge(result_status, result_url, result_html)
         LOGGER.info(
             "obscura search completed request_id=%s entry_mode=%s "
             "status_class=%sxx homepage_seconds=%.3f submission_seconds=%.3f "

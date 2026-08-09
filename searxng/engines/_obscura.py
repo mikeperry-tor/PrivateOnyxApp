@@ -73,6 +73,20 @@ INTERACTIONS = {
         form_action_path="/",
         form_method="get",
         allowed_fixed_field_names=frozenset({"ia"}),
+        result_terminal_selector=(
+            'li[data-layout="organic"],'
+            '[data-testid="no-results"],'
+            '[data-layout="no-results"],'
+            '.no-results,'
+            'form#challenge-form,'
+            'form[action*="duckduckgo.com/anomaly.js"],'
+            'form[action*="cc=botnet"],'
+            '.anomaly-modal__modal'
+        ),
+        result_pending_selector=(
+            'link#deep_preload_link[href*="links.duckduckgo.com/d.js"],'
+            'script#deep_preload_script[src*="links.duckduckgo.com/d.js"]'
+        ),
     ),
     "startpage2": SearchInteractionSpec(
         homepage_url="https://www.startpage.com/",
