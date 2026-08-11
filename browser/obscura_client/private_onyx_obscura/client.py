@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from html.parser import HTMLParser
 from typing import Callable, Literal, Mapping
-from urllib.parse import SplitResult, unquote, urlsplit, urlunsplit
+from urllib.parse import SplitResult, unquote, urljoin, urlsplit, urlunsplit
 
 LOGGER = logging.getLogger("private_onyx_obscura")
 PRE_NAVIGATION_TIMEOUT_SECONDS = 45.0
@@ -369,17 +369,62 @@ class _ChallengeSignals(HTMLParser):
     """Extract bounded challenge signals without treating script text as content."""
 
     _IGNORED = frozenset({"script", "style", "template", "noscript"})
+    _VOID = frozenset(
+        {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }
+    )
+    _ANUBIS_MAIN_PATH = "/.within.website/x/cmd/anubis/static/js/main.mjs"
 
-    def __init__(self) -> None:
+    def __init__(self, final_url: str) -> None:
         super().__init__(convert_charrefs=True)
+        self.final_url = final_url
         self.ignored_depth = 0
         self.title_depth = 0
+        self.sp_message_depth = 0
         self.visible: list[str] = []
         self.title: list[str] = []
+        self.sp_message_visible: list[str] = []
         self.challenge_structure = False
+        self.anubis_main_module = False
+        self.anubis_version_element = False
+        self.anubis_challenge_element = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
+        values = {name.lower(): (value or "") for name, value in attrs}
+        if tag == "script":
+            element_id = values.get("id", "")
+            self.anubis_version_element |= element_id == "anubis_version"
+            self.anubis_challenge_element |= element_id == "anubis_challenge"
+            source = values.get("src", "")
+            if source:
+                try:
+                    document = urlsplit(self.final_url)
+                    resolved = urlsplit(urljoin(self.final_url, source))
+                    self.anubis_main_module |= (
+                        resolved.scheme == document.scheme == "https"
+                        and resolved.hostname == document.hostname
+                        and (resolved.port or 443) == (document.port or 443)
+                        and resolved.username is None
+                        and resolved.password is None
+                        and unquote(resolved.path) == self._ANUBIS_MAIN_PATH
+                    )
+                except (TypeError, ValueError):
+                    pass
         if tag in self._IGNORED:
             self.ignored_depth += 1
             return
@@ -387,8 +432,17 @@ class _ChallengeSignals(HTMLParser):
             return
         if tag == "title":
             self.title_depth += 1
-        values = {name.lower(): (value or "").lower() for name, value in attrs}
-        candidate = values.get("action", "") if tag == "form" else values.get("src", "")
+        classes = values.get("class", "").split()
+        if self.sp_message_depth:
+            if tag not in self._VOID:
+                self.sp_message_depth += 1
+        elif "sp-message" in classes:
+            self.sp_message_depth = 1
+        candidate = (
+            values.get("action", "").lower()
+            if tag == "form"
+            else values.get("src", "").lower()
+        )
         if tag == "form" and any(
             marker in candidate for marker in ("/sorry/", "/captcha", "/sp/captcha", "turing")
         ):
@@ -411,6 +465,8 @@ class _ChallengeSignals(HTMLParser):
             return
         if not self.ignored_depth and tag == "title":
             self.title_depth = max(0, self.title_depth - 1)
+        if not self.ignored_depth and self.sp_message_depth and tag not in self._VOID:
+            self.sp_message_depth -= 1
 
     def handle_data(self, data: str) -> None:
         if self.ignored_depth or not data.strip():
@@ -418,6 +474,8 @@ class _ChallengeSignals(HTMLParser):
         self.visible.append(data)
         if self.title_depth:
             self.title.append(data)
+        if self.sp_message_depth:
+            self.sp_message_visible.append(data)
 
 
 def _challenge_details(
@@ -428,7 +486,7 @@ def _challenge_details(
     if status in {401, 402, 403}:
         return FetchFailure.ACCESS_DENIED, "http-denial-status"
 
-    parser = _ChallengeSignals()
+    parser = _ChallengeSignals(final_url)
     try:
         parser.feed((html or "")[:262_144])
         parser.close()
@@ -437,6 +495,7 @@ def _challenge_details(
 
     visible = " ".join(" ".join(parser.visible).lower().split())
     title = " ".join(" ".join(parser.title).lower().split())
+    sp_message = " ".join(" ".join(parser.sp_message_visible).lower().split())
     parsed_url = urlsplit(final_url)
     route = unquote(parsed_url.path).lower()
 
@@ -467,6 +526,13 @@ def _challenge_details(
         )
     ):
         return FetchFailure.CAPTCHA, "visible-human-verification"
+    if (
+        parser.anubis_main_module
+        and parser.anubis_version_element
+        and parser.anubis_challenge_element
+        and "verifying your request" in sp_message
+    ):
+        return FetchFailure.CAPTCHA, "anubis-verification"
     if parser.challenge_structure and any(
         marker in visible
         for marker in (

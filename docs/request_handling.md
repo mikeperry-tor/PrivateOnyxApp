@@ -497,17 +497,16 @@ An unfinished `deep_preload_link` without one of those explicit challenge
 markers is instead a parser/runtime failure: incomplete JavaScript hydration
 must not suspend the provider as though an IP challenge had been proved.
 
-Startpage's explicit CAPTCHA route is a typed CAPTCHA failure. A result-stage
-Anubis page containing the visible `Verifying your request` state plus the
-same-origin Anubis module marker is also a typed CAPTCHA failure when it reaches
-the provider parser. Startpage presents its Anubis v1.25.0 `fast` challenge at
-difficulty 4 as the homepage document on the configured route. That document
-has the exact main module, version and challenge elements, and visible
-verification marker, but no search form or query control. The shared generic
-classifier does not admit that exact homepage structure, so the client proceeds
-to form validation. Obscura returns an empty by-value object for the missing
-control, and the client reports `final-hop-policy-denied` at `form-validate`
-instead of the explicit challenge. No proof is attempted in either case.
+Startpage's explicit CAPTCHA route is a typed CAPTCHA failure. Its Anubis page
+is also a typed CAPTCHA failure at either the homepage or result boundary. The
+shared classifier requires the same-origin Anubis main-module path, exact
+version and challenge elements, and visible `.sp-message` text containing
+`Verifying your request`; any one of those signals alone is insufficient.
+Startpage presents its Anubis v1.25.0 `fast` challenge at difficulty 4 as the
+homepage document on the configured route. That document has no search form or
+query control, so classification occurs before form lookup. The result parser
+retains its equivalent Anubis check as defense in depth. No proof is attempted,
+and the explicit challenge enters the ordinary one-hour blocking suspension.
 
 The main ES module creates four same-origin classic workers from direct `.mjs`
 URLs under Obscura's advertised hardware profile. Obscura's `Worker`

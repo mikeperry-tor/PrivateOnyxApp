@@ -1,11 +1,9 @@
 # Startpage Anubis Proof-of-Work Support
 
 > **Status: deferred.** This is an implementation plan, not current behavior.
-> Result-stage Startpage Anubis pages that reach the provider parser are
-> explicit CAPTCHA failures and enter the ordinary provider-suspension path.
-> Homepage Anubis pages are not solved and currently fail during form
-> validation because the shared classifier does not admit their structure. The
-> normative current behavior is in [Request handling](../../request_handling.md).
+> Startpage Anubis pages are explicit CAPTCHA failures and enter the ordinary
+> provider-suspension path. They are not solved. The normative current behavior
+> is in [Request handling](../../request_handling.md).
 > Do not describe any approach below as implemented until its capability gates,
 > tests, live validation, and documentation phase all pass and this plan is
 > moved to `docs/plans/implemented/`.
@@ -108,22 +106,13 @@ The relevant upstream behavior is:
 The Startpage challenge is the homepage document itself. It has the exact
 Anubis main-module path, version and challenge elements, and visible
 `Verifying your request...` marker, but no form or query control. The shared
-generic classifier does not recognize that exact structure or phrase, so the
-client proceeds to form validation. Obscura returns an empty by-value object
-for the page-side `control-count` exception during validation, and the Python
-validator consequently reports
-`final-hop-policy-denied` at `form-validate`. This is a missed explicit
-challenge followed by an incorrectly typed missing-form failure, not evidence
-that the form action or method changed and not evidence that proof was
-optional.
+classifier requires the same-origin main module, both JSON elements, and the
+visible `.sp-message` phrase before classifying it as CAPTCHA ahead of form
+lookup. Any one of those signals alone is insufficient.
 
-Implementation must therefore recognize an admitted Anubis page before form
-lookup at both the homepage and result boundaries. Exact Anubis structure plus
-the normalized visible verification phrase is a CAPTCHA signal; the phrase by
-itself and a script reference by itself remain insufficient. A missing,
-duplicate, or invalid query control on a non-challenge homepage remains a
-sanitized protocol failure, never a destination-policy failure merely because
-the page-side inspection result lacks policy fields.
+Proof support must use that admitted structure at both the homepage and result
+boundaries before beginning continuation work. A missing, duplicate, or invalid
+query control on a non-challenge homepage remains a sanitized protocol failure.
 
 ## Maintenance Model
 
@@ -796,9 +785,6 @@ values, not captured live secrets.
   JSON type/size checks, and rejection of malformed or ambiguous pages;
 - the exact admitted structure and visible phrase classify an Anubis homepage
   before form lookup, while either signal alone does not;
-- a missing or duplicate control on a non-challenge homepage is a protocol
-  failure even when Obscura serializes the page-side exception as an empty
-  object;
 - DuckDuckGo same-document readiness remains behaviorally unchanged;
 - ordinary Startpage success/no-results retains `H0 -> R0` only;
 - a homepage challenge follows `H0 -> C0 -> R0`, never attempts form lookup

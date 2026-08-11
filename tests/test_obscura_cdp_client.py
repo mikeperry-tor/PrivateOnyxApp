@@ -815,6 +815,39 @@ class ObscuraClientTests(unittest.TestCase):
                 self.assertEqual(challenge, FetchFailure.CAPTCHA)
                 self.assertEqual(signal, expected_signal)
 
+    def test_challenge_detection_requires_complete_anubis_structure(self):
+        markup = """
+            <html><body>
+              <div class="sp-message"><span>Verifying your request...</span></div>
+              <script id="anubis_version" type="application/json">"v1.25.0"</script>
+              <script id="anubis_challenge" type="application/json">{}</script>
+              <script type="module"
+                src="/.within.website/x/cmd/anubis/static/js/main.mjs?cacheBuster=v1.25.0">
+              </script>
+            </body></html>
+        """
+        challenge, signal = _challenge_details(
+            200, "https://www.startpage.com/", markup
+        )
+        self.assertEqual(challenge, FetchFailure.CAPTCHA)
+        self.assertEqual(signal, "anubis-verification")
+
+        incomplete = (
+            markup.replace('id="anubis_challenge"', 'id="other"'),
+            markup.replace("sp-message", "ordinary-message"),
+            markup.replace(
+                "/.within.website/x/cmd/anubis/static/js/main.mjs",
+                "https://untrusted.example/.within.website/x/cmd/anubis/static/js/main.mjs",
+            ),
+        )
+        for candidate in incomplete:
+            with self.subTest(candidate=candidate):
+                challenge, signal = _challenge_details(
+                    200, "https://www.startpage.com/", candidate
+                )
+                self.assertIsNone(challenge)
+                self.assertEqual(signal, "none")
+
     def test_challenge_detection_preserves_http_status_classification(self):
         challenge, signal = _challenge_details(
             403, "https://example.com/", "<html></html>"
