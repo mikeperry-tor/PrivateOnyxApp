@@ -497,31 +497,37 @@ An unfinished `deep_preload_link` without one of those explicit challenge
 markers is instead a parser/runtime failure: incomplete JavaScript hydration
 must not suspend the provider as though an IP challenge had been proved.
 
-Startpage's explicit CAPTCHA route and its Anubis `sp-message` page containing
-the visible `Verifying your request` state plus the same-origin Anubis module
-marker are typed CAPTCHA failures. During the v0.2.0 audit Startpage served
-Anubis v1.25.0's `fast` algorithm at difficulty 5: its main ES module creates
-four same-origin classic workers from direct `.mjs` URLs under Obscura's
-advertised hardware profile. Obscura's current `Worker` compatibility shim
-executes those worker bodies cooperatively in the page's V8 isolate rather
-than in dedicated isolates. A live wait through the existing 50-second browser
-transaction budget starved the page-runtime CDP inspection and expired at
-`result-readiness`; adding an Anubis pending selector is therefore not a
-working continuation.
+Startpage's explicit CAPTCHA route is a typed CAPTCHA failure. A result-stage
+Anubis page containing the visible `Verifying your request` state plus the
+same-origin Anubis module marker is also a typed CAPTCHA failure when it reaches
+the provider parser. Startpage presents its Anubis v1.25.0 `fast` challenge at
+difficulty 4 as the homepage document on the configured route. That document
+has the exact main module, version and challenge elements, and visible
+verification marker, but no search form or query control. The shared generic
+classifier does not admit that exact homepage structure, so the client proceeds
+to form validation. Obscura returns an empty by-value object for the missing
+control, and the client reports `final-hop-policy-denied` at `form-validate`
+instead of the explicit challenge. No proof is attempted in either case.
 
-The live v1.25.0 flow does not create blob workers, but newer Anubis releases
-prefetch one worker source and create workers from a blob URL. Forward-compatible
-browser execution consequently requires both direct and blob-backed dedicated
-workers. It also requires a bounded multi-document continuation: successful
-proof submission navigates through the same-origin Anubis pass endpoint and a
+The main ES module creates four same-origin classic workers from direct `.mjs`
+URLs under Obscura's advertised hardware profile. Obscura's `Worker`
+compatibility shim executes those worker bodies cooperatively in the page's V8
+isolate rather than in dedicated isolates. Waiting on an Anubis pending selector
+therefore starves page-runtime CDP inspection and consumes the existing
+50-second browser transaction budget at `result-readiness`; readiness selectors
+alone cannot continue the challenge.
+
+The supported compatibility scope also includes an Anubis profile that
+prefetches one worker source and creates workers from a blob URL. Browser
+execution consequently requires both direct and blob-backed dedicated workers.
+It also requires a bounded multi-document continuation: successful proof
+submission navigates through the same-origin Anubis pass endpoint and a
 redirect, while the original Startpage search is a POST whose body is not
-preserved by that GET redirect. The current client owns neither that
-continuation nor an authorized one-time form resubmission. It returns the
-captured verification DOM to the provider parser, which records the explicit
-challenge through the ordinary CAPTCHA suspension path; it does not treat the
-page as result-DOM drift, wait on a separate allowance, construct a result URL,
-or retry the failed transaction. The deferred implementation alternatives and
-their ownership constraints are recorded in
+preserved by that GET redirect. The client owns neither that continuation nor
+an authorized one-time form submission after a homepage challenge or
+resubmission after a result challenge. It does not wait on a separate
+allowance, construct a result URL, or retry the failed transaction. The deferred
+implementation alternatives and their ownership constraints are recorded in
 [`docs/plans/deferred/anubis_pow_support.md`](plans/deferred/anubis_pow_support.md).
 
 Bing's rendered `One last step` / `solve the challenge below to continue`
