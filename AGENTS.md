@@ -224,18 +224,28 @@ This stack protects private research, document contents, browsing behavior, infe
     routing, supported workflows, or key locations change. Put subsystem
     behavior and validation details in the owning document.
   - README.md is for user-facing deployment properties, not implementation details.
-  - In normative README and subsystem documentation, remove or replace obsolete
-    text instead of retaining historical sections.
+  - Treat every README, subsystem document, and active/deferred plan as a
+    description of the current behavior, intended design, active decisions,
+    and required validation only. Replace obsolete text in place; never retain
+    it as background, chronology, or a historical section.
+  - When investigation changes the repository's understanding, rewrite the
+    owning documentation to the resulting current truth. Do not append the new
+    finding, retain the superseded account, or describe the investigation that
+    produced it. Do not add historical journaling in any repository
+    documentation.
   - Keep implementation plans accurate through implementation and review,
-    including their status, accepted decisions, and validation evidence. Plans
-    are review artifacts, not long-term documentation: document current behavior
-    canonically in the appropriate owning `docs/` document before implementation
-    is complete, and link to that document from the plan instead of duplicating
-    the lasting specification across plans or multiple subsystem documents.
-  - Files under `docs/plans/implemented/` are historical implementation records.
+    including their status, accepted decisions, and consolidated validation
+    evidence. Like all other documentation, plans must not journal or narrate
+    phase-by-phase progress or the order in which evidence was obtained.
+  - Plans are review artifacts, not as long-term documentation: document
+    current behavior canonically in the appropriate owning `docs/` document
+    before implementation is complete, and link to that document from the
+    plan instead of duplicating the lasting specification across plans or
+    multiple subsystem documents.
+  - Files under `docs/plans/implemented/` are frozen accepted-design records.
     Preserve them after review/merge, but do not revise them for later behavior
-    changes or append progress journals and post-implementation fix diaries;
-    update the canonical owning document instead.
+    changes or append progress journals, re-audits, or post-implementation fix
+    diaries; update the canonical owning document instead.
 - Patch upgrades:
   - Before changing Onyx, code-interpreter, SearXNG, Obscura, or Teep pins, or runtime Python lock inputs, read `docs/onyx_patches_upgrade.md`.
   - Runtime patches should remain narrow, startup-validated, strict by default, and documented.
