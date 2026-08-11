@@ -416,6 +416,52 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             captured["request_timeout_seconds"],
         )
 
+    def test_anubis_solver_runs_between_submit_and_resume_on_caller_thread(self):
+        calls = []
+        caller_thread = threading.get_ident()
+        challenge = self.module.PendingAnubisPow(
+            "continuation",
+            self.module.AnubisChallenge(
+                "v1.25.0",
+                "01980000-0000-7000-8000-000000000001",
+                "ab" * 64,
+                "fast",
+                2,
+            ),
+        )
+        solution = self.module.AnubisSolution("00" + "a" * 62, 7, 3)
+
+        class Browser:
+            def submit_sync(self, _query, **_kwargs):
+                calls.append(("submit", threading.get_ident()))
+                return challenge
+
+            def resume_sync(self, token, value):
+                calls.append(("resume", threading.get_ident(), token, value))
+                return SimpleNamespace(
+                    challenge=None,
+                    status=200,
+                    rendered_html="<html>solved</html>",
+                )
+
+        def solve(value, *, deadline):
+            calls.append(("solve", threading.get_ident(), value, deadline))
+            return solution
+
+        with (
+            patch.object(self.module, "_provider_browser", return_value=Browser()),
+            patch.object(self.module, "solve_anubis_fast", side_effect=solve),
+            self.module.provider_lease("startpage2") as record_start,
+        ):
+            result = self.module.submit_search(
+                "startpage2", "query", (), record_start
+            )
+
+        self.assertEqual(result, "<html>solved</html>")
+        self.assertEqual([call[0] for call in calls], ["submit", "solve", "resume"])
+        self.assertTrue(all(call[1] == caller_thread for call in calls))
+        self.assertEqual(calls[-1][2:], ("continuation", solution))
+
     def test_blocking_suspension_is_recorded_before_provider_release(self):
         patch = _load_patch_module()
         patch._require_source = lambda *_args, **_kwargs: None

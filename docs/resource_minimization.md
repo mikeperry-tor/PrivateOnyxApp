@@ -218,8 +218,12 @@ are not duplicate enforcement.
   optional timed-entry delay/autocomplete traffic. Homepage DOM text is
   released before result extraction, but the retained target necessarily keeps
   its current native page/history state until idle expiry or generation
-  invalidation. No worker, health check, periodic task, persistent store, or
-  browser binary is added.
+  invalidation. Startpage's admitted Anubis proof uses bounded, constant-memory
+  synchronous hashing on the already allocated SearXNG engine caller and inert
+  page-local Worker objects; it adds no thread, process, executor, health
+  check, periodic task, persistent store, or browser binary. The proof shares
+  the existing absolute browser deadline and examines at most 16,777,216
+  candidates.
 - Fifteen live connections cover the real mixed Onyx maximum of ten
   process-global direct `open_url` attempts plus five provider sessions.
   Excess connections fail with HTTP 503 rather than queueing as a fail-closed

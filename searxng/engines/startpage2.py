@@ -66,7 +66,12 @@ results_xpath = (
     '//div[contains(concat(" ", normalize-space(@class), " "), " result ")'
     ' and not(contains(concat(" ", normalize-space(@class), " "), " a-bg-result "))]'
 )
-no_results_xpath = '//*[@data-testid="no-results" or contains(concat(" ", normalize-space(@class), " "), " no-results ")]'
+no_results_xpath = (
+    '//*[@data-testid="no-results"'
+    ' or contains(concat(" ", normalize-space(@class), " "), " no-results ")'
+    ' or contains(concat(" ", normalize-space(@class), " "), " noresults ")'
+    ' or contains(concat(" ", normalize-space(@class), " "), " noresults-empty ")]'
+)
 # The clickable title link carries the real result href.
 link_xpath = './/a[@data-testid="gl-title-link"]'
 # Fallback for layout variants where data-testid is empty.

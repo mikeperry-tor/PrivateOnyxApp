@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -13,6 +14,8 @@ from private_onyx_obscura import FetchFailure  # noqa: E402
 from private_onyx_obscura import ObscuraClientError  # noqa: E402
 from private_onyx_obscura import SearchBrowserSession  # noqa: E402
 from private_onyx_obscura import SearchInteractionSpec  # noqa: E402
+from private_onyx_obscura import PendingAnubisPow  # noqa: E402
+from private_onyx_obscura import abort_anubis_pow  # noqa: E402
 from private_onyx_obscura import submit_search  # noqa: E402
 from private_onyx_obscura import fetch_sync  # noqa: E402
 from private_onyx_obscura import is_text_like_content_type  # noqa: E402
@@ -25,6 +28,7 @@ from private_onyx_obscura.client import _challenge_details  # noqa: E402
 from private_onyx_obscura.client import _drain_body  # noqa: E402
 from private_onyx_obscura.client import _SEARCH_FORM_FUNCTION  # noqa: E402
 from private_onyx_obscura.client import _wait_for_search_result_dom  # noqa: E402
+from private_onyx_obscura.client import _validate_anubis_worker_status  # noqa: E402
 
 
 class ObscuraClientTests(unittest.TestCase):
@@ -80,6 +84,177 @@ class ObscuraClientTests(unittest.TestCase):
             values.update(changes)
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 SearchInteractionSpec(**values)
+
+    def test_anubis_worker_can_be_armed_before_any_worker_starts(self):
+        _validate_anubis_worker_status(
+            {"active": True, "installed": True, "suppressed": 0}
+        )
+        for status in (
+            {"active": False, "installed": True, "suppressed": 0},
+            {"active": True, "installed": False, "suppressed": 0},
+        ):
+            with self.subTest(status=status), self.assertRaises(ObscuraClientError):
+                _validate_anubis_worker_status(status)
+
+    def test_anubis_challenge_is_returned_before_any_worker_starts(self):
+        challenge = {
+            "challenge": {
+                "id": "fixture-challenge",
+                "method": "fast",
+                "randomData": "ab" * 64,
+                "difficulty": 2,
+                "spent": False,
+            },
+            "rules": {"algorithm": "fast", "difficulty": 2},
+        }
+        document = (
+            '<script id="anubis_version" type="application/json">"v1.25.0"</script>'
+            '<script id="anubis_challenge" type="application/json">'
+            + json.dumps(challenge)
+            + "</script>"
+            '<script type="module" src="/.within.website/x/cmd/anubis/static/js/main.mjs"></script>'
+            '<div class="sp-message">Verifying your request</div>'
+        )
+
+        class WebSocket:
+            async def close(self):
+                return None
+
+        class Cdp:
+            def __init__(self):
+                self.events = []
+
+            async def send(self, method, params=None, **_kwargs):
+                params = params or {}
+                if method == "Target.createTarget":
+                    self.events.append(
+                        {
+                            "method": "Target.attachedToTarget",
+                            "params": {
+                                "sessionId": "session",
+                                "targetInfo": {"targetId": "target"},
+                            },
+                        }
+                    )
+                    return {"targetId": "target"}
+                if method in {
+                    "Network.enable",
+                    "Page.enable",
+                    "Page.setLifecycleEventsEnabled",
+                }:
+                    return {}
+                if method == "Page.getFrameTree":
+                    return {"frameTree": {"frame": {"id": "frame"}}}
+                if method == "Page.addScriptToEvaluateOnNewDocument":
+                    return {"identifier": "preload"}
+                if method == "Page.navigate":
+                    self.events.extend(
+                        [
+                            {
+                                "method": "Network.responseReceived",
+                                "params": {
+                                    "type": "Document",
+                                    "frameId": "frame",
+                                    "loaderId": "homepage",
+                                    "requestId": "request-homepage",
+                                    "response": {
+                                        "url": "https://www.startpage.com/",
+                                        "status": 200,
+                                        "headers": {"content-type": "text/html"},
+                                    },
+                                },
+                            },
+                            {
+                                "method": "Page.frameNavigated",
+                                "params": {
+                                    "frame": {
+                                        "id": "frame",
+                                        "loaderId": "homepage",
+                                        "url": "https://www.startpage.com/",
+                                    }
+                                },
+                            },
+                            {
+                                "method": "Network.loadingFinished",
+                                "params": {"requestId": "request-homepage"},
+                            },
+                            {
+                                "method": "Page.frameStoppedLoading",
+                                "params": {"frameId": "frame"},
+                            },
+                        ]
+                    )
+                    return {"loaderId": "homepage"}
+                if method == "DOM.getDocument":
+                    return {"root": {"nodeId": 1}}
+                if method == "DOM.getOuterHTML":
+                    return {"outerHTML": document}
+                if method == "Runtime.callFunctionOn":
+                    return {
+                        "result": {
+                            "value": {
+                                "active": True,
+                                "installed": True,
+                                "suppressed": 0,
+                            }
+                        }
+                    }
+                if method == "Target.closeTarget":
+                    return {"success": True}
+                raise AssertionError(method)
+
+            async def wait_for_event(
+                self, method, predicate, _timeout, *, start_index=0
+            ):
+                return next(
+                    event
+                    for event in self.events[start_index:]
+                    if event["method"] == method
+                    and predicate(event.get("params", {}))
+                )
+
+        async def exercise():
+            cdp = Cdp()
+            owner = SearchBrowserSession()
+            owner._connection.cdp = cdp
+            owner._connection.websocket = WebSocket()
+            owner._connection.cdp_url = "ws://obscura.invalid/devtools/browser"
+            owner._connection.max_size = 1 << 30
+            result = await submit_search(
+                "fixture query",
+                spec=SearchInteractionSpec(
+                    homepage_url="https://www.startpage.com/",
+                    allowed_homepage_hosts=frozenset(
+                        {"www.startpage.com", "startpage.com"}
+                    ),
+                    allowed_result_hosts=frozenset(
+                        {"www.startpage.com", "startpage.com"}
+                    ),
+                    query_selector="input#q",
+                    query_field_name="query",
+                    form_action_path="/sp/search",
+                    form_method="post",
+                    allowed_fixed_field_names=frozenset({"cat"}),
+                    anubis_pow=True,
+                ),
+                fixed_fields=(("cat", "web"),),
+                text_entry_mode="instant",
+                cdp_url=owner._connection.cdp_url,
+                wait_until="load",
+                dom_limit=1 << 20,
+                pre_navigation_guard=lambda: True,
+                pre_navigation_timeout_seconds=5,
+                cleanup_command_timeout_seconds=1,
+                request_timeout_seconds=10,
+                session_owner=owner,
+            )
+            self.assertIsInstance(result, PendingAnubisPow)
+            self.assertEqual(result.challenge.challenge_id, "fixture-challenge")
+            await abort_anubis_pow(
+                result.continuation_token, session_owner=owner
+            )
+
+        asyncio.run(exercise())
 
     def test_search_result_readiness_uses_protocol_arguments(self):
         self.assertNotIn("deep_preload", _SEARCH_RESULT_STATE_FUNCTION)

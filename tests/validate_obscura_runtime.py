@@ -14,6 +14,7 @@ from private_onyx_obscura import fetch as fetch_async
 from private_onyx_obscura import fetch_sync
 from private_onyx_obscura.client import _RawCdp
 from private_onyx_obscura.client import _SEARCH_FORM_FUNCTION
+from private_onyx_obscura.anubis import worker_preload_source
 from websockets.asyncio.client import connect
 
 
@@ -71,6 +72,108 @@ async def validate_playwright_session_attachment() -> None:
                 await page.close()
         finally:
             await browser.close()
+
+
+async def validate_anubis_worker_preload_runtime() -> None:
+    """Exercise exact interception and native delegation in the pinned V8 runtime."""
+    websocket = await connect(CDP_URL, proxy=None)
+    cdp = _RawCdp(websocket)
+    target_id = ""
+    try:
+        target_id, session_id = await create_target(cdp)
+        await cdp.send("Page.enable", {}, session_id=session_id)
+        nav = await cdp.send(
+            "Page.navigate",
+            {"url": f"{BASE_URL}/javascript", "waitUntil": "load"},
+            session_id=session_id,
+            timeout_seconds=15,
+        )
+        assert nav.get("loaderId")
+        source = worker_preload_source(
+            "__privateOnyxAnubis_0123456789abcdef0123456789abcdef"
+        )
+        setup = await cdp.send(
+            "Runtime.evaluate",
+            {
+                "expression": """
+(() => {
+  const marker = document.createElement('script');
+  marker.src = '/.within.website/x/cmd/anubis/static/js/main.mjs';
+  document.head.appendChild(marker);
+  globalThis.Worker = class NativeWorker {
+    constructor(url, options) {
+      this.kind = 'native';
+      this.url = String(url);
+      this.options = options;
+      this.newTargetName = new.target.name;
+    }
+  };
+})()
+""",
+                "returnByValue": True,
+            },
+            session_id=session_id,
+        )
+        assert "exceptionDetails" not in setup, setup
+        installed = await cdp.send(
+            "Runtime.evaluate",
+            {"expression": source, "returnByValue": True},
+            session_id=session_id,
+        )
+        assert "exceptionDetails" not in installed, installed
+        exercised = await cdp.send(
+            "Runtime.evaluate",
+            {
+                "expression": """
+(() => {
+  const controlName = '__privateOnyxAnubis_0123456789abcdef0123456789abcdef';
+  const direct = new Worker('/.within.website/x/cmd/anubis/static/js/worker/sha256-webcrypto.mjs');
+  const localBlob = new Worker(`blob:${location.origin}/local-worker`);
+  const foreignBlob = new Worker('blob:https://foreign.example/worker');
+  class ChildWorker extends Worker {}
+  const unrelated = new ChildWorker('/ordinary-worker.js', {type: 'module'});
+  const before = globalThis[controlName]('status');
+  const removed = globalThis[controlName]('remove');
+  return {
+    directInert: direct.kind === undefined && direct.onmessage === null,
+    localBlobInert: localBlob.kind === undefined && localBlob.onmessage === null,
+    foreignBlobNative: foreignBlob.kind === 'native',
+    unrelatedNative: unrelated.kind === 'native',
+    unrelatedNewTarget: unrelated.newTargetName,
+    unrelatedOption: unrelated.options.type,
+    before,
+    removed,
+    restoredNative: globalThis.Worker.name === 'NativeWorker'
+  };
+})()
+""",
+                "returnByValue": True,
+            },
+            session_id=session_id,
+        )
+        assert "exceptionDetails" not in exercised, exercised
+        value = exercised["result"]["value"]
+        assert value["directInert"] is True, value
+        assert value["localBlobInert"] is True, value
+        assert value["foreignBlobNative"] is True, value
+        assert value["unrelatedNative"] is True, value
+        assert value["unrelatedNewTarget"] == "ChildWorker", value
+        assert value["unrelatedOption"] == "module", value
+        assert value["before"] == {
+            "active": True,
+            "installed": True,
+            "suppressed": 2,
+        }, value
+        assert value["removed"] == {
+            "active": False,
+            "installed": False,
+            "suppressed": 0,
+        }, value
+        assert value["restoredNative"] is True, value
+    finally:
+        if target_id:
+            await cdp.send("Target.closeTarget", {"targetId": target_id})
+        await websocket.close()
 
 
 async def validate_patched_search_runtime() -> None:
@@ -605,6 +708,7 @@ def validate_navigation_contracts() -> None:
 
 def main() -> None:
     asyncio.run(validate_playwright_session_attachment())
+    asyncio.run(validate_anubis_worker_preload_runtime())
     asyncio.run(validate_patched_search_runtime())
     asyncio.run(validate_connection_isolation())
     asyncio.run(validate_connection_limit())

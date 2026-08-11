@@ -16,6 +16,17 @@ from .client import (
     normalize_public_url,
     submit_search,
     validate_wait_until,
+    abort_anubis_pow,
+    resume_anubis_pow,
+)
+from .anubis import (
+    AnubisChallenge,
+    AnubisProtocolError,
+    AnubisSolution,
+    AnubisSolverError,
+    PendingAnubisPow,
+    parse_anubis_challenge,
+    solve_anubis_fast,
 )
 
 __all__ = [
@@ -34,4 +45,13 @@ __all__ = [
     "normalize_public_url",
     "submit_search",
     "validate_wait_until",
+    "abort_anubis_pow",
+    "resume_anubis_pow",
+    "AnubisChallenge",
+    "AnubisProtocolError",
+    "AnubisSolution",
+    "AnubisSolverError",
+    "PendingAnubisPow",
+    "parse_anubis_challenge",
+    "solve_anubis_fast",
 ]

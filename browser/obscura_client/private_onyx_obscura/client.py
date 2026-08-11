@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import ipaddress
 import json
 import logging
@@ -21,7 +22,17 @@ from dataclasses import dataclass
 from enum import StrEnum
 from html.parser import HTMLParser
 from typing import Callable, Literal, Mapping
-from urllib.parse import SplitResult, unquote, urljoin, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qsl, unquote, urljoin, urlsplit, urlunsplit
+
+from .anubis import (
+    ANUBIS_PASS_PATH,
+    AnubisChallenge,
+    AnubisProtocolError,
+    AnubisSolution,
+    PendingAnubisPow,
+    parse_anubis_challenge,
+    worker_preload_source,
+)
 
 LOGGER = logging.getLogger("private_onyx_obscura")
 PRE_NAVIGATION_TIMEOUT_SECONDS = 45.0
@@ -148,6 +159,7 @@ class SearchInteractionSpec:
     allowed_fixed_field_names: frozenset[str]
     result_terminal_selector: str | None = None
     result_pending_selector: str | None = None
+    anubis_pow: bool = False
 
     def __post_init__(self) -> None:
         if not self.allowed_homepage_hosts or not self.allowed_result_hosts:
@@ -207,6 +219,8 @@ class SearchInteractionSpec:
                 or any(ord(character) < 0x20 for character in selector)
             ):
                 raise ValueError("search result readiness selector is invalid")
+        if type(self.anubis_pow) is not bool:
+            raise ValueError("Anubis support flag must be boolean")
 
 
 @dataclass(frozen=True)
@@ -218,6 +232,26 @@ class SearchSubmissionResult:
     challenge: FetchFailure | None
     homepage_navigation_seconds: float
     submission_navigation_seconds: float
+
+
+@dataclass(frozen=True)
+class _PendingAnubisContinuation:
+    token: str
+    challenge: AnubisChallenge
+    boundary: Literal["homepage", "result"]
+    challenged_url: str
+    challenged_loader: str
+    query: str
+    spec: SearchInteractionSpec
+    fixed_fields: tuple[tuple[str, str], ...]
+    text_entry_mode: TextEntryMode
+    request_deadline: float
+    dom_limit: int
+    homepage_navigation_seconds: float
+    submission_navigation_seconds: float
+    diagnostic_id: str
+    preload_identifier: str
+    preload_control: str
 
 
 def validate_wait_until(value: str) -> str:
@@ -837,6 +871,7 @@ class SearchBrowserSession:
         self._target_id: str | None = None
         self._session_id: str | None = None
         self._frame_id: str | None = None
+        self._pending_anubis: _PendingAnubisContinuation | None = None
         self._cleanup_command_timeout_seconds = CLEANUP_COMMAND_TIMEOUT_SECONDS
 
     @property
@@ -853,6 +888,7 @@ class SearchBrowserSession:
         self._target_id = None
         self._session_id = None
         self._frame_id = None
+        self._pending_anubis = None
         failure: BaseException | None = None
         if cdp is not None and target_id:
             try:
@@ -1710,6 +1746,37 @@ async def _search_form_call(
     _validate_form_policy(remote.get("value"), spec, stage=stage)
 
 
+async def _search_form_present(
+    session: _Session,
+    *,
+    selector: str,
+    remaining: Callable[[str, FetchFailure], float],
+) -> bool:
+    result = await session.send(
+        "Runtime.callFunctionOn",
+        {
+            "functionDeclaration": "function(selector) { return document.querySelector(selector) !== null; }",
+            "arguments": [{"value": selector}],
+            "returnByValue": True,
+            "awaitPromise": True,
+        },
+        timeout_seconds=remaining(
+            "form-presence", FetchFailure.POST_NAVIGATION_TIMEOUT
+        ),
+        timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+        timeout_stage="form-presence",
+    )
+    remote = result.get("result", {})
+    value = remote.get("value") if isinstance(remote, dict) else None
+    if result.get("exceptionDetails") is not None or type(value) is not bool:
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "form-presence",
+            "search form presence inspection failed",
+        )
+    return value
+
+
 async def _search_result_state(
     session: _Session,
     *,
@@ -1803,6 +1870,285 @@ async def _wait_for_search_result_dom(
             )
 
 
+async def _anubis_worker_control(
+    session: _Session,
+    *,
+    control_name: str,
+    operation: Literal["status", "remove"],
+    remaining: Callable[[str, FetchFailure], float],
+) -> dict:
+    stage = f"anubis-worker-{operation}"
+    result = await session.send(
+        "Runtime.callFunctionOn",
+        {
+            "functionDeclaration": "function(name, operation) { const control = globalThis[name]; if (typeof control !== 'function') throw new Error('missing control'); return control(operation); }",
+            "arguments": [{"value": control_name}, {"value": operation}],
+            "returnByValue": True,
+            "awaitPromise": True,
+        },
+        timeout_seconds=remaining(stage, FetchFailure.POST_NAVIGATION_TIMEOUT),
+        timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+        timeout_stage=stage,
+    )
+    remote = result.get("result", {})
+    value = remote.get("value") if isinstance(remote, dict) else None
+    if (
+        result.get("exceptionDetails") is not None
+        or not isinstance(value, dict)
+        or type(value.get("active")) is not bool
+        or type(value.get("installed")) is not bool
+        or type(value.get("suppressed")) is not int
+    ):
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL, stage, "Anubis worker control failed"
+        )
+    return value
+
+
+def _validate_anubis_worker_status(status: dict) -> None:
+    if not status["active"] or not status["installed"]:
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "anubis-worker-status",
+            "Anubis worker suppression was not acknowledged",
+        )
+
+
+async def _remove_anubis_preload(
+    cdp: _RawCdp,
+    session: _Session,
+    *,
+    session_id: str,
+    identifier: str,
+    control_name: str,
+    remaining: Callable[[str, FetchFailure], float],
+) -> None:
+    status = await _anubis_worker_control(
+        session,
+        control_name=control_name,
+        operation="status",
+        remaining=remaining,
+    )
+    _validate_anubis_worker_status(status)
+    removed = await _anubis_worker_control(
+        session,
+        control_name=control_name,
+        operation="remove",
+        remaining=remaining,
+    )
+    if removed != {"active": False, "installed": False, "suppressed": 0}:
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "anubis-worker-remove",
+            "Anubis worker suppression removal was not acknowledged",
+        )
+    await cdp.send(
+        "Page.removeScriptToEvaluateOnNewDocument",
+        {"identifier": identifier},
+        session_id=session_id,
+        timeout_seconds=remaining(
+            "anubis-preload-remove", FetchFailure.POST_NAVIGATION_TIMEOUT
+        ),
+        timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+        timeout_stage="anubis-preload-remove",
+    )
+
+
+async def _enter_search_query(
+    session: _Session,
+    *,
+    spec: SearchInteractionSpec,
+    fixed_fields: tuple[tuple[str, str], ...],
+    query: str,
+    text_entry_mode: TextEntryMode,
+    remaining: Callable[[str, FetchFailure], float],
+    timing_random=None,
+    timing_sleep=asyncio.sleep,
+) -> None:
+    await _search_form_call(
+        session,
+        operation="validate",
+        spec=spec,
+        fixed_fields=fixed_fields,
+        query=query,
+        remaining=remaining,
+        stage="form-validate",
+    )
+    if text_entry_mode == "instant":
+        await _search_form_call(
+            session,
+            operation="instant",
+            spec=spec,
+            fixed_fields=fixed_fields,
+            query=query,
+            remaining=remaining,
+            stage="instant-entry",
+        )
+        return
+    await _search_form_call(
+        session,
+        operation="timed-prepare",
+        spec=spec,
+        fixed_fields=fixed_fields,
+        query=query,
+        remaining=remaining,
+        stage="timed-entry-prepare",
+    )
+    random_source = timing_random or secrets.SystemRandom()
+    for index, character in enumerate(query):
+        for event_type in ("keyDown", "keyUp"):
+            params = {"type": event_type, "key": character}
+            if event_type == "keyDown":
+                params.update({"text": character, "unmodifiedText": character})
+            await session.send(
+                "Input.dispatchKeyEvent",
+                params,
+                timeout_seconds=remaining(
+                    f"timed-entry-{event_type.lower()}",
+                    FetchFailure.POST_NAVIGATION_TIMEOUT,
+                ),
+                timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+                timeout_stage=f"timed-entry-{event_type.lower()}",
+            )
+        if index + 1 < len(query):
+            delay = random_source.uniform(0.045, 0.135)
+            if delay >= remaining(
+                "timed-entry-delay", FetchFailure.POST_NAVIGATION_TIMEOUT
+            ):
+                raise ObscuraClientError(
+                    FetchFailure.POST_NAVIGATION_TIMEOUT,
+                    "timed-entry-delay",
+                    "timed entry delay exceeds the remaining deadline",
+                )
+            await timing_sleep(delay)
+    await _search_form_call(
+        session,
+        operation="verify",
+        spec=spec,
+        fixed_fields=fixed_fields,
+        query=query,
+        remaining=remaining,
+        stage="timed-entry-verify",
+    )
+
+
+async def _wait_for_distinct_search_document(
+    cdp: _RawCdp,
+    *,
+    frame_id: str,
+    previous_loader: str,
+    start_index: int,
+    remaining: Callable[[str, FetchFailure], float],
+    stage_prefix: str,
+) -> str:
+    try:
+        response = await cdp.wait_for_event(
+            "Network.responseReceived",
+            lambda event: (
+                event.get("type") == "Document"
+                and event.get("frameId") == frame_id
+                and event.get("loaderId") != previous_loader
+            ),
+            remaining(
+                f"{stage_prefix}-navigation", FetchFailure.POST_NAVIGATION_TIMEOUT
+            ),
+            start_index=start_index,
+        )
+    except asyncio.TimeoutError as exc:
+        raise ObscuraClientError(
+            FetchFailure.POST_NAVIGATION_TIMEOUT,
+            f"{stage_prefix}-navigation",
+            "search navigation did not produce a distinct document",
+        ) from exc
+    loader_id = str(response.get("params", {}).get("loaderId", ""))
+    if not loader_id or loader_id == previous_loader:
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            f"{stage_prefix}-navigation",
+            "search navigation did not create a distinct loader",
+        )
+    try:
+        await cdp.wait_for_event(
+            "Page.frameStoppedLoading",
+            lambda event: event.get("frameId") == frame_id,
+            remaining(
+                f"{stage_prefix}-event-barrier",
+                FetchFailure.POST_NAVIGATION_TIMEOUT,
+            ),
+            start_index=start_index,
+        )
+    except asyncio.TimeoutError as exc:
+        raise ObscuraClientError(
+            FetchFailure.POST_NAVIGATION_TIMEOUT,
+            f"{stage_prefix}-event-barrier",
+            "search document completion event timed out",
+        ) from exc
+    return loader_id
+
+
+async def _submit_form_document(
+    cdp: _RawCdp,
+    session: _Session,
+    *,
+    frame_id: str,
+    previous_loader: str,
+    spec: SearchInteractionSpec,
+    fixed_fields: tuple[tuple[str, str], ...],
+    query: str,
+    dom_limit: int,
+    request_deadline: float,
+    remaining: Callable[[str, FetchFailure], float],
+) -> tuple[str, int, dict[str, str], str, str, float]:
+    event_start = len(cdp.events)
+    started = time.monotonic()
+    await _search_form_call(
+        session,
+        operation="submit",
+        spec=spec,
+        fixed_fields=fixed_fields,
+        query=query,
+        remaining=remaining,
+        stage="form-submit",
+    )
+    loader_id = await _wait_for_distinct_search_document(
+        cdp,
+        frame_id=frame_id,
+        previous_loader=previous_loader,
+        start_index=event_start,
+        remaining=remaining,
+        stage_prefix="submission-result",
+    )
+    elapsed = time.monotonic() - started
+    url, status, headers, _request_id = _search_event_document(
+        cdp,
+        start_index=event_start,
+        frame_id=frame_id,
+        loader_id=loader_id,
+        stage="result-events",
+    )
+    _validate_search_terminal_url(url, spec.allowed_result_hosts, stage="result-origin")
+    html = await _search_dom(
+        session, dom_limit=dom_limit, remaining=remaining, stage_prefix="result"
+    )
+    if (
+        _challenge(status, url, html) is None
+        and status != 404
+        and status < 500
+        and spec.result_terminal_selector is not None
+        and spec.result_pending_selector is not None
+    ):
+        html = await _wait_for_search_result_dom(
+            session,
+            initial_html=html,
+            terminal_selector=spec.result_terminal_selector,
+            pending_selector=spec.result_pending_selector,
+            dom_limit=dom_limit,
+            request_deadline=request_deadline,
+            remaining=remaining,
+        )
+    return url, status, headers, html, loader_id, elapsed
+
+
 async def submit_search(
     query: str,
     *,
@@ -1819,7 +2165,7 @@ async def submit_search(
     session_owner: SearchBrowserSession,
     _timing_random=None,
     _timing_sleep=asyncio.sleep,
-) -> SearchSubmissionResult:
+) -> SearchSubmissionResult | PendingAnubisPow:
     """Perform one retained-target homepage/form/result browser transaction."""
     if not isinstance(query, str):
         raise TypeError("query must be a string")
@@ -1865,6 +2211,12 @@ async def submit_search(
     ambiguous = False
     owner = session_owner
     owner._cleanup_command_timeout_seconds = cleanup_command_timeout_seconds
+    if owner._pending_anubis is not None:
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "search-pending-continuation",
+            "retained search session already has a pending continuation",
+        )
 
     def remaining(next_stage: str, category: FetchFailure) -> float:
         nonlocal stage
@@ -1989,6 +2341,25 @@ async def submit_search(
         owner._frame_id = frame_id
         cdp.events.clear()
         session = _Session(cdp, session_id)
+        preload_identifier = ""
+        preload_control = ""
+        if spec.anubis_pow:
+            preload_control = f"__privateOnyxAnubis_{secrets.token_hex(16)}"
+            preload = await command(
+                cdp,
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": worker_preload_source(preload_control)},
+                session_id=session_id,
+                command_stage="anubis-preload-install",
+                category=FetchFailure.PRE_NAVIGATION_TIMEOUT,
+            )
+            preload_identifier = str(preload.get("identifier", ""))
+            if not preload_identifier:
+                raise ObscuraClientError(
+                    FetchFailure.PROTOCOL,
+                    "anubis-preload-install",
+                    "Obscura did not acknowledge the Anubis preload",
+                )
 
         if not pre_navigation_guard():
             raise ObscuraClientError(
@@ -2048,8 +2419,50 @@ async def submit_search(
             remaining=remaining,
             stage_prefix="homepage",
         )
-        homepage_challenge = _challenge(homepage_status, homepage_url, homepage_html)
+        homepage_challenge, homepage_signal = _challenge_details(
+            homepage_status, homepage_url, homepage_html
+        )
         if homepage_challenge is not None:
+            if (
+                spec.anubis_pow
+                and homepage_challenge is FetchFailure.CAPTCHA
+                and homepage_signal == "anubis-verification"
+            ):
+                try:
+                    challenge = parse_anubis_challenge(homepage_html)
+                except AnubisProtocolError as exc:
+                    raise ObscuraClientError(
+                        FetchFailure.CAPTCHA,
+                        "anubis-profile",
+                        "provider returned an unsupported Anubis profile",
+                    ) from exc
+                status_value = await _anubis_worker_control(
+                    session,
+                    control_name=preload_control,
+                    operation="status",
+                    remaining=remaining,
+                )
+                _validate_anubis_worker_status(status_value)
+                token = secrets.token_hex(32)
+                owner._pending_anubis = _PendingAnubisContinuation(
+                    token=token,
+                    challenge=challenge,
+                    boundary="homepage",
+                    challenged_url=homepage_url,
+                    challenged_loader=homepage_loader,
+                    query=query,
+                    spec=spec,
+                    fixed_fields=fixed_fields,
+                    text_entry_mode=text_entry_mode,
+                    request_deadline=request_deadline,
+                    dom_limit=dom_limit,
+                    homepage_navigation_seconds=homepage_seconds,
+                    submission_navigation_seconds=0.0,
+                    diagnostic_id=diagnostic_id,
+                    preload_identifier=preload_identifier,
+                    preload_control=preload_control,
+                )
+                return PendingAnubisPow(token, challenge)
             raise ObscuraClientError(
                 homepage_challenge,
                 "homepage-classification",
@@ -2063,172 +2476,87 @@ async def submit_search(
             )
         del homepage_html
 
-        await _search_form_call(
+        await _enter_search_query(
             session,
-            operation="validate",
             spec=spec,
             fixed_fields=fixed_fields,
             query=query,
+            text_entry_mode=text_entry_mode,
             remaining=remaining,
-            stage="form-validate",
+            timing_random=_timing_random,
+            timing_sleep=_timing_sleep,
         )
-        if text_entry_mode == "instant":
-            await _search_form_call(
-                session,
-                operation="instant",
-                spec=spec,
-                fixed_fields=fixed_fields,
-                query=query,
-                remaining=remaining,
-                stage="instant-entry",
-            )
-        else:
-            await _search_form_call(
-                session,
-                operation="timed-prepare",
-                spec=spec,
-                fixed_fields=fixed_fields,
-                query=query,
-                remaining=remaining,
-                stage="timed-entry-prepare",
-            )
-            random_source = _timing_random or secrets.SystemRandom()
-            for index, character in enumerate(query):
-                await session.send(
-                    "Input.dispatchKeyEvent",
-                    {
-                        "type": "keyDown",
-                        "key": character,
-                        "text": character,
-                        "unmodifiedText": character,
-                    },
-                    timeout_seconds=remaining(
-                        "timed-entry-key-down", FetchFailure.POST_NAVIGATION_TIMEOUT
-                    ),
-                    timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
-                    timeout_stage="timed-entry-key-down",
-                )
-                await session.send(
-                    "Input.dispatchKeyEvent",
-                    {"type": "keyUp", "key": character},
-                    timeout_seconds=remaining(
-                        "timed-entry-key-up", FetchFailure.POST_NAVIGATION_TIMEOUT
-                    ),
-                    timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
-                    timeout_stage="timed-entry-key-up",
-                )
-                if index + 1 < len(query):
-                    delay = random_source.uniform(0.045, 0.135)
-                    if delay >= remaining(
-                        "timed-entry-delay", FetchFailure.POST_NAVIGATION_TIMEOUT
-                    ):
-                        raise ObscuraClientError(
-                            FetchFailure.POST_NAVIGATION_TIMEOUT,
-                            "timed-entry-delay",
-                            "timed entry delay exceeds the remaining deadline",
-                        )
-                    await _timing_sleep(delay)
-            await _search_form_call(
-                session,
-                operation="verify",
-                spec=spec,
-                fixed_fields=fixed_fields,
-                query=query,
-                remaining=remaining,
-                stage="timed-entry-verify",
-            )
-
-        result_event_start = len(cdp.events)
-        result_started = time.monotonic()
-        await _search_form_call(
+        (
+            result_url,
+            result_status,
+            result_headers,
+            result_html,
+            result_loader,
+            submission_seconds,
+        ) = await _submit_form_document(
+            cdp,
             session,
-            operation="submit",
+            frame_id=frame_id,
+            previous_loader=homepage_loader,
             spec=spec,
             fixed_fields=fixed_fields,
             query=query,
-            remaining=remaining,
-            stage="form-submit",
-        )
-        try:
-            result_response = await cdp.wait_for_event(
-                "Network.responseReceived",
-                lambda event: (
-                    event.get("type") == "Document"
-                    and event.get("frameId") == frame_id
-                    and event.get("loaderId") != homepage_loader
-                ),
-                remaining(
-                    "submission-result-navigation",
-                    FetchFailure.POST_NAVIGATION_TIMEOUT,
-                ),
-                start_index=result_event_start,
-            )
-        except asyncio.TimeoutError as exc:
-            raise ObscuraClientError(
-                FetchFailure.POST_NAVIGATION_TIMEOUT,
-                "submission-result-navigation",
-                "submitted search did not produce a distinct result document",
-            ) from exc
-        result_loader = str(result_response.get("params", {}).get("loaderId", ""))
-        if not result_loader or result_loader == homepage_loader:
-            raise ObscuraClientError(
-                FetchFailure.PROTOCOL,
-                "submission-result-navigation",
-                "submitted search did not create a distinct result loader",
-            )
-        try:
-            await cdp.wait_for_event(
-                "Page.frameStoppedLoading",
-                lambda event: event.get("frameId") == frame_id,
-                remaining(
-                    "submission-event-barrier",
-                    FetchFailure.POST_NAVIGATION_TIMEOUT,
-                ),
-                start_index=result_event_start,
-            )
-        except asyncio.TimeoutError as exc:
-            raise ObscuraClientError(
-                FetchFailure.POST_NAVIGATION_TIMEOUT,
-                "submission-event-barrier",
-                "submitted document completion event timed out",
-            ) from exc
-        submission_seconds = time.monotonic() - result_started
-        result_url, result_status, result_headers, _request_id = (
-            _search_event_document(
-                cdp,
-                start_index=result_event_start,
-                frame_id=frame_id,
-                loader_id=result_loader,
-                stage="result-events",
-            )
-        )
-        _validate_search_terminal_url(
-            result_url, spec.allowed_result_hosts, stage="result-origin"
-        )
-        result_html = await _search_dom(
-            session,
             dom_limit=dom_limit,
+            request_deadline=request_deadline,
             remaining=remaining,
-            stage_prefix="result",
         )
-        challenge = _challenge(result_status, result_url, result_html)
+        challenge, result_signal = _challenge_details(
+            result_status, result_url, result_html
+        )
         if (
-            challenge is None
-            and result_status != 404
-            and result_status < 500
-            and spec.result_terminal_selector is not None
-            and spec.result_pending_selector is not None
+            challenge is FetchFailure.CAPTCHA
+            and result_signal == "anubis-verification"
+            and spec.anubis_pow
         ):
-            result_html = await _wait_for_search_result_dom(
+            try:
+                anubis_challenge = parse_anubis_challenge(result_html)
+            except AnubisProtocolError as exc:
+                raise ObscuraClientError(
+                    FetchFailure.CAPTCHA,
+                    "anubis-profile",
+                    "provider returned an unsupported Anubis profile",
+                ) from exc
+            status_value = await _anubis_worker_control(
                 session,
-                initial_html=result_html,
-                terminal_selector=spec.result_terminal_selector,
-                pending_selector=spec.result_pending_selector,
-                dom_limit=dom_limit,
-                request_deadline=request_deadline,
+                control_name=preload_control,
+                operation="status",
                 remaining=remaining,
             )
-            challenge = _challenge(result_status, result_url, result_html)
+            _validate_anubis_worker_status(status_value)
+            token = secrets.token_hex(32)
+            owner._pending_anubis = _PendingAnubisContinuation(
+                token=token,
+                challenge=anubis_challenge,
+                boundary="result",
+                challenged_url=result_url,
+                challenged_loader=result_loader,
+                query=query,
+                spec=spec,
+                fixed_fields=fixed_fields,
+                text_entry_mode=text_entry_mode,
+                request_deadline=request_deadline,
+                dom_limit=dom_limit,
+                homepage_navigation_seconds=homepage_seconds,
+                submission_navigation_seconds=submission_seconds,
+                diagnostic_id=diagnostic_id,
+                preload_identifier=preload_identifier,
+                preload_control=preload_control,
+            )
+            return PendingAnubisPow(token, anubis_challenge)
+        if spec.anubis_pow:
+            await _remove_anubis_preload(
+                cdp,
+                session,
+                session_id=session_id,
+                identifier=preload_identifier,
+                control_name=preload_control,
+                remaining=remaining,
+            )
         LOGGER.info(
             "obscura search completed request_id=%s entry_mode=%s "
             "status_class=%sxx homepage_seconds=%.3f submission_seconds=%.3f "
@@ -2253,7 +2581,7 @@ async def submit_search(
         ambiguous = True
         raise
     except ObscuraClientError as exc:
-        ambiguous = exc.category not in {
+        ambiguous = spec.anubis_pow or exc.category not in {
             FetchFailure.FINALIZED,
             FetchFailure.HTTP_STATUS,
             FetchFailure.ACCESS_DENIED,
@@ -2294,6 +2622,325 @@ async def submit_search(
                     "obscura cleanup failed request_id=%s stage=search-generation-close",
                     diagnostic_id,
                 )
+
+
+def _validate_anubis_solution(
+    pending: _PendingAnubisContinuation, solution: AnubisSolution
+) -> None:
+    if (
+        not isinstance(solution, AnubisSolution)
+        or re.fullmatch(r"[0-9a-f]{64}", solution.response) is None
+        or type(solution.nonce) is not int
+        or solution.nonce < 0
+        or type(solution.elapsed_ms) is not int
+        or solution.elapsed_ms < 0
+    ):
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "anubis-solution",
+            "Anubis solution is invalid",
+        )
+    expected = hashlib.sha256(
+        (pending.challenge.random_data + str(solution.nonce)).encode("ascii")
+    ).hexdigest()
+    if (
+        not secrets.compare_digest(solution.response, expected)
+        or not solution.response.startswith("0" * pending.challenge.difficulty)
+    ):
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "anubis-solution",
+            "Anubis solution does not satisfy the pending challenge",
+        )
+
+
+async def resume_anubis_pow(
+    continuation_token: str,
+    solution: AnubisSolution,
+    *,
+    session_owner: SearchBrowserSession,
+) -> SearchSubmissionResult:
+    """Consume one pending proof and continue in its retained target."""
+    owner = session_owner
+    pending = owner._pending_anubis
+    if (
+        not isinstance(continuation_token, str)
+        or pending is None
+        or not secrets.compare_digest(continuation_token, pending.token)
+    ):
+        try:
+            await owner.close()
+        except Exception:
+            LOGGER.warning("obscura cleanup failed stage=anubis-invalid-token-close")
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "anubis-continuation",
+            "Anubis continuation token is invalid",
+        )
+    try:
+        _validate_anubis_solution(pending, solution)
+    except ObscuraClientError:
+        owner._pending_anubis = None
+        try:
+            await owner.close()
+        except Exception:
+            LOGGER.warning(
+                "obscura cleanup failed request_id=%s stage=anubis-invalid-solution-close",
+                pending.diagnostic_id,
+            )
+        raise
+    owner._pending_anubis = None
+    cdp = owner._connection.cdp
+    session_id = owner._session_id
+    frame_id = owner._frame_id
+    if cdp is None or not session_id or not frame_id:
+        try:
+            await owner.close()
+        except Exception:
+            LOGGER.warning(
+                "obscura cleanup failed request_id=%s stage=anubis-missing-generation-close",
+                pending.diagnostic_id,
+            )
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "anubis-continuation",
+            "Anubis continuation generation is unavailable",
+        )
+    session = _Session(cdp, session_id)
+    stage = "anubis-continuation"
+
+    def remaining(next_stage: str, category: FetchFailure) -> float:
+        nonlocal stage
+        stage = next_stage
+        value = pending.request_deadline - time.monotonic()
+        if value <= 0:
+            raise ObscuraClientError(
+                category,
+                next_stage,
+                f"Obscura did not complete {next_stage} before its deadline",
+            )
+        return value
+
+    try:
+        event_start = len(cdp.events)
+        result = await session.send(
+            "Runtime.callFunctionOn",
+            {
+                "functionDeclaration": "function(path, id, response, nonce, redir, elapsedTime) { const url = new URL(path, location.origin); url.searchParams.set('id', id); url.searchParams.set('response', response); url.searchParams.set('nonce', String(nonce)); url.searchParams.set('redir', redir); url.searchParams.set('elapsedTime', String(elapsedTime)); location.replace(url.href); }",
+                "arguments": [
+                    {"value": ANUBIS_PASS_PATH},
+                    {"value": pending.challenge.challenge_id},
+                    {"value": solution.response},
+                    {"value": solution.nonce},
+                    {"value": pending.challenged_url},
+                    {"value": solution.elapsed_ms},
+                ],
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+            timeout_seconds=remaining(
+                "anubis-pass-submit", FetchFailure.POST_NAVIGATION_TIMEOUT
+            ),
+            timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+            timeout_stage="anubis-pass-submit",
+        )
+        if result.get("exceptionDetails") is not None:
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL,
+                "anubis-pass-submit",
+                "Anubis pass navigation failed",
+            )
+        loader_id = await _wait_for_distinct_search_document(
+            cdp,
+            frame_id=frame_id,
+            previous_loader=pending.challenged_loader,
+            start_index=event_start,
+            remaining=remaining,
+            stage_prefix="anubis-pass",
+        )
+        pass_requests = []
+        for event in cdp.events[event_start:]:
+            if event.get("method") != "Network.requestWillBeSent":
+                continue
+            params = event.get("params", {})
+            if params.get("frameId") != frame_id or params.get("loaderId") != loader_id:
+                continue
+            request = params.get("request", {})
+            if params.get("type") != "Document":
+                continue
+            request_url = str(request.get("url", ""))
+            try:
+                parsed = urlsplit(request_url)
+            except ValueError:
+                continue
+            if unquote(parsed.path) == ANUBIS_PASS_PATH:
+                pass_requests.append((str(request.get("method", "")), parsed))
+        if len(pass_requests) > 1:
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL,
+                "anubis-pass-events",
+                "Anubis pass request was not uniquely correlated",
+            )
+        if pass_requests:
+            pass_method, pass_request = pass_requests[0]
+            challenged = urlsplit(pending.challenged_url)
+            field_pairs = parse_qsl(pass_request.query, keep_blank_values=True)
+            fields = dict(field_pairs)
+            if (
+                pass_method != "GET"
+                or pass_request.scheme != "https"
+                or pass_request.hostname != challenged.hostname
+                or (pass_request.port or 443) != (challenged.port or 443)
+                or len(field_pairs) != 5
+                or set(fields) != {"id", "response", "nonce", "redir", "elapsedTime"}
+                or fields["id"] != pending.challenge.challenge_id
+                or fields["response"] != solution.response
+                or fields["nonce"] != str(solution.nonce)
+                or fields["redir"] != pending.challenged_url
+                or fields["elapsedTime"] != str(solution.elapsed_ms)
+            ):
+                raise ObscuraClientError(
+                    FetchFailure.POLICY_DENIED,
+                    "anubis-pass-events",
+                    "Anubis pass request violated its continuation policy",
+                )
+        final_url, status, headers, _request_id = _search_event_document(
+            cdp,
+            start_index=event_start,
+            frame_id=frame_id,
+            loader_id=loader_id,
+            stage="anubis-pass-events",
+        )
+        _validate_search_terminal_url(
+            final_url,
+            pending.spec.allowed_result_hosts | pending.spec.allowed_homepage_hosts,
+            stage="anubis-pass-origin",
+        )
+        html = await _search_dom(
+            session,
+            dom_limit=pending.dom_limit,
+            remaining=remaining,
+            stage_prefix="anubis-pass",
+        )
+        challenge = _challenge(status, final_url, html)
+        if challenge is not None:
+            raise ObscuraClientError(
+                challenge,
+                "anubis-pass-classification",
+                "provider rejected or renewed the Anubis challenge",
+            )
+
+        has_form = await _search_form_present(
+            session,
+            selector=pending.spec.query_selector,
+            remaining=remaining,
+        )
+        if pending.boundary == "homepage" and not has_form:
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL,
+                "anubis-homepage-restore",
+                "Anubis homepage continuation did not restore the declared form",
+            )
+        submission_seconds = pending.submission_navigation_seconds
+        should_submit = pending.boundary == "homepage" or (
+            pending.boundary == "result"
+            and final_url != pending.challenged_url
+            and has_form
+        )
+        if should_submit:
+            await _enter_search_query(
+                session,
+                spec=pending.spec,
+                fixed_fields=pending.fixed_fields,
+                query=pending.query,
+                text_entry_mode=pending.text_entry_mode,
+                remaining=remaining,
+            )
+            (
+                final_url,
+                status,
+                headers,
+                html,
+                _loader_id,
+                restored_seconds,
+            ) = await _submit_form_document(
+                cdp,
+                session,
+                frame_id=frame_id,
+                previous_loader=loader_id,
+                spec=pending.spec,
+                fixed_fields=pending.fixed_fields,
+                query=pending.query,
+                dom_limit=pending.dom_limit,
+                request_deadline=pending.request_deadline,
+                remaining=remaining,
+            )
+            submission_seconds += restored_seconds
+            challenge = _challenge(status, final_url, html)
+            if challenge is not None:
+                raise ObscuraClientError(
+                    challenge,
+                    "anubis-restored-result-classification",
+                    "provider returned another blocking challenge",
+                )
+        await _remove_anubis_preload(
+            cdp,
+            session,
+            session_id=session_id,
+            identifier=pending.preload_identifier,
+            control_name=pending.preload_control,
+            remaining=remaining,
+        )
+        LOGGER.info(
+            "obscura search completed request_id=%s entry_mode=%s status_class=%sxx "
+            "homepage_seconds=%.3f submission_seconds=%.3f challenge=none pow=solved",
+            pending.diagnostic_id,
+            pending.text_entry_mode,
+            status // 100,
+            pending.homepage_navigation_seconds,
+            submission_seconds,
+        )
+        return SearchSubmissionResult(
+            final_url=final_url,
+            status=status,
+            headers=headers,
+            rendered_html=html,
+            challenge=None,
+            homepage_navigation_seconds=pending.homepage_navigation_seconds,
+            submission_navigation_seconds=submission_seconds,
+        )
+    except BaseException:
+        try:
+            await owner.close()
+        except Exception:
+            LOGGER.warning(
+                "obscura cleanup failed request_id=%s stage=anubis-generation-close",
+                pending.diagnostic_id,
+            )
+        raise
+
+
+async def abort_anubis_pow(
+    continuation_token: str, *, session_owner: SearchBrowserSession
+) -> None:
+    """Consume and close one pending continuation without submitting proof."""
+    pending = session_owner._pending_anubis
+    if (
+        pending is None
+        or not isinstance(continuation_token, str)
+        or not secrets.compare_digest(continuation_token, pending.token)
+    ):
+        try:
+            await session_owner.close()
+        except Exception:
+            LOGGER.warning("obscura cleanup failed stage=anubis-invalid-abort-close")
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL,
+            "anubis-abort",
+            "Anubis continuation token is invalid",
+        )
+    session_owner._pending_anubis = None
+    await session_owner.close()
 
 
 def fetch_sync(*args, **kwargs) -> FetchResult:

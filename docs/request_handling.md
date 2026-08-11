@@ -497,37 +497,60 @@ An unfinished `deep_preload_link` without one of those explicit challenge
 markers is instead a parser/runtime failure: incomplete JavaScript hydration
 must not suspend the provider as though an IP challenge had been proved.
 
-Startpage's explicit CAPTCHA route is a typed CAPTCHA failure. Its Anubis page
-is also a typed CAPTCHA failure at either the homepage or result boundary. The
-shared classifier requires the same-origin Anubis main-module path, exact
-version and challenge elements, and visible `.sp-message` text containing
-`Verifying your request`; any one of those signals alone is insufficient.
-Startpage presents its Anubis v1.25.0 `fast` challenge at difficulty 4 as the
-homepage document on the configured route. That document has no search form or
-query control, so classification occurs before form lookup. The result parser
-retains its equivalent Anubis check as defense in depth. No proof is attempted,
-and the explicit challenge enters the ordinary one-hour blocking suspension.
+Startpage's explicit CAPTCHA routes remain typed CAPTCHA failures. The shared
+client separately admits a bounded, parseable Startpage Anubis `fast` puzzle at
+either the homepage or result boundary. The version string is bounded metadata,
+not an allowlist, and difficulty 0 through 64 is accepted as puzzle input.
+Admission requires the same-origin exact Anubis main-module path, both bounded
+JSON elements, visible `.sp-message` text containing `Verifying your request`,
+a bounded printable challenge ID, bounded printable ASCII random data, and
+matching `fast` method/rules. Additional unrelated envelope,
+challenge, or rule fields are ignored within the JSON byte bound. Missing or
+inconsistent puzzle fields, an unsupported algorithm, out-of-range difficulty,
+duplicate element, or malformed value fails closed as an unsupported
+verification page and enters the ordinary blocking-suspension path. The result
+parser retains its equivalent detector as defense in depth.
 
-The main ES module creates four same-origin classic workers from direct `.mjs`
-URLs under Obscura's advertised hardware profile. Obscura's `Worker`
-compatibility shim executes those worker bodies cooperatively in the page's V8
-isolate rather than in dedicated isolates. Waiting on an Anubis pending selector
-therefore starves page-runtime CDP inspection and consumes the existing
-50-second browser transaction budget at `result-readiness`; readiness selectors
-alone cannot continue the challenge.
+Before Startpage's initial homepage navigation, the client installs one
+pre-document Worker wrapper. It creates inert message-compatible objects only
+for exact same-origin Anubis SHA-256 worker paths, or target-local Blob workers
+on a document carrying the exact main-module marker. Every other Worker call
+delegates to the native constructor. This prevents Obscura v0.2.0's
+cooperative Worker shim from running the Anubis hash loop in the page isolate.
+Installation, active ownership, removal, and any inert-worker termination are
+acknowledged through the retained page; any mismatch closes the provider
+generation. A parseable challenge does not require the provider module to have
+successfully started a Worker: the module or worker asset can fail while the
+server-provided puzzle remains solvable. The armed wrapper stays installed
+through the pass and any restored search submission, so a delayed module or a
+renewed result-boundary challenge cannot start the page-local hash loop. It is
+removed only after an ordinary terminal result has been classified.
 
-The supported compatibility scope also includes an Anubis profile that
-prefetches one worker source and creates workers from a blob URL. Browser
-execution consequently requires both direct and blob-backed dedicated workers.
-It also requires a bounded multi-document continuation: successful proof
-submission navigates through the same-origin Anubis pass endpoint and a
-redirect, while the original Startpage search is a POST whose body is not
-preserved by that GET redirect. The client owns neither that continuation nor
-an authorized one-time form submission after a homepage challenge or
-resubmission after a result challenge. It does not wait on a separate
-allowance, construct a result URL, or retry the failed transaction. The deferred
-implementation alternatives and their ownership constraints are recorded in
-[`docs/plans/deferred/anubis_pow_support.md`](plans/deferred/anubis_pow_support.md).
+An admitted challenge becomes one opaque, one-shot continuation owned by the
+same Startpage connection, target, frame, cookie jar, route, query, fixed
+fields, and absolute browser deadline. The SearXNG engine caller synchronously
+searches nonce values from zero for the first
+`SHA256(randomData + decimalNonce)` with the required leading hexadecimal
+zeroes. It checks the deadline at least every 4,096 candidates, examines at
+most 16,777,216 candidates, uses constant memory, and creates no worker thread,
+process, executor, or second budget. Challenge values, proof fields, pass URLs,
+cookies, and queries are never logged.
+
+The continuation keeps the Worker preload armed and navigates the retained
+target to the exact same-origin Anubis pass path with the validated challenge
+ID, proof, nonce, challenged URL, and elapsed milliseconds. The pinned Obscura
+runtime can omit that redirect hop from CDP network events; when present its
+method, origin, path, loader, and exact fields are validated, while the exact
+client-built navigation and distinct terminal loader remain authoritative when
+it is omitted. A homepage challenge then restores and submits the declared
+Startpage POST once. A result challenge accepts the redirected result directly,
+or restores that POST once only when the redirect returns a homepage form.
+There is no constructed result URL, same-engine retry, alternate browser, or
+route fallback. After terminal classification it verifies Worker-wrapper
+removal and termination of any intercepted workers. Rejection or a renewed
+challenge is a CAPTCHA suspension; local exhaustion, deadline, or protocol
+failure is unresponsive and closes the generation. The accepted design is recorded in
+[`docs/plans/implemented/anubis_pow_support.md`](plans/implemented/anubis_pow_support.md).
 
 Bing's rendered `One last step` / `solve the challenge below to continue`
 interstitial is a CAPTCHA failure, even when it contains none of Bing's older

@@ -480,6 +480,16 @@ class SearxngObscuraEngineTests(unittest.TestCase):
                 </body></html>"""
             )
 
+    def test_startpage_current_no_results_classes(self):
+        for marker in ("noresults", "noresults-empty"):
+            with self.subTest(marker=marker):
+                self.assertEqual(
+                    self.startpage._parse_html(
+                        f"<html><div class='{marker}'>No results found.</div></html>"
+                    ),
+                    [],
+                )
+
     def test_every_custom_engine_declares_offline_contract(self):
         for path in sorted((ROOT / "searxng/engines").glob("*2.py")):
             source = path.read_text()

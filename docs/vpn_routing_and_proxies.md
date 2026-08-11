@@ -117,6 +117,13 @@ still crosses `obscura-egress-bridge` and the selected public final hop.
 Provider-session lifetime is deliberately independent of Myst, upstream-proxy,
 and Tor route changes.
 
+Startpage Anubis challenge assets, the one exact proof-pass navigation, its
+redirect, and the restored search POST remain navigations in that same retained
+target. Proof calculation is local to the SearXNG request thread and opens no
+network connection. Continuation support has no requests-client, direct-egress,
+alternate-proxy, or DNS fallback; every origin request still uses Obscura's
+target-owned stealth client and the selected public final hop.
+
 Both `NO_PROXY` and `no_proxy` in `onyx/helper-egress.env` contain the exact
 internal name `obscura-cdp-gateway`. Removed browser intermediaries have no
 compatibility aliases.

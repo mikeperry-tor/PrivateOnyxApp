@@ -13,11 +13,18 @@ import uuid
 from contextlib import contextmanager
 
 from private_onyx_obscura import (
+    AnubisChallenge,
+    AnubisSolution,
+    AnubisSolverError,
     FetchFailure,
     ObscuraClientError,
+    PendingAnubisPow,
     SearchBrowserSession,
     SearchInteractionSpec,
     submit_search as submit_search_async,
+    abort_anubis_pow as abort_anubis_pow_async,
+    resume_anubis_pow as resume_anubis_pow_async,
+    solve_anubis_fast,
     validate_wait_until,
 )
 
@@ -97,6 +104,7 @@ INTERACTIONS = {
         form_action_path="/sp/search",
         form_method="post",
         allowed_fixed_field_names=frozenset({"cat", "page"}),
+        anubis_pow=True,
     ),
     "bing2": SearchInteractionSpec(
         homepage_url="https://www.bing.com/",
@@ -205,6 +213,8 @@ class _ProviderBrowserSession:
         idle_seconds: float = PROVIDER_SESSION_IDLE_SECONDS,
         session_factory=SearchBrowserSession,
         submit_async=submit_search_async,
+        resume_async=resume_anubis_pow_async,
+        abort_async=abort_anubis_pow_async,
     ) -> None:
         if idle_seconds <= 0:
             raise ValueError("provider session idle timeout must be positive")
@@ -212,6 +222,8 @@ class _ProviderBrowserSession:
         self.idle_seconds = idle_seconds
         self._session_factory = session_factory
         self._submit_async = submit_async
+        self._resume_async = resume_async
+        self._abort_async = abort_async
         self._session: SearchBrowserSession | None = None
         self._idle_handle: asyncio.TimerHandle | None = None
         self._idle_deadline: float | None = None
@@ -293,7 +305,10 @@ class _ProviderBrowserSession:
                 **kwargs,
             )
         finally:
-            if getattr(session, "generation_active", True):
+            if getattr(session, "_pending_anubis", None) is not None:
+                self._idle_deadline = None
+                self._idle_handle = None
+            elif getattr(session, "generation_active", True):
                 self._idle_deadline = loop.time() + self.idle_seconds
                 self._idle_handle = loop.call_at(
                     self._idle_deadline,
@@ -310,6 +325,54 @@ class _ProviderBrowserSession:
         return _PROVIDER_BROWSER_LOOP.submit(
             self._run_submit(query, **kwargs)
         ).result()
+
+    async def _run_resume(self, continuation_token, solution):
+        if self._session is None:
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL,
+                "anubis-continuation",
+                "provider browser has no pending session",
+            )
+        session = self._session
+        generation = self._generation
+        loop = asyncio.get_running_loop()
+        try:
+            return await self._resume_async(
+                continuation_token,
+                solution,
+                session_owner=session,
+            )
+        finally:
+            if getattr(session, "generation_active", True):
+                self._idle_deadline = loop.time() + self.idle_seconds
+                self._idle_handle = loop.call_at(
+                    self._idle_deadline,
+                    self._begin_expiry,
+                    generation,
+                )
+            elif self._session is session:
+                self._session = None
+
+    def resume_sync(self, continuation_token, solution):
+        return _PROVIDER_BROWSER_LOOP.submit(
+            self._run_resume(continuation_token, solution)
+        ).result()
+
+    def abort_sync(self, continuation_token) -> None:
+        async def _abort() -> None:
+            if self._session is None:
+                return
+            session = self._session
+            try:
+                await self._abort_async(
+                    continuation_token,
+                    session_owner=session,
+                )
+            finally:
+                if self._session is session:
+                    self._session = None
+
+        _PROVIDER_BROWSER_LOOP.submit(_abort()).result()
 
     def close(self) -> None:
         if (
@@ -529,6 +592,7 @@ def submit_search(
             f"{engine_name}: unknown browser interaction"
         )
     try:
+        attempt_started = time.monotonic()
         state = _PROVIDERS[engine_name]
         with state.lock:
             engine_deadline = state.engine_deadline
@@ -549,7 +613,8 @@ def submit_search(
                 request_timeout_seconds,
                 available,
             )
-        result = _provider_browser(engine_name).submit_sync(
+        browser = _provider_browser(engine_name)
+        result = browser.submit_sync(
             query,
             spec=spec,
             fixed_fields=fixed_fields,
@@ -567,6 +632,28 @@ def submit_search(
             request_timeout_seconds=request_timeout_seconds,
             pre_navigation_guard=pre_navigation_guard,
         )
+        if isinstance(result, PendingAnubisPow):
+            solver_deadline = attempt_started + request_timeout_seconds
+            try:
+                solution = solve_anubis_fast(
+                    result.challenge,
+                    deadline=solver_deadline,
+                )
+            except AnubisSolverError as exc:
+                try:
+                    browser.abort_sync(result.continuation_token)
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "%s: Anubis solver abort failed (%s)",
+                        engine_name,
+                        cleanup_exc.__class__.__name__,
+                    )
+                raise ObscuraClientError(
+                    FetchFailure.POST_NAVIGATION_TIMEOUT,
+                    "anubis-local-solver",
+                    "Anubis proof did not complete inside its local bounds",
+                ) from exc
+            result = browser.resume_sync(result.continuation_token, solution)
     except ObscuraClientError as exc:
         raise _mapped_failure(engine_name, exc) from exc
 

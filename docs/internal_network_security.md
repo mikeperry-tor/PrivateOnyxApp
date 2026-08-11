@@ -76,6 +76,15 @@ protocol ambiguity discards the affected generation and remains an
 availability/resource event, not a safe retry signal. Clients do not
 reconnect or replay an in-flight attempt.
 
+Startpage's supported Anubis continuation does not widen CDP or network
+authority. Its opaque token and validated challenge remain inside the SearXNG
+process and are bound to the exact retained Startpage owner, target, session,
+frame, loader, form data, and deadline. Hashing is local and networkless. The
+pass request, redirect, and any restored form POST use only that target's
+existing cookie jar, fingerprint, stealth client, connection pool, and selected
+browser bridge. Token mismatch, interceptor mismatch, deadline expiry, or
+continuation ambiguity closes the provider generation without another route.
+
 ## Destination validation
 
 Client-side URL validation accepts explicit `https`, general `http` only when
@@ -283,6 +292,11 @@ Wrapper logs redact query strings, bodies, cookies, credentials, and response
 content. Upstream Obscura does not provide the same guarantee and may expose
 full URLs in some logging modes; its logs are private data. Multi-worker child
 logging can also be incomplete.
+
+The Startpage proof path additionally excludes challenge JSON, random data,
+challenge IDs, nonces, hashes, pass URLs, continuation tokens, and cookies from
+wrapper diagnostics. Only the sanitized request ID, entry mode, status class,
+stage/category, navigation timings, and solved/not-solved state are emitted.
 
 Provider browser state is process-local but not principal-local. All searches
 handled by one SearXNG process can contribute to the same provider's retained

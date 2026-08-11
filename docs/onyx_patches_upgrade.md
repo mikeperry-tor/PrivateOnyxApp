@@ -495,6 +495,38 @@ For every custom engine verify:
   encoded separators a second time;
 - DuckDuckGo form-based and rendered `anomaly-modal__modal` verification
   fixtures mapping to the ordinary CAPTCHA suspension path;
+- Startpage Anubis fixtures proving the same-origin exact main module, bounded
+  printable version metadata without a release allowlist, bounded printable
+  challenge IDs, bounded printable ASCII random data,
+  matching `fast` method/rules, difficulty 0 through 64, acceptance of
+  unrelated bounded JSON extensions, and fail-closed rejection of unsupported
+  algorithms or malformed/inconsistent puzzle fields;
+- the Startpage-only pre-document Worker wrapper intercepting only exact direct
+  Anubis SHA-256 worker paths or marker-bound target-local Blob workers,
+  delegating unrelated constructors with native arguments/prototype behavior,
+  admitting a coherent puzzle before any Worker starts, remaining armed
+  through pass navigation and any restored POST, and requiring acknowledged
+  installation, termination of any intercepted workers, and removal after an
+  ordinary terminal result;
+- known proof vectors, first-valid-nonce selection, constant memory, deadline
+  checks at least every 4,096 candidates, the 16,777,216-candidate ceiling,
+  and proof execution on the already allocated SearXNG engine caller rather
+  than the shared provider event-loop thread, a new thread, process, or
+  executor;
+- one opaque Startpage continuation bound to the exact provider owner, target,
+  session, frame, challenged loader/URL, query, fixed fields, and deadline;
+  single consumption by resume or abort; generation close on mismatch,
+  timeout, local solver failure, interceptor failure, or protocol ambiguity;
+- homepage- and result-boundary state-machine fixtures proving the exact
+  same-origin pass path and fields, retained cookie/route/fingerprint/client,
+  distinct terminal loader, at most one restored Startpage form POST, direct
+  redirected-result acceptance, renewed/rejected challenge suspension, and no
+  retry or constructed result URL. The pinned Obscura redirect-event omission
+  must remain explicit: validate the intermediate pass event when emitted and
+  otherwise require the exact client-built navigation plus terminal loader and
+  origin checks;
+- diagnostics proving queries, challenge JSON/IDs/random data, hashes, nonces,
+  pass URLs, tokens, and cookies are absent from wrapper logs;
 - one atomic pre-thread reservation consumed only by its exact engine attempt,
   one provider lease held through cleanup, exact monotonic 3.0-second start
   interval, no queued busy-provider thread, no all-unavailable fan-out, and

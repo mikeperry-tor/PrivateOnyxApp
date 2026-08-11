@@ -252,6 +252,25 @@ rows. The engine unwraps only recognized DuckDuckGo `/l/?uddg=...` redirects,
 decodes the destination once, and treats an unfinished deep-result preload as
 a verification failure.
 
+`startpage2` admits any bounded, parseable Anubis `fast` puzzle with difficulty
+0 through 64. The bounded version string is metadata rather than an allowlist,
+and unrelated JSON extensions do not block an otherwise coherent puzzle. The
+shared client installs a Startpage-only
+pre-document wrapper that suppresses exact direct or marker-bound Blob Anubis
+workers while delegating every unrelated Worker construction. It extracts a
+bounded challenge, returns an opaque one-shot continuation to `_obscura.py`,
+and keeps the retained target parked while the existing SearXNG engine caller
+performs constant-memory SHA-256 work. A challenge remains admissible when its
+module or worker asset has not successfully started a Worker. Resume keeps the
+armed wrapper through the exact same-origin pass navigation and any restored
+form POST, retains the authorization cookie, and removes the wrapper only
+after accepting the redirected or restored terminal result.
+The proof shares the existing browser deadline and provider lease; it creates
+no executor, thread, process, retry, constructed result URL, or route fallback.
+Unsupported algorithms, malformed puzzles, and provider rejection remain
+ordinary CAPTCHA suspensions;
+local proof/protocol failures are unresponsive and close the generation.
+
 The adapter uses one lazy event-loop thread for five independently retained
 provider connection/target generations. It retains each provider's native
 context, target, cookie jar, profile, target stealth client, connection pool,
