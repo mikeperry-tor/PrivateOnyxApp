@@ -1,12 +1,14 @@
 # Startpage Anubis Proof-of-Work Support
 
 > **Status: deferred.** This is an implementation plan, not current behavior.
-> Startpage Anubis pages are currently explicit CAPTCHA failures and enter the
-> ordinary provider-suspension path. The normative current behavior is in
-> [Request handling](../../request_handling.md). Do not describe any approach
-> below as implemented until its capability gates, tests, live validation, and
-> documentation phase all pass and this plan is moved to
-> `docs/plans/implemented/`.
+> Result-stage Startpage Anubis pages that reach the provider parser are
+> explicit CAPTCHA failures and enter the ordinary provider-suspension path.
+> Homepage Anubis pages are not solved and currently fail during form
+> validation because the shared classifier does not admit their structure. The
+> normative current behavior is in [Request handling](../../request_handling.md).
+> Do not describe any approach below as implemented until its capability gates,
+> tests, live validation, and documentation phase all pass and this plan is
+> moved to `docs/plans/implemented/`.
 >
 > **Decision rule:** implement exactly one execution approach. Prefer an
 > upstream Obscura release with bounded real workers (Approach A). If the
@@ -19,11 +21,13 @@
 ## Goal
 
 Allow the custom `startpage2` SearXNG engine to complete a supported Startpage
-Anubis proof-of-work challenge, retain the resulting authorization cookie in
-the existing Startpage-only Obscura session, restore the original form-POST
-search at most once when Anubis's GET redirect loses its body, and return a
-validated result DOM without weakening any routing, isolation, scheduling,
-deadline, logging, or failure contract.
+Anubis proof-of-work challenge presented either before the homepage form or
+after its search submission, retain the resulting authorization cookie in the
+existing Startpage-only Obscura session, perform the original form POST once
+after a homepage challenge or restore it at most once when a result challenge's
+GET redirect loses its body, and return a validated result DOM without
+weakening any routing, isolation, scheduling, deadline, logging, or failure
+contract.
 
 Completion must preserve these properties:
 
@@ -72,22 +76,23 @@ It does not:
   from one implementation approach to another; or
 - modify `reference_repos/`.
 
-## Audited Baseline and Version Scope
+## Version and Protocol Scope
 
-This plan was written against:
+This plan targets:
 
 - the derived Obscura v0.2.0 image and matching
   `reference_repos/obscura` checkout;
 - SearXNG `2026.7.15-7b2199ecd` and the five custom offline engines;
-- Startpage's live Anubis v1.25.0 challenge using algorithm `fast`, difficulty
-  5, a main ES module, and four direct same-origin classic workers; and
-- Anubis v1.26.2, which prefetches one worker body and creates blob-backed
-  workers, as the forward-compatibility fixture.
+- Startpage's Anubis v1.25.0 homepage challenge using algorithm `fast`,
+  difficulty 4, a main ES module, and four direct same-origin classic workers;
+  and
+- an Anubis v1.26.2 fixture that prefetches one worker body and creates
+  blob-backed workers.
 
 The relevant upstream behavior is:
 
-- v1.25.0 creates `max(hardwareConcurrency / 2, 1)` workers from direct
-  `sha256-webcrypto.mjs` or `sha256-purejs.mjs` URLs;
+- the direct-worker profile creates `max(hardwareConcurrency / 2, 1)` workers
+  from direct `sha256-webcrypto.mjs` or `sha256-purejs.mjs` URLs;
 - the worker searches nonce lanes and reports either progress or a
   `{hash, data, difficulty, nonce}` result;
 - the page navigates to
@@ -96,8 +101,53 @@ The relevant upstream behavior is:
 - the server validates `SHA256(randomData + decimalNonce)` and the configured
   count of leading hexadecimal zeroes, sets an authorization cookie, and
   redirects; and
-- v1.26.2 fetches the worker source once, creates a JavaScript Blob URL, and
-  falls back to direct worker URLs only when the prefetch/blob path fails.
+- the blob-worker profile fetches the worker source once, creates a JavaScript
+  Blob URL, and falls back to direct worker URLs only when the prefetch/blob
+  path fails.
+
+The Startpage challenge is the homepage document itself. It has the exact
+Anubis main-module path, version and challenge elements, and visible
+`Verifying your request...` marker, but no form or query control. The shared
+generic classifier does not recognize that exact structure or phrase, so the
+client proceeds to form validation. Obscura returns an empty by-value object
+for the page-side `control-count` exception during validation, and the Python
+validator consequently reports
+`final-hop-policy-denied` at `form-validate`. This is a missed explicit
+challenge followed by an incorrectly typed missing-form failure, not evidence
+that the form action or method changed and not evidence that proof was
+optional.
+
+Implementation must therefore recognize an admitted Anubis page before form
+lookup at both the homepage and result boundaries. Exact Anubis structure plus
+the normalized visible verification phrase is a CAPTCHA signal; the phrase by
+itself and a script reference by itself remain insufficient. A missing,
+duplicate, or invalid query control on a non-challenge homepage remains a
+sanitized protocol failure, never a destination-policy failure merely because
+the page-side inspection result lacks policy fields.
+
+## Maintenance Model
+
+The `fast` proof primitive is
+`SHA256(randomData + decimalNonce)` with the configured count of leading
+hexadecimal zeroes. Keep it independent of worker scheduling, WebCrypto versus
+pure-JavaScript selection, challenge-page transport, worker-source layout,
+direct versus Blob worker creation, retry and backoff, cleanup, and browser
+compatibility.
+
+Treat maintenance as two separate obligations:
+
+1. the small proof primitive, protected by version-independent known vectors
+   and expected to change only when an explicitly new algorithm is admitted;
+2. exact fixture-backed protocol profiles covering challenge extraction,
+   worker suppression or execution, pass fields/path, cookie and redirect
+   behavior, and post-pass form/result continuation.
+
+The proof primitive does not justify accepting unknown Anubis releases. Keep
+the exact version allowlist and fail closed on a new version until its protocol
+profile is audited. A version update requires a fixture and protocol-profile
+review; it changes the proof loop only when an explicitly different algorithm
+is admitted. Maintenance follows versions served by Startpage rather than
+unrelated upstream tags.
 
 Do not rely on the displayed version string alone. At implementation time,
 capture sanitized fixture copies or independently generated equivalent pages
@@ -113,11 +163,10 @@ and a `Worker` compatibility object. Its Worker implementation fetches or reads
 the source and evaluates it cooperatively in the page's V8 isolate. It does not
 create an independently scheduled worker isolate.
 
-The live v1.25.0 challenge launches four SHA-256 loops. A diagnostic interaction
-that added the challenge marker as a pending readiness selector remained in the
-same absolute transaction and expired at `result-readiness` after 50 seconds:
-the page isolate could not service the CDP inspection while its worker shims
-were consuming the same event loop. Therefore:
+The Startpage challenge launches four SHA-256 loops. Adding its marker as a
+pending readiness selector leaves those loops on the page isolate, prevents the
+isolate from servicing CDP inspection, and consumes the transaction deadline at
+`result-readiness`. Therefore:
 
 - do not implement support by adding only Startpage pending/terminal selectors;
 - do not extend `OBSCURA_MODULE_BUDGET_MS` or the script deadline to mask the
@@ -244,6 +293,12 @@ validated pending challenge to the synchronous `startpage2` engine thread; that
 thread computes the admitted proof; the provider browser owner then resumes
 the exact retained CDP target and performs the common continuation transaction.
 
+Keep the proof loop independent of the exact-version protocol profiles. The
+loop accepts only the already validated canonical `random_data`, difficulty,
+and deadline inputs below; it does not branch on an Anubis version. Version
+profiles own extraction, suppression markers, and continuation fields, and
+their fixture audits prove that they produce the same canonical solver input.
+
 The solver contract is:
 
 ```python
@@ -301,10 +356,15 @@ object to the engine module.
 Approach C must not coexist with real-worker challenge execution. The client
 must prevent the page's Anubis worker attempt from starting so it cannot starve
 the page isolate before challenge extraction, race the stack solver, consume
-duplicate CPU, or double-spend the challenge. Immediately before the original
-form POST, install one `Page.addScriptToEvaluateOnNewDocument` preload owned by
-the Startpage transaction. The preload wraps, but does not delete, the native
-`Worker` constructor. It returns an inert message-compatible worker only when:
+duplicate CPU, or double-spend the challenge. Before the transaction's initial
+homepage navigation, install one `Page.addScriptToEvaluateOnNewDocument`
+preload owned by the Startpage transaction. Keep it installed through the
+homepage classification and, when the homepage is ordinary, the original form
+POST classification so it can suppress a challenge at either boundary. Remove
+it before the admitted challenge's pass navigation, or immediately after the
+terminal result classification when no challenge occurred. The preload wraps,
+but does not delete, the native `Worker` constructor. It returns an inert
+message-compatible worker only when:
 
 - the resolved same-origin direct worker path is exactly an admitted Anubis
   `/.within.website/x/cmd/anubis/static/js/worker/sha256-*.mjs` path; or
@@ -316,10 +376,9 @@ unchanged arguments, prototype behavior, events, and exceptions. The inert
 worker accepts the one Anubis start message, performs no hashing, emits no
 progress/result, and implements idempotent `terminate()`; it must not expose
 the message to Python or logs because the validated challenge JSON remains the
-sole solver input. Remove the preload registration immediately after `R0` is
-classified, before `C0`, and terminate all inert instances on success, abort,
-timeout, navigation, target close, or connection close. Failure to install,
-remove, or acknowledge this interceptor closes the generation.
+sole solver input. Terminate all inert instances on success, abort, timeout,
+pass navigation, target close, or connection close. Failure to install, remove,
+or acknowledge this interceptor closes the generation.
 
 This interceptor is itself an Anubis protocol obligation and must be protected
 by exact source-shape and black-box tests. If a version cannot be suppressed
@@ -454,7 +513,21 @@ H0  homepage GET and completed validated document
 R0  original form POST and completed validated result document
 ```
 
-When `R0` is an admitted Anubis page, continue within the same request deadline:
+When `H0` is an admitted Anubis page, continue within the same request deadline
+before looking for a form:
+
+```text
+H0 challenge
+  -> proof work
+  -> C0 JavaScript or client navigation to exact pass path
+     (server redirect chain remains in C0's loader)
+  -> one validated Startpage homepage form
+  -> R0 one original authorized form POST
+  -> terminal result/no-results/challenge DOM
+```
+
+When an ordinary `H0` supplies the validated form but `R0` is an admitted
+Anubis page, continue within the same request deadline:
 
 ```text
 H0 -> R0 challenge
@@ -467,11 +540,13 @@ H0 -> R0 challenge
              -> terminal result/no-results/challenge DOM
 ```
 
-The maximum is four distinct main-document loaders: `H0`, `R0`, `C0`, and
-`R1`. Redirect responses within a loader do not increase this count. Any fifth
-loader, popup, child-frame result, same-document substitute, cross-origin
-navigation, or second restoration request is a protocol failure and taints the
-provider generation.
+Only one challenge may be solved in one engine attempt. A homepage challenge
+uses at most `H0`, `C0`, and `R0`; a result challenge uses at most `H0`, `R0`,
+`C0`, and `R1`. Redirect responses within a loader do not increase this count.
+Any additional challenge, loader beyond the boundary-specific maximum, popup,
+child-frame result, same-document substitute, cross-origin navigation, or
+second search submission is a terminal explicit challenge or protocol failure
+as specified below and never starts a second proof.
 
 For every loader the shared client must correlate main-frame
 `Network.responseReceived`, frame/loader identity, completion, terminal URL,
@@ -480,7 +555,16 @@ allowed host at each terminal response. `C0` must begin at the exact pass path;
 its redirect chain must remain on an allowed Startpage host. Query strings are
 never used to admit a route.
 
-After `C0`:
+After `C0` for a homepage challenge:
+
+- require exactly one form satisfying the original Startpage homepage form
+  contract and no result or challenge terminal;
+- submit the retained original query and fixed fields once through the same
+  native setter/event/requestSubmit path to create `R0`; and
+- accept terminal results/no-results, but return a renewed challenge without a
+  second proof or submission.
+
+After `C0` for a result challenge:
 
 - if the bounded DOM contains organic results or the explicit no-results
   marker, return it without resubmission;
@@ -496,10 +580,12 @@ After `C0`:
 
 The original query and fixed fields remain request-local client state. Do not
 derive them from `redir`, history, challenge JSON, a constructed result URL, or
-the post-challenge page. The restoration POST is challenge continuation, not a
-failure retry. Update canonical documentation to say that a successful
-Startpage challenge can add one pass navigation and at most one restoration
-POST while every other provider keeps its current stage count.
+the post-challenge page. The first POST after a homepage challenge is the
+original search submission; the restoration POST after a result challenge is
+challenge continuation, not a failure retry. Update canonical documentation to
+say that a successful Startpage challenge can add one pass navigation and,
+depending on its boundary, one original or restoration POST while every other
+provider keeps its current stage count.
 
 ## Exact Ownership and Enforcement Model
 
@@ -602,9 +688,9 @@ provider suspension.
 - Worker network fetches must use the owning target's client and destination
   policy. A worker runtime receives no file access, environment variables,
   host sockets, private mounts, direct DNS, or alternate HTTP client.
-- The pass and restoration stages must reuse the same target so the server sees
-  the same User-Agent, public route identity, fingerprint, cookies, and HTTP
-  client state that received the challenge.
+- The pass and following original/restoration submission stages must reuse the
+  same target so the server sees the same User-Agent, public route identity,
+  fingerprint, cookies, and HTTP client state that received the challenge.
 - Do not export/import cookies or copy the proof into a fresh browser context.
 - A route failure, Tor circuit failure, VPN failure, bridge failure, worker
   source fetch failure, or Obscura failure remains closed. There is no switch
@@ -633,13 +719,16 @@ provider suspension.
    existing DuckDuckGo selectors without behavior change.
 2. Add Startpage's immutable verification specification and strict constructor
    validation.
-3. Generalize result event accounting to admit the exact `R0 -> C0 -> optional
-   R1` state machine while preserving two stages for ordinary providers and
-   four for Bing's existing pagination transaction.
+3. Generalize event accounting to admit the exact homepage-challenge
+   `H0 -> C0 -> R0` or result-challenge `H0 -> R0 -> C0 -> optional R1`
+   state machine while preserving two stages for ordinary providers and four
+   for Bing's existing pagination transaction.
 4. Make returned URL, status, headers, loader, and DOM come from the actual
    terminal result loader, never the initial challenge loader.
-5. Add one form-restoration operation that reuses the original query/fixed
-   fields and can be invoked only after a successful admitted `C0` transition.
+5. Add one form-submission operation that reuses the original query/fixed
+   fields and can be invoked only after a successful admitted `C0` transition,
+   as the original POST after a homepage challenge or restoration after a
+   result challenge.
 6. Keep the request deadline object immutable and shared through every stage.
 7. Taint and close on event ambiguity or failed continuation cleanup.
 
@@ -666,8 +755,9 @@ provider suspension.
 ### Phase 2C: stack-specific solver
 
 1. Add strict challenge extraction and the generation-bound pending/resume API.
-2. Install the scoped pre-document Anubis Worker interceptor before `R0`, then
-   remove it and acknowledge inert-instance cleanup after classification.
+2. Install the scoped pre-document Anubis Worker interceptor before `H0`, keep
+   it through at most `R0`, then remove it and acknowledge inert-instance
+   cleanup after challenge or terminal classification.
 3. Implement the single-thread solver and exact limits in the shared package.
 4. Resume only through the provider browser owner's event loop and consume the
    token once.
@@ -704,12 +794,20 @@ values, not captured live secrets.
 
 - strict `AnubisVerificationSpec` construction, selectors, exact host/path,
   JSON type/size checks, and rejection of malformed or ambiguous pages;
+- the exact admitted structure and visible phrase classify an Anubis homepage
+  before form lookup, while either signal alone does not;
+- a missing or duplicate control on a non-challenge homepage is a protocol
+  failure even when Obscura serializes the page-side exception as an empty
+  object;
 - DuckDuckGo same-document readiness remains behaviorally unchanged;
 - ordinary Startpage success/no-results retains `H0 -> R0` only;
+- a homepage challenge follows `H0 -> C0 -> R0`, never attempts form lookup
+  before proof, and never performs a restoration POST;
 - supported challenge result directly after `C0` and result after exactly one
   `R1` restoration;
-- original POST query and fixed fields are restored exactly once without using
-  the redirect URL as their source;
+- original POST query and fixed fields are submitted after a homepage challenge
+  or restored after a result challenge exactly once without using the redirect
+  URL as their source;
 - updated terminal URL/status/headers/loader/DOM come from the real terminal
   loader;
 - cross-origin redirect, non-default port, wrong pass path, popup, child frame,
@@ -800,8 +898,9 @@ Use benign queries and sanitized logs. Run at least:
    network, mount, capability, replica, worker-process, or user-facing setting;
 5. `make up-lite` with explicit no-VPN, then health and targeted SearXNG,
    Obscura, gateway, bridge, and final-hop logs;
-6. a Startpage challenge that completes proof, obtains results, and reuses the
-   same provider session on a subsequent query;
+6. a live Startpage challenge at the served homepage or result boundary that
+   completes proof, obtains results, and reuses the same provider session on a
+   subsequent query;
 7. a forced unsupported/rejected challenge that suspends Startpage and rotates
    only through existing SearXNG behavior;
 8. a local proof/worker failure that is unresponsive but does not suspend the
@@ -823,12 +922,12 @@ Podman stack only if implementation changes Compose, mounts, health, lifecycle,
 or engine-specific behavior; otherwise deterministic Podman rendering is
 sufficient under the existing compatibility policy.
 
-Record the observed Anubis version, algorithm, difficulty, selected approach,
-route class, stage timings, terminal classification, and whether restoration
-was required. Do not record the query, challenge ID/data, proof, nonce, cookie,
-pass URL, exit IP, or response body. If Startpage does not offer a challenge on
-an available route, record the omitted live row; do not weaken deterministic
-fixtures or manufacture a production challenge endpoint.
+Record the observed Anubis version, algorithm, difficulty, challenge boundary,
+selected approach, route class, stage timings, terminal classification, and
+whether restoration was required. Do not record the query, challenge ID/data,
+proof, nonce, cookie, pass URL, exit IP, or response body. If Startpage does not
+offer a challenge on an available route, record the omitted live row; do not
+weaken deterministic fixtures or manufacture a production challenge endpoint.
 
 ## Required Documentation Updates at Completion
 
