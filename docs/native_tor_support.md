@@ -42,6 +42,12 @@ The Makefile selects narrowly scoped layers:
 - `compose_overlays/docker-compose.tor-egress-docker-macos.yml` disables image
   copy-up for the engine-local SOCKS volume so that its fresh mount root uses
   the same Docker Desktop UID/GID.
+- `compose_overlays/docker-compose.tor-docker-linux.yml` maps Tor to the
+  invoking host UID/GID so the shared mode-0700 state bind remains directly
+  usable across native Docker and rootless Podman.
+- `compose_overlays/docker-compose.tor-egress-docker-linux.yml` replaces the
+  Docker named SOCKS volume with a host-owned, Docker-specific transient bind;
+  this keeps Tor non-root without changing shared state ownership.
 - `compose_overlays/docker-compose.tor-podman.yml` and
   `compose_overlays/docker-compose.tor-onion-podman.yml` contain only Podman
   ownership, sysctl, and tmpfs translations.
@@ -61,7 +67,7 @@ restricted application network
 ```
 
 The socket is a Unix-domain SOCKS listener; no TCP SOCKS port or bridge service
-exists. Tor mounts the named runtime volume read-write. Only the two policy
+exists. Tor mounts the selected runtime path read-write. Only the two policy
 containers mount it read-only. Applications, browsers, executors, ingress
 gateways, Myst, Teep, and Tailscale receive neither the volume nor a Tor
 network. Ordinary target names remain unresolved until the shared SOCKS state
@@ -118,22 +124,30 @@ private identity. Deleting it changes the onion address. Copying it gives the
 recipient the ability to operate the same onion identity. Do not print, stage,
 or casually inspect its keys.
 
-The transient SOCKS socket exists only in the engine-local `tor-runtime` named
-volume. The control socket and authentication cookie exist only on Tor's
-ephemeral `/run/tor-control` tmpfs and are not shared with another container.
+The transient SOCKS socket exists in the engine-local `tor-runtime` named
+volume for Podman and Docker Desktop. Native Docker uses
+`docker-data/tor/docker-runtime`, which startup initializes as a host-owned
+mode-0755 directory and clears of a stale socket before launch. It contains no
+persistent Tor identity. The control socket and authentication cookie exist
+only on Tor's ephemeral `/run/tor-control` tmpfs and are not shared with
+another container.
 
-The minimal derived image bypasses the upstream entrypoint and normally runs
-the pinned Tor binary directly as UID/GID `101:102`, with a read-only root
-filesystem, all capabilities dropped, and `no-new-privileges`. Docker Desktop
-on macOS is the narrow exception: its bind transport reports a host bind root
-as UID/GID `0:0` regardless of host ownership or a container-side `chown`, and
+The common Compose layer explicitly replaces the upstream entrypoint with the
+pinned `/usr/bin/tor` binary; an empty entrypoint override is insufficient on
+native Podman. It normally runs directly as UID/GID `101:102`, with a read-only
+root filesystem, all capabilities dropped, and `no-new-privileges`. Native Docker
+on Linux runs it as the invoking host UID/GID because Docker lacks Podman's
+keep-id mapping; the state bind and Docker-specific socket bind therefore need
+no privileged ownership rewrite and remain compatible with rootless Podman.
+Docker Desktop on macOS is the narrow exception: its bind transport reports a
+host bind root as UID/GID `0:0` regardless of host ownership or a container-side
+`chown`, and
 Tor strictly rejects a data directory not owned by its effective UID. The
 Docker-macOS overlay therefore runs Tor as capability-free UID/GID `0:0` and
 uses a root-owned mode-0700 control tmpfs. Its writable paths remain limited to
 the state bind and optional SOCKS runtime volume. The egress translation uses
 `volume.nocopy` so Docker does not populate that fresh volume from the image's
-`101:102` directory. Podman retains the non-root keep-id mapping, and native
-Docker does not select either translation.
+`101:102` directory. Podman retains the non-root keep-id mapping.
 
 `ClientOnly 1` is the single relay-mode control. The pinned Tor manpage states
 that it prevents relay and directory service even if `ORPort`, `ExtORPort`, or

@@ -1,0 +1,20 @@
+services:
+  tor:
+    volumes:
+      - type: bind
+        source: ./docker-data/tor/docker-runtime
+        target: /run/tor-egress
+
+  onyx-public-egress-proxy:
+    volumes:
+      - type: bind
+        source: ./docker-data/tor/docker-runtime
+        target: /run/tor-egress
+        read_only: true
+
+  onyx-host-egress-proxy:
+    volumes:
+      - type: bind
+        source: ./docker-data/tor/docker-runtime
+        target: /run/tor-egress
+        read_only: true

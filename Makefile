@@ -20,6 +20,8 @@ TOR_EGRESS_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-egress.yml
 TOR_ONION_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-onion.yml
 TOR_PODMAN_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-podman.yml
 TOR_ONION_PODMAN_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-onion-podman.yml
+TOR_DOCKER_LINUX_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-docker-linux.yml
+TOR_EGRESS_DOCKER_LINUX_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-egress-docker-linux.yml
 TOR_DOCKER_MACOS_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-docker-macos.yml
 TOR_EGRESS_DOCKER_MACOS_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-egress-docker-macos.yml
 
@@ -255,12 +257,16 @@ TOR_EGRESS_SUFFIX :=
 TOR_ONION_SUFFIX :=
 TOR_PODMAN_SUFFIX :=
 TOR_ONION_PODMAN_SUFFIX :=
+TOR_DOCKER_LINUX_SUFFIX :=
+TOR_EGRESS_DOCKER_LINUX_SUFFIX :=
 TOR_DOCKER_MACOS_SUFFIX :=
 TOR_EGRESS_DOCKER_MACOS_SUFFIX :=
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
 TOR_COMMON_SUFFIX :=:$(TOR_COMMON_FILE)
 ifneq ($(PODMAN_SELECTED),false)
 TOR_PODMAN_SUFFIX :=:$(TOR_PODMAN_FILE)
+else ifeq ($(HOST_OS),Linux)
+TOR_DOCKER_LINUX_SUFFIX :=:$(TOR_DOCKER_LINUX_FILE)
 else ifeq ($(HOST_OS),Darwin)
 TOR_DOCKER_MACOS_SUFFIX :=:$(TOR_DOCKER_MACOS_FILE)
 endif
@@ -268,7 +274,9 @@ endif
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED)),)
 TOR_EGRESS_SUFFIX :=:$(TOR_EGRESS_FILE)
 ifeq ($(PODMAN_SELECTED),false)
-ifeq ($(HOST_OS),Darwin)
+ifeq ($(HOST_OS),Linux)
+TOR_EGRESS_DOCKER_LINUX_SUFFIX :=:$(TOR_EGRESS_DOCKER_LINUX_FILE)
+else ifeq ($(HOST_OS),Darwin)
 TOR_EGRESS_DOCKER_MACOS_SUFFIX :=:$(TOR_EGRESS_DOCKER_MACOS_FILE)
 endif
 endif
@@ -279,7 +287,7 @@ ifneq ($(PODMAN_SELECTED),false)
 TOR_ONION_PODMAN_SUFFIX :=:$(TOR_ONION_PODMAN_FILE)
 endif
 endif
-TOR_SUFFIX := $(TOR_COMMON_SUFFIX)$(TOR_EGRESS_SUFFIX)$(TOR_ONION_SUFFIX)$(TOR_PODMAN_SUFFIX)$(TOR_ONION_PODMAN_SUFFIX)$(TOR_DOCKER_MACOS_SUFFIX)$(TOR_EGRESS_DOCKER_MACOS_SUFFIX)
+TOR_SUFFIX := $(TOR_COMMON_SUFFIX)$(TOR_EGRESS_SUFFIX)$(TOR_ONION_SUFFIX)$(TOR_PODMAN_SUFFIX)$(TOR_ONION_PODMAN_SUFFIX)$(TOR_DOCKER_LINUX_SUFFIX)$(TOR_EGRESS_DOCKER_LINUX_SUFFIX)$(TOR_DOCKER_MACOS_SUFFIX)$(TOR_EGRESS_DOCKER_MACOS_SUFFIX)
 TOR_DOWN_PODMAN_SUFFIX :=
 ifneq ($(PODMAN_SELECTED),false)
 TOR_DOWN_PODMAN_SUFFIX :=:$(TOR_PODMAN_FILE):$(TOR_ONION_PODMAN_FILE)
@@ -764,6 +772,11 @@ tor-config-ready:
 	@if [ "$(TOR_EGRESS_ENABLED)" != "true" ] && [ "$(TOR_ONION_SERVICE_ENABLED)" != "true" ]; then exit 0; fi; \
 	mkdir -p docker-data/tor/config docker-data/tor/state; \
 	chmod 0700 docker-data/tor/state; \
+	if [ "$(PODMAN_SELECTED)" = "false" ] && [ "$(HOST_OS)" = "Linux" ] && [ "$(TOR_EGRESS_ENABLED)" = "true" ]; then \
+		mkdir -p docker-data/tor/docker-runtime; \
+		chmod 0755 docker-data/tor/docker-runtime; \
+		rm -f docker-data/tor/docker-runtime/socks; \
+	fi; \
 	python3 tor/render_config.py render \
 		--settings-file "$(ENV_FILE)" \
 		--output docker-data/tor/config/torrc

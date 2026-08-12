@@ -277,6 +277,15 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("info --format '{{.Host.RemoteSocket.Path}}'", makefile)
         self.assertIn("export CONTAINER_BIN", makefile)
 
+    def test_native_docker_tor_runtime_is_initialized_without_privileged_chown(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        tor_ready = makefile.split("\ntor-config-ready:", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("docker-data/tor/docker-runtime", tor_ready)
+        self.assertIn('chmod 0700 docker-data/tor/state', tor_ready)
+        self.assertIn('chmod 0755 docker-data/tor/docker-runtime', tor_ready)
+        self.assertIn('rm -f docker-data/tor/docker-runtime/socks', tor_ready)
+        self.assertNotIn("chown", tor_ready)
+
     def test_stack_start_preserves_integrated_myst_container(self) -> None:
         makefile = (ROOT / "Makefile").read_text()
         guard = (ROOT / "myst/signup_guard.py").read_text()

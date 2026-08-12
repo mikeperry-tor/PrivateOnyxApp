@@ -74,15 +74,25 @@ def validate_runtime_contract(
         root = Path(directory)
         state = root / "state"
         state.mkdir(mode=0o700)
+        runtime = root / "runtime"
+        runtime.mkdir(mode=0o755)
         torrc = root / "torrc"
         torrc.write_text(
             render_text(egress=True, onion=False, country="", fingerprints=()),
             encoding="ascii",
         )
         docker_macos = sys.platform == "darwin" and Path(engine).name == "docker"
-        expected_user = "0:0" if docker_macos else "101:102"
-        expected_owner = "0:0" if docker_macos else "101:102"
-        run(engine, "volume", "create", runtime_volume)
+        docker_linux = sys.platform.startswith("linux") and Path(engine).name == "docker"
+        host_user = f"{os.getuid()}:{os.getgid()}"
+        if docker_macos:
+            expected_user = "0:0"
+        elif docker_linux:
+            expected_user = host_user
+        else:
+            expected_user = "101:102"
+        expected_owner = expected_user
+        if not docker_linux:
+            run(engine, "volume", "create", runtime_volume)
         try:
             command = [
                 engine,
@@ -108,7 +118,9 @@ def validate_runtime_contract(
                 "--mount",
                 f"type=bind,src={health_script},dst=/usr/local/bin/tor-healthcheck.py,readonly",
                 "--mount",
-                (
+                f"type=bind,src={runtime},dst=/run/tor-egress"
+                if docker_linux
+                else (
                     f"type=volume,src={runtime_volume},dst=/run/tor-egress,volume-nocopy"
                     if docker_macos
                     else f"type=volume,src={runtime_volume},dst=/run/tor-egress"
@@ -132,7 +144,7 @@ def validate_runtime_contract(
                         (
                             "/run/tor-control:uid=0,gid=0,mode=0700"
                             if docker_macos
-                            else "/run/tor-control:uid=101,gid=102,mode=0700"
+                            else f"/run/tor-control:uid={os.getuid()},gid={os.getgid()},mode=0700"
                         ),
                     ]
                 )
@@ -149,7 +161,9 @@ def validate_runtime_contract(
             }
             assert destinations["/var/lib/tor"]["Type"] == "bind"
             assert destinations["/var/lib/tor"]["RW"] is True
-            assert destinations["/run/tor-egress"]["Type"] == "volume"
+            assert destinations["/run/tor-egress"]["Type"] == (
+                "bind" if docker_linux else "volume"
+            )
             assert destinations["/run/tor-egress"]["RW"] is True
 
             modes = run(
@@ -225,7 +239,11 @@ print("TOR_COOKIE_CONTROL_AUTHENTICATED")
                 "--entrypoint",
                 "python3",
                 "--mount",
-                f"type=volume,src={runtime_volume},dst=/run/tor-egress,readonly",
+                (
+                    f"type=bind,src={runtime},dst=/run/tor-egress,readonly"
+                    if docker_linux
+                    else f"type=volume,src={runtime_volume},dst=/run/tor-egress,readonly"
+                ),
                 image,
                 "-c",
                 """
@@ -241,7 +259,8 @@ print("TOR_READ_ONLY_POLICY_SOCKET_OK")
             assert "TOR_READ_ONLY_POLICY_SOCKET_OK" in policy
         finally:
             cleanup(engine, "rm", "--force", container)
-            cleanup(engine, "volume", "rm", "--force", runtime_volume)
+            if not docker_linux:
+                cleanup(engine, "volume", "rm", "--force", runtime_volume)
 
 
 def main() -> int:

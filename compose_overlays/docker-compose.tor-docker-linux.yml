@@ -1,0 +1,8 @@
+services:
+  tor:
+    # Native Docker has no keep-id mapping. Run Tor as the invoking host user
+    # so the shared mode-0700 state bind remains usable by rootless Podman
+    # after an engine switch without privileged ownership rewrites.
+    user: "${PRIVATE_ONYX_HOST_UID:?PRIVATE_ONYX_HOST_UID must be set}:${PRIVATE_ONYX_HOST_GID:?PRIVATE_ONYX_HOST_GID must be set}"
+    tmpfs: !override
+      - /run/tor-control:uid=${PRIVATE_ONYX_HOST_UID},gid=${PRIVATE_ONYX_HOST_GID},mode=0700

@@ -1,8 +1,8 @@
 services:
   tor:
     image: ${TOR_IMAGE:?TOR_IMAGE must be set}
-    entrypoint: []
-    command: ["tor", "-f", "/etc/tor/torrc"]
+    entrypoint: ["/usr/bin/tor"]
+    command: ["-f", "/etc/tor/torrc"]
     restart: unless-stopped
     user: "101:102"
     read_only: true

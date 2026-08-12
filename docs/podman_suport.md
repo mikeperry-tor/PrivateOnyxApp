@@ -7,13 +7,19 @@ so an engine switch preserves the onion identity. Only Tor gets
 `userns_mode: keep-id:uid=101,gid=102`; do not recursively rewrite its state or
 move it to an engine-specific directory.
 
+Native Docker runs Tor as the invoking host UID/GID, matching the owner of the
+shared mode-0700 state bind. Its transient SOCKS socket uses the separate
+host-owned `docker-data/tor/docker-runtime` bind. Podman continues to use its
+engine-local named volume, so switching engines requires neither root ownership
+nor a privileged state rewrite.
+
 Docker Desktop reports the shared state bind root as UID/GID `0:0`, so its
 macOS-only Tor overlay runs the otherwise capability-free Tor process as that
 UID/GID. This is a Docker bind translation, not state created incorrectly by
 Podman. Rootless Podman continues to map the invoking machine user to Tor's
 `101:102` and must not inherit the Docker process override.
 
-The SOCKS socket uses an engine-local named volume. Tor mounts it read-write
+The Podman SOCKS socket uses an engine-local named volume. Tor mounts it read-write
 and the two policy containers mount it read-only; those containers need no
 matching UID, supplemental group, shared user namespace, privilege, or engine
 socket. The Podman overlay translates the private control tmpfs to native
@@ -113,6 +119,13 @@ socket:
 ```bash
 systemctl --user enable --now podman.socket
 ```
+
+For containers started from a remote or otherwise transient login to remain
+running after the final session closes, an administrator must also enable
+lingering for that rootless user, for example
+`sudo loginctl enable-linger <user>`. Without lingering, logind can terminate
+the detached rootless container processes at logout; this is host lifecycle
+configuration rather than a container OOM or stack health failure.
 
 The startup capability target verifies that `DOCKER_SOCK_PATH` names an active
 Unix socket before claiming shared data or creating containers. It does not
