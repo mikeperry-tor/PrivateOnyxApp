@@ -312,11 +312,9 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             "docker-compose.podman.yml",
             "docker-compose.tailscale-vpn.yml",
             "docker-compose.teep-vpn.yml",
-            "docker-compose.tor-docker-linux.yml",
-            "docker-compose.tor-docker-macos.yml",
+            "docker-compose.tor-docker.yml",
             "docker-compose.tor-egress.yml",
-            "docker-compose.tor-egress-docker-linux.yml",
-            "docker-compose.tor-egress-docker-macos.yml",
+            "docker-compose.tor-egress-docker.yml",
             "docker-compose.tor-onion-podman.yml",
             "docker-compose.tor-onion.yml",
             "docker-compose.tor-podman.yml",
@@ -484,73 +482,87 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             ["/run/tor-control:U,mode=0700"],
         )
 
-        docker_macos = _compose_model(
-            "lite",
-            "docker-compose.tor.yml",
-            "docker-compose.tor-egress.yml",
-            "docker-compose.tor-docker-macos.yml",
-            "docker-compose.tor-egress-docker-macos.yml",
-        )
-        self.assertEqual(docker_macos["services"]["tor"]["user"], "0:0")
-        self.assertEqual(docker_macos["services"]["tor"]["cap_drop"], ["ALL"])
-        self.assertEqual(
-            docker_macos["services"]["tor"]["security_opt"],
-            ["no-new-privileges:true"],
-        )
-        self.assertEqual(
-            docker_macos["services"]["tor"]["tmpfs"],
-            ["/run/tor-control:uid=0,gid=0,mode=0700"],
-        )
-        runtime = next(
-            volume
-            for volume in docker_macos["services"]["tor"]["volumes"]
-            if volume["target"] == "/run/tor-egress"
-        )
-        self.assertTrue(runtime["volume"]["nocopy"])
-
-        docker_linux = _compose_model(
-            "lite",
-            "docker-compose.tor.yml",
-            "docker-compose.tor-egress.yml",
-            "docker-compose.tor-docker-linux.yml",
-            "docker-compose.tor-egress-docker-linux.yml",
-            env_overrides={
-                "PRIVATE_ONYX_HOST_UID": "1234",
-                "PRIVATE_ONYX_HOST_GID": "1235",
-            },
-        )
-        self.assertEqual(docker_linux["services"]["tor"]["user"], "1234:1235")
-        self.assertEqual(
-            docker_linux["services"]["tor"]["tmpfs"],
-            ["/run/tor-control:uid=1234,gid=1235,mode=0700"],
-        )
-        for service_name in (
-            "tor",
-            "onyx-public-egress-proxy",
-            "onyx-host-egress-proxy",
+        for uid, gid, runtime_source, runtime_type in (
+            ("0", "0", "tor-runtime", "volume"),
+            ("1234", "1235", "./docker-data/tor/docker-runtime", "bind"),
         ):
-            runtime = next(
-                volume
-                for volume in docker_linux["services"][service_name]["volumes"]
-                if volume["target"] == "/run/tor-egress"
-            )
-            self.assertEqual(runtime["type"], "bind")
-            self.assertTrue(runtime["source"].endswith("docker-data/tor/docker-runtime"))
-        self.assertFalse(
-            next(
-                volume
-                for volume in docker_linux["services"]["tor"]["volumes"]
-                if volume["target"] == "/run/tor-egress"
-            ).get("read_only", False)
-        )
-        for service_name in ("onyx-public-egress-proxy", "onyx-host-egress-proxy"):
-            self.assertTrue(
-                next(
-                    volume
-                    for volume in docker_linux["services"][service_name]["volumes"]
-                    if volume["target"] == "/run/tor-egress"
-                )["read_only"]
-            )
+            with self.subTest(
+                docker_tor_identity=f"{uid}:{gid}", runtime_type=runtime_type
+            ):
+                docker = _compose_model(
+                    "lite",
+                    "docker-compose.tor.yml",
+                    "docker-compose.tor-egress.yml",
+                    "docker-compose.tor-docker.yml",
+                    "docker-compose.tor-egress-docker.yml",
+                    env_overrides={
+                        "PRIVATE_ONYX_DOCKER_TOR_UID": uid,
+                        "PRIVATE_ONYX_DOCKER_TOR_GID": gid,
+                        "PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE": runtime_source,
+                    },
+                )
+                tor = docker["services"]["tor"]
+                runtime_init = docker["services"]["tor-runtime-init"]
+                self.assertEqual(tor["user"], f"{uid}:{gid}")
+                self.assertEqual(tor["entrypoint"], ["/bin/sh", "-ec"])
+                self.assertIn(
+                    "rm -f /run/tor-egress/socks", tor["command"][0]
+                )
+                self.assertIn(
+                    "exec /usr/bin/tor -f /etc/tor/torrc",
+                    tor["command"][0],
+                )
+                self.assertEqual(
+                    tor["tmpfs"],
+                    [f"/run/tor-control:uid={uid},gid={gid},mode=0700"],
+                )
+                self.assertEqual(tor["cap_drop"], ["ALL"])
+                self.assertEqual(
+                    tor["security_opt"], ["no-new-privileges:true"]
+                )
+                self.assertEqual(
+                    tor["depends_on"]["tor-runtime-init"]["condition"],
+                    "service_completed_successfully",
+                )
+                self.assertEqual(runtime_init["user"], "0:0")
+                self.assertEqual(runtime_init["network_mode"], "none")
+                self.assertEqual(runtime_init["cap_drop"], ["ALL"])
+                self.assertEqual(
+                    set(runtime_init["cap_add"]),
+                    {"CHOWN", "DAC_OVERRIDE", "FOWNER"},
+                )
+                self.assertEqual(
+                    runtime_init["security_opt"],
+                    ["no-new-privileges:true"],
+                )
+                for service_name in (
+                    "tor-runtime-init",
+                    "tor",
+                    "onyx-public-egress-proxy",
+                    "onyx-host-egress-proxy",
+                ):
+                    runtime = next(
+                        volume
+                        for volume in docker["services"][service_name]["volumes"]
+                        if volume["target"] == "/run/tor-egress"
+                    )
+                    self.assertEqual(runtime["type"], runtime_type)
+                    if runtime_type == "bind":
+                        self.assertTrue(
+                            runtime["source"].endswith(
+                                "docker-data/tor/docker-runtime"
+                            )
+                        )
+                    else:
+                        self.assertTrue(runtime["source"].endswith("tor-runtime"))
+                    self.assertEqual(
+                        runtime.get("read_only", False),
+                        service_name
+                        in (
+                            "onyx-public-egress-proxy",
+                            "onyx-host-egress-proxy",
+                        ),
+                    )
 
     def test_tor_makefile_layer_selection_is_role_and_engine_specific(self) -> None:
         for egress, onion in ((False, False), (True, False), (False, True), (True, True)):
@@ -559,7 +571,6 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                     files = _make_compose_files(
                         vpn_enabled=False,
                         container_bin=engine,
-                        HOST_OS="Darwin",
                         TOR_EGRESS_ENABLED=str(egress).lower(),
                         TOR_ONION_SERVICE_ENABLED=str(onion).lower(),
                     )
@@ -580,26 +591,33 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                         onion and engine == "podman",
                     )
                     self.assertEqual(
-                        "docker-compose.tor-docker-macos.yml" in files,
+                        "docker-compose.tor-docker.yml" in files,
                         enabled and engine == "docker",
                     )
                     self.assertEqual(
-                        "docker-compose.tor-egress-docker-macos.yml" in files,
+                        "docker-compose.tor-egress-docker.yml" in files,
                         egress and engine == "docker",
                     )
 
-    def test_tor_docker_macos_layer_is_not_selected_on_linux(self) -> None:
-        files = _make_compose_files(
-            vpn_enabled=False,
-            container_bin="docker",
-            HOST_OS="Linux",
-            TOR_EGRESS_ENABLED="true",
-            TOR_ONION_SERVICE_ENABLED="false",
-        )
-        self.assertNotIn("docker-compose.tor-docker-macos.yml", files)
-        self.assertNotIn("docker-compose.tor-egress-docker-macos.yml", files)
-        self.assertIn("docker-compose.tor-docker-linux.yml", files)
-        self.assertIn("docker-compose.tor-egress-docker-linux.yml", files)
+    def test_tor_docker_layers_are_platform_neutral(self) -> None:
+        selections = {
+            tuple(
+                path
+                for path in _make_compose_files(
+                    vpn_enabled=False,
+                    container_bin="docker",
+                    HOST_OS=host_os,
+                    TOR_EGRESS_ENABLED="true",
+                    TOR_ONION_SERVICE_ENABLED="false",
+                ).split(":")
+                if "docker-compose.tor" in path
+            )
+            for host_os in ("Darwin", "Linux")
+        }
+        self.assertEqual(len(selections), 1)
+        files = ":".join(selections.pop())
+        self.assertIn("docker-compose.tor-docker.yml", files)
+        self.assertIn("docker-compose.tor-egress-docker.yml", files)
 
     def test_core_startup_does_not_wait_for_optional_browsing(self) -> None:
         lite = _compose_model("lite")

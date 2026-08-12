@@ -1,0 +1,13 @@
+services:
+  tor:
+    # Docker Desktop reports host bind roots as 0:0, while native Docker
+    # reports the invoking host UID/GID. Make exports the matching identity so
+    # Tor owns its strict mode-0700 state directory on either platform.
+    user: "${PRIVATE_ONYX_DOCKER_TOR_UID:?PRIVATE_ONYX_DOCKER_TOR_UID must be set}:${PRIVATE_ONYX_DOCKER_TOR_GID:?PRIVATE_ONYX_DOCKER_TOR_GID must be set}"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        rm -f /run/tor-egress/socks;
+        exec /usr/bin/tor -f /etc/tor/torrc
+    tmpfs: !override
+      - /run/tor-control:uid=${PRIVATE_ONYX_DOCKER_TOR_UID},gid=${PRIVATE_ONYX_DOCKER_TOR_GID},mode=0700

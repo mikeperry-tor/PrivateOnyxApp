@@ -1,0 +1,32 @@
+services:
+  tor-runtime-init:
+    image: ${TOR_IMAGE:?TOR_IMAGE must be set}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        rm -f /run/tor-egress/socks;
+        chown ${PRIVATE_ONYX_DOCKER_TOR_UID}:${PRIVATE_ONYX_DOCKER_TOR_GID} /run/tor-egress;
+        chmod 0755 /run/tor-egress
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    restart: "no"
+    volumes:
+      - "${PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE:?PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE must be set}:/run/tor-egress"
+
+  tor:
+    depends_on:
+      tor-runtime-init: {condition: service_completed_successfully}
+    volumes:
+      - "${PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE:?PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE must be set}:/run/tor-egress"
+
+  onyx-public-egress-proxy:
+    volumes:
+      - "${PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE:?PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE must be set}:/run/tor-egress:ro"
+
+  onyx-host-egress-proxy:
+    volumes:
+      - "${PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE:?PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE must be set}:/run/tor-egress:ro"

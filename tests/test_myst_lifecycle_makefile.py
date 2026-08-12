@@ -277,7 +277,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("info --format '{{.Host.RemoteSocket.Path}}'", makefile)
         self.assertIn("export CONTAINER_BIN", makefile)
 
-    def test_native_docker_tor_runtime_is_initialized_without_privileged_chown(self) -> None:
+    def test_native_linux_docker_tor_runtime_is_initialized_without_privileged_chown(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         tor_ready = makefile.split("\ntor-config-ready:", 1)[1].split("\n\n", 1)[0]
         self.assertIn("docker-data/tor/docker-runtime", tor_ready)
@@ -285,6 +285,44 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn('chmod 0755 docker-data/tor/docker-runtime', tor_ready)
         self.assertIn('rm -f docker-data/tor/docker-runtime/socks', tor_ready)
         self.assertNotIn("chown", tor_ready)
+
+    def test_docker_tor_settings_match_platform_storage_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            empty = Path(directory, "empty.env")
+            empty.write_text("", encoding="utf-8")
+            expected = {
+                "Darwin": ("0", "0", "tor-runtime"),
+                "Linux": (
+                    str(os.getuid()),
+                    str(os.getgid()),
+                    "./docker-data/tor/docker-runtime",
+                ),
+            }
+            for host_os, settings in expected.items():
+                with self.subTest(host_os=host_os):
+                    database = self._make_database(
+                        empty,
+                        assignments=("CONTAINER_BIN=docker", f"HOST_OS={host_os}"),
+                    )
+                    self.assertEqual(
+                        self._simple_make_value(
+                            database, "PRIVATE_ONYX_DOCKER_TOR_UID"
+                        ),
+                        settings[0],
+                    )
+                    self.assertEqual(
+                        self._simple_make_value(
+                            database, "PRIVATE_ONYX_DOCKER_TOR_GID"
+                        ),
+                        settings[1],
+                    )
+                    self.assertEqual(
+                        self._simple_make_value(
+                            database,
+                            "PRIVATE_ONYX_DOCKER_TOR_RUNTIME_SOURCE",
+                        ),
+                        settings[2],
+                    )
 
     def test_stack_start_preserves_integrated_myst_container(self) -> None:
         makefile = (ROOT / "Makefile").read_text()

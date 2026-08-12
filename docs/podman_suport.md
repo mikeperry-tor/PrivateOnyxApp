@@ -9,15 +9,22 @@ move it to an engine-specific directory.
 
 Native Docker runs Tor as the invoking host UID/GID, matching the owner of the
 shared mode-0700 state bind. Its transient SOCKS socket uses the separate
-host-owned `docker-data/tor/docker-runtime` bind. Podman continues to use its
-engine-local named volume, so switching engines requires neither root ownership
-nor a privileged state rewrite.
+host-owned `docker-data/tor/docker-runtime` bind on Linux. Podman and Docker
+Desktop use engine-local named volumes, so switching engines requires neither
+root ownership nor a privileged state rewrite.
 
 Docker Desktop reports the shared state bind root as UID/GID `0:0`, so its
-macOS-only Tor overlay runs the otherwise capability-free Tor process as that
-UID/GID. This is a Docker bind translation, not state created incorrectly by
-Podman. Rootless Podman continues to map the invoking machine user to Tor's
-`101:102` and must not inherit the Docker process override.
+Docker Tor identity is `0:0`; native Docker uses the invoking host UID/GID.
+Docker Desktop also uses the named runtime volume because its host-bind
+transport cannot perform every Unix-socket operation Tor requires. Make
+exports the matching identity and runtime source to the same platform-neutral
+Docker overlays. This is Docker platform translation, not state created
+incorrectly by Podman.
+Docker initializes only that transient runtime mount with a networkless,
+capability-limited one-shot container before Tor starts; persistent state is
+never chowned by this path.
+Rootless Podman continues to map the invoking machine user to Tor's `101:102`
+and does not inherit the Docker process override.
 
 The Podman SOCKS socket uses an engine-local named volume. Tor mounts it read-write
 and the two policy containers mount it read-only; those containers need no

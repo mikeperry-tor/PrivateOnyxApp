@@ -36,18 +36,13 @@ The Makefile selects narrowly scoped layers:
   final-hop policy containers.
 - `compose_overlays/docker-compose.tor-onion.yml` adds `tor-ingress` and the
   fixed `tor-frontend-gateway`.
-- `compose_overlays/docker-compose.tor-docker-macos.yml` translates only the
-  Tor process and private control tmpfs to UID/GID `0:0` for Docker Desktop's
-  bind-ownership model.
-- `compose_overlays/docker-compose.tor-egress-docker-macos.yml` disables image
-  copy-up for the engine-local SOCKS volume so that its fresh mount root uses
-  the same Docker Desktop UID/GID.
-- `compose_overlays/docker-compose.tor-docker-linux.yml` maps Tor to the
-  invoking host UID/GID so the shared mode-0700 state bind remains directly
-  usable across native Docker and rootless Podman.
-- `compose_overlays/docker-compose.tor-egress-docker-linux.yml` replaces the
-  Docker named SOCKS volume with a host-owned, Docker-specific transient bind;
-  this keeps Tor non-root without changing shared state ownership.
+- `compose_overlays/docker-compose.tor-docker.yml` applies the Docker bind
+  identity exported by Make to the Tor process and private control tmpfs. Make
+  selects UID/GID `0:0` for Docker Desktop and the invoking host UID/GID for
+  native Docker.
+- `compose_overlays/docker-compose.tor-egress-docker.yml` replaces the Docker
+  named SOCKS volume with a host-owned, Docker-specific transient bind on both
+  supported host platforms.
 - `compose_overlays/docker-compose.tor-podman.yml` and
   `compose_overlays/docker-compose.tor-onion-podman.yml` contain only Podman
   ownership, sysctl, and tmpfs translations.
@@ -124,30 +119,42 @@ private identity. Deleting it changes the onion address. Copying it gives the
 recipient the ability to operate the same onion identity. Do not print, stage,
 or casually inspect its keys.
 
-The transient SOCKS socket exists in the engine-local `tor-runtime` named
-volume for Podman and Docker Desktop. Native Docker uses
-`docker-data/tor/docker-runtime`, which startup initializes as a host-owned
-mode-0755 directory and clears of a stale socket before launch. It contains no
-persistent Tor identity. The control socket and authentication cookie exist
-only on Tor's ephemeral `/run/tor-control` tmpfs and are not shared with
-another container.
+The transient SOCKS socket exists in an engine-local `tor-runtime` named
+volume for Podman and Docker Desktop. Native Linux Docker uses
+`docker-data/tor/docker-runtime`; startup initializes it as a host-owned
+mode-0755 directory and clears a stale socket before launch. Docker Desktop
+uses the named volume because its host-bind transport does not support every
+Unix-socket unlink and mode operation Tor requires. Neither location contains
+persistent Tor identity.
+Before Docker starts Tor, a networkless one-shot initializer removes a stale
+socket and sets only this transient runtime root to Make's selected UID/GID.
+It has a read-only root filesystem, `no-new-privileges`, and only the
+`CHOWN`, `DAC_OVERRIDE`, and `FOWNER` capabilities needed to repair a reused
+runtime volume. It never mounts or rewrites persistent Tor state.
+The Docker Tor launch removes the same socket once more immediately before it
+executes the pinned Tor binary. This closes the restart race in which an older
+Tor process can recreate the socket while Compose is replacing the service.
+The control socket and authentication cookie exist only on Tor's ephemeral
+`/run/tor-control` tmpfs and are not shared with another container.
 
 The common Compose layer explicitly replaces the upstream entrypoint with the
 pinned `/usr/bin/tor` binary; an empty entrypoint override is insufficient on
 native Podman. It normally runs directly as UID/GID `101:102`, with a read-only
-root filesystem, all capabilities dropped, and `no-new-privileges`. Native Docker
-on Linux runs it as the invoking host UID/GID because Docker lacks Podman's
-keep-id mapping; the state bind and Docker-specific socket bind therefore need
-no privileged ownership rewrite and remain compatible with rootless Podman.
+root filesystem, all capabilities dropped, and `no-new-privileges`. Native
+Linux Docker runs it as the invoking host UID/GID because Docker lacks
+Podman's keep-id mapping; the state and runtime binds therefore need no
+privileged ownership rewrite and remain compatible with rootless Podman.
+Docker Desktop runs it as `0:0`, matching that platform's bind ownership
+translation. Make exports both the selected identity and runtime source to the
+same platform-neutral Docker overlays.
 Docker Desktop on macOS is the narrow exception: its bind transport reports a
 host bind root as UID/GID `0:0` regardless of host ownership or a container-side
-`chown`, and
-Tor strictly rejects a data directory not owned by its effective UID. The
-Docker-macOS overlay therefore runs Tor as capability-free UID/GID `0:0` and
-uses a root-owned mode-0700 control tmpfs. Its writable paths remain limited to
-the state bind and optional SOCKS runtime volume. The egress translation uses
-`volume.nocopy` so Docker does not populate that fresh volume from the image's
-`101:102` directory. Podman retains the non-root keep-id mapping.
+`chown`, and Tor strictly rejects a data directory not owned by its effective
+UID. Make therefore exports Docker Tor UID/GID `0:0` on macOS and the host
+UID/GID on native Linux. The single Docker overlay consumes those values; its
+writable paths remain limited to persistent state and the selected transient
+SOCKS mount. Podman
+retains the non-root keep-id mapping.
 
 `ClientOnly 1` is the single relay-mode control. The pinned Tor manpage states
 that it prevents relay and directory service even if `ORPort`, `ExtORPort`, or
@@ -206,8 +213,8 @@ Common failure boundaries are:
 - Engine switch failure: ensure both stacks are down, preserve
   `docker-data/tor/state`, and follow `docs/podman_suport.md`.
 - Docker Desktop reports `/var/lib/tor` as root-owned: confirm the selected
-  Compose model includes `docker-compose.tor-docker-macos.yml`; clearing the
-  bind does not change Docker Desktop's mount-root ownership.
+  Compose model includes `docker-compose.tor-docker.yml` with Tor user `0:0`;
+  clearing the bind does not change Docker Desktop's mount-root ownership.
 
 ## Canonical origin and browser sessions
 
