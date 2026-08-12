@@ -1,0 +1,8 @@
+services:
+  tor:
+    volumes:
+      - type: volume
+        source: tor-runtime
+        target: /run/tor-egress
+        volume:
+          nocopy: true

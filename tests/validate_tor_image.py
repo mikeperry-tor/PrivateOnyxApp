@@ -79,6 +79,9 @@ def validate_runtime_contract(
             render_text(egress=True, onion=False, country="", fingerprints=()),
             encoding="ascii",
         )
+        docker_macos = sys.platform == "darwin" and Path(engine).name == "docker"
+        expected_user = "0:0" if docker_macos else "101:102"
+        expected_owner = "0:0" if docker_macos else "101:102"
         run(engine, "volume", "create", runtime_volume)
         try:
             command = [
@@ -90,7 +93,7 @@ def validate_runtime_contract(
                 "--network",
                 "none",
                 "--user",
-                "101:102",
+                expected_user,
                 "--read-only",
                 "--cap-drop",
                 "ALL",
@@ -105,9 +108,13 @@ def validate_runtime_contract(
                 "--mount",
                 f"type=bind,src={health_script},dst=/usr/local/bin/tor-healthcheck.py,readonly",
                 "--mount",
-                f"type=volume,src={runtime_volume},dst=/run/tor-egress",
+                (
+                    f"type=volume,src={runtime_volume},dst=/run/tor-egress,volume-nocopy"
+                    if docker_macos
+                    else f"type=volume,src={runtime_volume},dst=/run/tor-egress"
+                ),
             ]
-            if engine == "podman":
+            if Path(engine).name == "podman":
                 command.extend(
                     [
                         "--userns",
@@ -122,7 +129,11 @@ def validate_runtime_contract(
                 command.extend(
                     [
                         "--tmpfs",
-                        "/run/tor-control:uid=101,gid=102,mode=0700",
+                        (
+                            "/run/tor-control:uid=0,gid=0,mode=0700"
+                            if docker_macos
+                            else "/run/tor-control:uid=101,gid=102,mode=0700"
+                        ),
                     ]
                 )
             command.extend([image, "-f", "/etc/tor/torrc"])
@@ -130,7 +141,7 @@ def validate_runtime_contract(
             wait_for_socket(engine, container)
 
             inspection = json.loads(run(engine, "inspect", container))[0]
-            assert inspection["Config"]["User"] == "101:102"
+            assert inspection["Config"]["User"] == expected_user
             assert inspection["HostConfig"]["ReadonlyRootfs"] is True
             assert not inspection["HostConfig"].get("PortBindings")
             destinations = {
@@ -147,12 +158,12 @@ def validate_runtime_contract(
                 container,
                 "/bin/sh",
                 "-ec",
-                """
-test "$(stat -c '%a %u:%g' /run/tor-egress)" = "755 101:102"
-test "$(stat -c '%a %u:%g' /run/tor-egress/socks)" = "666 101:102"
-test "$(stat -c '%a %u:%g' /run/tor-control)" = "700 101:102"
-test "$(stat -c '%a %u:%g' /run/tor-control/control.sock)" = "600 101:102"
-test "$(stat -c '%a %u:%g' /run/tor-control/control_auth_cookie)" = "600 101:102"
+                f"""
+test "$(stat -c '%a %u:%g' /run/tor-egress)" = "755 {expected_owner}"
+test "$(stat -c '%a %u:%g' /run/tor-egress/socks)" = "666 {expected_owner}"
+test "$(stat -c '%a %u:%g' /run/tor-control)" = "700 {expected_owner}"
+test "$(stat -c '%a %u:%g' /run/tor-control/control.sock)" = "600 {expected_owner}"
+test "$(stat -c '%a %u:%g' /run/tor-control/control_auth_cookie)" = "600 {expected_owner}"
 echo TOR_RUNTIME_MODES_OK
 """,
             )

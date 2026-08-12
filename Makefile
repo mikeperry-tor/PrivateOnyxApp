@@ -20,6 +20,8 @@ TOR_EGRESS_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-egress.yml
 TOR_ONION_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-onion.yml
 TOR_PODMAN_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-podman.yml
 TOR_ONION_PODMAN_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-onion-podman.yml
+TOR_DOCKER_MACOS_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-docker-macos.yml
+TOR_EGRESS_DOCKER_MACOS_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-egress-docker-macos.yml
 
 env_value = $(strip $(shell for f in "$(ENV_FILE)" "$(VERSION_FILE)"; do [ -f "$$f" ] || continue; sed -n 's/^$(1)=//p' "$$f" | head -1 | sed 's/^"//; s/"$$//'; done | head -1))
 wrapper_setting = $(strip $(shell python3 tor/render_config.py get --settings-file "$(ENV_FILE)" --name "$(1)"))
@@ -253,14 +255,23 @@ TOR_EGRESS_SUFFIX :=
 TOR_ONION_SUFFIX :=
 TOR_PODMAN_SUFFIX :=
 TOR_ONION_PODMAN_SUFFIX :=
+TOR_DOCKER_MACOS_SUFFIX :=
+TOR_EGRESS_DOCKER_MACOS_SUFFIX :=
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
 TOR_COMMON_SUFFIX :=:$(TOR_COMMON_FILE)
 ifneq ($(PODMAN_SELECTED),false)
 TOR_PODMAN_SUFFIX :=:$(TOR_PODMAN_FILE)
+else ifeq ($(HOST_OS),Darwin)
+TOR_DOCKER_MACOS_SUFFIX :=:$(TOR_DOCKER_MACOS_FILE)
 endif
 endif
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED)),)
 TOR_EGRESS_SUFFIX :=:$(TOR_EGRESS_FILE)
+ifeq ($(PODMAN_SELECTED),false)
+ifeq ($(HOST_OS),Darwin)
+TOR_EGRESS_DOCKER_MACOS_SUFFIX :=:$(TOR_EGRESS_DOCKER_MACOS_FILE)
+endif
+endif
 endif
 ifneq ($(filter true,$(TOR_ONION_SERVICE_ENABLED)),)
 TOR_ONION_SUFFIX :=:$(TOR_ONION_FILE)
@@ -268,7 +279,7 @@ ifneq ($(PODMAN_SELECTED),false)
 TOR_ONION_PODMAN_SUFFIX :=:$(TOR_ONION_PODMAN_FILE)
 endif
 endif
-TOR_SUFFIX := $(TOR_COMMON_SUFFIX)$(TOR_EGRESS_SUFFIX)$(TOR_ONION_SUFFIX)$(TOR_PODMAN_SUFFIX)$(TOR_ONION_PODMAN_SUFFIX)
+TOR_SUFFIX := $(TOR_COMMON_SUFFIX)$(TOR_EGRESS_SUFFIX)$(TOR_ONION_SUFFIX)$(TOR_PODMAN_SUFFIX)$(TOR_ONION_PODMAN_SUFFIX)$(TOR_DOCKER_MACOS_SUFFIX)$(TOR_EGRESS_DOCKER_MACOS_SUFFIX)
 TOR_DOWN_PODMAN_SUFFIX :=
 ifneq ($(PODMAN_SELECTED),false)
 TOR_DOWN_PODMAN_SUFFIX :=:$(TOR_PODMAN_FILE):$(TOR_ONION_PODMAN_FILE)

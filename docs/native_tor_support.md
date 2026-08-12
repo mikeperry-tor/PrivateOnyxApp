@@ -36,6 +36,12 @@ The Makefile selects narrowly scoped layers:
   final-hop policy containers.
 - `compose_overlays/docker-compose.tor-onion.yml` adds `tor-ingress` and the
   fixed `tor-frontend-gateway`.
+- `compose_overlays/docker-compose.tor-docker-macos.yml` translates only the
+  Tor process and private control tmpfs to UID/GID `0:0` for Docker Desktop's
+  bind-ownership model.
+- `compose_overlays/docker-compose.tor-egress-docker-macos.yml` disables image
+  copy-up for the engine-local SOCKS volume so that its fresh mount root uses
+  the same Docker Desktop UID/GID.
 - `compose_overlays/docker-compose.tor-podman.yml` and
   `compose_overlays/docker-compose.tor-onion-podman.yml` contain only Podman
   ownership, sysctl, and tmpfs translations.
@@ -116,14 +122,24 @@ The transient SOCKS socket exists only in the engine-local `tor-runtime` named
 volume. The control socket and authentication cookie exist only on Tor's
 ephemeral `/run/tor-control` tmpfs and are not shared with another container.
 
-The minimal derived image bypasses the upstream entrypoint and runs the pinned
-Tor binary directly as UID/GID `101:102`, with a read-only root filesystem, all
-capabilities dropped, and `no-new-privileges`. `ClientOnly 1` is the single
-relay-mode control. The pinned Tor manpage states that it prevents relay and
-directory service even if `ORPort`, `ExtORPort`, or `DirPort` is configured,
-and the pinned source makes `server_mode()` return false whenever it is set.
-Do not duplicate it with relay-port zeros, `ExitPolicy`, or other relay-only
-settings.
+The minimal derived image bypasses the upstream entrypoint and normally runs
+the pinned Tor binary directly as UID/GID `101:102`, with a read-only root
+filesystem, all capabilities dropped, and `no-new-privileges`. Docker Desktop
+on macOS is the narrow exception: its bind transport reports a host bind root
+as UID/GID `0:0` regardless of host ownership or a container-side `chown`, and
+Tor strictly rejects a data directory not owned by its effective UID. The
+Docker-macOS overlay therefore runs Tor as capability-free UID/GID `0:0` and
+uses a root-owned mode-0700 control tmpfs. Its writable paths remain limited to
+the state bind and optional SOCKS runtime volume. The egress translation uses
+`volume.nocopy` so Docker does not populate that fresh volume from the image's
+`101:102` directory. Podman retains the non-root keep-id mapping, and native
+Docker does not select either translation.
+
+`ClientOnly 1` is the single relay-mode control. The pinned Tor manpage states
+that it prevents relay and directory service even if `ORPort`, `ExtORPort`, or
+`DirPort` is configured, and the pinned source makes `server_mode()` return
+false whenever it is set. Do not duplicate it with relay-port zeros,
+`ExitPolicy`, or other relay-only settings.
 
 Client-facing interfaces remain explicit: the selected Unix `SocksPort` or
 `SocksPort 0`, `DNSPort 0`, `HTTPTunnelPort 0`, `TransPort 0`, and `NATDPort
@@ -175,6 +191,9 @@ Common failure boundaries are:
   `tor-ingress`/`onyx-frontend` attachments.
 - Engine switch failure: ensure both stacks are down, preserve
   `docker-data/tor/state`, and follow `docs/podman_suport.md`.
+- Docker Desktop reports `/var/lib/tor` as root-owned: confirm the selected
+  Compose model includes `docker-compose.tor-docker-macos.yml`; clearing the
+  bind does not change Docker Desktop's mount-root ownership.
 
 ## Canonical origin and browser sessions
 

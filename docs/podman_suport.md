@@ -7,6 +7,12 @@ so an engine switch preserves the onion identity. Only Tor gets
 `userns_mode: keep-id:uid=101,gid=102`; do not recursively rewrite its state or
 move it to an engine-specific directory.
 
+Docker Desktop reports the shared state bind root as UID/GID `0:0`, so its
+macOS-only Tor overlay runs the otherwise capability-free Tor process as that
+UID/GID. This is a Docker bind translation, not state created incorrectly by
+Podman. Rootless Podman continues to map the invoking machine user to Tor's
+`101:102` and must not inherit the Docker process override.
+
 The SOCKS socket uses an engine-local named volume. Tor mounts it read-write
 and the two policy containers mount it read-only; those containers need no
 matching UID, supplemental group, shared user namespace, privilege, or engine
@@ -79,6 +85,13 @@ uses these version and capability rules:
 - a Compose provider that preserves `gw_priority`, `!override`, and
   `start_interval` in a rendered probe model; and
 - the native startup-health flags checked by `podman update --help`.
+
+Podman Machine creates separate rootless and rootful system connections for
+the same VM. Either connection may be selected explicitly, but rootless is the
+qualification default because it exercises the ownership and user-namespace
+constraints this wrapper must preserve. A rootful run is not a substitute for
+the documented rootless compatibility matrix, and the capability gate does
+not reject it merely for being rootful.
 
 An older Podman server prints a warning but is not rejected based on its version
 alone. It proceeds through the same image-store, Compose-provider, and native

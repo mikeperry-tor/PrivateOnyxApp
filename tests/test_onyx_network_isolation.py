@@ -312,7 +312,9 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             "docker-compose.podman.yml",
             "docker-compose.tailscale-vpn.yml",
             "docker-compose.teep-vpn.yml",
+            "docker-compose.tor-docker-macos.yml",
             "docker-compose.tor-egress.yml",
+            "docker-compose.tor-egress-docker-macos.yml",
             "docker-compose.tor-onion-podman.yml",
             "docker-compose.tor-onion.yml",
             "docker-compose.tor-podman.yml",
@@ -480,6 +482,30 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             ["/run/tor-control:U,mode=0700"],
         )
 
+        docker_macos = _compose_model(
+            "lite",
+            "docker-compose.tor.yml",
+            "docker-compose.tor-egress.yml",
+            "docker-compose.tor-docker-macos.yml",
+            "docker-compose.tor-egress-docker-macos.yml",
+        )
+        self.assertEqual(docker_macos["services"]["tor"]["user"], "0:0")
+        self.assertEqual(docker_macos["services"]["tor"]["cap_drop"], ["ALL"])
+        self.assertEqual(
+            docker_macos["services"]["tor"]["security_opt"],
+            ["no-new-privileges:true"],
+        )
+        self.assertEqual(
+            docker_macos["services"]["tor"]["tmpfs"],
+            ["/run/tor-control:uid=0,gid=0,mode=0700"],
+        )
+        runtime = next(
+            volume
+            for volume in docker_macos["services"]["tor"]["volumes"]
+            if volume["target"] == "/run/tor-egress"
+        )
+        self.assertTrue(runtime["volume"]["nocopy"])
+
     def test_tor_makefile_layer_selection_is_role_and_engine_specific(self) -> None:
         for egress, onion in ((False, False), (True, False), (False, True), (True, True)):
             for engine in ("docker", "podman"):
@@ -506,6 +532,25 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                         "docker-compose.tor-onion-podman.yml" in files,
                         onion and engine == "podman",
                     )
+                    self.assertEqual(
+                        "docker-compose.tor-docker-macos.yml" in files,
+                        enabled and engine == "docker",
+                    )
+                    self.assertEqual(
+                        "docker-compose.tor-egress-docker-macos.yml" in files,
+                        egress and engine == "docker",
+                    )
+
+    def test_tor_docker_macos_layer_is_not_selected_on_linux(self) -> None:
+        files = _make_compose_files(
+            vpn_enabled=False,
+            container_bin="docker",
+            HOST_OS="Linux",
+            TOR_EGRESS_ENABLED="true",
+            TOR_ONION_SERVICE_ENABLED="false",
+        )
+        self.assertNotIn("docker-compose.tor-docker-macos.yml", files)
+        self.assertNotIn("docker-compose.tor-egress-docker-macos.yml", files)
 
     def test_core_startup_does_not_wait_for_optional_browsing(self) -> None:
         lite = _compose_model("lite")

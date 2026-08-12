@@ -1,0 +1,10 @@
+services:
+  tor:
+    # Docker Desktop's bind transport reports every host bind root as UID/GID
+    # 0:0. Tor rejects that state directory before bootstrap when it runs as
+    # 101:102, even though the bind is writable by that user. Keep the root
+    # filesystem read-only and all capabilities dropped in the common layer;
+    # only translate the process and private control tmpfs ownership here.
+    user: "0:0"
+    tmpfs: !override
+      - /run/tor-control:uid=0,gid=0,mode=0700
