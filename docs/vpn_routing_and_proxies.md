@@ -271,6 +271,17 @@ The wrapper defaults Mysterium WireGuard to the conservative 1280-byte MTU.
 `MYST_VPN_WIREGUARD_MTU` remains an advanced override for a diagnosed path-MTU
 requirement, but it is intentionally absent from the user-facing example.
 
+Every VPN-enabled Myst daemon runs in consumer-only mode with
+`--quality.type=none`. This disables the node's optional outbound quality-event
+stream, including session, connection, transfer-total, identity, NAT-result,
+and payment-token metrics. It does not disable provider discovery and sorting,
+broker coordination, public-IP and STUN discovery, NAT traversal, connection
+assistance, registration, settlement, or payment traffic. Myst's quality
+client remains available for explicit read-only provider monitoring and
+statistics API paths, but those paths are not part of the wrapper's normal
+consumer connection workflow. Local process logs and explicitly submitted
+feedback reports are separate from the disabled quality-event stream.
+
 With the default `MYST_VPN_ENABLED=false`, the Myst daemon and its route-
 reconciliation loop are not started. The Myst container retains only an inert
 process so its existing healthcheck can act as a readiness sentinel for the

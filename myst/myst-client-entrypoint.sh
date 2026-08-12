@@ -134,9 +134,11 @@ else
 fi
 unset _default_route
 
-# Start daemon in consumer-only mode (no provider services).
+# Start daemon in consumer-only mode (no provider services) with optional
+# quality telemetry disabled. Provider discovery, NAT traversal, connection
+# assistance, registration, and payment traffic remain enabled.
 # Disable LAN discovery to avoid mDNS/Bonjour conflicts in host-network tests.
-set -- --local-service-discovery=false --consumer
+set -- --local-service-discovery=false --consumer --quality.type=none
 if [ -n "${MYST_VPN_WIREGUARD_MTU:-}" ]; then
   echo "Using WireGuard MTU override: ${MYST_VPN_WIREGUARD_MTU}"
   set -- "$@" --wireguard.mtu="${MYST_VPN_WIREGUARD_MTU}"

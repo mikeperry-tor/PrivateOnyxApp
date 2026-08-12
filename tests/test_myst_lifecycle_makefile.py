@@ -185,6 +185,16 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("Multiple Myst identities exist", entrypoint)
         self.assertIn("explicit signup repair is required", entrypoint)
 
+    def test_myst_daemon_is_consumer_only_with_quality_telemetry_disabled(self) -> None:
+        entrypoint = (ROOT / "myst/myst-client-entrypoint.sh").read_text(encoding="utf-8")
+        daemon_setup = entrypoint.split(
+            "# Start daemon in consumer-only mode", 1
+        )[1].split("/usr/local/bin/docker-entrypoint.sh", 1)[0]
+
+        self.assertIn("--consumer", daemon_setup)
+        self.assertIn("--quality.type=none", daemon_setup)
+        self.assertIn('set -- "$@" daemon', daemon_setup)
+
     def test_no_vpn_entrypoint_uses_inert_readiness_sentinel(self) -> None:
         entrypoint = (ROOT / "myst/myst-client-entrypoint.sh").read_text(encoding="utf-8")
         no_vpn_branch = entrypoint.split("# ── Optional VPN bypass", 1)[1].split(
