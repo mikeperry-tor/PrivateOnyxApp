@@ -274,7 +274,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
     def test_podman_compose_is_pinned_to_the_selected_unix_socket(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn("export DOCKER_HOST := unix://$(DOCKER_SOCK_PATH)", makefile)
-        self.assertIn("info --format '{{.Host.RemoteSocket.Path}}'", makefile)
+        self.assertIn("startup_health.py engine-socket-path", makefile)
         self.assertIn("export CONTAINER_BIN", makefile)
 
     def test_native_linux_docker_tor_runtime_is_initialized_without_privileged_chown(self) -> None:

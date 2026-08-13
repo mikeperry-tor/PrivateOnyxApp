@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and verify Podman's native startup health checks for Compose services."""
+"""Validate engine compatibility and manage Podman startup health checks."""
 
 from __future__ import annotations
 
@@ -162,6 +162,33 @@ def docker_socket_path(container_bin: str) -> str:
     if not os.path.isabs(path):
         raise ContractError("Docker context returned a non-absolute Unix socket path")
     return path
+
+
+def engine_socket_path(container_bin: str) -> str:
+    """Resolve the selected engine's local Unix API socket path."""
+    if "podman" not in os.path.basename(container_bin).lower():
+        return docker_socket_path(container_bin)
+
+    commands = (
+        [
+            container_bin,
+            "machine",
+            "inspect",
+            "--format",
+            "{{.ConnectionInfo.PodmanSocket.Path}}",
+        ],
+        [container_bin, "info", "--format", "{{.Host.RemoteSocket.Path}}"],
+    )
+    for command in commands:
+        try:
+            output = _run(command).stdout
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        for line in output.splitlines():
+            path = line.strip()
+            if os.path.isabs(path):
+                return path
+    raise ContractError("could not resolve the selected Podman Unix API socket")
 
 
 @dataclass(frozen=True)
@@ -966,7 +993,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "check-docker",
             "configure",
             "docker-mode",
-            "docker-socket-path",
+            "engine-socket-path",
             "initialize-opensearch",
             "initialize-postgres",
             "prepare-host-directories",
@@ -1005,8 +1032,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Docker {mode} daemon mode is supported.")
         elif args.action == "docker-mode":
             print(docker_engine_mode(args.container_bin))
-        elif args.action == "docker-socket-path":
-            print(docker_socket_path(args.container_bin))
+        elif args.action == "engine-socket-path":
+            print(engine_socket_path(args.container_bin))
         elif args.action == "assert-healthy":
             assert_services_healthy(args.container_bin, args.project, args.service)
         elif args.action == "prepare-shared-data":

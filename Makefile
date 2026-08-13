@@ -190,13 +190,8 @@ ifeq ($(DOCKER_ROOTLESS_SELECTED),true)
 PRIVATE_ONYX_DOCKER_HOST_GATEWAY := 10.0.2.2
 endif
 ifeq ($(strip $(DOCKER_SOCK_PATH)),)
-ifeq ($(PODMAN_SELECTED),true)
-DOCKER_SOCK_PATH := $(strip $(shell "$(CONTAINER_BIN)" machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null | sed -n '\|^/|{p;q;}'))
-ifeq ($(strip $(DOCKER_SOCK_PATH)),)
-DOCKER_SOCK_PATH := $(strip $(shell "$(CONTAINER_BIN)" info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null | sed -n '\|^/|{p;q;}'))
-endif
-else ifeq ($(DOCKER_ROOTLESS_SELECTED),true)
-DOCKER_SOCK_PATH := $(strip $(shell python3 podman/startup_health.py docker-socket-path --container-bin "$(CONTAINER_BIN)" 2>/dev/null))
+ifneq ($(filter true,$(PODMAN_SELECTED) $(DOCKER_ROOTLESS_SELECTED)),)
+DOCKER_SOCK_PATH := $(strip $(shell python3 podman/startup_health.py engine-socket-path --container-bin "$(CONTAINER_BIN)" 2>/dev/null))
 endif
 endif
 export CONTAINER_BIN

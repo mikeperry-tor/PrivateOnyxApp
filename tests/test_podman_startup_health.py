@@ -122,6 +122,40 @@ class PodmanStartupHealthTests(unittest.TestCase):
             "/run/user/4321/docker.sock",
         )
 
+    @patch.dict(os.environ, {"DOCKER_HOST": "unix:///ignored/docker.sock"})
+    @patch.object(startup_health, "_run")
+    def test_engine_socket_path_prefers_podman_machine_socket(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, stdout="/run/user/1234/podman/podman.sock\n"
+        )
+        self.assertEqual(
+            startup_health.engine_socket_path("podman"),
+            "/run/user/1234/podman/podman.sock",
+        )
+        self.assertEqual(run.call_count, 1)
+
+    @patch.object(startup_health, "_run")
+    def test_engine_socket_path_falls_back_to_podman_info(self, run) -> None:
+        run.side_effect = (
+            subprocess.CalledProcessError(1, ["podman", "machine", "inspect"]),
+            subprocess.CompletedProcess(
+                [], 0, stdout="/run/user/4321/podman/podman.sock\n"
+            ),
+        )
+        self.assertEqual(
+            startup_health.engine_socket_path("podman"),
+            "/run/user/4321/podman/podman.sock",
+        )
+
+    @patch.object(startup_health, "docker_socket_path")
+    def test_engine_socket_path_uses_docker_context_resolver(self, resolve) -> None:
+        resolve.return_value = "/run/user/1234/docker.sock"
+        self.assertEqual(
+            startup_health.engine_socket_path("docker"),
+            "/run/user/1234/docker.sock",
+        )
+        resolve.assert_called_once_with("docker")
+
     def test_prepare_lite_host_directories_creates_bind_roots(self) -> None:
         with tempfile.TemporaryDirectory() as parent:
             data_root = Path(parent) / "docker-data"

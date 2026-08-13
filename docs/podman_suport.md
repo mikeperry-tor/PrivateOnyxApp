@@ -83,6 +83,46 @@ The selected socket must be a live local Unix socket. Remote rootless contexts
 are rejected because the code-interpreter container cannot safely mount a
 remote engine endpoint as `/var/run/docker.sock`.
 
+On Debian-family systems with Docker Engine already installed, first inspect
+an existing rootless context with
+`docker --context rootless info --format '{{json .SecurityOptions}}'`. If the
+output contains `name=rootless`, select that context and skip installation.
+Otherwise, install the RootlessKit prerequisite and create the per-user daemon
+with:
+
+```bash
+sudo apt-get update
+sudo apt-get install rootlesskit
+dockerd-rootless-setuptool.sh install
+systemctl --user enable --now docker.service
+docker context use rootless
+docker info --format '{{json .SecurityOptions}}'
+```
+
+The security-options output must contain `name=rootless`. The `docker.io`
+package may install the setup tool under `/usr/share/docker.io/contrib`; add
+that directory to `PATH` when it is not otherwise found. The setup tool can
+refuse while a rootful system daemon is active. Use its `--force` option only
+when that is the reported reason and coexistence is intentional. The rootful
+daemon remains available through `docker context use default`. If the setup
+tool does not create its context, create it once with `docker context create
+rootless --docker "host=unix:///run/user/$(id -u)/docker.sock"`. The rootless
+daemon then uses that per-user socket through the `rootless` context.
+`sudo loginctl enable-linger "$USER"` additionally keeps the user service
+available across logout and starts it at boot.
+
+Rootless Podman and rootless Docker share two useful wrapper mechanisms: the
+common Compose application/network model and one engine-aware resolver for
+their per-user Unix API socket. They do not share a storage overlay or a
+synthetic common UID. Podman's `keep-id` can map each image UID onto the
+invoking user while retaining interoperable host binds. Rootless Docker maps
+only container root to that user and maps non-root image UIDs into the host's
+subordinate-ID range, so its ownership-sensitive stores must remain named
+volumes. Podman also needs native startup-health translation and omits the
+Docker-socket code interpreter, while rootless Docker retains Docker's native
+health behavior and code-interpreter contract. Keeping those differences in
+narrow overlays avoids assumptions about host or subordinate UID numbers.
+
 RootlessKit normally starts slirp4netns with host-loopback access disabled.
 Docker's `host-gateway` token is also daemon-global rather than
 RootlessKit-aware and can resolve to an inactive rootful `docker0` bridge when

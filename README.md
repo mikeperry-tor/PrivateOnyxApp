@@ -105,6 +105,33 @@ socket before starting the stack:
 systemctl --user enable --now podman.socket
 ```
 
+For rootless Docker on Debian or Ubuntu, first try
+`docker --context rootless info --format '{{json .SecurityOptions}}'`. If it
+includes `name=rootless`, select that context and skip installation. Otherwise,
+install RootlessKit, then install and enable the per-user Docker service
+(Docker Engine must already be installed):
+
+```bash
+sudo apt-get update
+sudo apt-get install rootlesskit
+dockerd-rootless-setuptool.sh install
+systemctl --user enable --now docker.service
+docker context use rootless
+docker info --format '{{json .SecurityOptions}}'
+```
+
+The final output must include `name=rootless`. Debian's `docker.io` package may
+place the setup tool in `/usr/share/docker.io/contrib`; add that directory to
+`PATH` if the command is not found. If installation stops only because a
+rootful daemon is already running and you intentionally want both daemons,
+rerun the setup command with `--force`. The setup tool normally creates the
+`rootless` context; if it does not, create it once with
+`docker context create rootless --docker
+"host=unix:///run/user/$(id -u)/docker.sock"`. Switch between the daemons with
+`docker context use rootless` and `docker context use default`. To keep the
+per-user daemon running across logout and start it at boot, also run
+`sudo loginctl enable-linger "$USER"`.
+
 ## Running the Stack
 
 The stack comes in two flavors: lite and full. This specifies the mode of the Onyx app. Lite mode provides Chat, Web, and Research only. Full mode also provides RAG, external app connectors, and groupware. Lite mode uses significantly less RAM (~1GB vs ~10GB).
