@@ -66,6 +66,62 @@ def _expected(service: str = "api_server") -> dict[str, dict]:
 
 
 class PodmanStartupHealthTests(unittest.TestCase):
+    @patch.object(startup_health, "_run")
+    def test_docker_engine_mode_detects_rootless_before_userns(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=json.dumps(
+                ["name=seccomp,profile=builtin", "name=userns", "name=rootless"]
+            ),
+        )
+        self.assertEqual(startup_health.docker_engine_mode("docker"), "rootless")
+
+    @patch.object(startup_health, "_run")
+    def test_docker_engine_mode_detects_rootful(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps(["name=seccomp,profile=builtin", "name=cgroupns"])
+        )
+        self.assertEqual(startup_health.docker_engine_mode("docker"), "rootful")
+
+    @patch.object(startup_health, "_run")
+    def test_docker_engine_gate_rejects_userns_remap(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps(["name=seccomp,profile=builtin", "name=userns"])
+        )
+        with self.assertRaisesRegex(
+            startup_health.ContractError, "userns-remap enabled.*rootless Docker"
+        ):
+            startup_health.check_docker_engine("docker")
+
+    @patch.object(startup_health, "_run")
+    def test_docker_engine_gate_detects_mode_change(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps(["name=rootless"])
+        )
+        with self.assertRaisesRegex(startup_health.ContractError, "mode changed"):
+            startup_health.check_docker_engine("docker", expected_mode="rootful")
+
+    @patch.dict(os.environ, {"DOCKER_HOST": "unix:///run/user/1234/docker.sock"})
+    @patch.object(startup_health, "_run")
+    def test_docker_socket_path_uses_environment_endpoint(self, run) -> None:
+        self.assertEqual(
+            startup_health.docker_socket_path("docker"),
+            "/run/user/1234/docker.sock",
+        )
+        run.assert_not_called()
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch.object(startup_health, "_run")
+    def test_docker_socket_path_uses_selected_context(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, stdout="unix:///run/user/4321/docker.sock\n"
+        )
+        self.assertEqual(
+            startup_health.docker_socket_path("docker"),
+            "/run/user/4321/docker.sock",
+        )
+
     def test_prepare_lite_host_directories_creates_bind_roots(self) -> None:
         with tempfile.TemporaryDirectory() as parent:
             data_root = Path(parent) / "docker-data"

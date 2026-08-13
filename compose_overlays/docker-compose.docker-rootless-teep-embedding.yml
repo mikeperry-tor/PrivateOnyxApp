@@ -1,0 +1,14 @@
+## Rootless Docker cannot hairpin through a host-published port while
+## RootlessKit's default host-loopback isolation is active. For the exact
+## stack-owned Teep embedding endpoint, keep the shim internal and connect it
+## directly to Teep (or the Teep VPN gateway) instead.
+
+services:
+  local-embedding-shim:
+    networks: !override [onyx-backend, onyx-teep]
+    environment:
+      ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL: "http://teep:8337/v1/embeddings"
+      ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL: ""
+    depends_on: !override
+      teep:
+        condition: service_healthy

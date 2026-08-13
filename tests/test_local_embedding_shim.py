@@ -39,6 +39,41 @@ def _load_module() -> ModuleType:
 
 
 class LocalEmbeddingShimReadinessTests(unittest.TestCase):
+    def test_exact_internal_teep_endpoint_can_bypass_host_proxy(self) -> None:
+        module = _load_module()
+        pool = module.UpstreamConnectionPool(
+            url="http://teep:8337/v1/embeddings",
+            pool_size=1,
+            timeout_seconds=17,
+            pool_wait_timeout_seconds=3,
+            proxy_url="",
+        )
+        connection = Mock()
+        connection.getresponse.return_value.status = 200
+        connection.getresponse.return_value.read.return_value = b"{}"
+        with patch.object(
+            module.http.client, "HTTPConnection", return_value=connection
+        ) as connection_class:
+            pool.request("POST", b"{}", {"Content-Type": "application/json"})
+        connection_class.assert_called_once_with("teep", 8337, timeout=17)
+        connection.request.assert_called_once_with(
+            "POST",
+            "/v1/embeddings",
+            body=b"{}",
+            headers={"Content-Type": "application/json"},
+        )
+
+    def test_empty_proxy_is_rejected_for_every_other_endpoint(self) -> None:
+        module = _load_module()
+        with self.assertRaisesRegex(ValueError, "exact internal Teep"):
+            module.UpstreamConnectionPool(
+                url="http://host.docker.internal:8337/v1/embeddings",
+                pool_size=1,
+                timeout_seconds=17,
+                pool_wait_timeout_seconds=3,
+                proxy_url="",
+            )
+
     def test_shim_has_bounded_upstream_timeout_and_no_post_retry(self) -> None:
         module = _load_module()
         self.assertEqual(module.HTTP_TIMEOUT_SECONDS, 540.0)

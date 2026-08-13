@@ -41,7 +41,7 @@ services:
     command: ["sleep", "infinity"]
     restart: unless-stopped
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:${PRIVATE_ONYX_DOCKER_HOST_GATEWAY:-host-gateway}"
     networks:
       routing-uplink:
         aliases: [myst-client]

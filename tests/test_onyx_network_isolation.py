@@ -305,6 +305,9 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             "docker-compose.code-interpreter-network.yml",
             "docker-compose.docker-linux-full.yml",
             "docker-compose.docker-linux.yml",
+            "docker-compose.docker-rootless-full.yml",
+            "docker-compose.docker-rootless-teep-embedding.yml",
+            "docker-compose.docker-rootless.yml",
             "docker-compose.full.yml",
             "docker-compose.lite.yml",
             "docker-compose.podman-full.yml",
@@ -836,6 +839,98 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         minio = full_model["services"]["minio"]
         self.assertEqual(minio["user"], "1234:1235")
         self.assertNotIn("userns_mode", minio)
+
+    def test_native_linux_rootless_docker_uses_engine_managed_storage(self) -> None:
+        rootless_files = _make_compose_files(
+            vpn_enabled=False,
+            container_bin="docker",
+            HOST_OS="Linux",
+            PRIVATE_ONYX_DOCKER_ENGINE_MODE="rootless",
+        )
+        self.assertIn("docker-compose.docker-rootless.yml", rootless_files)
+        self.assertIn("docker-compose.docker-rootless-full.yml", rootless_files)
+        self.assertNotIn("docker-compose.docker-linux.yml", rootless_files)
+        self.assertNotIn("docker-compose.docker-linux-full.yml", rootless_files)
+
+        teep_files = _make_compose_files(
+            vpn_enabled=False,
+            container_bin="docker",
+            HOST_OS="Linux",
+            PRIVATE_ONYX_DOCKER_ENGINE_MODE="rootless",
+            ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL=(
+                "http://host.docker.internal:8337/v1/embeddings"
+            ),
+        )
+        self.assertIn(
+            "docker-compose.docker-rootless-teep-embedding.yml", teep_files
+        )
+        teep_model = _compose_model(
+            "full",
+            "docker-compose.docker-rootless.yml",
+            "docker-compose.docker-rootless-full.yml",
+            "docker-compose.docker-rootless-teep-embedding.yml",
+        )
+        shim = teep_model["services"]["local-embedding-shim"]
+        self.assertEqual(set(shim["networks"]), {"onyx-backend", "onyx-teep"})
+        self.assertEqual(
+            shim["environment"]["ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL"],
+            "http://teep:8337/v1/embeddings",
+        )
+        self.assertEqual(
+            shim["environment"]["ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL"], ""
+        )
+        self.assertNotIn("onyx-host-egress", shim["networks"])
+
+        model = _compose_model(
+            "full",
+            "docker-compose.docker-rootless.yml",
+            "docker-compose.docker-rootless-full.yml",
+        )
+        services = model["services"]
+        self.assertEqual(
+            services["opensearch"]["ulimits"]["memlock"],
+            {"soft": 8388608, "hard": 8388608},
+        )
+        expected = {
+            "relational_db": ("rootless-docker-postgres", "/var/lib/postgresql/data"),
+            "searxng-core": (
+                "rootless-docker-searxng-cache",
+                "/var/cache/searxng",
+            ),
+            "opensearch": (
+                "rootless-docker-opensearch",
+                "/usr/share/opensearch/data",
+            ),
+            "minio": ("rootless-docker-minio", "/data"),
+        }
+        for service_name, (source, target) in expected.items():
+            mounts = services[service_name]["volumes"]
+            self.assertTrue(
+                any(
+                    mount.get("type") == "volume"
+                    and mount.get("source") == source
+                    and mount.get("target") == target
+                    for mount in mounts
+                ),
+                f"{service_name} does not use {source}",
+            )
+        self.assertTrue(
+            any(
+                mount.get("source", "").endswith("/onyx/opensearch/audit.yml")
+                and mount.get("read_only")
+                for mount in services["opensearch"]["volumes"]
+            )
+        )
+
+        host_model = _compose_model(
+            "lite",
+            "docker-compose.docker-rootless.yml",
+            env_overrides={"PRIVATE_ONYX_DOCKER_HOST_GATEWAY": "10.0.2.2"},
+        )
+        self.assertIn(
+            "host.docker.internal=10.0.2.2",
+            host_model["services"]["netns-holder"]["extra_hosts"],
+        )
 
     def test_makefile_scopes_podman_document_relay_to_macos(self) -> None:
         linux_files = _make_compose_files(

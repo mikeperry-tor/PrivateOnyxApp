@@ -75,6 +75,8 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertIn('[client.container_bin, "restart", client.container]', runtime)
         self.assertIn('[args.container_bin, "rm", "--force", name]', image)
         self.assertIn('[args.container_bin, "volume", "rm", "--force", volume]', image)
+        self.assertIn('f"memlock={args.memlock}"', image)
+        self.assertIn('--memlock "$(OPENSEARCH_VALIDATION_MEMLOCK)"', MAKEFILE)
 
     def test_image_validation_is_executable_and_does_not_fetch_images(self) -> None:
         self.assertTrue(os.access(IMAGE_SCRIPT_PATH, os.X_OK))

@@ -197,20 +197,28 @@ class UpstreamConnectionPool:
             )
 
         proxy = urlparse(proxy_url)
-        if (
-            proxy.scheme != "http"
-            or proxy.hostname != "onyx-host-egress-bridge"
-            or proxy.port != 3128
-            or proxy.username is not None
-            or proxy.password is not None
-            or proxy.path not in ("", "/")
-            or proxy.query
-            or proxy.fragment
-        ):
-            raise ValueError(
-                "ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL must be exactly "
-                "http://onyx-host-egress-bridge:3128"
-            )
+        direct_internal_teep = (
+            proxy_url == ""
+            and parsed.scheme == "http"
+            and parsed.hostname == "teep"
+            and parsed.port == 8337
+        )
+        if not direct_internal_teep:
+            if (
+                proxy.scheme != "http"
+                or proxy.hostname != "onyx-host-egress-bridge"
+                or proxy.port != 3128
+                or proxy.username is not None
+                or proxy.password is not None
+                or proxy.path not in ("", "/")
+                or proxy.query
+                or proxy.fragment
+            ):
+                raise ValueError(
+                    "ONYX_RAG_EMBEDDING_SHIM_HTTP_PROXY_URL must be exactly "
+                    "http://onyx-host-egress-bridge:3128, except for the exact "
+                    "internal Teep endpoint"
+                )
 
         self.scheme = parsed.scheme
         self.host = parsed.hostname
@@ -219,14 +227,20 @@ class UpstreamConnectionPool:
         if parsed.query:
             self.target = f"{self.target}?{parsed.query}"
         self.absolute_target = url
-        self.proxy_host = proxy.hostname
-        self.proxy_port = proxy.port
+        self.proxy_host = proxy.hostname if not direct_internal_teep else None
+        self.proxy_port = proxy.port if not direct_internal_teep else None
 
         self.timeout_seconds = timeout_seconds
         self.pool_wait_timeout_seconds = pool_wait_timeout_seconds
         self._slots = threading.BoundedSemaphore(pool_size)
 
     def _new_connection(self) -> http.client.HTTPConnection:
+        if self.proxy_host is None:
+            return http.client.HTTPConnection(
+                self.host,
+                self.port,
+                timeout=self.timeout_seconds,
+            )
         if self.scheme == "https":
             connection = http.client.HTTPSConnection(
                 self.proxy_host,
@@ -254,7 +268,9 @@ class UpstreamConnectionPool:
             connection = self._new_connection()
             upstream_start = time.monotonic()
             request_target = (
-                self.absolute_target if self.scheme == "http" else self.target
+                self.target
+                if self.proxy_host is None
+                else self.absolute_target if self.scheme == "http" else self.target
             )
             connection.request(method, request_target, body=body, headers=headers)
             response = connection.getresponse()

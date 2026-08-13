@@ -49,6 +49,27 @@ class SharedDataEngineTests(unittest.TestCase):
             shared_data_engine.release(marker, "podman")
             self.assertIsNone(shared_data_engine.read_owner(marker))
 
+    def test_docker_flavors_are_distinct_and_upgrade_legacy_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            marker.write_text("docker\n", encoding="ascii")
+            self.assertEqual(
+                shared_data_engine.claim(
+                    marker, "docker-rootless", inspect_commands=()
+                ),
+                "docker-rootless",
+            )
+            self.assertEqual(
+                shared_data_engine.read_owner(marker), "docker-rootless"
+            )
+            with self.assertRaisesRegex(
+                shared_data_engine.GuardError, "claimed by docker-rootless"
+            ):
+                shared_data_engine.claim(
+                    marker, "docker-rootful", inspect_commands=()
+                )
+            shared_data_engine.release(marker, "docker-rootless")
+
     def test_invalid_marker_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / "owner"

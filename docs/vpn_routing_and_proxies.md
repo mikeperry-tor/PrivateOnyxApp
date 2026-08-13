@@ -210,7 +210,11 @@ Onyx applications never join it.
 Full-mode embedding readiness starts Teep during the staged embedding phase.
 When Teep is VPN-routed, that phase also starts the fixed `host-teep-proxy`
 publisher before the shim validates the documented
-`host.docker.internal:8337` embedding URL.
+`host.docker.internal:8337` embedding URL. Under rootless Docker, the exact
+stack-owned Teep selection instead gives the shim only the internal
+`onyx-teep` route; the `teep` alias resolves to either Teep itself or the fixed
+VPN gateway, so embedding traffic preserves the selected Teep route without a
+RootlessKit host-port hairpin.
 
 Repeated `make up-lite`/`make up-full` calls distinguish the standalone Myst
 signup project from the integrated `onyx` Compose project. They stop the

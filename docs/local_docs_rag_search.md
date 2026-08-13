@@ -572,8 +572,12 @@ model when `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_MODEL` is unset.
 The startup preflight rejects that fallback when the URL is the wrapper's Teep
 endpoint and reports the required explicit upstream-model setting before
 containers are created.
-The shim reaches Teep through its fixed host publisher, not the internal
-`teep` service name.
+Ordinary Docker and Podman reach Teep through its fixed host publisher, not the
+internal `teep` service name. Rootless Docker applies a narrow exception for
+this exact stack-owned Teep URL: the shim joins `onyx-teep`, rewrites only its
+runtime upstream to `http://teep:8337/v1/embeddings`, and drops its host-egress
+network and proxy. This avoids RootlessKit's disabled host-loopback path while
+preserving the operator-facing configured authority and Teep routing choice.
 
 Teep port 8337 (or the actual `HOST_PORT_TEEP`) is permitted automatically only
 because it is the exact configured embedding authority. An RFC1918 literal or
@@ -581,7 +585,8 @@ a `.local`, `.internal`, or `.home.arpa` LAN name receives the same
 endpoint-specific treatment without enabling broad LAN access; names must
 resolve entirely to RFC1918 addresses.
 
-The shim itself has no direct route. It uses HTTP absolute-form or HTTPS
+Except for that exact internal rootless-Docker Teep path, the shim itself has
+no direct route. It uses HTTP absolute-form or HTTPS
 CONNECT through `onyx-host-egress-bridge`, verifies TLS, reuses pooled
 connections, and disables ambient proxy discovery. Without the required host
 policy permission, the one-shot `/ready` validation fails and full-stack

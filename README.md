@@ -66,9 +66,11 @@ The Docker Compose files in this stack relies on the following components:
 
 ## Prerequisites
 
-- Docker Engine API 1.44+ (Engine 25.0+) or rootless Podman. Podman 5.4.2 is
-  the currently validated baseline; older versions may work when the startup
-  checks pass.
+- Docker Engine API 1.44+ (Engine 25.0+), including native-Linux rootless
+  Docker, or rootless Podman. Podman 5.4.2 is the currently validated baseline;
+  older versions may work when the startup checks pass. Docker's daemon-wide
+  `userns-remap` mode is detected and rejected; use ordinary or rootless Docker
+  instead.
 - Docker Compose 2.35.0 or later. This is required with both Docker and Podman.
 - `make` and `python`
 - `uv` when using the optional local MLX embedding server on macOS.
@@ -165,10 +167,17 @@ Other key variables you may want to change:
 
 - **Container engine selection**:
   - Set `CONTAINER_BIN=podman` to use Podman instead of Docker.
-  - You must perform a clean `make down-*` when switching engines; this is enforced
+  - On Linux, select a local rootless Docker context and leave
+    `CONTAINER_BIN=docker`; Make detects the daemon mode and its Unix socket.
+    Both lite and full mode support this path, including the Docker-socket code interpreter.
+    - You must perform a clean `make down-*` when switching engines; this is enforced
     in the stack's startup code to prevent shared database corruption in the
     bind-mounted `docker-data` directory. Otherwise, switching between engines is safe
     to do at a later point.
+  - A Docker daemon configured with `userns-remap` exits during the startup
+    capability check, before the shared-data claim or Compose mutation. This
+    mode is intentionally unsupported because it is less secure than pure
+    rootless mode.
   - On rootless Podman, the code interpreter tool and the code subagent are unavailable,
     due to docker-from-docker launch compatibility issues.
 - **Tor, VPN, and Proxy Use**:
@@ -624,9 +633,9 @@ For an MCP server running on the same host as Docker or Podman:
      to make it listen on `0.0.0.0:<port>`. This includes the engine's host
      gateway interface; use host firewall rules to reject unwanted LAN or
      public access to that port. For a narrower listener, bind to the actual
-     host-gateway address reported by the selected engine (often `172.17.0.1`
-     but do not hardcode this: distribution Docker daemon configuration can
-     use a different address). A host process bound only to the host's
+     host-access address selected by the wrapper (often `172.17.0.1` for
+     ordinary Docker and `10.0.2.2` for rootless Docker; do not hardcode either
+     outside the wrapper). A host process bound only to the host's
      `127.0.0.1` is not reachable through `host.docker.internal` on native
      Linux.
    - If the server runs in a separate Docker or Podman container, make it

@@ -13,6 +13,11 @@ host-owned `docker-data/tor/docker-runtime` bind on Linux. Podman and Docker
 Desktop use engine-local named volumes, so switching engines requires neither
 root ownership nor a privileged state rewrite.
 
+Rootless Docker maps its container root to the invoking Linux user, so Tor runs
+as `0:0` inside that namespace while retaining host-user ownership of the same
+state and transient-runtime binds. The runtime initializer also uses `0:0` and
+does not need a subordinate-ID assumption or persistent-state ownership rewrite.
+
 Docker Desktop reports the shared state bind root as UID/GID `0:0`, so its
 Docker Tor identity is `0:0`; native Docker uses the invoking host UID/GID.
 Docker Desktop also uses the named runtime volume because its host-bind
@@ -41,7 +46,8 @@ and an engine switch. Both engines must be down before adopting shared Onyx
 data ownership; Tor identity state remains the common host bind.
 
 This document is the compatibility and validation authority for running this
-wrapper with rootless Podman on macOS. Read it before adding a feature that
+wrapper with rootless Podman on macOS or native Linux and with rootless Docker
+on native Linux. Read it before adding a feature that
 changes Compose layering, mounts, container lifecycle, health checks, image
 preparation, network interfaces, or Docker-socket use.
 
@@ -64,6 +70,62 @@ Use Makefile targets rather than assembling a Compose invocation manually.
 The Makefile detects a Podman binary by its basename, exports
 `CONTAINER_BIN`, and appends the Podman overlays to the effective
 `COMPOSE_FILE`.
+
+For rootless Docker on native Linux, leave `CONTAINER_BIN=docker` and select the
+local rootless Docker context (or set its local `DOCKER_HOST`). Make classifies
+the selected daemon from Docker's security options, resolves its Unix socket
+for the code interpreter, and adds:
+
+- `compose_overlays/docker-compose.docker-rootless.yml` in both modes; and
+- `compose_overlays/docker-compose.docker-rootless-full.yml` in full mode.
+
+The selected socket must be a live local Unix socket. Remote rootless contexts
+are rejected because the code-interpreter container cannot safely mount a
+remote engine endpoint as `/var/run/docker.sock`.
+
+RootlessKit normally starts slirp4netns with host-loopback access disabled.
+Docker's `host-gateway` token is also daemon-global rather than
+RootlessKit-aware and can resolve to an inactive rootful `docker0` bridge when
+rootful and rootless daemons coexist. For rootless Docker, Make therefore maps
+`host.docker.internal` explicitly to RootlessKit's stable `10.0.2.2` host
+address. Host embeddings and operator integrations require the daemon to be
+started with host loopback enabled, for example by setting
+`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false` in the rootless
+Docker service environment and restarting that daemon. This deliberately
+changes host reachability for every container on that daemon; keep host
+services bound narrowly where possible, apply host firewall policy, and rely
+on the stack's final-hop proxy to permit only configured ports and
+destinations.
+
+The exact stack-owned Teep embedding URL does not require host-loopback. When
+rootless Docker selects `http://host.docker.internal:${HOST_PORT_TEEP}/v1/embeddings`,
+the wrapper keeps that operator-facing setting but gives the shim only
+`onyx-backend` plus `onyx-teep` and sends its runtime request directly to
+`http://teep:8337/v1/embeddings`. If Teep is VPN-routed, its fixed internal
+gateway owns the same `teep` alias. No other host URL or integration receives
+this exception.
+
+On a systemd installation, a typical opt-in drop-in is:
+
+```ini
+# ~/.config/systemd/user/docker.service.d/host-loopback.conf
+[Service]
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false
+```
+
+Run `systemctl --user daemon-reload` and restart `docker.service` only after
+reviewing that daemon-wide consequence. Lite mode does not need this option
+unless an enabled integration actually targets a host service. Full mode needs
+it when its configured embedding endpoint is another host-local service; the
+exact stack-owned Teep endpoint uses the internal exception above.
+
+Docker's daemon-wide `userns-remap` mode is different from rootless Docker. It
+remaps bind ownership while the daemon and its socket remain rootful, which is
+incompatible with the stack's shared host binds and Docker-out-of-Docker
+executor contract. The capability gate detects `name=userns` without
+`name=rootless` and exits before the shared-data claim, host-directory
+preparation, image work, or Compose mutation. There is no automatic
+`--userns=host` bypass; use an ordinary or rootless Docker daemon.
 
 `podman compose` is a frontend to an external Compose provider. It may report
 `docker-compose` as that provider; the provider still submits operations to
@@ -349,6 +411,29 @@ Docker does not undo Podman's compatible ownership. These overlays are never
 selected on macOS, where Docker Desktop ownership metadata and the existing
 Podman xattr handling remain unchanged.
 
+Rootless Docker cannot reproduce Podman's `keep-id:uid=70,gid=70` mapping:
+container root maps to the invoking host user, while PostgreSQL must run as a
+nonzero in-container UID. Assigning image UID 70 or OpenSearch UID 1000 to a
+host bind would make the files belong to host subordinate IDs and would break
+the ordinary-Docker/rootless-Podman interchange contract. The rootless Docker
+overlays therefore use engine-managed named volumes for PostgreSQL and SearXNG
+cache, plus full-mode OpenSearch and MinIO. Image entrypoints retain their
+native ownership setup inside those volumes. No host UID, subordinate UID/GID
+range, or daemon-assigned volume UID is assumed.
+
+These four stores belong to the selected rootless Docker daemon and are not the
+same data as `docker-data/postgres`, `docker-data/opensearch`, or
+`docker-data/minio`. `make down-*` preserves them, as it preserves all named
+volumes. Other host binds—including Myst identity, Tor state, Onyx file-system
+data, model cache, and document source—remain host-user-compatible because
+their writers run as container root or are read-only. Always stop the active
+stack before changing Docker contexts or container engines; do not treat the
+rootless volume isolation as permission for concurrent stacks.
+The shared-data marker distinguishes `docker-rootful`, `docker-rootless`, and
+`podman`; switching between either Docker daemon therefore requires the active
+flavor's matching `make down-*`, just like a Docker/Podman switch. A legacy
+`docker` marker is upgraded to the selected Docker flavor on its next claim.
+
 OpenSearch uses `keep-id:uid=1000,gid=1000` and its ordinary image entrypoint.
 The Podman-only network namespace sets `net.ipv4.ping_group_range=1000 1000`:
 rootless crun applies this sysctl at container creation, and every group in the
@@ -372,6 +457,12 @@ capability difference. Do not broaden VM privileges or disable the common
 memory-lock request merely to silence the warning; re-evaluate the limit,
 guest swap state, mapped-index residency, and failure behavior when changing
 the Podman machine or OpenSearch resource policy.
+
+Rootless Docker's OCI runtime cannot raise the inherited unlimited memlock
+rlimit and otherwise refuses to create the OpenSearch container. Its full-mode
+overlay sets the same 8 MiB soft/hard limit explicitly. OpenSearch emits the
+same memory-not-locked warning and continues; this is a rootless runtime
+constraint, not permission to reduce the JVM heap or other memory safeguards.
 
 ### VPN recovery and socket limitations
 
@@ -441,7 +532,8 @@ The Podman Makefile lifecycle is consequently create/configure/start:
 
 1. `check-container-health-capability` runs the Podman capability gate once,
    before shared-data or host-process mutation. Docker uses the same target for
-   its separate native engine/Compose version check.
+   its separate native engine/Compose version check, rootless socket check, and
+   daemon-wide `userns-remap` rejection.
 2. The mode-appropriate database preflights initialize genuinely empty
    PostgreSQL and full-mode OpenSearch binds, validate existing shared binds,
    and remove only the unsafe PostgreSQL mount-root override when present. Full
@@ -721,6 +813,15 @@ direct inspection; do not mix Docker engine results into the evidence.
 9. Recheck after a VM/Desktop restart when the change depends on mounts,
    storage, startup health, or generated containers. Clean first-start and
    warm repeated-start behavior are both required lifecycle cases.
+
+For a rootless Docker change, run the same affected lite/full live checks with
+the rootless context selected. Confirm `docker info` reports `name=rootless`,
+the code interpreter mounts that context's socket, the four ownership-sensitive
+stores resolve to named volumes, `host.docker.internal` reaches a configured
+host service without selecting a coexisting rootful bridge, Tor state remains
+owned by the invoking host user, and both clean and warm starts succeed. Also exercise the capability gate
+against a disposable daemon with `userns-remap` and require it to exit before a
+Compose container or shared-data marker is created.
 
 Record exactly what could not be exercised and why. Leave the matching Podman
 stack state explicit at handoff, and never stop or recreate a user-owned VM or

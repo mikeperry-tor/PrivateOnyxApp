@@ -81,10 +81,20 @@ def validate_runtime_contract(
             render_text(egress=True, onion=False, country="", fingerprints=()),
             encoding="ascii",
         )
-        docker_macos = sys.platform == "darwin" and Path(engine).name == "docker"
-        docker_linux = sys.platform.startswith("linux") and Path(engine).name == "docker"
+        docker_selected = Path(engine).name == "docker"
+        docker_macos = sys.platform == "darwin" and docker_selected
+        docker_linux = sys.platform.startswith("linux") and docker_selected
+        docker_rootless = False
+        if docker_selected:
+            security_options = json.loads(
+                run(engine, "info", "--format", "{{json .SecurityOptions}}")
+            )
+            docker_rootless = any(
+                option.split(",", 1)[0] == "name=rootless"
+                for option in security_options
+            )
         host_user = f"{os.getuid()}:{os.getgid()}"
-        if docker_macos:
+        if docker_macos or docker_rootless:
             expected_user = "0:0"
         elif docker_linux:
             expected_user = host_user
@@ -143,7 +153,7 @@ def validate_runtime_contract(
                         "--tmpfs",
                         (
                             "/run/tor-control:uid=0,gid=0,mode=0700"
-                            if docker_macos
+                            if docker_macos or docker_rootless
                             else f"/run/tor-control:uid={os.getuid()},gid={os.getgid()},mode=0700"
                         ),
                     ]

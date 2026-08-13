@@ -1,0 +1,23 @@
+## Full-mode rootless Docker storage override. These engine-managed volumes
+## avoid assumptions about the host's subordinate UID/GID allocation.
+
+services:
+  opensearch:
+    # Rootless runc cannot raise RLIMIT_MEMLOCK to the inherited unlimited
+    # value. Keep the daemon/user limit so container creation succeeds;
+    # OpenSearch logs the expected memory-lock warning and continues.
+    ulimits:
+      memlock:
+        soft: 8388608
+        hard: 8388608
+    volumes: !override
+      - rootless-docker-opensearch:/usr/share/opensearch/data
+      - ./onyx/opensearch/audit.yml:/usr/share/opensearch/config/opensearch-security/audit.yml:ro
+
+  minio:
+    volumes: !override
+      - rootless-docker-minio:/data
+
+volumes:
+  rootless-docker-opensearch: {}
+  rootless-docker-minio: {}

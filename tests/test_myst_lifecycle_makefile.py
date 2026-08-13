@@ -324,6 +324,23 @@ class MystLifecycleMakefileTests(unittest.TestCase):
                         settings[2],
                     )
 
+            rootless = self._make_database(
+                empty,
+                assignments=(
+                    "CONTAINER_BIN=docker",
+                    "HOST_OS=Linux",
+                    "PRIVATE_ONYX_DOCKER_ENGINE_MODE=rootless",
+                ),
+            )
+            self.assertEqual(
+                self._simple_make_value(rootless, "PRIVATE_ONYX_DOCKER_TOR_UID"),
+                "0",
+            )
+            self.assertEqual(
+                self._simple_make_value(rootless, "PRIVATE_ONYX_DOCKER_TOR_GID"),
+                "0",
+            )
+
     def test_stack_start_preserves_integrated_myst_container(self) -> None:
         makefile = (ROOT / "Makefile").read_text()
         guard = (ROOT / "myst/signup_guard.py").read_text()
@@ -432,6 +449,8 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[1].split("\n\n", 1)[0]
         self.assertIn("startup_health.py check-compose", capability_target)
         self.assertIn("startup_health.py check", capability_target)
+        self.assertIn("startup_health.py check-docker", capability_target)
+        self.assertIn("DOCKER_ROOTLESS_SELECTED", capability_target)
         self.assertIn('[ ! -S "$(DOCKER_SOCK_PATH)" ]', capability_target)
         self.assertIn(
             "systemctl --user enable --now podman.socket", capability_target

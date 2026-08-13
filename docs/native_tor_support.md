@@ -145,13 +145,15 @@ Linux Docker runs it as the invoking host UID/GID because Docker lacks
 Podman's keep-id mapping; the state and runtime binds therefore need no
 privileged ownership rewrite and remain compatible with rootless Podman.
 Docker Desktop runs it as `0:0`, matching that platform's bind ownership
-translation. Make exports both the selected identity and runtime source to the
-same platform-neutral Docker overlays.
+translation. Rootless Docker also runs it as in-container `0:0`, which maps to
+the invoking Linux user for both binds. Make exports the selected identity and
+runtime source to the same platform-neutral Docker overlays.
 Docker Desktop on macOS is the narrow exception: its bind transport reports a
 host bind root as UID/GID `0:0` regardless of host ownership or a container-side
 `chown`, and Tor strictly rejects a data directory not owned by its effective
-UID. Make therefore exports Docker Tor UID/GID `0:0` on macOS and the host
-UID/GID on native Linux. The single Docker overlay consumes those values; its
+UID. Make therefore exports Docker Tor UID/GID `0:0` on macOS and rootless
+Linux, and the host UID/GID on ordinary native Linux Docker. The single Docker
+overlay consumes those values; its
 writable paths remain limited to persistent state and the selected transient
 SOCKS mount. Podman
 retains the non-root keep-id mapping.

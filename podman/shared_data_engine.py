@@ -13,7 +13,7 @@ from typing import Iterable, Sequence
 from urllib.parse import unquote, urlsplit
 
 
-VALID_ENGINES = {"docker", "podman"}
+VALID_ENGINES = {"docker", "docker-rootful", "docker-rootless", "podman"}
 SHARED_WRITER_SERVICES = {"relational_db", "opensearch"}
 MYST_CONTAINER_NAME = "myst-client-vpn"
 
@@ -42,6 +42,14 @@ def read_owner(marker: Path) -> str | None:
 def _engine_for_command(command: str) -> str:
     name = Path(command).name.lower()
     return "podman" if "podman" in name else "docker"
+
+
+def _engine_family(engine: str) -> str:
+    return "docker" if engine.startswith("docker-") else engine
+
+
+def _legacy_owner_matches(owner: str, engine: str) -> bool:
+    return owner == "docker" and _engine_family(engine) == "docker"
 
 
 def _available_command(command: str) -> bool:
@@ -140,6 +148,7 @@ def _docker_local_endpoint_is_absent(command: str) -> str | None:
 
 
 def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
+    engine_family = _engine_family(engine)
     checked: set[tuple[str, str]] = set()
     for command in commands:
         command_engine = _engine_for_command(command)
@@ -154,13 +163,13 @@ def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
             writers = _running_shared_writers(command)
         except GuardError:
             if (
-                command_engine != engine
+                command_engine != engine_family
                 and command_engine == "podman"
                 and _podman_machine_is_stopped(command)
             ):
                 print(f"Skipping stopped unselected Podman machine ({command}).")
                 continue
-            if command_engine != engine and command_engine == "docker":
+            if command_engine != engine_family and command_engine == "docker":
                 absent_endpoint = _docker_local_endpoint_is_absent(command)
                 if absent_endpoint is not None:
                     print(
@@ -169,7 +178,7 @@ def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
                     )
                     continue
             raise
-        if writers and command_engine != engine:
+        if writers and command_engine != engine_family:
             names = ", ".join(sorted(writers))
             raise GuardError(
                 f"refusing first {engine} claim while {command_engine} has running "
@@ -188,7 +197,7 @@ def claim(
     marker.parent.mkdir(parents=True, exist_ok=True)
     owner = read_owner(marker)
     if owner is not None:
-        if owner != engine:
+        if owner != engine and not _legacy_owner_matches(owner, engine):
             raise GuardError(
                 f"shared persistent data is claimed by {owner}; run that "
                 "engine's matching make down-* target before starting " + engine
@@ -198,6 +207,12 @@ def claim(
         # especially a Myst daemon sharing the wallet/database bind.
         if not adopt_unclaimed:
             inspect_first_claim(inspect_commands, engine)
+        if owner != engine:
+            temporary = marker.with_name(marker.name + ".upgrade")
+            temporary.write_text(engine + "\n", encoding="ascii")
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, marker)
+            return engine
         return owner
 
     if not adopt_unclaimed:
@@ -225,7 +240,7 @@ def release(marker: Path, engine: str) -> None:
     owner = read_owner(marker)
     if owner is None:
         return
-    if owner != engine:
+    if owner != engine and not _legacy_owner_matches(owner, engine):
         raise GuardError(
             f"refusing to release {owner}'s shared-data claim as {engine}"
         )

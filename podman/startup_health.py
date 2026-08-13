@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Sequence
+from urllib.parse import unquote, urlsplit
 
 
 VALIDATED_PODMAN_VERSION = (5, 4, 2)
@@ -87,6 +88,80 @@ networks:
 
 class ContractError(RuntimeError):
     pass
+
+
+def docker_engine_mode(container_bin: str) -> str:
+    """Classify the selected Docker daemon's user-namespace mode."""
+    if "podman" in os.path.basename(container_bin).lower():
+        raise ContractError("Docker engine inspection refuses a Podman binary")
+    try:
+        raw_options = _run(
+            [container_bin, "info", "--format", "{{json .SecurityOptions}}"]
+        ).stdout.strip()
+        options = json.loads(raw_options)
+    except (json.JSONDecodeError, OSError, subprocess.CalledProcessError) as exc:
+        raise ContractError(
+            f"could not inspect the selected Docker daemon security options: {exc}"
+        ) from exc
+    if not isinstance(options, list) or not all(
+        isinstance(option, str) for option in options
+    ):
+        raise ContractError("Docker returned malformed security options")
+    names = {option.split(",", 1)[0] for option in options}
+    if "name=rootless" in names:
+        return "rootless"
+    if "name=userns" in names:
+        return "userns-remap"
+    return "rootful"
+
+
+def check_docker_engine(container_bin: str, expected_mode: str | None = None) -> str:
+    """Reject daemon-wide userns-remap and verify Make selected the right layer."""
+    mode = docker_engine_mode(container_bin)
+    if mode == "userns-remap":
+        raise ContractError(
+            "the selected Docker daemon has userns-remap enabled. This stack "
+            "does not support daemon-wide userns-remap because its host binds "
+            "and engine-socket executor require ownership semantics that Docker "
+            "remaps incompatibly. Disable userns-remap or select a rootless "
+            "Docker daemon; no stack containers were started."
+        )
+    if expected_mode and expected_mode != mode:
+        raise ContractError(
+            f"Docker daemon mode changed while preparing the stack "
+            f"(Make selected {expected_mode}, daemon reports {mode}); rerun make"
+        )
+    return mode
+
+
+def docker_socket_path(container_bin: str) -> str:
+    """Resolve the selected local Docker context to its Unix socket path."""
+    endpoint = os.environ.get("DOCKER_HOST", "").strip()
+    if not endpoint:
+        try:
+            endpoint = _run(
+                [
+                    container_bin,
+                    "context",
+                    "inspect",
+                    "--format",
+                    "{{.Endpoints.docker.Host}}",
+                ]
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise ContractError(
+                f"could not resolve the selected Docker context endpoint: {exc}"
+            ) from exc
+    parsed = urlsplit(endpoint)
+    if parsed.scheme != "unix" or parsed.netloc or not parsed.path:
+        raise ContractError(
+            "rootless Docker requires a local unix:// context so the code "
+            "interpreter can mount the selected engine socket"
+        )
+    path = unquote(parsed.path)
+    if not os.path.isabs(path):
+        raise ContractError("Docker context returned a non-absolute Unix socket path")
+    return path
 
 
 @dataclass(frozen=True)
@@ -888,7 +963,10 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "assert-healthy",
             "check",
             "check-compose",
+            "check-docker",
             "configure",
+            "docker-mode",
+            "docker-socket-path",
             "initialize-opensearch",
             "initialize-postgres",
             "prepare-host-directories",
@@ -896,6 +974,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--container-bin", default="podman")
+    parser.add_argument("--expected-docker-mode", choices=("rootful", "rootless"))
     parser.add_argument("--project", default="onyx")
     parser.add_argument("--env-file", action="append", default=[])
     parser.add_argument("--skip-capability-check", action="store_true")
@@ -919,6 +998,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "check-compose":
             version = check_compose_capability(args.container_bin)
             print(f"Compose {version} required model features are available.")
+        elif args.action == "check-docker":
+            mode = check_docker_engine(
+                args.container_bin, expected_mode=args.expected_docker_mode
+            )
+            print(f"Docker {mode} daemon mode is supported.")
+        elif args.action == "docker-mode":
+            print(docker_engine_mode(args.container_bin))
+        elif args.action == "docker-socket-path":
+            print(docker_socket_path(args.container_bin))
         elif args.action == "assert-healthy":
             assert_services_healthy(args.container_bin, args.project, args.service)
         elif args.action == "prepare-shared-data":

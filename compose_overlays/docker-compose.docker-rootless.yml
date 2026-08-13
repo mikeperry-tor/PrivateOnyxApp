@@ -1,0 +1,17 @@
+## Rootless Docker override for services whose image users cannot safely write
+## host-user-owned binds through Docker's subordinate-ID mapping.
+
+services:
+  relational_db:
+    volumes: !override
+      - rootless-docker-postgres:/var/lib/postgresql/data
+
+  searxng-core:
+    volumes: !override
+      - ./searxng/core-config/:/etc/searxng/:Z
+      - rootless-docker-searxng-cache:/var/cache/searxng
+      - ./searxng/patches:/usr/local/searxng/wrapper-patches:ro
+
+volumes:
+  rootless-docker-postgres: {}
+  rootless-docker-searxng-cache: {}

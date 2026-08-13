@@ -107,6 +107,7 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--iterations", type=int, default=24)
     parser.add_argument("--expected-version")
+    parser.add_argument("--memlock", default="-1:-1")
     args = parser.parse_args()
 
     audit_config = args.audit_config.resolve(strict=True)
@@ -124,7 +125,7 @@ def main() -> None:
         "--volume",
         f"{volume}:/usr/share/opensearch/data",
         "--ulimit",
-        "memlock=-1:-1",
+        f"memlock={args.memlock}",
         "--env",
         "discovery.type=single-node",
         "--env",

@@ -52,7 +52,7 @@ apply in every selected mode.
 | `obscura-cdp-gateway` | API-side control network and Obscura control network | none |
 | `obscura` | CDP control networks and its fixed browser bridge | shared public final-hop policy through `obscura-egress-bridge` |
 | enabled executor | executor service/control networks and its fixed bridge | shared public final-hop policy through `executor-egress-bridge` |
-| doc-drop and embedding components | their documented full-mode local networks; the macOS Podman relay has a dedicated host uplink | only their explicit fixed host/public route where configured |
+| doc-drop and embedding components | their documented full-mode local networks; the macOS Podman relay has a dedicated host uplink; rootless Docker's exact stack-owned Teep embedding selection has only `onyx-backend` plus `onyx-teep` | only their explicit fixed host/public route where configured; the rootless Teep exception has no host-egress network |
 | optional `tor` | `tor-ingress` only when onion ingress is enabled; private control tmpfs and optional SOCKS runtime volume are mounts, not networks | dedicated `tor-uplink`; applications never join it |
 | optional `tor-frontend-gateway` | spans only `tor-ingress` and `onyx-frontend`, with fixed nginx forwarding | none |
 
