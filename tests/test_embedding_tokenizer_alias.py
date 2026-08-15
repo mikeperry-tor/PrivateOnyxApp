@@ -80,9 +80,10 @@ class EmbeddingTokenizerAliasTests(unittest.TestCase):
             ), patch.dict(sys.modules, modules):
                 wrapper.apply_embedding_tokenizer_alias_patch()
                 utils.HuggingFaceTokenizer("nomic-ai/nomic-embed-text-v23")
+                utils.HuggingFaceTokenizer("nomic-ai/nomic-embed-text-v1")
                 utils.HuggingFaceTokenizer("other/model")
 
-        self.assertEqual(Tokenizer.file_calls, [str(tokenizer_file)])
+        self.assertEqual(Tokenizer.file_calls, [str(tokenizer_file)] * 2)
         self.assertEqual(Tokenizer.calls, ["other/model"])
 
     def test_missing_offline_file_fails_patch_installation(self) -> None:

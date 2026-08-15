@@ -222,16 +222,22 @@ former before stack startup but preserve an already-running integrated Myst
 container and its routing namespace.
 
 The standalone project uses `MYST_SETUP_ONLY=true` and `restart: "no"`. Its
-entrypoint starts TequilAPI and waits without creating identities, registering,
-or placing orders. The host helper is the single mutation owner, validates the
-exact identity and live gateway configuration, verifies registration/order
-postconditions, and never automatically retries an ambiguous financial
-result. `MYST_VPN_IDENTITY` is required for both setup and integrated startup
-when the wallet contains multiple identities. Setup health checks only local
-TequilAPI and bypasses the recovery
+entrypoint starts TequilAPI and waits without registering an identity, creating
+a payment order, or submitting a transfer. The pinned Myst daemon may create
+and unlock one local default identity while its empty data directory starts;
+the host helper reuses that identity, or creates one explicitly only when the
+daemon did not. The helper is the single owner of registration and funding
+mutations, validates the exact identity and live gateway configuration,
+verifies registration/order postconditions, and never automatically retries
+an ambiguous financial result. `MYST_VPN_IDENTITY` is required for both setup
+and integrated startup when the wallet contains multiple identities. Setup
+health checks only local TequilAPI and bypasses the recovery
 supervisor, so hours or days spent completing payment neither arm PID-1
 termination nor create restart churn. `make vpn-signup-stop` explicitly stops
-the setup service. Integrated Myst startup performs no signup/order mutation.
+the setup service. On native rootful Docker, that stop path also returns the
+wallet bind to the invoking host UID/GID with the tracked networkless ownership
+helper before releasing the shared-data claim. Integrated Myst startup performs
+no signup/order mutation.
 
 With `MYST_VPN_ENABLED=true`, health reads only Myst's loopback
 `/connection` status plus the local `myst0` address and route. It requires a

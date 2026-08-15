@@ -397,12 +397,13 @@ Re-audit the pinned Onyx symbols for:
 - built-in versus external provider dispatch and Admin/provider test APIs;
 - any new requests, local-browser, Firecrawl, parser, or generic fallback.
 
-Re-audit the exact fake embedding model contract. The saved
-`nomic-ai/nomic-embed-text-v23` value maps only tokenizer construction to the
-bundled `nomic-ai/nomic-embed-text-v1` tokenizer. Confirm the strict
-`HuggingFaceTokenizer.__init__` source-shape check, both API and background
-installation points, no Hugging Face lookup for v23, and unchanged behavior
-for every other tokenizer model. Confirm the network-disabled pinned-image
+Re-audit the exact supported nomic tokenizer contract. The fresh-state
+`nomic-ai/nomic-embed-text-v1` value and saved synthetic
+`nomic-ai/nomic-embed-text-v23` value map only tokenizer construction to the
+bundled v1 tokenizer file. Confirm the strict `HuggingFaceTokenizer.__init__`
+source-shape check, both API and background installation points, no Hugging
+Face lookup for either exact name, and unchanged behavior for every other
+tokenizer model. Confirm the network-disabled pinned-image
 extraction into the shared cache, startup failure for a missing generated file,
 and local `Tokenizer.from_file` construction. Exercise a clean cache under
 both Docker and Podman as well as an idempotent populated-cache start. The

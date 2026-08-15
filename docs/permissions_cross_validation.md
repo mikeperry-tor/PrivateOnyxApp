@@ -75,7 +75,9 @@ The expected handoff is not identical for all stores:
   `docker-data/opensearch` and `docker-data/minio`.
 - Native-Linux ordinary Docker must leave the PostgreSQL tree and, in full
   mode, the MinIO tree owned by the invoking host user so rootless Podman can
-  write them.
+  write them. Its tracked shutdown path must likewise return the Myst tree,
+  whose writer requires container root, to the invoking host UID/GID before
+  releasing the shared-data claim.
 - Rootless Docker cannot map non-root image users onto those same binds safely.
   It therefore uses engine-managed named volumes for PostgreSQL and SearXNG
   cache and, in full mode, OpenSearch and MinIO. Those stores are intentionally

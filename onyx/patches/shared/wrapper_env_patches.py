@@ -2953,13 +2953,14 @@ def apply_llm_max_tokens_override_patch() -> None:
 
 
 def apply_embedding_tokenizer_alias_patch() -> None:
-    """Keep Onyx's intentional fake nomic model name without a network lookup.
+    """Load the wrapper's supported nomic tokenizers without a network lookup.
 
     The saved v23 name activates Onyx's nomic-family RAG behavior, while the
     local embedding shim selects the real upstream model. Onyx otherwise asks
     Hugging Face for a nonexistent tokenizer and then falls back to the bundled
-    v1 tokenizer. Map only tokenizer construction to that same fallback model;
-    the saved model name and every feature gate remain unchanged.
+    v1 tokenizer. Fresh Onyx state also constructs that v1 tokenizer directly.
+    Map only those two exact tokenizer names to the generated offline file; the
+    saved model name and every feature gate remain unchanged.
     """
 
     fake_model = "nomic-ai/nomic-embed-text-v23"
@@ -3006,7 +3007,7 @@ def apply_embedding_tokenizer_alias_patch() -> None:
 
     @functools.wraps(original_init)
     def _aliased_init(self, model_name: str):
-        if model_name == fake_model and tokenizer_file:
+        if model_name in (fake_model, tokenizer_model) and tokenizer_file:
             self.encoder = nlp_utils.Tokenizer.from_file(tokenizer_file)
             return None
         return original_init(
@@ -3016,7 +3017,7 @@ def apply_embedding_tokenizer_alias_patch() -> None:
 
     nlp_utils.HuggingFaceTokenizer.__init__ = _aliased_init
     print(
-        "sitecustomize: mapped fake nomic v23 tokenizer to bundled nomic v1 "
+        "sitecustomize: mapped supported nomic tokenizers to bundled nomic v1 "
         + (
             "offline file without changing the saved embedding model name"
             if tokenizer_file

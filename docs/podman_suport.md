@@ -258,6 +258,14 @@ July 2026 that tag produced a Fedora CoreOS 44 image whose first-boot Ignition
 failed while creating the macOS uid 501 user (`useradd: cannot lock
 /etc/group`) and entered emergency mode under both libkrun and AppleHV.
 
+The immutable image retains package-owned container configuration under
+`/usr/etc`. If `podman build` or `podman pull` reports that no `policy.json`
+exists, first verify that `/usr/etc/containers/policy.json` is present and is
+owned by `containers-common`, then restore that exact vendor file to
+`/etc/containers/policy.json`. Do not invent a different trust policy or copy
+one from another host. Repeat the runtime identity gates after this host
+correction.
+
 On this machine, official 5.8.2 and 5.8.5 machine images also developed an
 unusable overlay image store after restart, reporting
 `readlink ... overlay: invalid argument`. This is a local observed regression,
@@ -352,6 +360,17 @@ preflight initializes a genuinely missing or empty PostgreSQL bind and refuses
 a nonempty bind without `PG_VERSION` as partial or unknown state. The same rule
 applies to OpenSearch: a genuinely missing or empty bind is initialized, while
 a nonempty bind without `nodes` is never overwritten.
+
+Myst must run as container root under native rootful Docker so it can configure
+its tunnel namespace and firewall. After the Myst writer stops, each tracked
+`make down-*` and `make vpn-signup-stop` path runs a networkless, read-only-root
+helper from the already-selected Myst image with only `CAP_CHOWN`. The helper
+returns the persistent `docker-data/myst-data` tree to the invoking host UID/GID
+and verifies the result before releasing the shared-data claim. Rootless
+Docker and Podman already map container root to the invoking user, while Docker
+Desktop translates the bind through its VM; those paths do not run the helper.
+This narrow shutdown operation is part of the engine handoff contract, not an
+operator repair command.
 
 Full-mode startup also uses the shared `docker-data/model-cache` bind for the
 small wrapper-owned nomic tokenizer file. The Makefile extracts that file from

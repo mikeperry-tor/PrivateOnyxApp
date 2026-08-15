@@ -1253,6 +1253,30 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             recipe = makefile.split(target, 1)[1].split("\n\n", 1)[0]
             self.assertIn("release-shared-data-engine", recipe)
 
+    def test_native_rootful_docker_releases_myst_bind_ownership(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        release = makefile.split("release-myst-data-ownership:", 1)[1].split(
+            "\n\n", 1
+        )[0]
+        self.assertIn('"$(HOST_OS)" != "Linux"', release)
+        self.assertIn('"$(PODMAN_SELECTED)" = "true"', release)
+        self.assertIn('"$(DOCKER_ROOTLESS_SELECTED)" = "true"', release)
+        self.assertIn("--network none --read-only", release)
+        self.assertIn("--cap-drop ALL --cap-add CHOWN", release)
+        self.assertIn('--entrypoint chown "$(MYST_IMAGE)"', release)
+        self.assertIn(
+            '-R "$(PRIVATE_ONYX_HOST_UID):$(PRIVATE_ONYX_HOST_GID)" /data',
+            release,
+        )
+        self.assertIn('find "$(MYST_DATA_DIR)" -xdev', release)
+
+        for target in ("down-lite:", "down-full:", "vpn-signup-stop:"):
+            recipe = makefile.split(target, 1)[1].split("\n\n", 1)[0]
+            self.assertLess(
+                recipe.index("release-myst-data-ownership"),
+                recipe.index("release-shared-data-engine"),
+            )
+
     def test_podman_excludes_socket_only_code_interpreter_and_pulls_directly(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn(

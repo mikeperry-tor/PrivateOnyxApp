@@ -169,9 +169,11 @@ myst_cli identities list >/dev/null 2>&1 || true
 
 echo "TequilAPI is ready."
 
-# Standalone signup/payment containers deliberately stop here.  The host-side
-# helper is the sole owner of identity creation, registration, and funding
-# mutations so two independent processes can never race an order creation.
+# Standalone signup/payment containers deliberately stop here. The pinned
+# daemon may already have initialized one local default identity on an empty
+# data directory. The host-side helper reuses it (or creates one when absent)
+# and remains the sole owner of registration and funding mutations, so two
+# independent processes can never race a financial operation.
 # Keep the daemon alive across an arbitrarily long user payment pause.
 case "${MYST_SETUP_ONLY:-false}" in
   true)

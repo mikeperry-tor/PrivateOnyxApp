@@ -39,9 +39,10 @@
 #   ../docker-data/myst-data/keystore/
 #
 # Back up this directory to preserve your identity and any funded balance.
-# Identity creation, registration, and payment orders are explicit host-side
-# operations (`make vpn-signup-*`); ordinary container startup never mutates
-# signup/payment state.
+# Registration and payment orders are explicit host-side operations
+# (`make vpn-signup-*`). On an empty data directory, the pinned daemon may
+# initialize a local default identity before the host-side signup helper runs;
+# ordinary integrated startup does not register or fund it.
 #
 # ── Startup sequence ──────────────────────────────────────────────────────────
 # With MYST_VPN_ENABLED=false, skip the daemon and run only an inert process;

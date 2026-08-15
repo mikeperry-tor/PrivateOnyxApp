@@ -58,7 +58,7 @@ echo "Validating offline embedding tokenizer contract in $onyx_backend_image"
     -v "$repo_root/onyx/patches/shared:/wrapper:ro" \
     -v "$tokenizer_tmp/tokenizer.json:/offline-tokenizer/tokenizer.json:ro" \
     "$onyx_backend_image" \
-    -c "import wrapper_env_patches as p; p.apply_embedding_tokenizer_alias_patch(); from onyx.natural_language_processing.utils import HuggingFaceTokenizer; t=HuggingFaceTokenizer('nomic-ai/nomic-embed-text-v23'); assert t.encoder.encode('offline tokenizer').tokens; print('PINNED_OFFLINE_TOKENIZER_CONTRACT_OK')"
+    -c "import wrapper_env_patches as p; p.apply_embedding_tokenizer_alias_patch(); from onyx.natural_language_processing.utils import HuggingFaceTokenizer; tokenizers=[HuggingFaceTokenizer(name) for name in ('nomic-ai/nomic-embed-text-v1', 'nomic-ai/nomic-embed-text-v23')]; assert all(t.encoder.encode('offline tokenizer').tokens for t in tokenizers); print('PINNED_OFFLINE_TOKENIZER_CONTRACT_OK')"
 
 echo "Validating WebUI build-time privacy controls in $onyx_web_server_image"
 "$container_bin" run --rm \

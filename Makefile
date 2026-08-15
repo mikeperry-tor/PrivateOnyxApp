@@ -539,7 +539,7 @@ FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-stop-if-started
 endif
 endif
 
-.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine prepare-lite-host-data prepare-full-host-data prepare-onyx-tokenizer up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-sync-environment embedserv-sync-if-installed embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine release-myst-data-ownership prepare-lite-host-data prepare-full-host-data prepare-onyx-tokenizer up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-sync-environment embedserv-sync-if-installed embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -625,6 +625,33 @@ adopt-shared-data-engine:
 
 release-shared-data-engine:
 	@python3 podman/shared_data_engine.py release --engine "$(SHARED_DATA_ENGINE)" --marker "$(SHARED_DATA_ENGINE_MARKER)"
+
+# Native rootful Docker must run Myst as container root for namespace and
+# firewall setup. Return only its persistent wallet tree to the invoking host
+# identity after the writer has stopped, before another rootless engine can
+# claim the shared data. Other supported engines already map container root to
+# the host user or translate the bind through a VM and need no rewrite.
+release-myst-data-ownership:
+	@set -eu; \
+	if [ "$(HOST_OS)" != "Linux" ] || [ "$(PODMAN_SELECTED)" = "true" ] || [ "$(DOCKER_ROOTLESS_SELECTED)" = "true" ]; then \
+		exit 0; \
+	fi; \
+	if [ ! -d "$(MYST_DATA_DIR)" ]; then exit 0; fi; \
+	if ! "$(CONTAINER_BIN)" image inspect "$(MYST_IMAGE)" >/dev/null 2>&1; then \
+		echo "ERROR: cannot release Myst data ownership because image $(MYST_IMAGE) is unavailable" >&2; \
+		exit 1; \
+	fi; \
+	"$(CONTAINER_BIN)" run --rm --network none --read-only \
+		--cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges \
+		--user 0:0 \
+		--mount "type=bind,src=$(CURDIR)/$(MYST_DATA_DIR),dst=/data" \
+		--entrypoint chown "$(MYST_IMAGE)" \
+		-R "$(PRIVATE_ONYX_HOST_UID):$(PRIVATE_ONYX_HOST_GID)" /data; \
+	if find "$(MYST_DATA_DIR)" -xdev \( ! -user "$(PRIVATE_ONYX_HOST_UID)" -o ! -group "$(PRIVATE_ONYX_HOST_GID)" \) -print -quit | grep -q .; then \
+		echo "ERROR: Myst data ownership release left a non-host-owned entry" >&2; \
+		exit 1; \
+	fi; \
+	echo "Myst persistent data ownership released to host uid/gid $(PRIVATE_ONYX_HOST_UID):$(PRIVATE_ONYX_HOST_GID)."
 
 prepare-lite-host-data:
 	@python3 podman/startup_health.py prepare-host-directories \
@@ -1075,10 +1102,12 @@ upgrade-onyx:
 
 down-lite:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(LITE_DOWN_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
+	@$(MAKE) --no-print-directory release-myst-data-ownership
 	@$(MAKE) --no-print-directory release-shared-data-engine
 
 down-full:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(FULL_DOWN_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
+	@$(MAKE) --no-print-directory release-myst-data-ownership
 	@"$${MAKE:-make}" podman-doc-server-stop-if-started
 	@"$${MAKE:-make}" embedserv-stop-if-started
 	@$(MAKE) --no-print-directory release-shared-data-engine
@@ -1381,8 +1410,9 @@ embedserv-stop-after-custom-ready:
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Start standalone Myst container for initial signup/payment, then run the
-# signup helper which creates an identity, registers it, and creates a
-# payment order. The payment URL is printed to stdout.
+# signup helper which ensures an identity exists, registers it, and creates a
+# payment order. The daemon may have initialized the local identity while
+# entering setup mode. The payment URL is printed to stdout.
 # Setup mode starts only the local daemon; the host helper owns each explicit
 # identity, registration, and payment operation.
 vpn-signup-orderform: myst-image-ready
@@ -1403,8 +1433,9 @@ vpn-signup-orderform: myst-image-ready
 		$(MYST_VPN_CLI) signup
 
 # Start standalone Myst container for initial signup, then run the blockchain
-# helper which creates an identity, registers it, and prints the consumer
-# channel address for direct on-chain $MYST transfer (Polygon). No payment
+# helper which ensures an identity exists, registers it, and prints the
+# consumer channel address for direct on-chain $MYST transfer (Polygon). The
+# daemon may have initialized the local identity while entering setup mode. No payment
 # order is created.
 # Setup mode starts only the local daemon; the host helper owns each explicit
 # identity and registration operation. This target never creates an order.
@@ -1423,6 +1454,7 @@ vpn-signup-blockchain: myst-image-ready
 vpn-signup-stop:
 	@python3 myst/signup_guard.py --container-bin "$(CONTAINER_BIN)" --container-name "$(MYST_CONTAINER_NAME)" --allowed-project "$(MYST_SIGNUP_PROJECT)" --require-existing
 	@COMPOSE_FILE=$(MYST_COMPOSE_FILE) "$(CONTAINER_BIN)" compose -p $(MYST_SIGNUP_PROJECT) $(COMPOSE_ENV_FILES) down --remove-orphans
+	@$(MAKE) --no-print-directory release-myst-data-ownership
 	@$(MAKE) --no-print-directory release-shared-data-engine
 
 # Show identity, balance, registration status, all orders, and payment URLs

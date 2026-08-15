@@ -344,10 +344,11 @@ The `v23` name is intentionally synthetic. Before full-mode Compose starts, the
 Makefile extracts the `nomic-ai/nomic-embed-text-v1` tokenizer already bundled
 in the pinned Onyx image, with container networking disabled, and atomically
 installs it in the shared model-cache bind. API and background startup require
-that generated file and map tokenizer construction for the exact synthetic
-name to `Tokenizer.from_file`; they do not call Hugging Face, rewrite the saved
-model name, or change the model name sent to the embedding shim. Other
-tokenizer model names retain stock Onyx behavior. In Onyx, the `nomic-ai` name
+that generated file and map tokenizer construction for the exact bundled v1
+name and synthetic v23 name to `Tokenizer.from_file`; they do not call Hugging
+Face, rewrite the saved model name, or change the model name sent to the
+embedding shim. Other tokenizer model names retain stock Onyx behavior. In
+Onyx, the `nomic-ai` name
 prefix additionally permits large chunks only when multipass indexing is
 enabled; it has no name-based retrieval effect while multipass is disabled.
 
@@ -761,7 +762,7 @@ these assumptions:
 - The recommended Admin model type and embedding dimension still match the
   current Onyx UI behavior and the selected local model.
 - `HuggingFaceTokenizer.__init__` still has the source shape validated by the
-  exact synthetic v23-to-v1 tokenizer-only alias; the pinned image bootstrap
+  exact v1/v23-to-offline-v1 tokenizer-only mapping; the pinned image bootstrap
   succeeds with networking disabled; API and background load the generated
   file without a Hugging Face request; every other model retains stock loading;
   and any intended large-chunk behavior is tested with multipass indexing
