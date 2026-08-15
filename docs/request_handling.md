@@ -131,7 +131,12 @@ SearXNG instead gives each of its five providers one lazy connection and one
 target retained together until the provider has been idle for one hour. Later
 queries reuse that target, its native cookie jar, selected profile,
 target-owned stealth HTTP client/connection pool, and target-scoped fingerprint
-seed. Neither path issues `Network.clearBrowserCookies`.
+seed. After collecting a terminal search DOM, the client navigates that same
+target to local `about:blank` before returning it to the provider owner. This
+destroys provider JavaScript realms, timers, and page resources while retaining
+the target-owned state above. A pending Startpage proof is the sole exception:
+its challenge document remains live only until resume or abort. Neither path
+issues `Network.clearBrowserCookies`.
 
 The single Obscura process accepts at most 15 live WebSockets: ten direct
 `open_url` attempts plus one retained connection for each of the five search
@@ -619,7 +624,10 @@ can navigate concurrently on the shared loop, so concurrent agent search calls
 do not become process-global serialization. After each browser transaction
 that leaves its generation reusable, the provider owner arms one monotonic
 one-hour idle deadline before provider-specific parsing and SearXNG outcome
-recording finish. Another query before that deadline reuses the same target,
+recording finish. The result HTML has already been copied into SearXNG and the
+target is parked on local `about:blank`, so provider scripts do not continue
+running during that idle interval. Another query before that deadline reuses
+the same target,
 native cookie jar, selected browser profile, target-owned stealth HTTP client
 and pool, and target-scoped fingerprint bundle, then moves the idle deadline.
 A new main-document navigation creates a fresh JavaScript realm, but the
@@ -639,10 +647,13 @@ failed query. An owner whose ambiguous generation was already closed is removed
 immediately; it is not reported as reused and does not receive a redundant idle
 close.
 
-Each ordinary search attempt has exactly two main-document stages. Bing's
+Each ordinary search attempt has exactly two provider-origin main-document
+stages followed by one bounded local `about:blank` parking navigation, which
+creates no provider or final-hop request. Bing's
 successful sparse-first-page path has two such transactions and therefore at
-most four stages: homepage and result for page one, then homepage and result
-for page two. Redirects and subresources remain within their stage. Every
+most four provider-origin stages: homepage and result for page one, then
+homepage and result for page two. Redirects and subresources remain within
+their stage. Every
 homepage and result independently
 receive HTTPS/default-port/exact-host, lifecycle, status, challenge, and
 20 MiB rendered-DOM validation. The homepage DOM is released before result
@@ -735,11 +746,15 @@ carried from one provider rotation into another:
   additional time.
 - Cleanup is deliberately outside the browser transaction deadline so an
   ambiguous generation can still fail closed after its 50 seconds are spent.
-  Target closure has a five-second command bound and WebSocket closure has its
-  own five-second close bound; in the worst ambiguous path they can run
+  Successful target parking and target closure each have a five-second command
+  bound, and WebSocket closure has its own five-second close bound. A missing
+  or failed parking acknowledgement discards the generation instead of
+  returning an active provider page to the idle pool. In the worst ambiguous
+  path they can run
   sequentially and bring the engine thread close to or beyond SearXNG's
-  60-second wait. A successful reusable transaction performs neither immediate
-  close. The Obscura server's configured 90-second navigation and 120-second
+  60-second wait. A successful reusable transaction performs the local parking
+  navigation but neither immediate close. The Obscura server's configured
+  90-second navigation and 120-second
   command ceilings are lower-level safety bounds; the client's remaining
   50-second deadline normally expires first and they add no time.
 - Provider parsing, challenge classification, and suspension recording use

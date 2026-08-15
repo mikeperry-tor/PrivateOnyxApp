@@ -84,6 +84,34 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send(b"ok", content_type="text/plain")
             return
+        if path == "/retained-active":
+            self._send(
+                b"<html><body><main id='retained-active'>active</main><script>"
+                b"setTimeout(() => setInterval(() => {"
+                b"let value = 0; for (let index = 0; index < 20000; index += 1) "
+                b"value = (value + index) % 2147483647;"
+                b"fetch('/idle-pulse', {cache: 'no-store'});"
+                b"globalThis.__privateOnyxRetainedValue = value;"
+                b"}, 20), 100);"
+                b"</script></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/idle-pulse":
+            with _COUNTS_LOCK:
+                _COUNTS[path] = _COUNTS.get(path, 0) + 1
+            self._send(b"pulse", content_type="text/plain")
+            return
+        if path == "/idle-pulse-count":
+            with _COUNTS_LOCK:
+                count = _COUNTS.get("/idle-pulse", 0)
+            self._send(str(count).encode(), content_type="text/plain")
+            return
+        if path == "/idle-pulse-reset":
+            with _COUNTS_LOCK:
+                _COUNTS["/idle-pulse"] = 0
+            self._send(b"reset", content_type="text/plain")
+            return
         if path == "/search-get-home":
             self._search_page(method="get", result_path="/search-get-result")
             return

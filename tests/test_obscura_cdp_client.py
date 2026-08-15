@@ -427,6 +427,46 @@ class ObscuraClientTests(unittest.TestCase):
         self.assertIsNone(owner._target_id)
         self.assertIsNone(owner._connection.websocket)
 
+    def test_search_target_parking_failure_discards_generation(self):
+        calls = []
+
+        class WebSocket:
+            async def close(self):
+                calls.append("websocket-close")
+
+        class Cdp:
+            events = []
+
+            async def send(self, method, _params=None, **_kwargs):
+                calls.append(method)
+                if method == "Page.navigate":
+                    raise ObscuraClientError(
+                        FetchFailure.PROTOCOL,
+                        "search-target-park",
+                        "parking failed",
+                    )
+                if method == "Target.closeTarget":
+                    return {"success": True}
+                raise AssertionError(method)
+
+        async def exercise():
+            owner = SearchBrowserSession()
+            owner._connection.cdp = Cdp()
+            owner._connection.websocket = WebSocket()
+            owner._target_id = "target"
+            owner._session_id = "session"
+            owner._frame_id = "frame"
+            with self.assertRaises(ObscuraClientError) as raised:
+                await owner._park_target()
+            self.assertEqual(raised.exception.stage, "search-target-park")
+            self.assertFalse(owner.generation_active)
+
+        asyncio.run(exercise())
+        self.assertEqual(
+            calls,
+            ["Page.navigate", "Target.closeTarget", "websocket-close"],
+        )
+
     def test_search_transaction_reuses_one_target_and_partitions_two_loaders(self):
         class WebSocket:
             def __init__(self):
@@ -504,6 +544,9 @@ class ObscuraClientTests(unittest.TestCase):
                 if method == "Page.getFrameTree":
                     return {"frameTree": {"frame": {"id": "frame"}}}
                 if method == "Page.navigate":
+                    if params.get("url") == "about:blank":
+                        self.current_document = "blank"
+                        return {"loaderId": f"park-{self.attempt}"}
                     self.attempt += 1
                     loader = f"homepage-{self.attempt}"
                     self.current_document = "homepage"
@@ -613,7 +656,20 @@ class ObscuraClientTests(unittest.TestCase):
                 [call[0] for call in cdp.calls].count("Target.createTarget"), 1
             )
             self.assertEqual(
-                [call[0] for call in cdp.calls].count("Page.navigate"), 2
+                [call[0] for call in cdp.calls].count("Page.navigate"), 4
+            )
+            self.assertEqual(
+                [
+                    call[1]["url"]
+                    for call in cdp.calls
+                    if call[0] == "Page.navigate"
+                ],
+                [
+                    "https://search.example/",
+                    "about:blank",
+                    "https://search.example/",
+                    "about:blank",
+                ],
             )
             self.assertNotIn(
                 "Target.closeTarget", [call[0] for call in cdp.calls]

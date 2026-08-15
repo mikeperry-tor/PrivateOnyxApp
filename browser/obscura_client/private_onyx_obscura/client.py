@@ -914,6 +914,45 @@ class SearchBrowserSession:
         if failure is not None:
             raise failure
 
+    async def _park_target(self) -> None:
+        """Replace a completed provider document with a local inert document."""
+        cdp = self._connection.cdp
+        session_id = self._session_id
+        if (
+            cdp is None
+            or self._target_id is None
+            or not session_id
+            or not self._frame_id
+            or self._pending_anubis is not None
+        ):
+            raise ObscuraClientError(
+                FetchFailure.PROTOCOL,
+                "search-target-park",
+                "retained search target cannot be parked",
+            )
+        try:
+            parked = await cdp.send(
+                "Page.navigate",
+                {"url": "about:blank", "waitUntil": "load"},
+                session_id=session_id,
+                timeout_seconds=self._cleanup_command_timeout_seconds,
+                timeout_category=FetchFailure.PROTOCOL,
+                timeout_stage="search-target-park",
+            )
+            if not str(parked.get("loaderId", "")):
+                raise ObscuraClientError(
+                    FetchFailure.PROTOCOL,
+                    "search-target-park",
+                    "Obscura did not confirm retained target parking",
+                )
+            cdp.events.clear()
+        except BaseException:
+            try:
+                await self.close()
+            except Exception:
+                LOGGER.warning("obscura cleanup failed stage=search-target-park-close")
+            raise
+
 
 class _Session:
     def __init__(self, cdp: _RawCdp, session_id: str):
@@ -2209,6 +2248,7 @@ async def submit_search(
     diagnostic_id = uuid.uuid4().hex[:12]
     stage = "search-connect"
     ambiguous = False
+    park_required = False
     owner = session_owner
     owner._cleanup_command_timeout_seconds = cleanup_command_timeout_seconds
     if owner._pending_anubis is not None:
@@ -2369,6 +2409,7 @@ async def submit_search(
             )
         homepage_event_start = len(cdp.events)
         homepage_started = time.monotonic()
+        park_required = True
         nav = await command(
             cdp,
             "Page.navigate",
@@ -2462,6 +2503,7 @@ async def submit_search(
                     preload_identifier=preload_identifier,
                     preload_control=preload_control,
                 )
+                park_required = False
                 return PendingAnubisPow(token, challenge)
             raise ObscuraClientError(
                 homepage_challenge,
@@ -2547,6 +2589,7 @@ async def submit_search(
                 preload_identifier=preload_identifier,
                 preload_control=preload_control,
             )
+            park_required = False
             return PendingAnubisPow(token, anubis_challenge)
         if spec.anubis_pow:
             await _remove_anubis_preload(
@@ -2557,6 +2600,8 @@ async def submit_search(
                 control_name=preload_control,
                 remaining=remaining,
             )
+        await owner._park_target()
+        park_required = False
         LOGGER.info(
             "obscura search completed request_id=%s entry_mode=%s "
             "status_class=%sxx homepage_seconds=%.3f submission_seconds=%.3f "
@@ -2620,6 +2665,14 @@ async def submit_search(
             except Exception:
                 LOGGER.warning(
                     "obscura cleanup failed request_id=%s stage=search-generation-close",
+                    diagnostic_id,
+                )
+        elif park_required:
+            try:
+                await owner._park_target()
+            except Exception:
+                LOGGER.warning(
+                    "obscura cleanup failed request_id=%s stage=search-target-park",
                     diagnostic_id,
                 )
 
@@ -2891,6 +2944,7 @@ async def resume_anubis_pow(
             control_name=pending.preload_control,
             remaining=remaining,
         )
+        await owner._park_target()
         LOGGER.info(
             "obscura search completed request_id=%s entry_mode=%s status_class=%sxx "
             "homepage_seconds=%.3f submission_seconds=%.3f challenge=none pow=solved",

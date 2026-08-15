@@ -201,6 +201,7 @@ def main() -> int:
             args.client_image,
             "/validation.py",
         )
+        assert "RETAINED_PAGE_AUTONOMOUS_WORK_REPRODUCED_AND_PARKED" in output
         assert "PINNED_OBSCURA_RUNTIME_CONTRACTS_OK" in output
 
         logs = run(args.container_bin, "logs", obscura)

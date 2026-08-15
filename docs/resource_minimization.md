@@ -203,7 +203,11 @@ are not duplicate enforcement.
 - Obscura uses one process with isolated per-WebSocket browser state instead of
   a process worker pool. Each search provider lazily retains one independently
   leased connection and target, then closes the target and connection after one
-  hour without a query. Reusable connections disable periodic WebSocket pings.
+  hour without a query. After terminal DOM capture, that same target navigates
+  to local `about:blank`; provider JavaScript, timers, subresources, and
+  animations therefore do not run during ordinary idle reuse, while cookies,
+  the target fingerprint, profile, and target-owned transport remain stable.
+  Reusable connections disable periodic WebSocket pings.
   One shared lazy SearXNG event-loop thread owns all five generations and their
   one idle-deadline callback per live provider session. This changes target
   lifetime, not the maximum target, connection, thread, or callback counts.
@@ -216,9 +220,10 @@ are not duplicate enforcement.
 - Homepage-first search adds one provider main document and its subresources,
   one independently bounded homepage DOM serialization, form execution, and
   optional timed-entry delay/autocomplete traffic. Homepage DOM text is
-  released before result extraction, but the retained target necessarily keeps
-  its current native page/history state until idle expiry or generation
-  invalidation. Startpage's admitted Anubis proof uses bounded, constant-memory
+  released before result extraction; after result DOM capture, a bounded local
+  parking navigation releases the provider page's runtime state. Startpage's
+  admitted Anubis proof temporarily retains its challenge page and uses
+  bounded, constant-memory
   synchronous hashing on the already allocated SearXNG engine caller and inert
   page-local Worker objects; it adds no thread, process, executor, health
   check, periodic task, persistent store, or browser binary. The proof shares

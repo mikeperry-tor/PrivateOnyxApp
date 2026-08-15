@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from private_onyx_obscura import BodyClassification
 from private_onyx_obscura import FetchFailure
 from private_onyx_obscura import ObscuraSession
+from private_onyx_obscura import SearchBrowserSession
 from private_onyx_obscura import fetch as fetch_async
 from private_onyx_obscura import fetch_sync
 from private_onyx_obscura.client import _RawCdp
@@ -47,6 +49,83 @@ async def create_target(cdp: _RawCdp) -> tuple[str, str]:
         == target_id
     )
     return target_id, str(attached["params"]["sessionId"])
+
+
+def fixture_get(path: str) -> bytes:
+    with urllib.request.urlopen(f"{BASE_URL}{path}", timeout=5) as response:
+        return response.read()
+
+
+async def validate_retained_page_autonomous_work() -> None:
+    """Reproduce retained-page work, then prove local parking stops it."""
+    fixture_get("/idle-pulse-reset")
+    websocket = await connect(CDP_URL, proxy=None)
+    cdp = _RawCdp(websocket)
+    target_id = ""
+    try:
+        target_id, session_id = await create_target(cdp)
+        nav = await cdp.send(
+            "Page.navigate",
+            {"url": f"{BASE_URL}/retained-active", "waitUntil": "load"},
+            session_id=session_id,
+            timeout_seconds=15,
+        )
+        assert nav.get("loaderId")
+        await asyncio.sleep(0.8)
+        first_count = int(await asyncio.to_thread(fixture_get, "/idle-pulse-count"))
+        await asyncio.sleep(0.3)
+        second_count = int(await asyncio.to_thread(fixture_get, "/idle-pulse-count"))
+        assert first_count > 0, first_count
+        assert second_count > first_count, (first_count, second_count)
+    finally:
+        if target_id:
+            await cdp.send("Target.closeTarget", {"targetId": target_id})
+        await websocket.close()
+
+    fixture_get("/idle-pulse-reset")
+    owner = SearchBrowserSession()
+    owner._connection.websocket = await connect(CDP_URL, proxy=None)
+    owner._connection.cdp = _RawCdp(owner._connection.websocket)
+    try:
+        owner._target_id, owner._session_id = await create_target(
+            owner._connection.cdp
+        )
+        frame_tree = await owner._connection.cdp.send(
+            "Page.getFrameTree", session_id=owner._session_id
+        )
+        owner._frame_id = frame_tree["frameTree"]["frame"]["id"]
+        nav = await owner._connection.cdp.send(
+            "Page.navigate",
+            {"url": f"{BASE_URL}/retained-active", "waitUntil": "load"},
+            session_id=owner._session_id,
+            timeout_seconds=15,
+        )
+        assert nav.get("loaderId")
+        await asyncio.sleep(0.5)
+        active_count = int(await asyncio.to_thread(fixture_get, "/idle-pulse-count"))
+        assert active_count > 0, active_count
+
+        retained_target = owner._target_id
+        await owner._park_target()
+        await asyncio.sleep(0.1)
+        parked_count = int(await asyncio.to_thread(fixture_get, "/idle-pulse-count"))
+        await asyncio.sleep(0.5)
+        final_count = int(await asyncio.to_thread(fixture_get, "/idle-pulse-count"))
+        assert final_count == parked_count, (parked_count, final_count)
+        assert owner.generation_active
+        targets = await owner._connection.cdp.send("Target.getTargets")
+        assert [target["targetId"] for target in targets["targetInfos"]] == [
+            retained_target
+        ]
+        location = await owner._connection.cdp.send(
+            "Runtime.evaluate",
+            {"expression": "location.href", "returnByValue": True},
+            session_id=owner._session_id,
+        )
+        assert location["result"]["value"] == "about:blank", location
+    finally:
+        await owner.close()
+    print("RETAINED_PAGE_AUTONOMOUS_WORK_REPRODUCED_AND_PARKED")
 
 
 async def validate_playwright_session_attachment() -> None:
@@ -707,6 +786,7 @@ def validate_navigation_contracts() -> None:
 
 
 def main() -> None:
+    asyncio.run(validate_retained_page_autonomous_work())
     asyncio.run(validate_playwright_session_attachment())
     asyncio.run(validate_anubis_worker_preload_runtime())
     asyncio.run(validate_patched_search_runtime())

@@ -137,7 +137,11 @@ Its default mode, used by direct `open_url`, opens and closes one
 v0.2.0-isolated browser connection per request. Its explicit reusable-session
 mode is owned only by the SearXNG provider adapter: each provider serializes
 two-stage searches on one retained connection and target generation and
-discards the generation after an ambiguous client or cleanup failure. Neither
+parks that target on local `about:blank` after terminal DOM capture so provider
+JavaScript cannot run throughout the one-hour idle lifetime. Cookies, profile,
+target fingerprint, and target-owned stealth transport survive the parking
+navigation. The client discards the generation after an ambiguous client or
+parking/cleanup failure. Neither
 mode uses a non-atomic
 cookie-clear command. The pinned server can evict a subresource-heavy page's
 main body before creating its loader alias. The client maps that exact
@@ -259,7 +263,8 @@ shared client installs a Startpage-only
 pre-document wrapper that suppresses exact direct or marker-bound Blob Anubis
 workers while delegating every unrelated Worker construction. It extracts a
 bounded challenge, returns an opaque one-shot continuation to `_obscura.py`,
-and keeps the retained target parked while the existing SearXNG engine caller
+and keeps the retained challenge document live while the existing SearXNG
+engine caller
 performs constant-memory SHA-256 work. A challenge remains admissible when its
 module or worker asset has not successfully started a Worker. Resume keeps the
 armed wrapper through the exact same-origin pass navigation and any restored
@@ -274,7 +279,9 @@ local proof/protocol failures are unresponsive and close the generation.
 The adapter uses one lazy event-loop thread for five independently retained
 provider connection/target generations. It retains each provider's native
 context, target, cookie jar, profile, target stealth client, connection pool,
-and target fingerprint until one hour after its last attempt.
+and target fingerprint until one hour after its last attempt. A completed
+transaction first parks the retained target on local `about:blank`, leaving no
+provider page runtime active during ordinary idle reuse.
 The existing provider lease is the same-provider serialization authority;
 different providers remain concurrent. Ambiguous client or cleanup failures
 close and immediately discard only the affected connection/target owner,
@@ -830,7 +837,8 @@ egress bridges, and shared public/host final-hop policies. Obscura v0.2.0
 isolates every live WebSocket browser context and rejects connections above the
 aggregate capacity of 15. Direct `open_url` connections remain request-scoped;
 each SearXNG provider instead lazily retains one connection for one hour after
-its last query together with one retained target. It runs read-only as
+its last query together with one retained target, parked on local `about:blank`
+between completed queries. It runs read-only as
 65534:65534, without capabilities, storage, private mounts, or file-access
 permission. Application containers do not join the trusted VPN namespace or a
 direct public network.

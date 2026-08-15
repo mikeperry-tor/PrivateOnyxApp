@@ -193,7 +193,11 @@ Audit these current Obscura areas:
 - repeated homepage/result and later-query navigation on one retained provider
   target/connection generation; native cookie, selected-profile,
   target-stealth-client/pool, and target-seeded fingerprint continuity;
-  bounded CDP event state; disabled idle keepalive pings; one-hour idle
+  bounded local `about:blank` parking after terminal DOM capture, with a
+  retained-page autonomous-work fixture proving provider tasks stop while the
+  same target and state remain reusable; parking failure discarding the
+  generation; bounded CDP event state; disabled idle keepalive pings; one-hour
+  idle
   target-then-connection expiry; and disposal after ambiguous transport,
   submission acknowledgement, event accounting, DOM, target-close command, or
   negative target-close-acknowledgement failure;
@@ -547,7 +551,10 @@ For every custom engine verify:
   bounded two-stage event accounting per ordinary query and at most two
   transactions/four stages for Bing's sparse-first-page pagination; native cookie, profile,
   fingerprint-seed, and target-owned stealth-client continuity before the
-  sliding one-hour idle deadline;
+  sliding one-hour idle deadline; local `about:blank` parking after each
+  completed terminal DOM, no provider JavaScript activity during ordinary
+  idle reuse, and fail-closed generation disposal when parking is not
+  acknowledged;
   physical and synchronous-on-access expiry without keepalive pings or
   timer-delay revival; expiry-boundary queries waiting for the old connection
   to close before opening a replacement; a fresh connection after expiry; and

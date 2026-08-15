@@ -67,8 +67,10 @@ but it is not an authorization protocol between the two intended callers.
 
 Each direct `open_url` request uses and closes a fresh connection and target.
 SearXNG partitions one lazy connection and target per exact provider, reuses
-both across clean homepage-first search attempts, and closes the target and
-then the connection after one hour idle. Provider generations retain their
+both across clean homepage-first search attempts, parks the target on local
+`about:blank` after terminal DOM capture, and closes the target and then the
+connection after one hour idle. Parking destroys provider page execution
+without creating a final-hop request. Provider generations retain their
 native cookie jar, stable target fingerprint seed, selected profile, and
 target-owned stealth HTTP client only within that provider boundary. There is
 no cookie-clear race to claim as an isolation mechanism. A cleanup or

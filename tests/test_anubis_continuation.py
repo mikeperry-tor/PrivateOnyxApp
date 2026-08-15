@@ -217,6 +217,8 @@ class _ContinuationCdp:
             return {"outerHTML": self.current_html}
         if method == "Page.removeScriptToEvaluateOnNewDocument":
             return {}
+        if method == "Page.navigate" and params.get("url") == "about:blank":
+            return {"loaderId": "parked"}
         if method == "Target.closeTarget":
             return {"success": True}
         raise AssertionError(method)
@@ -299,7 +301,11 @@ class AnubisContinuationTests(unittest.TestCase):
         self.assertTrue(owner.generation_active)
         self.assertEqual(websocket.closed, 0)
         methods = [method for method, _params in cdp.calls]
-        self.assertNotIn("Page.navigate", methods)
+        self.assertEqual(methods.count("Page.navigate"), 1)
+        self.assertIn(
+            ("Page.navigate", {"url": "about:blank", "waitUntil": "load"}),
+            cdp.calls,
+        )
         self.assertNotIn("Network.clearBrowserCookies", methods)
         self.assertLess(
             methods.index("Runtime.callFunctionOn", 6),
