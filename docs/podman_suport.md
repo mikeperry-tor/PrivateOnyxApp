@@ -50,6 +50,8 @@ wrapper with rootless Podman on macOS or native Linux and with rootless Docker
 on native Linux. Read it before adding a feature that
 changes Compose layering, mounts, container lifecycle, health checks, image
 preparation, network interfaces, or Docker-socket use.
+The fresh-state, directed engine-handoff matrix is defined separately in
+[`permissions_cross_validation.md`](permissions_cross_validation.md).
 
 Podman is a separate runtime backed by a Linux virtual machine. It is not a
 drop-in executable alias for Docker Desktop. The common Compose model remains
@@ -844,6 +846,10 @@ direct inspection; do not mix Docker engine results into the evidence.
    Docker-to-Podman plus Podman-to-Docker switching with persistent
    PostgreSQL, OpenSearch, and MinIO records. Require the PostgreSQL and MinIO
    trees to remain owned by the invoking host uid/gid after every Docker start.
+   When permissions or engine interchange changes, run the complete macOS and
+   Linux lite/full directed matrix in
+   [`permissions_cross_validation.md`](permissions_cross_validation.md),
+   including rootless Docker's separate named-volume storage model.
 7. Verify socket-only code interpreter remains absent and Myst recovery has no
    socket mount or engine-specific overlay. If a future feature needs
    control-plane access, review its authority rather than exposing the rootless
