@@ -17,12 +17,13 @@
 >
 > Do not enable the Obscura part of this plan against the currently selected
 > image. Obscura v0.2.1's CDP cookie export/import path still does not preserve
-> whether a cookie is host-only, and its cookie-domain validation still does
-> not use a complete Public Suffix List. Re-importing an exported host-only
-> cookie can therefore widen it to subdomains. None of the four current
-> wrapper patches changes that path. Implementation may proceed only after the
-> separately reviewed wrapper-owned Obscura cookie patch makes the capability
-> gate below pass.
+> whether a cookie is host-only, treats an explicit exact-origin `Domain`
+> attribute as host-only, and still does not use a complete Public Suffix List.
+> Re-importing an exported host-only cookie can therefore widen it to
+> subdomains, while an exact-origin domain cookie cannot be represented
+> faithfully. None of the four current wrapper patches changes that path.
+> Implementation may proceed only after the separately reviewed wrapper-owned
+> Obscura cookie patch makes the capability gate below pass.
 
 ## Goal
 
@@ -109,16 +110,17 @@ specified below.
 | Component | Consulted version | Why it matters for this plan |
 | --- | --- | --- |
 | Obscura | Derived v0.2.1 image; `reference_repos/obscura` at `v0.2.1`; four wrapper patches | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, context-scoped cookie clearing, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. The current patches preserve stealth GET/POST cookie-jar identity, target fingerprint state, search-runtime compatibility, and explicit navigation-realm ownership; they do not change cookie serialization or CDP transfer. |
-| Onyx application | Current `ONYX_IMAGE_TAG`; matching `reference_repos/onyx` checkout | Owns `open_url()` orchestration, the stock Requests-first/Playwright-fallback flow, the five-worker stock crawler, the 120-second tool deadline, and the runtime symbols wrapped by both Onyx patches. |
+| Onyx application | `ONYX_IMAGE_TAG=v4.4.8`; matching `reference_repos/onyx` checkout | Owns `open_url()` orchestration, the stock Requests-first/Playwright-fallback flow, the five-worker stock crawler, the 120-second tool deadline, and the runtime symbols wrapped by both Onyx patches. |
 | Onyx crawler libraries | Requests `2.33.0`, Playwright `1.58.0`, and `publicsuffix2` `2.20191221` in the Onyx `uv.lock` | Determine Requests cookie-jar metadata, Chromium context cookie conversion, and the parser available to runtime patches. The old parser package's implicit PSL data is not accepted as the shared current snapshot proposed here. |
-| Egress identity components | `MYST_IMAGE=local/private-onyx-myst:2d6e87618f9f-20260719` and `TOR_BASE_IMAGE=docker.io/dockurr/tor:0.4.9.11@sha256:446881b3366cbc2cc5cf8d13a76e3104f60824b7c15343d14defe903ded18f0d` | Myst reconnects and Tor circuit/exit changes can separate a retained cookie from the public IP that established it. Neither currently supplies an authoritative route-generation signal to the cookie store, so this plan deliberately relies on the fixed one-hour ceiling instead of heuristic route coupling. |
+| Egress identity components | `MYST_IMAGE=local/private-onyx-myst:74d144d4261a-20260812` and `TOR_BASE_IMAGE=docker.io/dockurr/tor:0.4.9.11@sha256:446881b3366cbc2cc5cf8d13a76e3104f60824b7c15343d14defe903ded18f0d` | Myst reconnects and Tor circuit/exit changes can separate a retained cookie from the public IP that established it. Neither currently supplies an authoritative route-generation signal to the cookie store, so this plan deliberately relies on the fixed one-hour ceiling instead of heuristic route coupling. |
 
 ## Current Behavior and Blockers
 
 ### Current Obscura capabilities that are useful
 
 Obscura gives each CDP WebSocket connection an isolated live browser
-context, cookie jar, HTTP client, target set, event thread, and V8 state. The
+context, cookie jar, HTTP client, target set, OS thread with its own
+current-thread Tokio runtime, and V8 state. The
 wrapper's client already opens one WebSocket per navigation, and the
 direct-Obscura crawler permits up to ten concurrent `open_url()` fetches
 against Obscura's fifteen-connection limit. This removes the need for the
@@ -159,6 +161,12 @@ export it, and `Network.setCookies` imports every cookie with
 `host_only: false`. The same implementation has no partition-key handling or
 complete PSL.
 
+v0.2.1 did improve adjacent cookie behavior: it canonicalizes leading-dot and
+case variants before storing, exporting, or deleting CDP cookies; treats
+expired and zero-expiry CDP imports as deletion; omits expired entries from
+export; and implements context-scoped `Storage.clearCookies`. Those fixes must
+remain covered, but they do not make the export/import representation lossless.
+
 Of the four selected wrapper patches, patch 0001 keeps native stealth GET and
 POST on the same target cookie jar during one navigation. Patches 0002, 0003,
 and 0004 own fingerprint stability, search-page runtime compatibility, and
@@ -192,6 +200,13 @@ every cookie as a domain cookie is not acceptable. Treating every cookie as
 host-only would be safe but would silently break legitimate domain cookies
 and is not the intended browser-compatible feature.
 
+The v0.2.1 `resolve_cookie_domain()` path also treats an explicit
+`Domain=<origin-host>` attribute as host-only. Browser cookie semantics require
+that cookie to remain a domain cookie even though its canonical domain string
+equals the origin host. A lossless patch must therefore preserve whether the
+`Domain` attribute was present, not derive `host_only` from whether the
+canonical domain equals the response host.
+
 Implementation is blocked until the selected derived Obscura image and wrapper
 boundary pass all of these black-box requirements through the public CDP
 endpoint:
@@ -199,16 +214,21 @@ endpoint:
 1. A host-only cookie set by `app.example.test` exports with unambiguous
    host-only metadata, survives export/import into a new connection, is sent
    to `app.example.test`, and is not sent to `sub.app.example.test`.
-2. A valid `Domain=example.test` cookie remains distinguishable, survives
-   export/import, and is sent to matching subdomains.
-3. Cookie name, value, domain, path, `Secure`, `HttpOnly`, `SameSite`,
+2. A valid parent-domain `Domain=example.test` cookie and an exact-origin
+   `Domain=app.example.test` cookie both remain distinguishable from a
+   host-only cookie, survive export/import, and are sent to matching
+   subdomains.
+3. Replacing a host-only cookie with an otherwise same-identity exact-origin
+   domain cookie, and the reverse transition, leaves exactly one cookie with
+   the new scope before and after export/import.
+4. Cookie name, value, domain, path, `Secure`, `HttpOnly`, `SameSite`,
    expiration/session status, and deletion semantics survive a round trip.
-4. Invalid supercookies for public and private suffixes, including multi-label
+5. Invalid supercookies for public and private suffixes, including multi-label
    cases, are rejected by Obscura or are exported with sufficient information
    for the wrapper's pinned-PSL filter to reject them before retention; none is
    re-imported.
-5. An expired cookie and `Max-Age=0` deletion cannot reappear after import.
-6. `Network.setCookies` and `Network.getCookies` operate on the target's
+6. An expired cookie and `Max-Age=0` deletion cannot reappear after import.
+7. `Network.setCookies` and `Network.getCookies` operate on the target's
    isolated connection context and do not mutate another simultaneous
    connection.
 
@@ -219,14 +239,18 @@ leave it unimplemented; do not activate a reduced cookie model.
 An acceptable wrapper-owned Obscura patch must be narrower than the store:
 
 - add `host_only` to the lossless cookie value carried from `CookieEntry`;
+- make the `Set-Cookie` and JavaScript-cookie domain resolver retain
+  `host_only: false` whenever a valid `Domain` attribute is present, including
+  when its canonical value equals the origin host;
 - expose it unambiguously from `Network.getCookies` and accept it explicitly
   on the corresponding wrapper import path;
 - preserve it through every `CookieInfo` conversion used by that path;
 - make an absent, malformed, or ignored host-only value detectable rather
   than silently defaulting an opted-in wrapper import to domain scope; and
-- add Rust tests for host-only and domain-cookie export/import, subdomain
-  delivery, session and persistent expiry, deletion, and simultaneous
-  connection isolation.
+- add Rust tests for host-only, exact-origin domain, and parent-domain cookie
+  export/import; both same-identity scope-replacement directions; subdomain
+  delivery; session and persistent expiry; deletion; canonical domain spelling;
+  and simultaneous connection isolation.
 
 The exact wire field may be a documented wrapper extension because the raw
 shared client owns this opt-in transfer and already targets one pinned image.
@@ -494,13 +518,17 @@ When a navigation finishes:
 Merge by the browser cookie identity tuple:
 
 ```text
-(canonical domain, host_only, path, name, partition key if supported)
+(canonical domain, path, name, partition key if supported)
 ```
 
-Apply explicit deletions as deletions. For concurrent updates within the same
-generation, completion order under the store lock wins for the same identity;
-updates to unrelated cookie identities must not be lost. Do not hold the store
-lock during CDP, HTTP, Playwright, parsing, or logging operations.
+`host_only` is a security-relevant value on that identity, not part of the
+identity itself. A domain cookie and host-only cookie with the same canonical
+domain, path, name, and partition key replace one another in completion order;
+they must never coexist and become import-order dependent. Apply explicit
+deletions as deletions. For concurrent updates within the same generation,
+completion order under the store lock wins for the same identity; updates to
+unrelated cookie identities must not be lost. Do not hold the store lock during
+CDP, HTTP, Playwright, parsing, or logging operations.
 
 Use one daemon sweeper per `FirstPartyCookieStore`, waiting on a condition for
 the nearest deadline. Access and merge paths must also expire due buckets
@@ -777,6 +805,10 @@ Add focused unit tests with injected monotonic and wall clocks for:
 - exact-host keys for IPv4, IPv6, and `.onion`;
 - separate secure and cleartext keys;
 - host-only versus domain-cookie matching;
+- exact-origin `Domain` cookies remain domain-scoped and reach a subdomain,
+  while otherwise identical host-only cookies do not;
+- same-identity host-only-to-domain and domain-to-host-only updates replace the
+  old value rather than retaining two import-order-dependent cookies;
 - rejection of public/private-suffix supercookies and cookies outside the
   initial site;
 - preservation of path, `Secure`, `HttpOnly`, `SameSite`, expiry/session state,
@@ -884,6 +916,8 @@ Use an isolated, engine-local HTTPS fixture with controlled host aliases and
 endpoints that:
 
 - set and reflect host-only and domain cookies;
+- set both exact-origin and parent-domain `Domain` cookies so their subdomain
+  delivery can be distinguished from host-only behavior;
 - set path, secure, HTTP-only, same-site, session, short-expiry, and deletion
   variants;
 - perform same-site and cross-site redirects;
@@ -896,7 +930,8 @@ domain-cookie capability gate. The wrapper-integrated portion of the same
 fixture must enforce complete pinned-PSL rejection before retention and prove
 that rejected cookies are never re-imported. Then exercise two separate CDP
 connections to prove same-site continuity, cross-site isolation, host-only
-subdomain denial, valid domain-cookie subdomain delivery,
+subdomain denial, valid exact-origin and parent-domain cookie subdomain
+delivery,
 third-party/cross-redirect non-retention, and simultaneous connection
 isolation.
 

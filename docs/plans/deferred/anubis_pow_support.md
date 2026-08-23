@@ -1,31 +1,34 @@
-# Startpage Anubis Proof-of-Work Support
+# Native Obscura Worker Execution for Startpage Anubis Proof-of-Work
 
-> **Status: deferred.** This is an implementation plan, not current behavior.
-> Startpage Anubis pages are explicit CAPTCHA failures and enter the ordinary
-> provider-suspension path. They are not solved. The normative current behavior
-> is in [Request handling](../../request_handling.md).
+> **Status: deferred.** This is an implementation plan for replacing the
+> implemented stack-specific Anubis solver with bounded browser Worker
+> execution, not a description of current behavior. The normative current
+> behavior is in [Request handling](../../request_handling.md), and its accepted
+> design is frozen in
+> [Startpage Anubis proof-of-work support](../implemented/anubis_pow_support.md).
 > Do not describe any approach below as implemented until its capability gates,
 > tests, live validation, and documentation phase all pass and this plan is
 > moved to `docs/plans/implemented/`.
 >
-> **Decision rule:** implement exactly one execution approach. Prefer an
+> **Decision rule:** implement exactly one worker execution approach. Prefer an
 > upstream Obscura release with bounded real workers (Approach A). If the
-> selected pin has no suitable implementation, prefer the narrow upstreamable
-> Obscura worker patch (Approach B). Use the stack-specific solver (Approach C)
-> only after explicitly accepting its Anubis protocol-maintenance obligation.
-> Never ship worker execution and the stack solver as fallback paths for each
-> other.
+> selected pin has no suitable implementation, use the narrow upstreamable
+> Obscura worker patch (Approach B). Obscura v0.2.1 does not pass the dedicated-
+> worker gate, so implementation against the current pin requires Approach B.
+> Remove the implemented stack solver in the same change; never ship it as a
+> fallback for worker execution.
 
 ## Goal
 
-Allow the custom `startpage2` SearXNG engine to complete a supported Startpage
-Anubis proof-of-work challenge presented either before the homepage form or
-after its search submission, retain the resulting authorization cookie in the
-existing Startpage-only Obscura session, perform the original form POST once
-after a homepage challenge or restore it at most once when a result challenge's
-GET redirect loses its body, and return a validated result DOM without
-weakening any routing, isolation, scheduling, deadline, logging, or failure
-contract.
+Replace the custom `startpage2` SearXNG engine's implemented stack-specific
+Anubis proof loop and Worker interceptor with genuine bounded Obscura Worker
+execution. Continue to solve a supported challenge presented either before the
+homepage form or after its search submission, retain the resulting
+authorization cookie in the existing Startpage-only Obscura session, perform
+the original form POST once after a homepage challenge or restore it at most
+once when a result challenge's GET redirect loses its body, and return a
+validated result DOM without weakening any routing, isolation, scheduling,
+deadline, logging, or failure contract.
 
 Completion must preserve these properties:
 
@@ -52,7 +55,8 @@ This plan applies only to:
 - the provider parser in `searxng/engines/startpage2.py`;
 - the shared direct-CDP client in `browser/obscura_client/`;
 - the derived Obscura image and patch series under
-  `browser/obscura_image/` when Approach B is selected; and
+  `browser/obscura_image/` when Approach B is selected, or the Obscura pin and
+  removal of obsolete wrapper code when Approach A is selected; and
 - deterministic, selected-image, and live Startpage validation.
 
 It does not:
@@ -71,7 +75,7 @@ It does not:
 - enable the raster renderer or change the no-render `stealth` feature set
   unless a later audited Anubis requirement proves that unavoidable;
 - permit repeated proof attempts, repeated search resubmissions, or a fallback
-  from one implementation approach to another; or
+  from worker execution to the implemented stack solver; or
 - modify `reference_repos/`.
 
 ## Version and Protocol Scope
@@ -150,7 +154,10 @@ provider identifier that is unique to an observed request.
 Obscura v0.2.1 has `crypto.subtle.digest`, Blob objects, blob URL bookkeeping,
 and a `Worker` compatibility object. Its Worker implementation fetches or reads
 the source and evaluates it cooperatively in the page's V8 isolate. It does not
-create an independently scheduled worker isolate.
+create an independently scheduled worker isolate. v0.2.1 synchronously records
+source bytes for its native Blob objects before a Blob-backed Worker is
+constructed, which removes an earlier source-registration race but does not
+change the cooperative execution or resource-ownership failure.
 
 The Startpage challenge launches four SHA-256 loops. Adding its marker as a
 pending readiness selector leaves those loops on the page isolate, prevents the
@@ -165,10 +172,13 @@ isolate from servicing CDP inspection, and consumes the transaction deadline at
 
 Anubis also creates a new main-document navigation through its pass endpoint.
 The existing readiness helper is intentionally a same-document DOM hydration
-wait and does not own new loader correlation. Finally, the original Startpage
-search is a POST while Anubis redirects with GET. The redirect URL cannot
-reconstruct the original request body. A successful proof may therefore need
-one new form submission using the already retained query and fixed fields.
+wait and does not own new loader correlation. The selected v0.2.1 wrapper's
+explicit-navigation-realm patch makes top-level `location.replace()` reach the
+owning navigation realm, but it does not supply the transaction state machine
+or loader correlation. Finally, the original Startpage search is a POST while
+Anubis redirects with GET. The redirect URL cannot reconstruct the original
+request body. A successful proof may therefore need one new form submission
+using the already retained query and fixed fields.
 
 ## Alternatives and Selection Gates
 
@@ -274,160 +284,32 @@ Each worker must have a distinct V8 isolate and event loop. Reusing the page
 isolate, evaluating the worker once per incoming message, or converting each
 digest into a main-page microtask does not satisfy this approach.
 
-### Approach C: stack-specific Anubis solver
-
-This is the smaller implementation but creates a permanent protocol audit. It
-does not execute Anubis workers. Instead, the shared client returns a strictly
-validated pending challenge to the synchronous `startpage2` engine thread; that
-thread computes the admitted proof; the provider browser owner then resumes
-the exact retained CDP target and performs the common continuation transaction.
-
-Keep the proof loop independent of the exact-version protocol profiles. The
-loop accepts only the already validated canonical `random_data`, difficulty,
-and deadline inputs below; it does not branch on an Anubis version. Version
-profiles own extraction, suppression markers, and continuation fields, and
-their fixture audits prove that they produce the same canonical solver input.
-
-The solver contract is:
-
-```python
-@dataclass(frozen=True)
-class AnubisPowChallenge:
-    continuation_token: str       # opaque, generation-bound, non-secret log ID forbidden
-    version: str                  # exact allowlisted version
-    challenge_id: str             # canonical UUID, never logged
-    random_data: str              # exactly 128 lowercase hexadecimal characters
-    algorithm: Literal["fast"]
-    difficulty: int               # inclusive range 1..5
-
-@dataclass(frozen=True)
-class AnubisPowSolution:
-    response: str                 # 64 lowercase hexadecimal characters
-    nonce: int                    # non-negative decimal integer
-    elapsed_milliseconds: int     # monotonic elapsed time, non-negative
-```
-
-The exact version allowlist is code-owned and fixture-backed. Begin with the
-versions proven during implementation; do not use a broad semver range. A new
-version must fail closed until its fixtures and protocol audit pass.
-
-The solver:
-
-- runs synchronously on the already allocated SearXNG engine thread, never on
-  the shared provider event-loop thread and never in a new process or executor;
-- computes `sha256((random_data + str(nonce)).encode("ascii"))` starting at
-  nonce zero and accepts the first hash with `difficulty` leading hexadecimal
-  zeroes;
-- checks the shared browser deadline at least once per 4,096 candidates;
-- examines at most 16,777,216 candidates, an exact ceiling of sixteen expected
-  search spaces at admitted difficulty 5;
-- uses constant-size working memory and emits no progress log containing
-  challenge material, nonce, hash, query, pass URL, or cookie;
-- returns `pow-exhausted` when the candidate ceiling is reached and the normal
-  post-navigation timeout category when the shared deadline expires; and
-- does not manufacture a shorter elapsed time or bypass the Anubis test-cookie
-  requirement.
-
-The provider browser owner stores the continuation state on its own event-loop
-thread under a random opaque token bound to the exact owner generation,
-session ID, target ID, frame ID, initial result loader, query, fixed fields,
-and request deadline. Only one token may exist for `startpage2`. It is consumed
-exactly once by either resume or abort. A token mismatch, generation change,
-second resume, or expired deadline closes the generation and returns a typed
-protocol failure.
-
-The pending object crosses to the synchronous engine thread only after the
-initial challenge fields and origin have been validated. The engine thread
-must call resume or abort in `finally`; abandoning a token is a generation-
-closing error. Do not expose a raw CDP session, WebSocket, cookie jar, or target
-object to the engine module.
-
-Approach C must not coexist with real-worker challenge execution. The client
-must prevent the page's Anubis worker attempt from starting so it cannot starve
-the page isolate before challenge extraction, race the stack solver, consume
-duplicate CPU, or double-spend the challenge. Before the transaction's initial
-homepage navigation, install one `Page.addScriptToEvaluateOnNewDocument`
-preload owned by the Startpage transaction. Keep it installed through the
-homepage classification and, when the homepage is ordinary, the original form
-POST classification so it can suppress a challenge at either boundary. Remove
-it before the admitted challenge's pass navigation, or immediately after the
-terminal result classification when no challenge occurred. The preload wraps,
-but does not delete, the native `Worker` constructor. It returns an inert
-message-compatible worker only when:
-
-- the resolved same-origin direct worker path is exactly an admitted Anubis
-  `/.within.website/x/cmd/anubis/static/js/worker/sha256-*.mjs` path; or
-- the constructor receives a target-local Blob URL while the current document
-  contains the exact admitted Anubis main-module marker.
-
-Every other Worker construction delegates to the original constructor with
-unchanged arguments, prototype behavior, events, and exceptions. The inert
-worker accepts the one Anubis start message, performs no hashing, emits no
-progress/result, and implements idempotent `terminate()`; it must not expose
-the message to Python or logs because the validated challenge JSON remains the
-sole solver input. Terminate all inert instances on success, abort, timeout,
-pass navigation, target close, or connection close. Failure to install, remove,
-or acknowledge this interceptor closes the generation.
-
-This interceptor is itself an Anubis protocol obligation and must be protected
-by exact source-shape and black-box tests. If a version cannot be suppressed
-without intercepting unrelated workers, do not add it to Approach C's version
-allowlist. Do not rely on racing a termination command against an already
-running cooperative hash loop.
-
 ## Common Provider API and Component Boundaries
 
 Keep `startpage2.search()`'s public engine contract unchanged: it calls
 `searxng.engines._obscura.submit_search(...)` once and receives one terminal
-DOM or a typed exception. The two-phase objects required by Approach C are an
-internal boundary between `_obscura.py`, its provider browser owner, and the
-shared client; they never reach SearXNG's generic processor or the provider
-parser.
+DOM or a typed exception. Worker execution and continuation remain inside the
+shared client's one retained browser transaction; they never reach SearXNG's
+generic processor or the provider parser.
 
 The shared-client API becomes conceptually:
 
 ```python
-AnubisExecutionMode = Literal["browser-workers", "stack-solver"]
-
-@dataclass(frozen=True)
-class PendingAnubisPow:
-    challenge: AnubisPowChallenge
-
-SearchTransactionOutcome = SearchSubmissionResult | PendingAnubisPow
-
 async def submit_search(
     query: str,
     *,
     session_owner: SearchBrowserSession,
     spec: SearchInteractionSpec,
-    anubis_mode: AnubisExecutionMode,
     # existing policy/deadline arguments remain
-) -> SearchTransactionOutcome: ...
-
-async def resume_anubis(
-    *,
-    session_owner: SearchBrowserSession,
-    continuation_token: str,
-    solution: AnubisPowSolution,
 ) -> SearchSubmissionResult: ...
-
-async def abort_anubis(
-    *,
-    session_owner: SearchBrowserSession,
-    continuation_token: str,
-) -> None: ...
 ```
 
-`anubis_mode` is a build-selected constant with exactly one accepted value in
-an installed image, not an environment/user setting. Under A/B,
-`submit_search` runs proof and continuation internally and never returns
-`PendingAnubisPow`; `resume_anubis` and `abort_anubis` are unreachable and may
-be omitted from that build. Under C, `_ProviderBrowser` exposes matching
-thread-safe `begin_sync`, `resume_sync`, and `abort_sync` operations that submit
-these coroutines to its existing event-loop thread. `_obscura.submit_search`
-performs begin, synchronous engine-thread proof calculation, and resume under
-one outer `try/finally`, then returns only the final DOM. Do not add these
-operations to the provider engine module or expose them over HTTP/CDP.
+Remove the implemented `PendingAnubisPow`, solver, continuation-token,
+`resume_anubis_pow`, and `abort_anubis_pow` boundary in the same change that
+enables workers. `_ProviderBrowser` returns only the terminal result or a typed
+exception from its existing thread-safe submit operation. Do not preserve the
+old boundary as compatibility code, expose it to the provider engine module,
+or expose any worker control over HTTP/CDP.
 
 `SearchSubmissionResult` must carry the actual terminal loader's URL, status,
 headers, rendered DOM, challenge classification, and cumulative stage timings.
@@ -586,15 +468,14 @@ provider keeps its current stage count.
 | Setup sub-deadline | Shared client | Keep the existing cumulative 45-second ceiling inside the browser deadline. Challenge continuation creates no new setup phase. |
 | Cleanup command bounds | Shared client | Keep the existing five-second command and WebSocket-close bounds outside the transaction deadline. A failed worker/continuation cleanup taints and closes the generation. |
 | Challenge field and protocol validation | Shared client using the provider's immutable `AnubisVerificationSpec` | Admit proof work only after exact structural, origin, path, type, size, algorithm, and selected-approach checks. |
-| Worker source, isolate, message, and concurrency limits for A/B | Obscura | Enforce the exact worker limits below. Python and SearXNG must not add duplicate worker counters or timers. |
-| Solver candidate and difficulty limits for C | Shared solver called on the SearXNG engine thread | Enforce the exact solver limits below. Obscura must not also solve or meter the proof. |
+| Worker source, isolate, message, and concurrency limits | Obscura | Enforce the exact worker limits below. Python and SearXNG must not add duplicate worker counters or timers. |
 | Cookie acceptance and delivery | Existing retained Obscura target cookie jar | Do not export, inspect, copy, clear, or separately validate the authorization cookie. A renewed challenge is the behavioral failure signal. |
 | Target/generation lifecycle | Shared client `SearchBrowserSession` | Reuse on unambiguous terminal success/block; close immediately on ambiguous protocol, worker teardown, event, or transport failure; retain the existing one-hour idle expiry otherwise. |
 | Final provider DOM parsing | `startpage2.py` | Parse results/no-results and defensively classify explicit Startpage/Anubis challenge DOM. It never runs proof work. |
 | CAPTCHA/access/rate-limit suspension | SearXNG offline processor | Preserve the existing 3,600-second values and record only typed blocking outcomes returned by the engine. |
 | Destination DNS and routing | Existing Obscura target client, bridges, and final-hop proxy | Worker source, pass, redirect, and restoration requests follow the selected no-VPN/VPN/proxy/Tor route with no fallback. |
 
-### Worker resource limits for Approaches A and B
+### Worker resource limits
 
 These are fixed reviewed implementation values, not environment variables:
 
@@ -626,15 +507,6 @@ an aggregate byte-perfect process-memory bound. Selected-image stress tests
 must nevertheless demonstrate that four admitted workers and repeated teardown
 do not grow live isolate/thread counts or retained source/message state.
 
-### Solver resource limits for Approach C
-
-Approach C has exactly one proof loop because the existing `startpage2` lease
-allows one engine attempt. It adds no executor, process, thread pool, semaphore,
-or worker counter. Its only resource ceilings are difficulty 5, 16,777,216
-candidates, 4,096-candidate deadline checks, fixed-size challenge fields, and
-the existing browser deadline. Do not apply the four-worker or V8 heap limits
-to this approach.
-
 ## Failure and Suspension Semantics
 
 Use existing typed shared-client failures where they fit. Add a sanitized
@@ -648,9 +520,8 @@ details.
 | Pass endpoint rejects the submitted proof, authorization cookie is ineffective, or terminal page is another explicit challenge | CAPTCHA | Retain until ordinary one-hour blocked-session expiry ordering | 3,600 seconds by existing processor |
 | Explicit Anubis page uses unsupported version, algorithm, difficulty, or required browser feature | CAPTCHA/unsupported verification | Retain under ordinary blocked ordering | 3,600 seconds |
 | Worker constructor/runtime/error event, worker quota, source-size/message-size rejection, or acknowledged local worker failure | Protocol/runtime failure, not CAPTCHA | Close immediately as ambiguous | None |
-| Solver reaches its candidate ceiling | `pow-exhausted` parser/runtime failure, not CAPTCHA | Close immediately | None |
 | Existing browser deadline expires during proof or continuation | Existing post-navigation timeout with exact stage | Close immediately | None |
-| Cross-origin/path violation, extra loader, second restoration, token mismatch, or malformed continuation fields after initial admission | Protocol/policy failure | Close immediately | None unless the returned DOM independently proves an explicit challenge |
+| Cross-origin/path violation, extra loader, second restoration, or malformed continuation fields after initial admission | Protocol/policy failure | Close immediately | None unless the returned DOM independently proves an explicit challenge |
 | Valid terminal result/no-results DOM | Success/no-results | Reusable | None |
 
 Do not convert local implementation failures into CAPTCHA merely because an
@@ -666,8 +537,7 @@ provider suspension.
   in wrapper logs, exceptions, metrics, test snapshots, or committed fixtures.
 - Logs may include only engine name, opaque existing request correlation ID,
   selected approach, sanitized stage, admitted version, numeric difficulty,
-  worker count, status class, and elapsed duration. Do not log the opaque
-  continuation token from Approach C.
+  worker count, status class, and elapsed duration.
 - Challenge JSON and worker source are attacker-controlled. Apply size/type
   validation before allocation, parsing, hashing, isolate creation, or URL
   construction.
@@ -683,7 +553,7 @@ provider suspension.
 - Do not export/import cookies or copy the proof into a fresh browser context.
 - A route failure, Tor circuit failure, VPN failure, bridge failure, worker
   source fetch failure, or Obscura failure remains closed. There is no switch
-  to the stack solver, Chromium, requests, or direct egress.
+  to the removed stack solver, Chromium, requests, or direct egress.
 - Preserve the current unprivileged, read-only, capability-free Obscura
   container and no-private-mount contract.
 
@@ -698,7 +568,7 @@ provider suspension.
    terminal classification.
 3. Test the selected Obscura image for independently scheduled direct/blob
    workers and the exact resource gates.
-4. Choose A, B, or C in the implementation review. Update the status block with
+4. Choose A or B in the implementation review. Update the status block with
    the accepted decision before changing behavior.
 5. Do not implement or retain code/tests for an unselected alternative.
 
@@ -741,28 +611,20 @@ provider suspension.
 5. Apply the patch with `git apply --check` in the existing verified-source
    builder and keep build tools out of the runtime image.
 
-### Phase 2C: stack-specific solver
-
-1. Add strict challenge extraction and the generation-bound pending/resume API.
-2. Install the scoped pre-document Anubis Worker interceptor before `H0`, keep
-   it through at most `R0`, then remove it and acknowledge inert-instance
-   cleanup after challenge or terminal classification.
-3. Implement the single-thread solver and exact limits in the shared package.
-4. Resume only through the provider browser owner's event loop and consume the
-   token once.
-5. Add the same common pass/redirect/restoration transaction; only proof
-   execution differs from A/B.
-
 ### Phase 3: classification, cleanup, and scheduling integration
 
-1. Preserve the provider lease through final parser classification and
+1. Remove the stack solver, Worker interceptor, pending/resume/abort API,
+   continuation tokens, solver-thread handoff, and their implementation-only
+   tests after the selected worker path passes its gates. Retain fixture tests
+   that specify the common Anubis transaction and failure behavior.
+2. Preserve the provider lease through final parser classification and
    suspension recording.
-2. Map local worker/solver failures according to the table above.
-3. Keep renewed/rejected Anubis pages in `startpage2.py`'s explicit CAPTCHA
+3. Map local worker failures according to the table above.
+4. Keep renewed/rejected Anubis pages in `startpage2.py`'s explicit CAPTCHA
    detector.
-4. Verify the one-hour provider target is reusable after success and expires
+5. Verify the one-hour provider target is reusable after success and expires
    before readmission after a blocking outcome.
-5. Confirm the three-second provider-start cooldown has one owner. It applies
+6. Confirm the three-second provider-start cooldown has one owner. It applies
    to the attempt's initial homepage authorization and to Bing's separately
    documented page-two transaction; it is not re-stamped for Anubis's internal
    pass navigation or the one restoration POST.
@@ -772,14 +634,16 @@ provider suspension.
 Complete every required documentation update listed below, remove obsolete
 current-behavior language, record validation evidence in the implementation
 review, and move this file unchanged in substance to
-`docs/plans/implemented/anubis_pow_support.md`. Do not append a progress diary.
+`docs/plans/implemented/anubis_native_workers.md`. The existing implemented
+stack-solver record is frozen and must not be overwritten or revised. Do not
+append a progress diary.
 
 ## Deterministic Test Criteria
 
 All deterministic tests must be networkless and contain generated challenge
 values, not captured live secrets.
 
-### Common tests required for every selected approach
+### Common tests required for both approaches
 
 - strict `AnubisVerificationSpec` construction, selectors, exact host/path,
   JSON type/size checks, and rejection of malformed or ambiguous pages;
@@ -812,7 +676,7 @@ values, not captured live secrets.
 - ambiguous cleanup closes and discards the retained generation without
   replaying the query.
 
-### Additional tests only for selected Approach A or B
+### Worker implementation tests
 
 - direct and blob classic workers execute outside the main isolate while CDP
   remains responsive during a long hash loop;
@@ -834,37 +698,19 @@ Approach A may satisfy Rust-level coverage in upstream, but this repository
 still requires black-box selected-image tests for every boundary it relies on.
 Do not copy upstream's complete test suite.
 
-### Additional tests only for selected Approach C
-
-- exact known SHA-256 vectors and first-valid-nonce behavior;
-- difficulty 1 through 5, malformed data, uppercase/odd/non-hex data,
-  unsupported algorithm/version/difficulty, and noncanonical UUID;
-- deadline checks no less often than every 4,096 candidates;
-- exact 16,777,216-candidate exhaustion without an off-by-one;
-- proof execution occurs on the engine thread while another provider's CDP
-  coroutine progresses on the shared event loop;
-- one pending token, exact generation binding, one resume/abort, rejection of
-  replay/mismatch/expiry, and mandatory finally cleanup;
-- the pre-document interceptor suppresses admitted direct and Blob Anubis
-  workers, delegates unrelated workers unchanged, is removed before `C0`, and
-  cannot race or double-spend the proof; and
-- no worker-patch tests, worker resource settings, or alternate solver process
-  are added.
-
 ## Selected-Image and Build Criteria
 
-For Approach A or B, extend `make test-obscura-image` so the selected local
+Extend `make test-obscura-image` so the selected local
 image proves the worker capability and fixed resource contract without network,
 pulling, or image substitution. The test must use public CDP behavior and an
 isolated fixture origin reached through the normal test network. For Approach B
 it must also verify exact patch-series application and the updated patchset
 startup marker.
 
-For every approach, extend `make test-patch-images` only for the SearXNG/shared-
+For both approaches, extend `make test-patch-images` only for the SearXNG/shared-
 client/parser behavior that actually needs pinned image dependencies. Keep
-pure state-machine and solver tests in `make test`. Do not add Approach A/B
-image tests when C is selected, and do not run Tor or OpenSearch image gates for
-this focused change.
+pure state-machine tests in `make test`. Do not run Tor or OpenSearch image
+gates for this focused change.
 
 The derived SearXNG image tag must change when shared-client or engine inputs
 change through the existing Makefile digest mechanism. Update
@@ -877,8 +723,7 @@ merely because a wrapper patch was added.
 Use benign queries and sanitized logs. Run at least:
 
 1. `make check`;
-2. `make test-obscura-image` for A/B, or omit it for C unless another Obscura
-   image contract changed;
+2. `make test-obscura-image`;
 3. `make test-patch-images`;
 4. effective Docker and Podman lite/full Compose rendering, confirming no new
    network, mount, capability, replica, worker-process, or user-facing setting;
@@ -893,7 +738,7 @@ Use benign queries and sanitized logs. Run at least:
    provider;
 9. concurrent Startpage and another-provider requests proving same-provider
    serialization and different-provider progress;
-10. for A/B, four-worker saturation, fifth-worker fail-fast behavior, main-page
+10. four-worker saturation, fifth-worker fail-fast behavior, main-page
     CDP responsiveness, and complete worker cleanup after success and timeout;
 11. a route interruption during worker fetch/pass/restoration proving no
     direct fallback and generation invalidation; and
@@ -923,16 +768,15 @@ The implementation is incomplete until these canonical documents are updated:
   with the selected execution owner, exact `H0/R0/C0/R1` transaction, deadline,
   classification, cookie continuity, stage count, and no-fallback behavior.
 - `docs/onyx_patch_info.md`: document an adopted upstream worker capability or
-  the exact new Obscura patch; document the shared-client continuation API and
-  any new strict startup markers. Approach C must instead document its solver
-  and pending/resume boundary without implying browser Worker support.
+  the exact new Obscura patch, removal of the stack solver/interceptor, the
+  shared-client continuation transaction, and any new strict startup markers.
 - `docs/onyx_patches_upgrade.md`: add an explicit removal/re-audit checkpoint
   for the selected approach, every admitted direct/blob fixture family, any
   explicitly unsupported family, resource limits, transaction restoration,
   failure mapping, and the live Startpage check.
-- `docs/resource_minimization.md`: document either the four-isolate global and
-  per-target worker ceilings plus lifecycle cleanup (A/B), or the one in-thread
-  bounded solver and absence of new workers/processes (C).
+- `docs/resource_minimization.md`: replace the implemented in-thread solver
+  contract with the four-isolate global and per-target worker ceilings plus
+  lifecycle cleanup.
 - `docs/internal_network_security.md`: record worker-source/pass/restoration
   destination authority, target-local state, and absence of a direct or
   cross-context path.
@@ -955,9 +799,11 @@ Conditionally update:
   introduced. This plan specifies none.
 
 Do not revise unrelated historical files under `docs/plans/implemented/`.
-After completion, move this plan to `docs/plans/implemented/` and ensure its
-status and selected-approach decision accurately describe the reviewed result;
-lasting behavior must remain canonical in the documents above.
+After completion, move this plan to
+`docs/plans/implemented/anubis_native_workers.md` and ensure its status and
+selected-approach decision accurately describe the reviewed result. Do not
+revise the frozen stack-solver record; lasting behavior must remain canonical
+in the documents above.
 
 ## Completion Criteria
 
