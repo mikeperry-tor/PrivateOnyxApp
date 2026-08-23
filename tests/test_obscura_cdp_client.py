@@ -699,6 +699,8 @@ class ObscuraClientTests(unittest.TestCase):
         self.assertEqual(_SEARCH_FORM_FUNCTION.count('new Event("input"'), 1)
         self.assertEqual(_SEARCH_FORM_FUNCTION.count('new Event("change"'), 1)
         self.assertIn("state.form.requestSubmit()", _SEARCH_FORM_FUNCTION)
+        self.assertIn("function exactMember", _SEARCH_FORM_FUNCTION)
+        self.assertNotIn(".includes(", _SEARCH_FORM_FUNCTION)
         self.assertNotIn("location.assign", _SEARCH_FORM_FUNCTION)
         self.assertNotIn("fetch(", _SEARCH_FORM_FUNCTION)
 

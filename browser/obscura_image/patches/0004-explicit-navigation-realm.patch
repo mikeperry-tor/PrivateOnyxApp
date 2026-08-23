@@ -2,8 +2,7 @@ diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.
 index d72dcac..a2f9d03 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -4103,10 +4103,12 @@ class Element extends Node {
- 
+@@ -4104,9 +4104,11 @@ class Element extends Node {
      const encoded = pairs.join('&');
      if (method === 'POST') {
 -      Deno.core.ops.op_navigate(targetUrl, 'POST', encoded);
@@ -78,10 +77,7 @@ diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
 index f0b0e1a..622a0d6 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -13222,6 +13222,39 @@ mod tests {
-         );
-     }
- 
+@@ -13225,3 +13225,36 @@ mod tests {
 +    #[test]
 +    fn private_onyx_request_submit_queues_top_level_post_navigation() {
 +        let mut rt = setup_runtime(

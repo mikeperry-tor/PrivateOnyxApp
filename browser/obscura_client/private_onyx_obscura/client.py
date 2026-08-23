@@ -1472,6 +1472,13 @@ async def fetch(
 
 _SEARCH_FORM_FUNCTION = r"""
 function(operation, selector, fieldName, fixedFields, query, expectedPolicy) {
+  function exactMember(values, candidate) {
+    if (!values || typeof values.length !== "number") return false;
+    for (let index = 0; index < values.length; index += 1) {
+      if (values[index] === candidate) return true;
+    }
+    return false;
+  }
   function inspect() {
     const controls = Array.from(document.querySelectorAll(selector));
     if (controls.length !== 1) throw new Error("control-count");
@@ -1507,11 +1514,11 @@ function(operation, selector, fieldName, fixedFields, query, expectedPolicy) {
     const enctype = declaredEnctype || "application/x-www-form-urlencoded";
     const method = String(form.method || "get").toLowerCase();
     if (current.protocol !== expectedPolicy[4] ||
-        !expectedPolicy[0].includes(current.hostname.toLowerCase()) ||
-        !expectedPolicy[5].includes(current.port) ||
+        !exactMember(expectedPolicy[0], current.hostname.toLowerCase()) ||
+        !exactMember(expectedPolicy[5], current.port) ||
         action.protocol !== expectedPolicy[4] ||
-        !expectedPolicy[1].includes(action.hostname.toLowerCase()) ||
-        !expectedPolicy[5].includes(action.port) ||
+        !exactMember(expectedPolicy[1], action.hostname.toLowerCase()) ||
+        !exactMember(expectedPolicy[5], action.port) ||
         action.username !== "" || action.password !== "" ||
         action.pathname !== expectedPolicy[2] ||
         method !== expectedPolicy[3] ||

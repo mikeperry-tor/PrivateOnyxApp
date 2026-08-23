@@ -209,8 +209,9 @@ Audit these current Obscura areas:
   `0001-stealth-native-post.patch` only when upstream provides that complete
   contract without falling back to its ordinary context client;
 - one unpredictable nonzero target seed injected before each new JavaScript
-  realm and stable seed-derived screen/GPU/canvas/audio/hardware/device-memory
-  surfaces across homepage, result, and later-query navigation. Remove
+  top-level or child-frame realm and stable seed-derived
+  screen/GPU/canvas/audio/hardware/device-memory surfaces across frames,
+  homepage, result, and later-query navigation. Remove
   `0002-target-fingerprint-seed.patch` only when upstream provides target- or
   context-stable fingerprint state with the same provider-session lifetime;
 - writable shadowing of legacy Window named-element properties, the

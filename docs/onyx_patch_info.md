@@ -216,9 +216,10 @@ binaries with the no-render `stealth` feature set:
   patchset marker.
 - `0002-target-fingerprint-seed.patch` generates one nonzero random seed when
   a target is created and injects it through a one-shot private setter before
-  every page-realm initialization, so seed-derived screen/GPU/canvas/audio
-  surfaces remain stable for that target without exposing the seed to page
-  code or CDP. Profile-owned hardware and memory values remain stable too.
+  every top-level and child-frame realm initialization, so seed-derived
+  screen/GPU/canvas/audio surfaces remain stable for that target without
+  exposing the seed to page code or CDP. Profile-owned hardware and memory
+  values remain stable too.
 - `0003-search-runtime-compatibility.patch` lets assignment shadow a legacy
   getter-backed Window named element, exposes the navigation-timing constructor
   hierarchy and SVG anchor constructor used by provider scripts, and gives
@@ -242,7 +243,8 @@ The selected runtime also provides child-frame realms and `postMessage`,
 context-scoped `Storage.clearCookies`, cookie-domain canonicalization and
 expiry/deletion fixes, stealth ES-module transport, and a stealth-client DNS
 SSRF resolver guard. Tagged-image tests cover the frame-message path and prove
-that clearing one connection context does not affect another. The wrapper does
+that a child frame observes its parent's seed-derived fingerprint and that
+clearing one connection context does not affect another. The wrapper does
 not use cookie clearing for isolation, and CDP cookie export/import still loses
 the host-only bit, so these capabilities do not justify persistent
 cross-connection cookie transfer or removal of any selected patch.

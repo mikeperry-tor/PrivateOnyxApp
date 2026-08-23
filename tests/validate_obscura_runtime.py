@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from private_onyx_obscura import BodyClassification
 from private_onyx_obscura import FetchFailure
+from private_onyx_obscura import ObscuraClientError
 from private_onyx_obscura import ObscuraSession
 from private_onyx_obscura import SearchBrowserSession
 from private_onyx_obscura import fetch as fetch_async
@@ -335,9 +336,9 @@ async def validate_patched_search_runtime() -> None:
             )
             return connection_id, fingerprint
 
-        async def form_call(operation: str, query: str):
+        async def form_call_result(operation: str, query: str):
             assert current_form_policy is not None
-            result = await cdp.send(
+            return await cdp.send(
                 "Runtime.callFunctionOn",
                 {
                     "functionDeclaration": _SEARCH_FORM_FUNCTION,
@@ -363,6 +364,9 @@ async def validate_patched_search_runtime() -> None:
                 session_id=session_id,
                 timeout_seconds=15,
             )
+
+        async def form_call(operation: str, query: str):
+            result = await form_call_result(operation, query)
             assert "exceptionDetails" not in result, result
             return result["result"]
 
@@ -443,6 +447,20 @@ async def validate_patched_search_runtime() -> None:
                 "a.sampleRate,a.baseLatency]);})()"
             )
             return connection_id, fingerprint
+
+        await navigate("/search-get-home")
+        await evaluate(
+            "(Array.prototype.includes = Array.prototype.indexOf,"
+            "document.querySelector('form').action = "
+            "'https://policy-bypass.invalid/search-get-result',true)"
+        )
+        try:
+            await form_call_result("validate", "fixture")
+        except ObscuraClientError as exc:
+            assert exc.category is FetchFailure.PROTOCOL, exc.category
+            assert exc.stage == "cdp-command", exc.stage
+        else:
+            raise AssertionError("prototype tampering bypassed search form policy")
 
         observations = []
         observations.append(await navigate("/search-get-home"))

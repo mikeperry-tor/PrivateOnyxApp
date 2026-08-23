@@ -150,9 +150,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(
                 b"<html><body><main id='message-state'>pending</main>"
                 b"<iframe src='/post-message-child'></iframe><script>"
+                b"const fingerprint=()=>[navigator.hardwareConcurrency,"
+                b"navigator.deviceMemory,new AudioContext().sampleRate,"
+                b"new AudioContext().baseLatency].join('|');"
                 b"addEventListener('message', event => {"
-                b"if (event.origin === location.origin && event.data === 'frame-ready') "
-                b"document.getElementById('message-state').textContent = event.data;"
+                b"if (event.origin === location.origin && event.data.kind === 'frame-ready') "
+                b"document.getElementById('message-state').textContent = "
+                b"event.data.fingerprint === fingerprint() ? "
+                b"'frame-ready' : 'fingerprint-mismatch';"
                 b"});</script></body></html>",
                 content_type="text/html; charset=utf-8",
             )
@@ -160,7 +165,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/post-message-child":
             self._send(
                 b"<html><body><script>"
-                b"parent.postMessage('frame-ready', location.origin);"
+                b"parent.postMessage({kind:'frame-ready',fingerprint:["
+                b"navigator.hardwareConcurrency,navigator.deviceMemory,"
+                b"new AudioContext().sampleRate,new AudioContext().baseLatency"
+                b"].join('|')}, location.origin);"
                 b"</script></body></html>",
                 content_type="text/html; charset=utf-8",
             )

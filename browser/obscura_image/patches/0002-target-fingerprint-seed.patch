@@ -93,16 +93,89 @@ index d7e69040c4fcdd7ed82346a4afb0d4719975701a..faf922e1e552be9218238088880f8760
    _fpCache = null;
    // A real navigation just completed (this runs after set_url), so drop any
    // URL a location setter previewed synchronously and let document_url drive
+diff --git a/crates/obscura-js/src/frame.rs b/crates/obscura-js/src/frame.rs
+index a5ef00f..436de62 100644
+--- a/crates/obscura-js/src/frame.rs
++++ b/crates/obscura-js/src/frame.rs
+@@ -100,11 +100,14 @@ impl FrameRealm {
+         // Both ids before init, not after: init is what installs `parent` and
+         // `top`, and a document that runs even one script believing it is
+         // top-level has already taken the wrong branch.
++        let fingerprint_seed = parent.fingerprint_seed();
+         realm
+             .run(
+                 parent,
+                 &format!(
+-                    "globalThis.__obscura_frameId = {frame_id};\
++                    "globalThis.__obscura_set_fingerprint_seed({fingerprint_seed});\
++                     delete globalThis.__obscura_set_fingerprint_seed;\
++                     globalThis.__obscura_frameId = {frame_id};\
+                      globalThis.__obscura_parentFrameId = {parent_frame_id};\
+                      globalThis.__obscura_init();"
+                 ),
+@@ -507,1 +510,35 @@ mod tests {
++    #[test]
++    fn private_onyx_frame_inherits_the_parent_fingerprint_seed() {
++        let mut parent = ObscuraJsRuntime::new();
++        parent.set_dom(parse_html("<html><body></body></html>"));
++        parent.set_url("https://parent.example/");
++        parent.set_fingerprint_seed(0x1020_3040);
++        parent.run_page_init();
++
++        let frame = FrameRealm::new(
++            &mut parent,
++            1,
++            0,
++            "https://parent.example/frame",
++            "<html><body></body></html>",
++        )
++        .expect("frame realm");
++        let expression =
++            "[navigator.hardwareConcurrency,navigator.deviceMemory,\
++             new AudioContext().sampleRate,new AudioContext().baseLatency]";
++        assert_eq!(
++            frame.evaluate(&mut parent, expression).unwrap(),
++            parent.evaluate(expression).unwrap(),
++        );
++        assert_eq!(
++            frame
++                .evaluate(
++                    &mut parent,
++                    "typeof globalThis.__obscura_set_fingerprint_seed",
++                )
++                .unwrap(),
++            serde_json::json!("undefined"),
++        );
++    }
++
+     /// The capability the frame realm exists for: scripts that arrived with the
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
 index f36f742e6340ed2ddecb6a0e31d7a96283d0134f..d0c44a6ea5170472b0f6682f1c3033c1574a3297 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -996,6 +996,18 @@ impl ObscuraJsRuntime {
+@@ -118,6 +118,7 @@ pub struct RemoteObjectInfo {
+ pub struct ObscuraJsRuntime {
+     runtime: JsRuntime,
+     state: Rc<RefCell<ObscuraState>>,
++    fingerprint_seed: u32,
+     object_store: HashMap<String, String>,
+     object_counter: u64,
+     import_map: Rc<RefCell<ImportMap>>,
+@@ -342,6 +343,7 @@ impl ObscuraJsRuntime {
+         let mut instance = ObscuraJsRuntime {
+             runtime,
+             state,
++            fingerprint_seed: 0,
+             object_store: HashMap::new(),
+             object_counter: 0,
+             import_map,
+@@ -996,6 +998,23 @@ impl ObscuraJsRuntime {
          let _ = self.execute_runtime_script("<set-screen-size>", script);
      }
 
 +    pub fn set_fingerprint_seed(&mut self, seed: u32) {
 +        debug_assert_ne!(seed, 0);
++        self.fingerprint_seed = seed;
 +        let _ = self.runtime.execute_script(
 +            "<set-fingerprint-seed>",
 +            format!(
@@ -113,10 +186,14 @@ index f36f742e6340ed2ddecb6a0e31d7a96283d0134f..d0c44a6ea5170472b0f6682f1c3033c1
 +        );
 +    }
 +
++    pub(crate) fn fingerprint_seed(&self) -> u32 {
++        self.fingerprint_seed
++    }
++
      /// Current clamped root scroll offset shared by CSSOM geometry and paint.
      #[cfg(feature = "render")]
      pub fn scroll_offset(&self) -> (f32, f32) {
-@@ -3123,6 +3135,31 @@ mod tests {
+@@ -3123,6 +3142,31 @@ mod tests {
          rt
      }
 

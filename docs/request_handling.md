@@ -467,8 +467,10 @@ completed homepage document, populates that page's declared query control and
 fixed fields, validates the expected homepage host, form action host/path,
 scheme, port, method, target, credentials, and encoding inside the same browser
 call, then calls the owning form's native `requestSubmit()`. The call throws
-before submission on any mismatch and does not depend on Obscura returning a
-composite JavaScript policy object. The engine validates a
+before submission on any mismatch; allowed-host and allowed-port membership
+uses indexed primitive equality rather than page-overridable array prototype
+methods. It does not depend on Obscura returning a composite JavaScript policy
+object. The engine validates a
 distinct completed result document, and passes only the bounded result DOM to
 its parser. Bing alone performs one additional homepage/form/result transaction
 when a successfully parsed first page contains fewer than five valid organic
@@ -647,10 +649,10 @@ native cookie jar, selected browser profile, target-owned stealth HTTP client
 and pool, and target-scoped fingerprint bundle, then moves the idle deadline.
 A new main-document navigation creates a fresh JavaScript realm, but the
 source-built Obscura patch injects the same unpredictable target seed into each
-realm. Native form POST uses that same target stealth client as GET, including
-its cookies, proxy, TLS-emulation profile, redirect handling, and pool. Natural
-upstream/library idle socket expiry is allowed; the retained client may open a
-replacement socket without rotating browser state.
+top-level and child-frame realm. Native form POST uses that same target stealth
+client as GET, including its cookies, proxy, TLS-emulation profile, redirect
+handling, and pool. Natural upstream/library idle socket expiry is allowed; the
+retained client may open a replacement socket without rotating browser state.
 
 No query by the deadline physically closes the target followed by its
 connection. A later query creates a fresh generation. The owner checks an
