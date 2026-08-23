@@ -52,14 +52,14 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertNotIn("--storage-dir", self.compose)
         self.assertNotIn("--allow-file-access", self.compose)
 
-    def test_manifest_pins_obscura_0_2_0(self):
+    def test_manifest_pins_obscura_0_2_1(self):
         self.assertIn(
-            "OBSCURA_RELEASE_VERSION=0.2.0",
+            "OBSCURA_RELEASE_VERSION=0.2.1",
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.0"
-            "@sha256:78c99ac89d010d444d96d85c183a2db912c41f807b7807d697df98ab7e4bd3c2",
+            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.1"
+            "@sha256:e65cb455fc67543283da6901e8735c45aab5421e2ced8879b0a1fa70a4e38a2d",
             self.manifest,
         )
         self.assertIn(
@@ -67,12 +67,12 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_SOURCE_REF=97124edeb2ea610615e78f43e097454e3b221f6b",
+            "OBSCURA_SOURCE_REF=2810cb478696885e0d44d1741cbf586f1cc98bb5",
             self.manifest,
         )
         self.assertIn(
             "OBSCURA_SOURCE_SHA256="
-            "e9fa0387f51afc6f33a0e16b0aa31c2da071151fd70cea83583b176e6d0f79bc",
+            "d38781abc2051b08ddb21ab6e34eb42e0cbaa4a701fee95978447bebc44b7972",
             self.manifest,
         )
         self.assertNotIn("\nOBSCURA_IMAGE=", self.manifest)
@@ -106,8 +106,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         )
         self.assertIn(
             "ARG OBSCURA_UPSTREAM_IMAGE="
-            "docker.io/h4ckf0r0day/obscura:0.2.0"
-            "@sha256:78c99ac89d010d444d96d85c183a2db912c41f807b7807d697df98ab7e4bd3c2",
+            "docker.io/h4ckf0r0day/obscura:0.2.1"
+            "@sha256:e65cb455fc67543283da6901e8735c45aab5421e2ced8879b0a1fa70a4e38a2d",
             self.obscura_dockerfile,
         )
         self.assertIn("obscura/archive/{ref}.tar.gz", self.obscura_fetcher)
@@ -123,9 +123,15 @@ class ObscuraDirectComposeTests(unittest.TestCase):
                 "0001-stealth-native-post.patch",
                 "0002-target-fingerprint-seed.patch",
                 "0003-search-runtime-compatibility.patch",
+                "0004-explicit-navigation-realm.patch",
             ],
         )
-        self.assertIn("cargo build --release --locked --features stealth", self.obscura_dockerfile)
+        self.assertIn(
+            "cargo build --release --locked --no-default-features --features stealth",
+            self.obscura_dockerfile,
+        )
+        self.assertIn("-p obscura-net stealth_resolver_", self.obscura_dockerfile)
+        self.assertIn("-p obscura-cdp clear_cookies_", self.obscura_dockerfile)
         self.assertNotIn("--features render", self.obscura_dockerfile)
         self.assertNotIn("--features render,stealth", self.obscura_dockerfile)
         self.assertIn("--bin obscura --bin obscura-worker", self.obscura_dockerfile)
@@ -138,7 +144,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertIn("response.url.as_str()", native_post)
         self.assertIn("redirected_navigation_method", native_post)
         fingerprint = self.obscura_patches["0002-target-fingerprint-seed.patch"]
-        self.assertIn("__obscura_registerLinkedStylesheet", fingerprint)
+        self.assertIn("__obscura_core_handoff", fingerprint)
+        self.assertIn("__obscura_set_fingerprint_seed", fingerprint)
         self.assertIn("set_fingerprint_seed(self.fingerprint_seed)", fingerprint)
         compatibility = self.obscura_patches[
             "0003-search-runtime-compatibility.patch"
@@ -155,6 +162,13 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             compatibility,
         )
         self.assertIn("_windowNamedPropertyNames.delete(name)", compatibility)
+        navigation = self.obscura_patches[
+            "0004-explicit-navigation-realm.patch"
+        ]
+        self.assertIn("_realmFrameId", navigation)
+        self.assertIn("private_onyx_request_submit_queues", navigation)
+        self.assertIn("private_onyx_location_replace_queues", navigation)
+        self.assertIn("replace(url)", navigation)
         self.assertIn("private_onyx_window_named_property_assignment", compatibility)
         self.assertIn('OBSCURA_MODULE_BUDGET_MS: "10000"', self.compose)
 

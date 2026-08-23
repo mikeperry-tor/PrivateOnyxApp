@@ -211,7 +211,8 @@ are not duplicate enforcement.
   One shared lazy SearXNG event-loop thread owns all five generations and their
   one idle-deadline callback per live provider session. This changes target
   lifetime, not the maximum target, connection, thread, or callback counts.
-- The derived Obscura v0.2.0 binary selects the no-render stealth feature set.
+- The derived Obscura v0.2.1 binary selects the upstream release variant's
+  explicit `--no-default-features --features stealth` no-render feature set.
   Search and direct `open_url` consume DOM and response-body CDP surfaces, so
   screenshot, screencast, PDF-export, raster layout, image/font capture, and
   renderer-only resource warmup remain absent. JavaScript, DOM, module,

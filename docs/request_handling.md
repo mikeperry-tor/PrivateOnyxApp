@@ -124,7 +124,7 @@ implementation from `browser/obscura_client`. SearXNG connects on
 connect only through `obscura-cdp-gateway` on `onyx-obscura-control`. CDP is
 not published on the host or attached to an Onyx data/backend network.
 
-Obscura v0.2.0 gives every WebSocket connection its own browser context, HTTP
+Obscura v0.2.1 gives every WebSocket connection its own browser context, HTTP
 client, cookie jar, targets, headers, User-Agent state, OS thread, and V8
 isolates. Direct `open_url` uses one fresh connection and target per navigation.
 SearXNG instead gives each of its five providers one lazy connection and one
@@ -136,7 +136,11 @@ target to local `about:blank` before returning it to the provider owner. This
 destroys provider JavaScript realms, timers, and page resources while retaining
 the target-owned state above. A pending Startpage proof is the sole exception:
 its challenge document remains live only until resume or abort. Neither path
-issues `Network.clearBrowserCookies`.
+issues `Network.clearBrowserCookies` or `Storage.clearCookies`; connection and
+provider ownership, not a mutable clear operation, define the state boundary.
+The tagged-image gate separately proves that `Storage.clearCookies` clears only
+the selected connection context and cannot clear a second live connection's
+cookies.
 
 The single Obscura process accepts at most 15 live WebSockets: ten direct
 `open_url` attempts plus one retained connection for each of the five search
@@ -147,13 +151,20 @@ receive HTTP 503 instead of entering a server queue as a fail-closed guard
 against a changed worker/process model or another unexpected CDP caller; normal
 Onyx tool execution is expected to remain within the 15-slot composition.
 
-In the stealth-feature build, upstream v0.2.0 accepts
+In the stealth-feature build, upstream v0.2.1 accepts
 `Network.setExtraHTTPHeaders` and `Network.setUserAgentOverride` but applies
 them to the ordinary context HTTP client while navigation uses its separate
 wreq client, so those overrides do not reach the wire. The wrapper does not
 call either command; its isolation contract therefore covers the cookie jar,
 targets, contexts, V8 state, and connection cleanup actually used by this
 stack. Re-audit this upstream split before depending on either override.
+
+The selected no-render runtime executes same-origin child-frame scripts and
+page/frame `postMessage`; the tagged-image gate exercises that path because
+provider hydration can depend on frame messaging. Its stealth transport also
+applies the upstream DNS SSRF resolver guard and redirect validation. These are
+defense-in-depth beneath the stack's fixed final-hop destination policy; they
+do not authorize a direct route or weaken fail-closed bridge/proxy handling.
 
 The client uses flattened CDP messages over the pinned WebSocket transport so
 it can own event correlation, retained-body streaming, deadlines, redaction,
@@ -453,7 +464,11 @@ they cannot perform startup DNS/network work or retain engine-specific state.
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are custom
 offline engines. Each begins at its declared provider homepage, validates the
 completed homepage document, populates that page's declared query control and
-fixed fields, calls the owning form's native `requestSubmit()`, validates a
+fixed fields, validates the expected homepage host, form action host/path,
+scheme, port, method, target, credentials, and encoding inside the same browser
+call, then calls the owning form's native `requestSubmit()`. The call throws
+before submission on any mismatch and does not depend on Obscura returning a
+composite JavaScript policy object. The engine validates a
 distinct completed result document, and passes only the bounded result DOM to
 its parser. Bing alone performs one additional homepage/form/result transaction
 when a successfully parsed first page contains fewer than five valid organic
@@ -520,7 +535,7 @@ Before Startpage's initial homepage navigation, the client installs one
 pre-document Worker wrapper. It creates inert message-compatible objects only
 for exact same-origin Anubis SHA-256 worker paths, or target-local Blob workers
 on a document carrying the exact main-module marker. Every other Worker call
-delegates to the native constructor. This prevents Obscura v0.2.0's
+delegates to the native constructor. This prevents the selected runtime's
 cooperative Worker shim from running the Anubis hash loop in the page isolate.
 Installation, active ownership, removal, and any inert-worker termination are
 acknowledged through the retained page; any mismatch closes the provider
@@ -860,17 +875,22 @@ visible under its otherwise warning-oriented default logger and adds only the
 engine name, provider-local query sequence, and whether the retained browser
 session was reused.
 The wrapper-selected image retains the digest-pinned upstream runtime but
-builds the exact SHA-256-verified upstream source revision with the no-render
-`stealth` feature set and the three strict wrapper patch-series entries, then
+builds the exact SHA-256-verified upstream source revision with the explicit
+`--no-default-features --features stealth` no-render feature set and the four
+strict wrapper patch-series entries, then
 copies only the resulting server binaries into that runtime. This is required
 for wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
 fingerprint seed, stealth-native form POST, and focused provider JavaScript
-runtime-compatibility contracts. The stack consumes
-DOM and response-body CDP surfaces, not screenshots, screencasts, or PDF
-export, so it does not compile the v0.2.0 raster renderer or incur its image,
+runtime-compatibility and explicit navigation-realm contracts. The stack
+consumes DOM and response-body CDP surfaces, not screenshots, screencasts, or PDF
+export, so it does not compile the v0.2.1 raster renderer or incur its image,
 font, layout, and capture resource work. JavaScript, DOM, module, charset, and
 compressed-stealth-response improvements remain present in the no-render
 build.
+The navigation-realm contract covers native form GET/POST plus document,
+window, and global `location` assignment, `href`, `assign()`, `reload()`, and
+`replace()`. Startpage's Anubis proof-pass navigation depends on
+`location.replace()` and is part of the selected-image and live-provider gates.
 The patch removes the submitted URL and body from Obscura's JS-triggered
 main-navigation diagnostics so search queries are not written there. Obscura
 does not offer equivalent end-to-end redaction for every upstream subresource

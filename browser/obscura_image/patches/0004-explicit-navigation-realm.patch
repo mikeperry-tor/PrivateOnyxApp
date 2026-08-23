@@ -1,0 +1,120 @@
+diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
+index d72dcac..a2f9d03 100644
+--- a/crates/obscura-js/js/bootstrap.js
++++ b/crates/obscura-js/js/bootstrap.js
+@@ -4103,10 +4103,12 @@ class Element extends Node {
+ 
+     const encoded = pairs.join('&');
+     if (method === 'POST') {
+-      Deno.core.ops.op_navigate(targetUrl, 'POST', encoded);
++      Deno.core.ops.op_navigate(targetUrl, 'POST', encoded, _realmFrameId);
+     } else {
+       const sep = targetUrl.includes('?') ? '&' : '?';
+-      Deno.core.ops.op_navigate(targetUrl + (encoded ? sep + encoded : ''), 'GET', '');
++      Deno.core.ops.op_navigate(
++        targetUrl + (encoded ? sep + encoded : ''), 'GET', '', _realmFrameId
++      );
+     }
+   }
+   reset() {
+@@ -4885,7 +4887,7 @@ class Document extends Node {
+   }
+   get referrer() { return _domParse("document_referrer") ?? ""; }
+   get location() { return globalThis.location; }
+-  set location(url) { Deno.core.ops.op_navigate(_resolveUrl(String(url)), 'GET', ''); }
++  set location(url) { Deno.core.ops.op_navigate(_resolveUrl(String(url)), 'GET', '', _realmFrameId); }
+   get defaultView() { return globalThis; }
+   get nodeType() { return 9; }
+   get nodeName() { return "#document"; }
+@@ -6131,7 +6133,7 @@ function __currentUrl() {
+ }
+ globalThis.location = {
+   get href() { return __currentUrl(); },
+-  set href(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
++  set href(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
+   get origin() { try { return new URL(this.href).origin; } catch { return ""; } },
+   get protocol() { try { return new URL(this.href).protocol; } catch { return ""; } },
+   get host() { try { return new URL(this.href).host; } catch { return ""; } },
+@@ -6141,14 +6143,14 @@ globalThis.location = {
+   get hash() { try { return new URL(this.href).hash; } catch { return ""; } },
+   get port() { try { return new URL(this.href).port; } catch { return ""; } },
+   toString() { return this.href; },
+-  assign(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
+-  reload() { var r = _resolveUrl(this.href); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
+-  replace(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
++  assign(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
++  reload() { var r = _resolveUrl(this.href); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
++  replace(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
+ };
+ const _locationObj = globalThis.location;
+ Object.defineProperty(globalThis, 'location', {
+   get() { return _locationObj; },
+-  set(url) { var r = _resolveUrl(String(url)); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
++  set(url) { var r = _resolveUrl(String(url)); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
+   configurable: false,
+   enumerable: true,
+ });
+diff --git a/crates/obscura-js/src/ops.rs b/crates/obscura-js/src/ops.rs
+index 7597a99..b460066 100644
+--- a/crates/obscura-js/src/ops.rs
++++ b/crates/obscura-js/src/ops.rs
+@@ -3504,13 +3504,13 @@ fn op_set_cookie(scope: &mut v8::HandleScope, state: &OpState, #[string] cookie_
+ // navigation against the calling realm keeps it inside that frame.
+ #[op2(fast)]
+ fn op_navigate(
+-    scope: &mut v8::HandleScope,
+     state: &OpState,
+     #[string] url: &str,
+     #[string] method: &str,
+     #[string] body: &str,
++    frame_id: u32,
+ ) {
+-    let gs = realm_state(scope, state);
++    let gs = frame_state(state, frame_id);
+     let mut gs = gs.borrow_mut();
+     gs.url = url.to_string();
+     gs.pending_navigation = Some((url.to_string(), method.to_string(), body.to_string()));
+diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
+index f0b0e1a..622a0d6 100644
+--- a/crates/obscura-js/src/runtime.rs
++++ b/crates/obscura-js/src/runtime.rs
+@@ -13222,6 +13222,39 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn private_onyx_request_submit_queues_top_level_post_navigation() {
++        let mut rt = setup_runtime(
++            r#"<html><body><form id="f" action="/submitted" method="post">
++                <input name="q" value="fixture">
++            </form></body></html>"#,
++        );
++        rt.evaluate("(document.getElementById('f').requestSubmit(), true)")
++            .unwrap();
++        assert_eq!(
++            rt.take_pending_navigation(),
++            Some((
++                "http://example.com/submitted".to_string(),
++                "POST".to_string(),
++                "q=fixture".to_string(),
++            )),
++        );
++    }
++
++    #[test]
++    fn private_onyx_location_replace_queues_top_level_navigation() {
++        let mut rt = setup_runtime("<html><body></body></html>");
++        rt.evaluate("(location.replace('/passed'), true)").unwrap();
++        assert_eq!(
++            rt.take_pending_navigation(),
++            Some((
++                "http://example.com/passed".to_string(),
++                "GET".to_string(),
++                "".to_string(),
++            )),
++        );
++    }
++
+     #[test]
+     fn test_location_navigation_coerces_url_objects() {
+         let mut rt = setup_runtime("<html><body></body></html>");

@@ -71,7 +71,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
         self.assertIn("$(TOR_BASE_IMAGE)", self.makefile)
         self.assertRegex(
             self.value("OBSCURA_UPSTREAM_IMAGE"),
-            r"^docker\.io/h4ckf0r0day/obscura:0\.2\.0@sha256:[0-9a-f]{64}$",
+            r"^docker\.io/h4ckf0r0day/obscura:0\.2\.1@sha256:[0-9a-f]{64}$",
         )
 
     def test_minio_release_records_its_image_source_revision(self) -> None:

@@ -146,6 +146,25 @@ class Handler(BaseHTTPRequestHandler):
                 content_type="text/html; charset=utf-8",
             )
             return
+        if path == "/post-message":
+            self._send(
+                b"<html><body><main id='message-state'>pending</main>"
+                b"<iframe src='/post-message-child'></iframe><script>"
+                b"addEventListener('message', event => {"
+                b"if (event.origin === location.origin && event.data === 'frame-ready') "
+                b"document.getElementById('message-state').textContent = event.data;"
+                b"});</script></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/post-message-child":
+            self._send(
+                b"<html><body><script>"
+                b"parent.postMessage('frame-ready', location.origin);"
+                b"</script></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
         if path == "/modern-javascript":
             self._send(
                 b"<html><head><title>Modern JavaScript</title></head><body>"

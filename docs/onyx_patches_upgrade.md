@@ -187,8 +187,9 @@ Audit these current Obscura areas:
 - per-body network retention, entry/alias/base64 amplification, per-connection
   IO stream accounting, and initial full-body allocation before retention;
 - two-client isolation of cookies, HTTP clients, targets, browser contexts, and
-  V8 isolates without a cookie-clear command; also re-audit the stealth-feature
-  split where accepted extra-header and User-Agent CDP overrides
+  V8 isolates without relying on a cookie-clear command; context-scoped
+  `Storage.clearCookies` must not affect a second connection; also re-audit the
+  stealth-feature split where accepted extra-header and User-Agent CDP overrides
   update the ordinary HTTP client rather than the wreq navigation client;
 - repeated homepage/result and later-query navigation on one retained provider
   target/connection generation; native cookie, selected-profile,
@@ -221,6 +222,14 @@ Audit these current Obscura areas:
   `0003-search-runtime-compatibility.patch` only when the tagged upstream runtime
   provides all five contracts and the focused
   provider fixtures pass without it;
+- explicit main- versus child-frame ownership for script-triggered navigation,
+  including a top-level `requestSubmit()` POST with its encoded form body and
+  every document/window/global `location` navigation entry point. Require a
+  top-level `location.replace()` regression because the Startpage Anubis pass
+  uses it.
+  Remove `0004-explicit-navigation-realm.patch` only when upstream passes the
+  focused request-submission, location-navigation, and child-frame contracts
+  without inferring navigation state from the active V8 context;
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
@@ -236,11 +245,10 @@ Audit these current Obscura areas:
 - render versus no-render feature selection, ensuring the selected build keeps
   every JavaScript, DOM, charset, module, compressed-response, and CDP surface
   used by search and `open_url` without enabling unused raster capture work;
-  the wrapper currently builds `--features stealth` against a tag whose CLI
-  default feature set is empty rather than treating `--no-default-features` as
-  a permanent Cargo contract. Re-audit both the tag's declared defaults and
-  Cargo flag semantics on every upgrade, and prove the built binary rejects
-  render-only capture commands;
+  the wrapper builds the upstream release variant's explicit
+  `--no-default-features --features stealth` selection. Re-audit both the tag's
+  declared defaults and Cargo flag semantics on every upgrade, and prove the
+  built binary rejects render-only capture commands;
 - the populated-page ES-module budget under the slowest supported Tor route;
   keep it inside the page script and caller attempt deadlines and prove a fast
   module graph does not acquire an unconditional delay;
@@ -1247,6 +1255,18 @@ Use this matrix to prove the current-state documents, not merely container
 health. Resolve every affected functionality, applicability, necessity, and
 obsolescence question before accepting the upgrade; update or remove the
 implementation, tests, and documentation together.
+
+Every Obscura or SearXNG version, source, image, build-feature, or patch-series
+upgrade requires an explicit live query of each custom engine: `google2`,
+`brave2`, `duckduckgo2`, `startpage2`, and `bing2`. Force one exact engine per
+request so round-robin success from another provider cannot mask a failure.
+For every engine, verify nonempty coherent results with that engine as the sole
+result source, inspect the SearXNG and Obscura completion records, and confirm
+there is no unresponsive-engine entry or empty-success substitution. A CAPTCHA,
+429, access denial, timeout, or route failure is useful typed-failure evidence
+but is not a successful provider gate; retry through an available documented
+route and record any engine that still cannot produce valid results as
+incomplete upgrade validation.
 
 Where external dependencies are available, exercise lite/full with VPN,
 explicit no-VPN, and a documented remote-DNS upstream. For each practical row:

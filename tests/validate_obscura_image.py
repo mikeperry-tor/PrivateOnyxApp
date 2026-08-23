@@ -178,34 +178,38 @@ def main() -> int:
         )
         wait_for_obscura(args.container_bin, network, args.client_image, cdp_host)
 
-        output = run(
-            args.container_bin,
-            "run",
-            "--rm",
-            "--network",
-            network,
-            "--entrypoint",
-            "python",
-            "--env",
-            "PYTHONPATH=/obscura-client",
-            "--env",
-            f"OBSCURA_TEST_CDP_URL=ws://{cdp_host}:9222/devtools/browser",
-            "--env",
-            f"OBSCURA_TEST_BASE_URL=http://{fixture_host}:8080",
-            "--mount",
-            f"type=bind,src={ROOT / 'browser/obscura_client'},"
-            "dst=/obscura-client,readonly",
-            "--mount",
-            f"type=bind,src={ROOT / 'tests/validate_obscura_runtime.py'},"
-            "dst=/validation.py,readonly",
-            args.client_image,
-            "/validation.py",
-        )
+        try:
+            output = run(
+                args.container_bin,
+                "run",
+                "--rm",
+                "--network",
+                network,
+                "--entrypoint",
+                "python",
+                "--env",
+                "PYTHONPATH=/obscura-client",
+                "--env",
+                f"OBSCURA_TEST_CDP_URL=ws://{cdp_host}:9222/devtools/browser",
+                "--env",
+                f"OBSCURA_TEST_BASE_URL=http://{fixture_host}:8080",
+                "--mount",
+                f"type=bind,src={ROOT / 'browser/obscura_client'},"
+                "dst=/obscura-client,readonly",
+                "--mount",
+                f"type=bind,src={ROOT / 'tests/validate_obscura_runtime.py'},"
+                "dst=/validation.py,readonly",
+                args.client_image,
+                "/validation.py",
+            )
+        except RuntimeError as exc:
+            logs = run(args.container_bin, "logs", obscura)
+            raise RuntimeError(f"{exc}\nObscura test logs:\n{logs}") from exc
         assert "RETAINED_PAGE_AUTONOMOUS_WORK_REPRODUCED_AND_PARKED" in output
         assert "PINNED_OBSCURA_RUNTIME_CONTRACTS_OK" in output
 
         logs = run(args.container_bin, "logs", obscura)
-        assert "Headless Browser v0.2.0-private-onyx-search-v1" in logs
+        assert "Headless Browser v0.2.1-private-onyx-search-v1" in logs
         assert "Private Onyx patchset: search-submission-v1" in logs
         assert (
             "Stealth mode enabled "

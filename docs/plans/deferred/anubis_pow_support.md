@@ -78,7 +78,7 @@ It does not:
 
 This plan targets:
 
-- the derived Obscura v0.2.0 image and matching
+- the derived Obscura v0.2.1 image and matching
   `reference_repos/obscura` checkout;
 - SearXNG `2026.7.15-7b2199ecd` and the five custom offline engines;
 - Startpage's Anubis v1.25.0 homepage challenge using algorithm `fast`,
@@ -147,7 +147,7 @@ provider identifier that is unique to an observed request.
 
 ## Current Failure and Why Readiness Alone Is Insufficient
 
-Obscura v0.2.0 has `crypto.subtle.digest`, Blob objects, blob URL bookkeeping,
+Obscura v0.2.1 has `crypto.subtle.digest`, Blob objects, blob URL bookkeeping,
 and a `Worker` compatibility object. Its Worker implementation fetches or reads
 the source and evaluates it cooperatively in the page's V8 isolate. It does not
 create an independently scheduled worker isolate.

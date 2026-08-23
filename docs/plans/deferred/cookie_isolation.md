@@ -10,16 +10,16 @@
 > [Request handling](../../request_handling.md) until this plan is implemented,
 > validated, documented, and moved to `docs/plans/implemented/`.
 >
-> **Feasibility with v0.2.0: conditional.** The design is technically feasible
+> **Feasibility with v0.2.1: conditional.** The design is technically feasible
 > through the verified-source image pipeline. It requires the lossless
 > host-only wrapper patch and black-box gate described below, plus acceptance
 > of the separate service-global/non-per-user privacy limitation.
 >
 > Do not enable the Obscura part of this plan against the currently selected
-> image. Obscura v0.2.0's CDP cookie export/import path still does not preserve
+> image. Obscura v0.2.1's CDP cookie export/import path still does not preserve
 > whether a cookie is host-only, and its cookie-domain validation still does
 > not use a complete Public Suffix List. Re-importing an exported host-only
-> cookie can therefore widen it to subdomains. None of the three current
+> cookie can therefore widen it to subdomains. None of the four current
 > wrapper patches changes that path. Implementation may proceed only after the
 > separately reviewed wrapper-owned Obscura cookie patch makes the capability
 > gate below pass.
@@ -108,7 +108,7 @@ specified below.
 
 | Component | Consulted version | Why it matters for this plan |
 | --- | --- | --- |
-| Obscura | Derived v0.2.0 image; `reference_repos/obscura` at `v0.2.0`; three wrapper patches | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. The current patches preserve stealth GET/POST cookie-jar identity, target fingerprint state, and search-runtime compatibility; they do not change cookie serialization or CDP transfer. |
+| Obscura | Derived v0.2.1 image; `reference_repos/obscura` at `v0.2.1`; four wrapper patches | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, context-scoped cookie clearing, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. The current patches preserve stealth GET/POST cookie-jar identity, target fingerprint state, search-runtime compatibility, and explicit navigation-realm ownership; they do not change cookie serialization or CDP transfer. |
 | Onyx application | Current `ONYX_IMAGE_TAG`; matching `reference_repos/onyx` checkout | Owns `open_url()` orchestration, the stock Requests-first/Playwright-fallback flow, the five-worker stock crawler, the 120-second tool deadline, and the runtime symbols wrapped by both Onyx patches. |
 | Onyx crawler libraries | Requests `2.33.0`, Playwright `1.58.0`, and `publicsuffix2` `2.20191221` in the Onyx `uv.lock` | Determine Requests cookie-jar metadata, Chromium context cookie conversion, and the parser available to runtime patches. The old parser package's implicit PSL data is not accepted as the shared current snapshot proposed here. |
 | Egress identity components | `MYST_IMAGE=local/private-onyx-myst:2d6e87618f9f-20260719` and `TOR_BASE_IMAGE=docker.io/dockurr/tor:0.4.9.11@sha256:446881b3366cbc2cc5cf8d13a76e3104f60824b7c15343d14defe903ded18f0d` | Myst reconnects and Tor circuit/exit changes can separate a retained cookie from the public IP that established it. Neither currently supplies an authoritative route-generation signal to the cookie store, so this plan deliberately relies on the fixed one-hour ceiling instead of heuristic route coupling. |
@@ -133,6 +133,11 @@ The relevant pinned source is under `reference_repos/obscura/`:
 - `crates/obscura-cdp/src/domains/network.rs` implements
   `Network.getCookies`, `Network.setCookie`, `Network.setCookies`,
   `Network.deleteCookies`, and `Network.clearBrowserCookies`.
+- `crates/obscura-cdp/src/domains/storage.rs` implements context-scoped
+  `Storage.getCookies`, `Storage.setCookies`, `Storage.deleteCookies`, and
+  `Storage.clearCookies`. The selected-image gate proves that clearing one
+  connection context does not affect another, but clearing does not preserve
+  state for transfer.
 - `crates/obscura-cdp/src/domains/target.rs` implements browser contexts within
   one connection.
 
@@ -140,9 +145,9 @@ Those capabilities are enough to inject a cookie snapshot into one isolated
 navigation and extract its final cookie state. They are not enough to persist
 that state safely between connections.
 
-### Obscura v0.2.0 feasibility
+### Obscura v0.2.1 feasibility
 
-The v0.2.0 cookie-transfer contract is owned by:
+The v0.2.1 cookie-transfer contract is owned by:
 
 - `crates/obscura-net/src/cookies.rs`;
 - `crates/obscura-cdp/src/cookie_params.rs`; and
@@ -154,11 +159,11 @@ export it, and `Network.setCookies` imports every cookie with
 `host_only: false`. The same implementation has no partition-key handling or
 complete PSL.
 
-Of the three selected wrapper patches, patch 0001 keeps native stealth GET and
-POST on the same target cookie jar during one navigation. Patches 0002 and
-0003 own fingerprint stability and search-page runtime compatibility. None
-changes `CookieInfo`, `Network.getCookies`, `Network.setCookies`, or domain
-validation.
+Of the four selected wrapper patches, patch 0001 keeps native stealth GET and
+POST on the same target cookie jar during one navigation. Patches 0002, 0003,
+and 0004 own fingerprint stability, search-page runtime compatibility, and
+explicit navigation-realm ownership. None changes `CookieInfo`,
+`Network.getCookies`, `Network.setCookies`, or domain validation.
 
 This plan adds one narrow Obscura patch that preserves an explicit host-only
 bit across the public CDP export/import boundary. The selected-image gate must
@@ -710,7 +715,7 @@ Do the work in these bounded phases. Stop if any gate fails.
      private suffix cookies before retention.
    - Run it against the selected Obscura image.
    - Add the narrow, reviewed host-only patch through
-     `browser/obscura_image/patches/series`, rebuild the derived v0.2.0 image,
+     `browser/obscura_image/patches/series`, rebuild the derived v0.2.1 image,
      and require the black-box gate to pass. Never patch
      `reference_repos/obscura/` or waive a failed gate.
 2. **Store**

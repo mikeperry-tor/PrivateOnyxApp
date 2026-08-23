@@ -570,6 +570,14 @@ class ObscuraClientTests(unittest.TestCase):
                             }
                         }
                     operation = params["arguments"][0]["value"]
+                    assert params["arguments"][5]["value"] == [
+                        ["search.example"],
+                        ["search.example"],
+                        "/search",
+                        self.form_method,
+                        "https:",
+                        ["", "443"],
+                    ]
                     if operation == "submit":
                         # Result events deliberately precede the command
                         # acknowledgement; _RawCdp has the same buffering
@@ -579,24 +587,7 @@ class ObscuraClientTests(unittest.TestCase):
                         self.document_events(
                             loader, "https://search.example/search"
                         )
-                    return {
-                        "result": {
-                            "value": {
-                                "currentScheme": "https:",
-                                "currentHost": "search.example",
-                                "currentPort": "",
-                                "scheme": "https:",
-                                "host": "search.example",
-                                "port": "",
-                                "username": "",
-                                "password": "",
-                                "path": "/search",
-                                "method": self.form_method,
-                                "target": "",
-                                "enctype": "application/x-www-form-urlencoded",
-                            }
-                        }
-                    }
+                    return {"result": {"type": "boolean"}}
                 if method == "Input.dispatchKeyEvent":
                     return {}
                 if method == "Target.closeTarget":
@@ -674,6 +665,14 @@ class ObscuraClientTests(unittest.TestCase):
             self.assertNotIn(
                 "Target.closeTarget", [call[0] for call in cdp.calls]
             )
+            form_calls = [
+                call[1]
+                for call in cdp.calls
+                if call[0] == "Runtime.callFunctionOn"
+                and call[1].get("functionDeclaration") == _SEARCH_FORM_FUNCTION
+            ]
+            self.assertTrue(form_calls)
+            self.assertTrue(all("awaitPromise" not in call for call in form_calls))
             if mode == "timed":
                 texts = [
                     call[1].get("text")
@@ -695,7 +694,8 @@ class ObscuraClientTests(unittest.TestCase):
                     asyncio.run(exercise(method, mode))
 
     def test_search_form_function_enforces_native_entry_and_native_submission(self):
-        self.assertIn('Object.getOwnPropertyDescriptor(proto, "value").set', _SEARCH_FORM_FUNCTION)
+        self.assertIn('Object.getOwnPropertyDescriptor(proto, "value")', _SEARCH_FORM_FUNCTION)
+        self.assertIn("Object.getPrototypeOf(proto)", _SEARCH_FORM_FUNCTION)
         self.assertEqual(_SEARCH_FORM_FUNCTION.count('new Event("input"'), 1)
         self.assertEqual(_SEARCH_FORM_FUNCTION.count('new Event("change"'), 1)
         self.assertIn("state.form.requestSubmit()", _SEARCH_FORM_FUNCTION)

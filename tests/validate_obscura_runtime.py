@@ -7,6 +7,7 @@ import asyncio
 import os
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlsplit
 
 from private_onyx_obscura import BodyClassification
 from private_onyx_obscura import FetchFailure
@@ -270,6 +271,8 @@ async def validate_patched_search_runtime() -> None:
             await cdp.send(method, params, session_id=session_id)
         frame_tree = await cdp.send("Page.getFrameTree", session_id=session_id)
         frame_id = frame_tree["frameTree"]["frame"]["id"]
+        fixture_url = urlsplit(BASE_URL)
+        current_form_policy: tuple[str, str] | None = None
 
         async def evaluate(expression: str):
             result = await cdp.send(
@@ -286,6 +289,13 @@ async def validate_patched_search_runtime() -> None:
             return result["result"].get("value")
 
         async def navigate(path: str) -> tuple[int, str]:
+            nonlocal current_form_policy
+            current_form_policy = {
+                "/search-get-home": ("/search-get-result", "get"),
+                "/search-post-home": ("/search-post-result", "post"),
+                "/search-post-302-home": ("/search-post-302", "post"),
+                "/search-post-307-home": ("/search-post-307", "post"),
+            }.get(path)
             event_start = len(cdp.events)
             nav = await cdp.send(
                 "Page.navigate",
@@ -326,6 +336,7 @@ async def validate_patched_search_runtime() -> None:
             return connection_id, fingerprint
 
         async def form_call(operation: str, query: str):
+            assert current_form_policy is not None
             result = await cdp.send(
                 "Runtime.callFunctionOn",
                 {
@@ -336,17 +347,24 @@ async def validate_patched_search_runtime() -> None:
                         {"value": "q"},
                         {"value": [["lang", "en"]]},
                         {"value": query},
+                        {
+                            "value": [
+                                [fixture_url.hostname],
+                                [fixture_url.hostname],
+                                current_form_policy[0],
+                                current_form_policy[1],
+                                f"{fixture_url.scheme}:",
+                                [str(fixture_url.port or "")],
+                            ]
+                        },
                     ],
                     "returnByValue": True,
-                    "awaitPromise": True,
                 },
                 session_id=session_id,
                 timeout_seconds=15,
             )
             assert "exceptionDetails" not in result, result
-            policy = result["result"].get("value")
-            assert policy["enctype"] == "application/x-www-form-urlencoded"
-            return policy
+            return result["result"]
 
         async def submit(expected_method: str, *, mode: str) -> tuple[int, str]:
             event_start = len(cdp.events)
@@ -531,6 +549,16 @@ async def validate_connection_isolation() -> None:
             session_id=first_session,
         )
         assert cookie_result == {"success": True}
+        second_cookie_result = await second.send(
+            "Network.setCookie",
+            {
+                "name": "private-onyx-isolation",
+                "value": "second",
+                "url": f"{BASE_URL}/",
+            },
+            session_id=second_session,
+        )
+        assert second_cookie_result == {"success": True}
         first_cookies = await first.send(
             "Network.getCookies", session_id=first_session
         )
@@ -543,6 +571,25 @@ async def validate_connection_isolation() -> None:
         )
         assert all(
             cookie["name"] != "private-onyx-isolation"
+            or cookie["value"] == "second"
+            for cookie in second_cookies["cookies"]
+        )
+        assert await first.send(
+            "Storage.clearCookies", {}, session_id=first_session
+        ) == {}
+        first_cookies = await first.send(
+            "Network.getCookies", session_id=first_session
+        )
+        second_cookies = await second.send(
+            "Network.getCookies", session_id=second_session
+        )
+        assert all(
+            cookie["name"] != "private-onyx-isolation"
+            for cookie in first_cookies["cookies"]
+        )
+        assert any(
+            cookie["name"] == "private-onyx-isolation"
+            and cookie["value"] == "second"
             for cookie in second_cookies["cookies"]
         )
         first_targets = await first.send("Target.getTargets")
@@ -714,6 +761,11 @@ def validate_navigation_contracts() -> None:
 
     javascript = fetch("/javascript", want="dom")
     assert "id=\"state\">rendered<" in (javascript.rendered_html or "")
+
+    post_message = fetch("/post-message", want="dom")
+    assert "id=\"message-state\">frame-ready<" in (
+        post_message.rendered_html or ""
+    )
 
     modern_javascript = fetch("/modern-javascript", want="dom")
     modern_html = modern_javascript.rendered_html or ""

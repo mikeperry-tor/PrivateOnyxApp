@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 7decb18..485255b 100644
+index d0c2d17817688dd0a51777af852832ab4537f936..d599e758b02f9b31aa45f7b577749cbc6b51bdf3 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -1879,6 +1879,7 @@ dependencies = [
@@ -11,19 +11,19 @@ index 7decb18..485255b 100644
 
  [[package]]
 diff --git a/crates/obscura-browser/Cargo.toml b/crates/obscura-browser/Cargo.toml
-index ab87de7..d23fcd5 100644
+index e2869e4c56dc6bb364be38060031f89ebd159e92..5524f05cfe7c4b3f1ce8b339ae6bc1f4126ceddc 100644
 --- a/crates/obscura-browser/Cargo.toml
 +++ b/crates/obscura-browser/Cargo.toml
-@@ -21,3 +21,4 @@ anyhow = { workspace = true }
+@@ -23,3 +23,4 @@ anyhow = { workspace = true }
  serde_json = { workspace = true }
  base64 = { workspace = true }
  image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
 +uuid = { workspace = true }
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index 975c6ec..5f7f34e 100644
+index d1bc82e94f7f716c7cffd249e1086ec4e68a64dc..c9ffd8d910a020d744fa61bb4062e87c5ea866f0 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -287,6 +287,7 @@ pub struct Page {
+@@ -292,6 +292,7 @@ pub struct Page {
      callbacks: Arc<CallbackRegistry>,
      #[cfg(feature = "stealth")]
      pub stealth_client: Option<Arc<StealthHttpClient>>,
@@ -31,7 +31,7 @@ index 975c6ec..5f7f34e 100644
  }
 
  const MAX_STYLESHEET_IMPORT_DEPTH: u8 = 4;
-@@ -882,6 +883,13 @@ impl Page {
+@@ -899,6 +900,13 @@ impl Page {
          } else {
              None
          };
@@ -45,7 +45,7 @@ index 975c6ec..5f7f34e 100644
 
          Page {
              id,
-@@ -918,6 +926,7 @@ impl Page {
+@@ -936,6 +944,7 @@ impl Page {
              callbacks: Arc::new(CallbackRegistry::new()),
              #[cfg(feature = "stealth")]
              stealth_client,
@@ -53,7 +53,7 @@ index 975c6ec..5f7f34e 100644
          }
      }
 
-@@ -1154,6 +1163,7 @@ impl Page {
+@@ -1496,6 +1505,7 @@ impl Page {
              rt.set_dom(dom);
          }
 
@@ -62,19 +62,20 @@ index 975c6ec..5f7f34e 100644
          let _ = rt.execute_script(
              "<device-metrics>",
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index add5e8a..724e197 100644
+index d7e69040c4fcdd7ed82346a4afb0d4719975701a..faf922e1e552be9218238088880f87608c5ce166 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -15,7 +15,7 @@
+@@ -15,7 +15,8 @@
      '__obscura_errors', '__obscura_init', '__obscura_hide_list',
      '__obscura_objects', '__obscura_oid', '__obscura_ua',
      '__obscura_platform', '__obscura_ua_platform', '__obscura_ua_platform_version',
--    '__obscura_stealth', '__obscura_markTrusted',
+-    '__obscura_stealth', '__obscura_markTrusted', '__obscura_core_handoff',
 +    '__obscura_stealth', '__obscura_markTrusted', '__obscura_set_fingerprint_seed',
-     '__obscura_registerLinkedStylesheet',
-     '__markParserScripts', '__obscura_hasPendingDynamicScripts',
-     '__obscura_hasPendingLoadDelayingScripts',
-@@ -214,6 +214,9 @@ if (_origStackDesc && _origStackDesc.get) {
++    '__obscura_core_handoff',
+     '__obscura_frameId', '__obscura_parentFrameId', '__obscura_frameWindows',
+     '__obscura_frameObjects', '__obscura_frameElements', '__obscura_deliverMessage',
+     '__obscura_liveFrameIds', '__obscura_forgetFrame',
+@@ -238,6 +239,9 @@ if (_origStackDesc && _origStackDesc.get) {
  }
 
  let _fpSeed = 0;
@@ -84,20 +85,20 @@ index add5e8a..724e197 100644
  // Dynamic module/in-order script queue. Module evaluation remains serialized
  // to prevent a re-entrant RefCell panic in deno_core's
  // futures_unordered_driver when SPAs insert multiple <script type=module>
-@@ -13884,7 +13887,6 @@ if (typeof ShadowRoot !== 'undefined' && !ShadowRoot.prototype.elementFromPoint)
- }
-
+@@ -14486,7 +14490,6 @@ if (typeof ShadowRoot !== 'undefined' && !ShadowRoot.prototype.elementFromPoint)
  globalThis.__obscura_init = function() {
+   // The host sets __obscura_frameId on a frame realm before calling this.
+   _realmFrameId = globalThis.__obscura_frameId >>> 0;
 -  _fpSeed = Date.now() ^ (Math.random() * 0xFFFFFFFF >>> 0);
    _fpCache = null;
    // A real navigation just completed (this runs after set_url), so drop any
    // URL a location setter previewed synchronously and let document_url drive
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index 0e6c29f..0ac069c 100644
+index f36f742e6340ed2ddecb6a0e31d7a96283d0134f..d0c44a6ea5170472b0f6682f1c3033c1574a3297 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -493,6 +493,18 @@ impl ObscuraJsRuntime {
-         let _ = self.runtime.execute_script("<set-screen-size>", script);
+@@ -996,6 +996,18 @@ impl ObscuraJsRuntime {
+         let _ = self.execute_runtime_script("<set-screen-size>", script);
      }
 
 +    pub fn set_fingerprint_seed(&mut self, seed: u32) {
@@ -115,7 +116,7 @@ index 0e6c29f..0ac069c 100644
      /// Current clamped root scroll offset shared by CSSOM geometry and paint.
      #[cfg(feature = "render")]
      pub fn scroll_offset(&self) -> (f32, f32) {
-@@ -2549,6 +2561,31 @@ mod tests {
+@@ -3123,6 +3135,31 @@ mod tests {
          rt
      }
 
@@ -145,5 +146,5 @@ index 0e6c29f..0ac069c 100644
 +    }
 +
      #[test]
-     fn document_domain_getter_and_valid_relaxation_match_effective_host() {
-         let dom = parse_html("<html><body></body></html>");
+     fn function_to_string_has_native_function_shape() {
+         let mut rt = setup_runtime("<html><body></body></html>");

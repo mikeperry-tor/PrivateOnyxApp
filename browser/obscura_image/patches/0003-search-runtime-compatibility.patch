@@ -1,8 +1,87 @@
+diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
+index c9ffd8d910a020d744fa61bb4062e87c5ea866f0..d4daa4b740e3cd5d6f4b66dc8ead792d6996b128 100644
+--- a/crates/obscura-browser/src/page.rs
++++ b/crates/obscura-browser/src/page.rs
+@@ -1912,6 +1912,15 @@ impl Page {
+                                 }
+                                 _ => continue,
+                             };
++                            // This runtime supports ES modules, so the HTML
++                            // `nomodule` contract suppresses the legacy
++                            // classic fallback. Executing both builds can
++                            // corrupt shared webpack chunk registries.
++                            if matches!(kind, ScriptKind::Classic)
++                                && node.get_attribute("nomodule").is_some()
++                            {
++                                continue;
++                            }
+
+                             let inline_code = if src.is_none() {
+                                 dom.text_content(sid)
+@@ -5187,6 +5196,32 @@ mod tests {
+         page
+     }
+
++    #[tokio::test(flavor = "current_thread")]
++    async fn private_onyx_module_capable_runtime_skips_parser_nomodule_fallback() {
++        let mut page = import_map_test_page(
++            "parser-nomodule",
++            "http://example.com",
++            r#"<html><head>
++                <script type="module">
++                    globalThis.__selected_script_build = "module";
++                </script>
++                <script nomodule>
++                    globalThis.__selected_script_build = "legacy";
++                </script>
++            </head><body></body></html>"#,
++        );
++        page.execute_scripts().await;
++
++        assert_eq!(
++            page.js
++                .as_mut()
++                .unwrap()
++                .evaluate("globalThis.__selected_script_build")
++                .unwrap(),
++            serde_json::json!("module"),
++        );
++    }
++
+     #[tokio::test(flavor = "current_thread")]
+     async fn module_graph_and_evaluation_share_one_active_budget() {
+         use std::io::{Read as _, Write as _};
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index 724e197..a565cf1 100644
+index faf922e1e552be9218238088880f87608c5ce166..d72dcace5bbf3dc6001628fe8d44046cc4f0ac85 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -7015,6 +7015,7 @@ if (typeof Response === 'undefined') {
+@@ -1747,6 +1747,9 @@ function __prepareInsertedScript(script) {
+   const scriptType = (script.getAttribute('type') || '').trim().toLowerCase();
+   const isModule = scriptType === 'module';
+   const isImportMap = scriptType === 'importmap';
++  // The runtime supports ES modules. Match HTML's `nomodule` selection and
++  // never execute a dynamically inserted legacy fallback alongside them.
++  if (!isModule && (script.hasAttribute('nomodule') || script.noModule === true)) return;
+   if (isImportMap) {
+     const src = script.getAttribute('src');
+     let error = '';
+@@ -6050,6 +6053,7 @@ function _elementClassFor(nid) {
+       && _domParse("namespace_uri", nid) === "http://www.w3.org/2000/svg") {
+     if (tag === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
+     if (tag === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
++    if (tag === "a" && globalThis.SVGAElement) return globalThis.SVGAElement;
+     if (globalThis.SVGElement) return globalThis.SVGElement;
+   }
+   if (tag === "FORM" && globalThis.HTMLFormElement) return globalThis.HTMLFormElement;
+@@ -6068,6 +6072,7 @@ function _elementClassForKnownName(namespace, qualifiedName) {
+   if (namespace === "http://www.w3.org/2000/svg") {
+     if (localName === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
+     if (localName === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
++    if (localName === "a" && globalThis.SVGAElement) return globalThis.SVGAElement;
+     if (globalThis.SVGElement) return globalThis.SVGElement;
+   }
+   if (namespace === "http://www.w3.org/1999/xhtml") {
+@@ -7211,6 +7216,7 @@ if (typeof Response === 'undefined') {
    globalThis.Response = class Response {
      constructor(body, init = {}) {
        this._bodyBytes = _bodyToUint8Array(body); this.status = init.status || 200; this.statusText = init.statusText || '';
@@ -10,7 +89,7 @@ index 724e197..a565cf1 100644
        this.ok = this.status >= 200 && this.status < 300;
        this.headers = new Headers(init.headers);
        this.type = init.type || 'basic'; this.url = init.url || ''; this.redirected = !!init.redirected;
-@@ -7023,6 +7024,18 @@ if (typeof Response === 'undefined') {
+@@ -7219,6 +7225,18 @@ if (typeof Response === 'undefined') {
      async json() { return JSON.parse(await this.text()); }
      async arrayBuffer() { return _arrayBufferFromBytes(this._bodyBytes); }
      async blob() { return new Blob([this._bodyBytes]); }
@@ -29,7 +108,7 @@ index 724e197..a565cf1 100644
      clone() { return new Response(this._bodyBytes, { status: this.status, statusText: this.statusText, headers: this.headers, type: this.type, url: this.url, redirected: this.redirected }); }
      static error() { return new Response(null, { status: 0 }); }
      static redirect(url, status) { return new Response(null, { status: status || 302, headers: { Location: url } }); }
-@@ -9706,6 +9719,33 @@ globalThis.XMLSerializer = class XMLSerializer {
+@@ -9977,6 +9995,33 @@ globalThis.XMLSerializer = class XMLSerializer {
      return "";
    }
  };
@@ -63,7 +142,21 @@ index 724e197..a565cf1 100644
  globalThis.performance = globalThis.performance || {
    now: (function() {
      // Monotonically non-decreasing: return the wall-clock offset, but never a
-@@ -10991,6 +11031,15 @@ function _ensureWindowNamedProperty(name) {
+@@ -11093,11 +11138,13 @@ class SVGGraphicsElement extends SVGElement {}
+ class SVGGeometryElement extends SVGGraphicsElement {}
+ class SVGPathElement extends SVGGeometryElement {}
+ class SVGSVGElement extends SVGGraphicsElement {}
++class SVGAElement extends SVGGraphicsElement {}
+ globalThis.SVGElement = SVGElement;
+ globalThis.SVGGraphicsElement = SVGGraphicsElement;
+ globalThis.SVGGeometryElement = SVGGeometryElement;
+ globalThis.SVGPathElement = SVGPathElement;
+ globalThis.SVGSVGElement = SVGSVGElement;
++globalThis.SVGAElement = SVGAElement;
+ globalThis.CharacterData = CharacterData;
+ globalThis.Text = Text;
+ globalThis.Comment = Comment;
+@@ -11279,6 +11326,15 @@ function _ensureWindowNamedProperty(name) {
    try {
      Object.defineProperty(globalThis, name, {
        get() { return _windowNamedValue(name); },
@@ -80,10 +173,10 @@ index 724e197..a565cf1 100644
        enumerable: true,
      });
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index f3e435d..f53a480 100644
+index d0c44a6ea5170472b0f6682f1c3033c1574a3297..f0b0e1adaf3ffd8e9726815b5231f3205ea947b4 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -4213,6 +4213,53 @@ mod tests {
+@@ -4891,6 +4891,71 @@ mod tests {
          );
      }
 
@@ -134,81 +227,28 @@ index f3e435d..f53a480 100644
 +        );
 +    }
 +
-     #[test]
-     fn window_named_access_tracks_dynamic_ids_and_fragment_parsing() {
-         let mut rt = setup_runtime("<html><body><div id='host'></div></body></html>");
-diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index 5f7f34e..34b4567 100644
---- a/crates/obscura-browser/src/page.rs
-+++ b/crates/obscura-browser/src/page.rs
-@@ -1587,6 +1587,15 @@ impl Page {
-                                 }
-                                 _ => continue,
-                             };
-+                            // This runtime supports ES modules, so the HTML
-+                            // `nomodule` contract suppresses the legacy
-+                            // classic fallback. Executing both builds can
-+                            // corrupt shared webpack chunk registries.
-+                            if matches!(kind, ScriptKind::Classic)
-+                                && node.get_attribute("nomodule").is_some()
-+                            {
-+                                continue;
-+                            }
-
-                             let inline_code = if src.is_none() {
-                                 dom.text_content(sid)
-@@ -4629,6 +4638,32 @@ mod tests {
-         page
-     }
-
-+    #[tokio::test(flavor = "current_thread")]
-+    async fn private_onyx_module_capable_runtime_skips_parser_nomodule_fallback() {
-+        let mut page = import_map_test_page(
-+            "parser-nomodule",
-+            "http://example.com",
-+            r#"<html><head>
-+                <script type="module">
-+                    globalThis.__selected_script_build = "module";
-+                </script>
-+                <script nomodule>
-+                    globalThis.__selected_script_build = "legacy";
-+                </script>
-+            </head><body></body></html>"#,
-+        );
-+        page.execute_scripts().await;
-+
++    #[test]
++    fn private_onyx_svg_anchor_constructor_surface_is_available() {
++        let mut rt = setup_runtime("<html><body></body></html>");
++        let result = rt
++            .evaluate(
++                r#"
++                const anchor = document.createElementNS("http://www.w3.org/2000/svg", "a");
++                return [typeof SVGAElement, anchor instanceof SVGAElement,
++                        anchor instanceof SVGGraphicsElement, anchor instanceof SVGElement];
++                "#,
++            )
++            .unwrap();
 +        assert_eq!(
-+            page.js
-+                .as_mut()
-+                .unwrap()
-+                .evaluate("globalThis.__selected_script_build")
-+                .unwrap(),
-+            serde_json::json!("module"),
++            result,
++            serde_json::json!(["function", true, true, true])
 +        );
 +    }
 +
-     #[tokio::test(flavor = "current_thread")]
-     async fn module_graph_and_evaluation_share_one_active_budget() {
-         use std::io::{Read as _, Write as _};
-diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index cad75f6..3dadf97 100644
---- a/crates/obscura-js/js/bootstrap.js
-+++ b/crates/obscura-js/js/bootstrap.js
-@@ -1682,6 +1682,9 @@ function __prepareInsertedScript(script) {
-   const scriptType = (script.getAttribute('type') || '').trim().toLowerCase();
-   const isModule = scriptType === 'module';
-   const isImportMap = scriptType === 'importmap';
-+  // The runtime supports ES modules. Match HTML's `nomodule` selection and
-+  // never execute a dynamically inserted legacy fallback alongside them.
-+  if (!isModule && (script.hasAttribute('nomodule') || script.noModule === true)) return;
-   if (isImportMap) {
-     const src = script.getAttribute('src');
-     let error = '';
-diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index c67bf87..7d26be3 100644
---- a/crates/obscura-js/src/runtime.rs
-+++ b/crates/obscura-js/src/runtime.rs
-@@ -13558,6 +13558,56 @@ mod tests {
+     #[test]
+     fn window_named_access_tracks_dynamic_ids_and_fragment_parsing() {
+         let mut rt = setup_runtime("<html><body><div id='host'></div></body></html>");
+@@ -14355,6 +14420,56 @@ mod tests {
          );
      }
 
@@ -265,7 +305,7 @@ index c67bf87..7d26be3 100644
      #[tokio::test(flavor = "current_thread")]
      async fn dynamic_classic_scripts_are_async_by_default_but_honor_async_false_order() {
          let mut rt = setup_runtime("<html><head></head><body></body></html>");
-@@ -13575,6 +13622,26 @@ mod tests {
+@@ -14437,6 +14552,26 @@ mod tests {
          );
      }
 
@@ -292,66 +332,3 @@ index c67bf87..7d26be3 100644
      #[tokio::test(flavor = "current_thread")]
      async fn test_wasm_instantiate_streaming_uses_response_array_buffer() {
          let mut rt = setup_runtime("<html><body></body></html>");
-diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index a565cf1..cad75f6 100644
---- a/crates/obscura-js/js/bootstrap.js
-+++ b/crates/obscura-js/js/bootstrap.js
-@@ -5850,6 +5850,7 @@ function _elementClassFor(nid) {
-       && _domParse("namespace_uri", nid) === "http://www.w3.org/2000/svg") {
-     if (tag === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
-     if (tag === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
-+    if (tag === "a" && globalThis.SVGAElement) return globalThis.SVGAElement;
-     if (globalThis.SVGElement) return globalThis.SVGElement;
-   }
-   if (tag === "FORM" && globalThis.HTMLFormElement) return globalThis.HTMLFormElement;
-@@ -5867,6 +5868,7 @@ function _elementClassForKnownName(namespace, qualifiedName) {
-   if (namespace === "http://www.w3.org/2000/svg") {
-     if (localName === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
-     if (localName === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
-+    if (localName === "a" && globalThis.SVGAElement) return globalThis.SVGAElement;
-     if (globalThis.SVGElement) return globalThis.SVGElement;
-   }
-   if (namespace === "http://www.w3.org/1999/xhtml") {
-@@ -10846,11 +10848,13 @@ class SVGGraphicsElement extends SVGElement {}
- class SVGGeometryElement extends SVGGraphicsElement {}
- class SVGPathElement extends SVGGeometryElement {}
- class SVGSVGElement extends SVGGraphicsElement {}
-+class SVGAElement extends SVGGraphicsElement {}
- globalThis.SVGElement = SVGElement;
- globalThis.SVGGraphicsElement = SVGGraphicsElement;
- globalThis.SVGGeometryElement = SVGGeometryElement;
- globalThis.SVGPathElement = SVGPathElement;
- globalThis.SVGSVGElement = SVGSVGElement;
-+globalThis.SVGAElement = SVGAElement;
- globalThis.CharacterData = CharacterData;
- globalThis.Text = Text;
- globalThis.Comment = Comment;
-diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index f53a480..c67bf87 100644
---- a/crates/obscura-js/src/runtime.rs
-+++ b/crates/obscura-js/src/runtime.rs
-@@ -4260,6 +4260,24 @@ mod tests {
-         );
-     }
-
-+    #[test]
-+    fn private_onyx_svg_anchor_constructor_surface_is_available() {
-+        let mut rt = setup_runtime("<html><body></body></html>");
-+        let result = rt
-+            .evaluate(
-+                r#"
-+                const anchor = document.createElementNS("http://www.w3.org/2000/svg", "a");
-+                return [typeof SVGAElement, anchor instanceof SVGAElement,
-+                        anchor instanceof SVGGraphicsElement, anchor instanceof SVGElement];
-+                "#,
-+            )
-+            .unwrap();
-+        assert_eq!(
-+            result,
-+            serde_json::json!(["function", true, true, true])
-+        );
-+    }
-+
-     #[test]
-     fn window_named_access_tracks_dynamic_ids_and_fragment_parsing() {
-         let mut rt = setup_runtime("<html><body><div id='host'></div></body></html>");

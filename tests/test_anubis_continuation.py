@@ -186,6 +186,12 @@ class _ContinuationCdp:
                     return {"result": {"value": self.remove_value}}
             if declaration == _SEARCH_FORM_FUNCTION:
                 operation = values[0]
+                expected_policy = values[5]
+                if self.form_policy_host not in expected_policy[0]:
+                    return {
+                        "exceptionDetails": {"text": "Uncaught Error: form-policy"},
+                        "result": {"subtype": "error"},
+                    }
                 self.form_operations.append(operation)
                 if operation == "submit":
                     self.current_has_form = False

@@ -134,7 +134,7 @@ terminal main-frame Document request, reads retained body streams with actual
 byte accounting, obtains rendered DOM, returns typed warning-level failures,
 redacts wrapper diagnostics, and cleans up streams and targets on every path.
 Its default mode, used by direct `open_url`, opens and closes one
-v0.2.0-isolated browser connection per request. Its explicit reusable-session
+v0.2.1-isolated browser connection per request. Its explicit reusable-session
 mode is owned only by the SearXNG provider adapter: each provider serializes
 two-stage searches on one retained connection and target generation and
 parks that target on local `about:blank` after terminal DOM capture so provider
@@ -152,9 +152,10 @@ HTML/XHTML DOM, while PDF/raw/binary paths remain strict. See
 The derived Obscura image also suppresses classic scripts carrying `nomodule`
 because its runtime supports ES modules. This prevents modern and legacy
 webpack builds from sharing and corrupting one global chunk registry. The
-no-render build currently uses `--features stealth` with the pinned tag's empty
-CLI default feature set. Upgrade validation must re-audit those Cargo defaults
-and flag semantics and confirm that render-only capture remains unavailable.
+no-render build uses the upstream release variant's explicit
+`--no-default-features --features stealth` selection. Upgrade validation must
+re-audit those Cargo defaults and flag semantics and confirm that render-only
+capture remains unavailable.
 
 ## Lite-mode `open_url` availability
 
@@ -202,9 +203,9 @@ retained-body, deadline, redaction, and cleanup contracts directly. Tagged-image
 validation separately proves Playwright's public page-session attachment path.
 
 The Obscura image is built from the digest-verified archive for exact commit
-`97124edeb2ea610615e78f43e097454e3b221f6b`, using a digest-pinned Rust/Debian
+`2810cb478696885e0d44d1741cbf586f1cc98bb5`, using a digest-pinned Rust/Debian
 builder and the upstream locked dependency graph. The build applies exactly
-three ordered patches with `git apply --check` before compiling both runtime
+four ordered patches with `git apply --check` before compiling both runtime
 binaries with the no-render `stealth` feature set:
 
 - `0001-stealth-native-post.patch` routes native form POST through the
@@ -223,14 +224,28 @@ binaries with the no-render `stealth` feature set:
   hierarchy and SVG anchor constructor used by provider scripts, and gives
   `Response.body` a readable stream compatible with `pipeThrough()`. These are
   narrow fixes for failures reproduced on DuckDuckGo and Brave with the tagged
-  v0.2.0 runtime.
+  v0.2.1 runtime.
+- `0004-explicit-navigation-realm.patch` passes the bootstrap's explicit frame
+  identifier into form submission and every `location` navigation entry point,
+  so top-level `requestSubmit()` and `location.replace()` record their GET or
+  POST on the page state while child-frame navigation remains scoped to its
+  frame. The patch includes POST-body and location-replacement regression tests.
 
-The v0.2.0 tagged runtime includes the native raster renderer, but this stack
+The v0.2.1 tagged runtime includes the native raster renderer, but this stack
 does not expose screenshot, screencast, or PDF-export features. Its derived
 binary omits rendering so browser searches and direct `open_url` do not add
 renderer-only image, font, layout, or capture work. The no-render feature set
 still includes the release's JavaScript, DOM, module, charset, compressed
 stealth-response, and CDP compatibility improvements used by these paths.
+
+The selected runtime also provides child-frame realms and `postMessage`,
+context-scoped `Storage.clearCookies`, cookie-domain canonicalization and
+expiry/deletion fixes, stealth ES-module transport, and a stealth-client DNS
+SSRF resolver guard. Tagged-image tests cover the frame-message path and prove
+that clearing one connection context does not affect another. The wrapper does
+not use cookie clearing for isolation, and CDP cookie export/import still loses
+the host-only bit, so these capabilities do not justify persistent
+cross-connection cookie transfer or removal of any selected patch.
 
 Source, patches, compiler, Cargo cache, and build tools remain in builder
 stages. The final image retains the audited upstream hardened runtime base and
@@ -833,7 +848,7 @@ background supervisor, so neither setting creates a bot process there.
 
 The base wrapper adds the hardened single-process Obscura service, direct
 control networks, API-only CDP gateway, derived SearXNG service, distinct fixed
-egress bridges, and shared public/host final-hop policies. Obscura v0.2.0
+egress bridges, and shared public/host final-hop policies. Obscura v0.2.1
 isolates every live WebSocket browser context and rejects connections above the
 aggregate capacity of 15. Direct `open_url` connections remain request-scoped;
 each SearXNG provider instead lazily retains one connection for one hour after

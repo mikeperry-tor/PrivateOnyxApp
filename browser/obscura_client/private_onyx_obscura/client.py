@@ -1471,7 +1471,7 @@ async def fetch(
 
 
 _SEARCH_FORM_FUNCTION = r"""
-function(operation, selector, fieldName, fixedFields, query) {
+function(operation, selector, fieldName, fixedFields, query, expectedPolicy) {
   function inspect() {
     const controls = Array.from(document.querySelectorAll(selector));
     if (controls.length !== 1) throw new Error("control-count");
@@ -1505,23 +1505,21 @@ function(operation, selector, fieldName, fixedFields, query) {
       form.enctype || form.getAttribute("enctype") || ""
     ).toLowerCase();
     const enctype = declaredEnctype || "application/x-www-form-urlencoded";
-    return {
-      control, form,
-      policy: {
-        currentScheme: current.protocol,
-        currentHost: current.hostname.toLowerCase(),
-        currentPort: current.port,
-        scheme: action.protocol,
-        host: action.hostname.toLowerCase(),
-        port: action.port,
-        username: action.username,
-        password: action.password,
-        path: action.pathname,
-        method: String(form.method || "get").toLowerCase(),
-        target,
-        enctype
-      }
-    };
+    const method = String(form.method || "get").toLowerCase();
+    if (current.protocol !== expectedPolicy[4] ||
+        !expectedPolicy[0].includes(current.hostname.toLowerCase()) ||
+        !expectedPolicy[5].includes(current.port) ||
+        action.protocol !== expectedPolicy[4] ||
+        !expectedPolicy[1].includes(action.hostname.toLowerCase()) ||
+        !expectedPolicy[5].includes(action.port) ||
+        action.username !== "" || action.password !== "" ||
+        action.pathname !== expectedPolicy[2] ||
+        method !== expectedPolicy[3] ||
+        (target !== "" && target !== "_self") ||
+        enctype !== "application/x-www-form-urlencoded") {
+      throw new Error("form-policy");
+    }
+    return {control, form};
   }
   function applyFixed(form) {
     for (const pair of fixedFields) {
@@ -1551,12 +1549,17 @@ function(operation, selector, fieldName, fixedFields, query) {
     }
   }
   let state = inspect();
-  if (operation === "validate") return state.policy;
+  if (operation === "validate") return true;
   applyFixed(state.form);
   if (operation === "instant") {
-    const proto = String(state.control.tagName).toLowerCase() === "textarea"
+    let proto = String(state.control.tagName).toLowerCase() === "textarea"
       ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
+    let descriptor = null;
+    while (proto && !descriptor) {
+      descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+      proto = Object.getPrototypeOf(proto);
+    }
+    const setter = descriptor && descriptor.set;
     if (typeof setter !== "function") throw new Error("native-setter");
     setter.call(state.control, query);
     state.control.dispatchEvent(new Event("input", {bubbles: true}));
@@ -1576,7 +1579,7 @@ function(operation, selector, fieldName, fixedFields, query) {
     }
     state.form.requestSubmit();
   }
-  return state.policy;
+  return true;
 }
 """
 
@@ -1613,35 +1616,6 @@ def _validate_search_terminal_url(
             FetchFailure.POLICY_DENIED,
             stage,
             "search terminal URL violates its origin policy",
-        )
-
-
-def _validate_form_policy(
-    value: object, spec: SearchInteractionSpec, *, stage: str
-) -> None:
-    if not isinstance(value, dict):
-        raise ObscuraClientError(
-            FetchFailure.PROTOCOL, stage, "search form inspection was invalid"
-        )
-    if (
-        value.get("currentScheme") != "https:"
-        or value.get("currentHost") not in spec.allowed_homepage_hosts
-        or value.get("currentPort") not in {"", "443"}
-        or
-        value.get("scheme") != "https:"
-        or value.get("host") not in spec.allowed_result_hosts
-        or value.get("port") not in {"", "443"}
-        or value.get("username") != ""
-        or value.get("password") != ""
-        or value.get("path") != spec.form_action_path
-        or value.get("method") != spec.form_method
-        or value.get("target") not in {"", "_self"}
-        or value.get("enctype") != "application/x-www-form-urlencoded"
-    ):
-        raise ObscuraClientError(
-            FetchFailure.POLICY_DENIED,
-            stage,
-            "search form violates its declared policy",
         )
 
 
@@ -1765,9 +1739,18 @@ async def _search_form_call(
                 {"value": spec.query_field_name},
                 {"value": [list(item) for item in fixed_fields]},
                 {"value": query},
+                {
+                    "value": [
+                        sorted(spec.allowed_homepage_hosts),
+                        sorted(spec.allowed_result_hosts),
+                        spec.form_action_path,
+                        spec.form_method,
+                        "https:",
+                        ["", "443"],
+                    ]
+                },
             ],
             "returnByValue": True,
-            "awaitPromise": True,
         },
         timeout_seconds=remaining(stage, FetchFailure.POST_NAVIGATION_TIMEOUT),
         timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
@@ -1782,7 +1765,6 @@ async def _search_form_call(
         raise ObscuraClientError(
             FetchFailure.PROTOCOL, stage, "search form operation failed"
         )
-    _validate_form_policy(remote.get("value"), spec, stage=stage)
 
 
 async def _search_form_present(
