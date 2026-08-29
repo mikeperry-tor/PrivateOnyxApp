@@ -574,9 +574,11 @@ source operations of `WebConnector._do_scrape()` and
 `Document` fields, database document attributes, and `ScrapeResult` shape.
 Only an unreadable sentinel or an unchanged sentinel whose HTTP validators
 still match the database record is removed before indexing. A stale or
-malformed sentinel falls through to normal indexing, including forced reindex.
-The wrapper forwards both upstream bypass controls, including the independent
-content-hash bypass used for secondary-index port migrations.
+malformed unchanged sentinel fails the indexing attempt: its empty sections
+cannot safely fall through after the scrape stage has completed, and a later
+crawl must perform the full parse. The wrapper forwards both upstream bypass
+controls for ordinary documents, including the independent content-hash bypass
+used for secondary-index port migrations.
 
 `tests/test_web_connector_egress_patch.py` covers installed unchanged, changed,
 missing-validator, terminal-error, and non-allowlisted HEAD paths; matching,

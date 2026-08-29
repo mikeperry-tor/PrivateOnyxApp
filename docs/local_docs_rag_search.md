@@ -188,6 +188,12 @@ when indexed content is unchanged. Removing this wrapper patch would therefore
 restore repeated PDF download and parsing, not repeated embedding of every
 unchanged document.
 
+The empty document used to carry an unchanged decision is never allowed into
+indexing unless its validators still match the database record. A concurrent
+database change or malformed sentinel fails that indexing attempt so a later
+crawl performs a full scrape; it cannot replace indexed content with an empty
+placeholder.
+
 The trusted validator is only as strong as the metadata supplied by
 `doc-drop-web`. A same-size replacement with an unchanged second-resolution
 modification time cannot be distinguished by this fast path. Files should be
@@ -285,6 +291,12 @@ to `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`, which must be an OpenAI-compatible
 ```json
 {"embeddings": [[0.1, 0.2]]}
 ```
+
+The shim also honors Onyx's `normalize_embeddings` request field. When enabled,
+each validated upstream vector is L2-normalized before it is returned; a zero
+or otherwise non-normalizable vector is rejected. This preserves the local
+model-server contract independently of whether a selected OpenAI-compatible
+upstream normalizes its own output.
 
 The OpenAI-compatible response must contain exactly one indexed vector for
 every input. The shim restores input order from the response indices and
@@ -668,7 +680,8 @@ For the local/custom embedding path:
 3. Enter `nomic-ai/nomic-embed-text-v23` as the model type.
 4. Set the embedding dimension to `1024` for the recommended Harrier or
    Qwen3 0.6B models.
-5. Keep the wrapper env query prefix configured unless your selected model
+5. Enable **Normalize Embeddings** for the recommended models.
+6. Keep the wrapper env query prefix configured unless your selected model
    explicitly does not require asymmetric query instructions.
 
 The model name entered in Onyx is not necessarily the model served upstream.

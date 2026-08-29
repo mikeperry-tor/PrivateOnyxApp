@@ -373,6 +373,42 @@ def apply_prefixes(payload: dict) -> tuple[list[str], str, int]:
     return [f"{prefix}{t}" for t in texts], prefix_source, len(prefix)
 
 
+def apply_embedding_normalization(
+    embeddings: list[list[float]], normalize_embeddings: object
+) -> list[list[float]]:
+    """Honor the local model-server normalization contract exactly."""
+    if not isinstance(normalize_embeddings, bool):
+        raise ValueError("Invalid 'normalize_embeddings' field; expected boolean")
+    if not normalize_embeddings:
+        return embeddings
+
+    normalized: list[list[float]] = []
+    for embedding in embeddings:
+        # Compute a stable norm without splatting another vector-sized tuple.
+        # The response body is already bounded, but normalization should not
+        # add avoidable peak-memory amplification for a large vector.
+        scale = 0.0
+        sum_squares = 1.0
+        for value in embedding:
+            absolute = abs(float(value))
+            if absolute == 0.0:
+                continue
+            if scale < absolute:
+                sum_squares = 1.0 + sum_squares * (scale / absolute) ** 2
+                scale = absolute
+            else:
+                sum_squares += (absolute / scale) ** 2
+        denominator = math.sqrt(sum_squares)
+        if scale == 0.0 or not math.isfinite(denominator):
+            raise UpstreamResponseError(
+                "upstream embedding response contained a vector that cannot be normalized"
+            )
+        normalized.append(
+            [(float(value) / scale) / denominator for value in embedding]
+        )
+    return normalized
+
+
 def request_local_embeddings(
     model_name: str, texts: list[str]
 ) -> tuple[list[list[float]], float, float]:
@@ -621,6 +657,9 @@ class Handler(BaseHTTPRequestHandler):
             )
             embeddings, pool_wait_ms, upstream_ms = request_local_embeddings(
                 upstream_model, prefixed_texts
+            )
+            embeddings = apply_embedding_normalization(
+                embeddings, payload.get("normalize_embeddings")
             )
             total_ms = (time.monotonic() - request_start) * 1000.0
             first_dim = len(embeddings[0]) if embeddings else 0

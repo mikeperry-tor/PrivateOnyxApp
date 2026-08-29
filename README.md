@@ -644,8 +644,11 @@ To configure embedding support in Onyx:
    prepares and loads its bundled nomic v1 tokenizer offline; the embedding
    shim still sends requests to the configured real upstream model.
 4. For both `Harrier-OSS-V1-0.6B` and `Qwen3-Embedding-0.6B`, the embedding dimension is 1024.
+5. Enable **Normalize Embeddings** for the recommended models. The shim honors
+   this setting even when the selected OpenAI-compatible endpoint returns
+   unnormalized vectors.
 
-This Onyx configuration choices cause the stack's patches to route embedding requests to either the MLX embeddings or teep model that you configured above, using correctly formatted query and indexing prefixes.
+These Onyx configuration choices cause the stack's patches to route embedding requests to either the MLX embeddings or teep model that you configured above, using correctly formatted query and indexing prefixes.
 
 > Frontier embedding models require an instruction prefix when generating queries, but unfortunately, Onyx has an issue with handling this prefix for generic LLM providers. To address this, the stack contains a local shim which allows you to set the query prefix via an environment instead. The prefixes in `.env.wrapper.example` should be good for either Harrier or Qwen3.
 

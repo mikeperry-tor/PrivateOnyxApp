@@ -958,11 +958,17 @@ wrappers.
   `get_docs_to_update()` signatures/source markers plus connector, database,
   and result shapes. Exercise unchanged, changed, missing-validator, 401/403/404,
   non-PDF, non-allowlisted, normal sync, and forced-reindex cases. Only a
-  matching unchanged or terminal-unreadable sentinel may skip indexing.
+  matching unchanged or terminal-unreadable sentinel may skip indexing. A
+  stale or malformed unchanged sentinel must fail before indexing rather than
+  allowing its empty placeholder to replace stored content. Prove separately
+  that the native content-hash gate skips ordinary unchanged documents and is
+  intentionally bypassed for secondary-index builds.
 - **Embedding shim:** validate one indexed vector per input, response
   reordering, duplicate/missing/out-of-range indices, arbitrary consistent
   dimensions, finite numeric values, request/response limits, active-handler
-  bounds, upstream timeout, error scrubbing, and single-attempt forwarding.
+  bounds, upstream timeout, error scrubbing, single-attempt forwarding, prefix
+  selection, and the requested normalization behavior. Reject zero or otherwise
+  non-normalizable vectors when normalization is enabled.
 - **Executor networking:** validate the exact code-interpreter command-builder
   signature/source, one `docker run`, one native network argument, and the
   native run-argument setting containing exactly eight proxy variables.
@@ -1293,7 +1299,8 @@ explicit no-VPN, and a documented remote-DNS upstream. For each practical row:
 - interrupt Myst, Obscura, gateway, and the final hop and confirm no stale
   connection reuse, direct fallback, or application restart storm;
 - test full doc-drop crawl/freshness/native content-hash skip, embedding, and
-  `internal_search`;
+  `internal_search`, including the secondary-index hash-gate bypass and
+  normalized embedding output;
 - test disabled/enabled executor network paths and LLM-facing descriptions;
 - exercise configured inference, Teep, WebUI/authentication/MinIO, host
   publishers, and optional Tailscale where configured.

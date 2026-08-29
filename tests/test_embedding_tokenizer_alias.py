@@ -39,6 +39,11 @@ class FakeHuggingFaceTokenizer:
         self.encoder = Tokenizer.from_pretrained(model_name)
 
 
+class DriftedHuggingFaceTokenizer:
+    def __init__(self, model_name: str, revision: str | None = None):
+        self.encoder = Tokenizer.from_pretrained(model_name)
+
+
 def _load_wrapper_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "wrapper_env_patches_tokenizer_under_test", MODULE_PATH
@@ -112,6 +117,31 @@ class EmbeddingTokenizerAliasTests(unittest.TestCase):
             },
         ):
             with self.assertRaisesRegex(RuntimeError, "offline embedding tokenizer"):
+                wrapper.apply_embedding_tokenizer_alias_patch()
+
+    def test_tokenizer_constructor_signature_drift_is_fatal(self) -> None:
+        wrapper = _load_wrapper_module()
+        onyx = ModuleType("onyx")
+        nlp = ModuleType("onyx.natural_language_processing")
+        utils = ModuleType("onyx.natural_language_processing.utils")
+        utils.HuggingFaceTokenizer = DriftedHuggingFaceTokenizer
+        utils.Tokenizer = Tokenizer
+        nlp.utils = utils
+        onyx.natural_language_processing = nlp
+
+        with patch.dict(
+            os.environ,
+            {"WRAPPER_PATCH_STRICT": "true"},
+            clear=True,
+        ), patch.dict(
+            sys.modules,
+            {
+                "onyx": onyx,
+                "onyx.natural_language_processing": nlp,
+                "onyx.natural_language_processing.utils": utils,
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "signature changed"):
                 wrapper.apply_embedding_tokenizer_alias_patch()
 
 

@@ -2983,6 +2983,13 @@ def apply_embedding_tokenizer_alias_patch() -> None:
         return
 
     original_init = nlp_utils.HuggingFaceTokenizer.__init__
+    init_parameters = tuple(inspect.signature(original_init).parameters)
+    if init_parameters != ("self", "model_name"):
+        _warn_or_raise(
+            "HuggingFaceTokenizer.__init__ signature changed: "
+            f"expected ('self', 'model_name'), got {init_parameters!r}"
+        )
+        return
     try:
         source = inspect.getsource(original_init)
     except Exception as e:  # pragma: no cover

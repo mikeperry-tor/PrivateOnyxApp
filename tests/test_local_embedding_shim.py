@@ -39,6 +39,51 @@ def _load_module() -> ModuleType:
 
 
 class LocalEmbeddingShimReadinessTests(unittest.TestCase):
+    def test_prefixes_honor_text_type_manual_override_and_escaped_newline(self) -> None:
+        module = _load_module()
+        with patch.object(module, "DEFAULT_QUERY_PREFIX", "default query: "), patch.object(
+            module, "DEFAULT_PASSAGE_PREFIX", "default passage:\\n"
+        ):
+            self.assertEqual(
+                module.apply_prefixes(
+                    {
+                        "texts": ["first", "second"],
+                        "text_type": "query",
+                        "manual_query_prefix": "manual query:\\n",
+                    }
+                ),
+                (["manual query:\nfirst", "manual query:\nsecond"], "manual_query", 14),
+            )
+            self.assertEqual(
+                module.apply_prefixes(
+                    {"texts": ["document"], "text_type": "PASSAGE"}
+                ),
+                (["default passage:\ndocument"], "default_passage", 17),
+            )
+            self.assertEqual(
+                module.apply_prefixes(
+                    {"texts": ["unchanged"], "text_type": "UNKNOWN"}
+                ),
+                (["unchanged"], "none", 0),
+            )
+
+    def test_embedding_normalization_honors_onyx_request_flag(self) -> None:
+        module = _load_module()
+        original = [[3, 4], [0.0, -5.0]]
+        self.assertIs(module.apply_embedding_normalization(original, False), original)
+        normalized = module.apply_embedding_normalization(original, True)
+        self.assertEqual(normalized, [[0.6, 0.8], [0.0, -1.0]])
+        for vector in normalized:
+            self.assertAlmostEqual(math.hypot(*vector), 1.0)
+        large = module.apply_embedding_normalization([[1e308, 1e308]], True)[0]
+        self.assertTrue(all(math.isfinite(value) for value in large))
+        self.assertAlmostEqual(math.hypot(*large), 1.0)
+
+        with self.assertRaisesRegex(ValueError, "expected boolean"):
+            module.apply_embedding_normalization(original, "true")
+        with self.assertRaisesRegex(module.UpstreamResponseError, "cannot be normalized"):
+            module.apply_embedding_normalization([[0.0, 0.0]], True)
+
     def test_exact_internal_teep_endpoint_can_bypass_host_proxy(self) -> None:
         module = _load_module()
         pool = module.UpstreamConnectionPool(
@@ -273,6 +318,36 @@ class LocalEmbeddingShimReadinessTests(unittest.TestCase):
                     )
                 self.assertEqual(len(embeddings[0]), dimension)
 
+    def test_embedding_endpoint_composes_prefix_and_normalization(self) -> None:
+        module = _load_module()
+        payload = json.dumps(
+            {
+                "model_name": "requested",
+                "text_type": "QUERY",
+                "texts": ["question"],
+                "manual_query_prefix": "query:\\n",
+                "normalize_embeddings": True,
+            }
+        ).encode()
+        handler = module.Handler.__new__(module.Handler)
+        handler.path = "/encoder/bi-encoder-embed"
+        handler.headers = {"Content-Length": str(len(payload))}
+        handler.rfile = io.BytesIO(payload)
+        handler.client_address = ("127.0.0.1", 1)
+        handler._send_json = Mock()
+
+        with patch.object(
+            module,
+            "request_local_embeddings",
+            return_value=([[3.0, 4.0]], 1.0, 2.0),
+        ) as request, patch.object(module, "log_line"):
+            handler.do_POST()
+
+        request.assert_called_once_with("test-model", ["query:\nquestion"])
+        handler._send_json.assert_called_once_with(
+            200, {"embeddings": [[0.6, 0.8]]}
+        )
+
     def test_upstream_response_read_is_bounded(self) -> None:
         module = _load_module()
         response = Mock(status=200)
@@ -314,6 +389,7 @@ class LocalEmbeddingShimReadinessTests(unittest.TestCase):
                 "model_name": "requested",
                 "text_type": "QUERY",
                 "texts": ["safe test"],
+                "normalize_embeddings": True,
             }
         ).encode()
         handler = module.Handler.__new__(module.Handler)

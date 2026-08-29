@@ -815,14 +815,11 @@ def _filter_freshness_sentinels(documents, db_docs):  # noqa: ANN001
             skipped += 1
             continue
 
-        _log_once(
-            "sentinel_mismatch",
-            "warning",
-            "PDF freshness sentinel did not match DB validators; "
-            "allowing normal indexing for url=%s",
-            doc.id,
+        raise RuntimeError(
+            "PDF freshness sentinel no longer matches the stored validators; "
+            "refusing to index its empty placeholder so a later crawl can "
+            f"perform a full scrape: {doc.id}"
         )
-        passthrough_documents.append(doc)
 
     return passthrough_documents, skipped
 

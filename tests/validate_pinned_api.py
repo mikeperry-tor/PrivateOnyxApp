@@ -653,6 +653,7 @@ def _validate_local_embedding_caller_contract() -> None:
     from requests import RequestException
     from tenacity import wait_none
 
+    from onyx.db.models import SearchSettings
     from onyx.natural_language_processing import search_nlp_models
     from onyx.natural_language_processing.search_nlp_models import EmbeddingModel
     from shared_configs.configs import (
@@ -664,6 +665,15 @@ def _validate_local_embedding_caller_contract() -> None:
 
     assert MODEL_SERVER_CONNECT_TIMEOUT == 30
     assert MODEL_SERVER_READ_TIMEOUT == 600
+    assert SearchSettings.can_use_large_chunks(
+        True, "nomic-ai/nomic-embed-text-v23", None
+    )
+    assert not SearchSettings.can_use_large_chunks(
+        False, "nomic-ai/nomic-embed-text-v23", None
+    )
+    assert not SearchSettings.can_use_large_chunks(
+        True, "majentik/harrier-oss-v1-0.6b", None
+    )
 
     model = EmbeddingModel(
         server_host="local-embedding-shim",
@@ -744,6 +754,7 @@ def _validate_local_embedding_caller_contract() -> None:
         )
         assert call["timeout"] == (30, 600)
         assert call["json"]["texts"] == ["wrapper embedding contract"]
+        assert call["json"]["normalize_embeddings"] is True
 
 
 def _validate_opensearch_startup_contract() -> None:

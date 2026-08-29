@@ -575,11 +575,13 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         ordinary = SimpleNamespace(id="ordinary", doc_metadata={})
 
         passthrough, skipped = module._filter_freshness_sentinels(
-            [unchanged, unreadable, stale, ordinary], [db_doc]
+            [unchanged, unreadable, ordinary], [db_doc]
         )
 
         self.assertEqual(skipped, 2)
-        self.assertEqual([doc.id for doc in passthrough], ["stale", "ordinary"])
+        self.assertEqual([doc.id for doc in passthrough], ["ordinary"])
+        with self.assertRaisesRegex(RuntimeError, "refusing to index"):
+            module._filter_freshness_sentinels([stale], [db_doc])
 
     def test_pdf_freshness_validates_indexing_source_and_signature(self) -> None:
         self._load_patched_modules("validate_all")
