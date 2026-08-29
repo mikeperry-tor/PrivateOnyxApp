@@ -46,6 +46,15 @@ class SitecustomizeStdoutTests(unittest.TestCase):
             with self.subTest(path=relative):
                 self.assertTrue(_redirects_install_stdout_to_stderr(path))
 
+    def test_strict_bootstraps_exit_instead_of_raising_to_site_loader(self):
+        for relative in (
+            "onyx/patches/sitecustomize_api_server/sitecustomize.py",
+            "onyx/patches/sitecustomize_background/sitecustomize.py",
+        ):
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            with self.subTest(path=relative):
+                self.assertIn("os._exit(78)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

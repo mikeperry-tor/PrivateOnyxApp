@@ -65,7 +65,7 @@ echo "Validating WebUI build-time privacy controls in $onyx_web_server_image"
     --network none \
     --entrypoint node \
     "$onyx_web_server_image" \
-    -e 'for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.4.8") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK");'
+    -e 'for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.6.5") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK");'
 
 echo "Validating API patch contracts in $onyx_backend_image"
 "$container_bin" run --rm \
@@ -136,6 +136,7 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     -e PYTHONPATH=/app:/shared \
     -e WRAPPER_PATCH_STRICT=true \
     -e ENABLE_CRAFT=false \
+    -e DISABLE_TELEMETRY=true \
     -e ONYX_DISABLE_VESPA=true \
     -e AUTO_LLM_CONFIG_URL= \
     -e LICENSE_ENFORCEMENT_ENABLED=false \

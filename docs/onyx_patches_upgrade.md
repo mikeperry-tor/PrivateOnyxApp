@@ -788,7 +788,9 @@ origin or onion changes additionally require the corresponding checks in
 Re-audit every privacy setting against the new Onyx source rather than carrying
 environment names forward by resemblance. Confirm:
 
-- `DISABLE_TELEMETRY` still gates every anonymous telemetry call;
+- `DISABLE_TELEMETRY` still gates every anonymous telemetry call, including
+  the version callback, and the wrapper's worker topology removes its hourly
+  Beat producer rather than leaving messages on the absent monitoring queue;
 - empty backend Sentry, PostHog/marketing PostHog, HubSpot, Braintrust, and
   Langfuse credentials still prevent initialization, including in Celery
   workers;
@@ -946,8 +948,9 @@ wrappers.
   not replace this browser/database integration check.
 - **Context and output limits:** re-audit both configured-token lookup source
   markers, the complete internal-search formatter signature/JSON construction,
-  all three `open_url`/search positional defaults, and the repository downloader
-  signature/defaults. Test invalid, zero/unlimited, normal, and smaller-than-
+  all three `open_url`/search positional defaults, and the repository archive
+  downloader signature plus coding-agent call-site limit. Test invalid,
+  zero/unlimited, normal, and smaller-than-
   notice budgets; no result may exceed its per-result or aggregate cap. Keep
   the crawler-only per-URL cap distinct from the post-merge aggregate cap and
   from the built-in crawler's response/rendered-document byte cap.
@@ -1009,8 +1012,9 @@ the Onyx and SearXNG contracts remain required.
 Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
 background services unless the wrapper deliberately adds and documents a
 Craft backend. Re-audit the exact schedule names, tasks, and original cadences:
-seven discovery schedules must be rewritten to five minutes; the three Craft
-cleanup schedules and queue/process/memory monitoring schedules must be
+seven discovery schedules must be rewritten to five minutes; incognito file
+cleanup must remain at ten minutes; the three Craft cleanup schedules and
+queue/process/memory monitoring plus version-telemetry schedules must be
 removed; conditional schedules must remain absent; and Beat reload must remain
 five minutes. Confirm `DynamicTenantScheduler.tick` remains the unmodified
 upstream method, worker bootsteps are empty, and Beat logs show no

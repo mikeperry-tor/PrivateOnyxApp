@@ -96,4 +96,7 @@ except Exception as exc:
         flush=True,
     )
     if _strict():
-        raise
+        # CPython's site loader catches ordinary sitecustomize exceptions and
+        # continues startup. Exit directly so a strict privacy/runtime patch
+        # failure cannot leave an apparently healthy unpatched service.
+        os._exit(78)

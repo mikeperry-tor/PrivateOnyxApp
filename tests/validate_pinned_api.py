@@ -13,6 +13,7 @@ import wrapper_env_patches as patches
 def _install_wrapper_patches() -> None:
     patches.apply_llm_max_tokens_override_patch()
     patches.apply_open_url_char_limit_patches()
+    patches.apply_coding_agent_repo_download_limit_patch()
     patches.apply_internal_search_context_patches()
     patches.apply_native_reasoning_detection_override_patch()
     patches.apply_python_file_link_prompt_patches()
@@ -33,7 +34,7 @@ def _validate_python_tool_identity() -> None:
     from onyx.file_store.utils import build_frontend_file_url
     from onyx.prompts.tool_prompts import PYTHON_TOOL_GUIDANCE
     from onyx.tools import built_in_tools
-    from onyx.tools.constants import PYTHON_TOOL_ID, PYTHON_TOOL_NAME
+    from onyx.tools.constants import PYTHON_TOOL_NAME
     from onyx.tools.tool_implementations.python import python_tool
     from onyx.tools.tool_implementations.python.python_tool import PythonTool
 
@@ -42,7 +43,7 @@ def _validate_python_tool_identity() -> None:
     assert PythonTool.DISPLAY_NAME == "Code Interpreter"
     assert built_in_tools.TOOL_NAME_TO_CLASS["run_python"] is PythonTool
     assert "python" not in built_in_tools.TOOL_NAME_TO_CLASS
-    assert built_in_tools.llm_tool_name(PYTHON_TOOL_ID, "stale-db-name") == "run_python"
+    assert not hasattr(built_in_tools, "llm_tool_name")
     assert "## run_python" in PYTHON_TOOL_GUIDANCE
     assert "Use the `run_python` tool" in PYTHON_TOOL_GUIDANCE
     assert "response_markdown" in PythonTool.DESCRIPTION
@@ -358,6 +359,7 @@ def _validate_litellm_contract() -> None:
     from onyx.llm.models import AssistantMessage
 
     assert version("litellm") == "1.93.0"
+    assert version("pydantic") == "2.12.5"
     assert get_model_cost_map_source_info() == {
         "source": "local",
         "url": None,
@@ -489,6 +491,81 @@ def _validate_litellm_contract() -> None:
     assert "_wrapper_append_python_guidance" in final_loop_names
 
 
+def _validate_incognito_gateway_contract() -> None:
+    from onyx.chat import process_message
+    from onyx.chat.incognito import incognito_llm_request_policy
+    from onyx.chat.incognito_context import INCOGNITO_CONTEXT_TTL_SECONDS
+    from onyx.chat.incognito_context import incognito_context_available
+    from onyx.configs import app_configs
+    from onyx.db.enums import IncognitoRecordMode
+    from onyx.llm import factory
+    from onyx.llm import multi_llm
+
+    assert INCOGNITO_CONTEXT_TTL_SECONDS == 60 * 60
+    assert incognito_context_available() is (
+        app_configs.CACHE_BACKEND.value == "redis"
+    )
+
+    openai_policy = incognito_llm_request_policy(
+        IncognitoRecordMode.USAGE_ONLY, "openai"
+    )
+    assert openai_policy.model_kwargs == {"store": False}
+    proxy_policy = incognito_llm_request_policy(
+        IncognitoRecordMode.USAGE_ONLY, "litellm_proxy"
+    )
+    assert proxy_policy.headers == {"x-litellm-enable-message-redaction": "true"}
+
+    llm = factory.get_llm(
+        provider="openai",
+        model="wrapper-incognito-contract",
+        deployment_name=None,
+        api_key="contract-key",
+        max_input_tokens=4096,
+        additional_headers={"x-wrapper-policy": "ordinary"},
+        model_kwargs={"store": True},
+        policy_headers={"x-wrapper-policy": "incognito"},
+        policy_model_kwargs={"store": False},
+    )
+    assert llm._model_kwargs["store"] is False
+    assert llm._model_kwargs["extra_headers"]["x-wrapper-policy"] == "incognito"
+
+    process_source = inspect.getsource(process_message.build_chat_turn)
+    assert "incognito_policy_fn = partial(" in process_source
+    assert "policy_fn=incognito_policy_fn" in process_source
+    model_runner_source = inspect.getsource(process_message._run_models)
+    assert "run_llm_loop(" in model_runner_source
+
+    completion_source = inspect.getsource(multi_llm.LitellmLLM._completion)
+    assert "except BadRequestError as e:" in completion_source
+    assert "_rejection_names_strippable_kwargs" in completion_source
+    assert "_REASONING_KWARG_KEYS" in completion_source
+    assert "_BEST_EFFORT_KWARG_KEYS" in completion_source
+    assert "**passthrough_kwargs" in completion_source
+    assert multi_llm._rejection_names_strippable_kwargs(
+        ValueError("unsupported reasoning_effort"), {"reasoning_effort"}
+    )
+    assert not multi_llm._rejection_names_strippable_kwargs(
+        ValueError("context length exceeded"), {"reasoning_effort", "temperature"}
+    )
+
+
+def _validate_opensearch_startup_contract() -> None:
+    from onyx.document_index.opensearch import client
+    from onyx.document_index.opensearch import opensearch_document_index
+
+    assert issubclass(client.OpenSearchIndexWriteBlockedError, Exception)
+    verify_source = inspect.getsource(
+        opensearch_document_index.OpenSearchDocumentIndex.verify_and_create_index_if_necessary
+    )
+    assert "is_cluster_block_error(e)" in verify_source
+    assert "raise OpenSearchIndexWriteBlockedError(" in verify_source
+    init_source = inspect.getsource(
+        opensearch_document_index.OpenSearchDocumentIndex.__init__
+    )
+    assert "except OpenSearchIndexWriteBlockedError as e:" in init_source
+    assert "_verified_index_names_for_current_process.add(index_name)" in init_source
+
+
 def _validate_textual_tool_output_persistence() -> None:
     from onyx.chat.chat_state import ChatStateContainer
     from onyx.chat.llm_step import run_llm_step_pkt_generator
@@ -508,6 +585,7 @@ def _validate_textual_tool_output_persistence() -> None:
         config = SimpleNamespace(
             model_provider="wrapper-contract-provider",
             model_name="wrapper-contract-model",
+            deployment_name=None,
             api_base=None,
         )
 
@@ -701,6 +779,8 @@ if __name__ == "__main__":
     _validate_web_search_timeout_contract()
     _validate_web_search_concurrency_contract()
     _validate_litellm_contract()
+    _validate_incognito_gateway_contract()
+    _validate_opensearch_startup_contract()
     _validate_textual_tool_output_persistence()
     _validate_midstream_continuation_state_persistence()
     print("PINNED_API_PATCH_CONTRACTS_OK")

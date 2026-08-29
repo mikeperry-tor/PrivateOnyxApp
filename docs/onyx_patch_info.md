@@ -5,8 +5,11 @@ behaviors are not configurable in the pinned Onyx release. Patches are narrow,
 and strict: required callable targets validate signatures plus source markers,
 or exact structural text where a string/prompt is the target. A required patch
 that no longer matches must stop startup rather than silently restore an unsafe
-upstream path. Focused deterministic tests cover the wrapper-owned behavior;
-the upgrade checklist also requires installation against the pinned images.
+upstream path. Both Onyx bootstraps exit the interpreter directly on a strict
+installation failure because CPython otherwise reports and suppresses ordinary
+`sitecustomize` exceptions before continuing application startup. Focused
+deterministic tests cover the wrapper-owned behavior; the upgrade checklist
+also requires installation against the pinned images.
 
 ## Bootstrap ownership
 
@@ -377,8 +380,11 @@ retained crawler fallback through the public bridge.
 
 The wrapper explicitly overrides the pinned images' optional reporting and
 tracing configuration rather than relying on unset values inherited from the
-generated upstream `.env` file. `DISABLE_TELEMETRY=true` disables Onyx's
-anonymous telemetry endpoint. Empty Sentry, PostHog, marketing PostHog,
+generated upstream `.env` file. `DISABLE_TELEMETRY=true` disables every Onyx
+anonymous telemetry call, including the version callback normally dispatched
+from an hourly Beat schedule. The strict background transform requires that
+setting and removes the hourly producer because this deployment has no
+monitoring worker to drain it. Empty Sentry, PostHog, marketing PostHog,
 HubSpot, Braintrust, and Langfuse credentials disable those clients; the
 PostHog key, rather than its default host value, is the authoritative enable
 condition. Cloud, paid-EE, Stripe, GTM, and reCAPTCHA configuration remains
@@ -648,6 +654,18 @@ continuation because concatenating two independently schema-constrained outputs
 cannot generically reconstruct one valid value; their original setting is never
 replaced with an unconstrained request.
 
+Incognito turns use the same `get_llm_for_persona()`, `run_llm_loop()`,
+`run_llm_step()`, and LiteLLM request path as recorded turns. Native reasoning,
+native-tool-only enforcement, Python/file-link handling, and midstream
+continuation therefore remain active on that secondary path. Provider-specific
+incognito retention policy is merged after ordinary headers and model kwargs;
+the provider-400 retry ladder removes only reasoning/temperature tuning and
+retains those policy values. Incognito's Redis history intentionally stores the
+current user text and final assistant answer rather than reconstructed database
+tool rows, so the optional prior-turn tool-result and all-reasoning restoration
+patches have no separate incognito reconstruction boundary to wrap. Incognito
+is unavailable in lite mode because its content-free context requires Redis.
+
 Reasoning-only output is preservable progress. Before an answer or tool-call
 delta, an interrupted reasoning stream gets a warning within the same reasoning
 phase, and the continuation can keep reasoning or select an originally
@@ -824,10 +842,11 @@ Those requirements are not implemented by this wrapper. The resource
 consequences of keeping Craft absent are documented in
 `docs/resource_minimization.md`.
 The strict background bootstrap materializes seven connector-discovery
-schedules at five minutes, removes their one-minute templates, removes the
-three Craft cleanup schedules, and removes the queue/process/memory monitoring
-producers. It also raises Beat's schedule reload interval to five minutes and
-removes worker liveness bootsteps. It deliberately leaves the upstream Beat
+schedules at five minutes, retains incognito generated-file cleanup at ten
+minutes, removes their one-minute templates, removes the three Craft cleanup
+schedules, and removes the queue/process/memory monitoring and version-
+telemetry producers. It also raises Beat's schedule reload interval to five
+minutes and removes worker liveness bootsteps. It deliberately leaves the upstream Beat
 `tick()` method intact: that method publishes local process liveness when the
 reload tick runs and logs schedule-update failures independently. The wrapper
 watchdog therefore detects a stopped Beat loop without turning a persistent

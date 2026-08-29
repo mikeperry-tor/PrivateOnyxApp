@@ -40,7 +40,7 @@ WORKER_QUEUES = {
     ),
     "celery_worker_docprocessing": "docprocessing,port",
     "celery_worker_user_file_processing": (
-        "user_file_processing,user_file_project_sync,user_file_delete"
+        "user_file_processing,user_file_project_sync,user_file_delete,user_file_port"
     ),
     "celery_worker_scheduled_tasks": "scheduled_tasks",
     "celery_worker_docfetching": "connector_doc_fetching",
@@ -117,7 +117,7 @@ def derive_config(source: Path = SOURCE_CONFIG) -> configparser.RawConfigParser:
     watchdog_section = _program("supervisord_watchdog_celery_beat")
     watchdog_command = parser.get(watchdog_section, "command")
     if (
-        not watchdog_command.startswith("python onyx/utils/supervisord_watchdog.py\n")
+        not watchdog_command.startswith("python -m onyx.utils.supervisord_watchdog\n")
         or '--key "onyx:celery:beat:heartbeat"' not in watchdog_command
         or "--program celery_beat" not in watchdog_command
     ):

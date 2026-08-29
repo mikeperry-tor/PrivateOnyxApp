@@ -47,8 +47,12 @@ def _validate_schedules(background_patch, original_tick) -> None:
         "cleanup-idle-sandboxes",
         "dispatch-due-scheduled-tasks",
         "cleanup-stuck-scheduled-runs",
+        "emit-version-telemetry",
     }
     assert not removed.intersection(effective)
+    assert effective["check-for-incognito-file-cleanup"]["schedule"] == timedelta(
+        minutes=10
+    )
     assert DynamicTenantScheduler.RELOAD_INTERVAL == 300
     assert DynamicTenantScheduler.tick is original_tick
     assert app_base.get_bootsteps() == []

@@ -122,11 +122,13 @@ hour. Do not copy fixed counts into documentation.
 - Connector, user-file, and secondary-index port-migration discovery schedules
   run every five minutes. Newly eligible work can therefore wait roughly five
   minutes before discovery.
-- Housekeeping remains explicit: checkpoint cleanup hourly, index-attempt
-  cleanup every 30 minutes, and hierarchy fetching hourly.
+- Housekeeping remains explicit: incognito generated-file cleanup every ten
+  minutes, checkpoint cleanup hourly, index-attempt cleanup every 30 minutes,
+  and hierarchy fetching hourly.
 - Monitoring, periodic process-memory logging, Redis Beat-heartbeat, Craft
-  cleanup/dispatch, and unsupported scheduled-task producers are absent. The
-  separate indexing-child memory observer and indexing allocation tracer remain
+  cleanup/dispatch, version telemetry, and unsupported scheduled-task producers
+  are absent. The separate indexing-child memory observer and indexing
+  allocation tracer remain
   request-scoped upstream diagnostics and are no-ops under the wrapper's
   default zero-valued limits.
 - The monitoring and scheduled-task workers are absent because no supported

@@ -33,34 +33,56 @@ def _fake_onyx_modules() -> tuple[dict[str, ModuleType], ModuleType]:
     onyx_module = ModuleType("onyx")
     utils_module = ModuleType("onyx.utils")
     github_module = ModuleType("onyx.utils.github")
+    tools_module = ModuleType("onyx.tools")
+    fake_tools_module = ModuleType("onyx.tools.fake_tools")
+    coding_agent_module = ModuleType("onyx.tools.fake_tools.coding_agent")
 
-    github_module.DEFAULT_MAX_TARBALL_SIZE_BYTES = 500 * 1024 * 1024
+    coding_agent_module.CODING_AGENT_GITHUB_MAX_REPO_BYTES = 500 * 1024 * 1024
 
-    def download_github_repo(
-        repo: str,
-        github_token: str | None = None,
-        max_size_bytes: int = github_module.DEFAULT_MAX_TARBALL_SIZE_BYTES,
+    def download_github_archive(
+        source,
+        revision: str,
+        authorization_header: str | None = None,
+        *,
+        max_size_bytes: int,
+        timeout: float | tuple[float, float] = 30,
     ) -> bytes:
-        del repo, github_token, max_size_bytes
+        del source, revision, authorization_header, max_size_bytes, timeout
         return b""
 
-    github_module.download_github_repo = download_github_repo
+    def _setup_session():
+        download_github_archive(
+            object(),
+            "HEAD",
+            max_size_bytes=CODING_AGENT_GITHUB_MAX_REPO_BYTES,
+        )
+
+    coding_agent_module._setup_session = _setup_session
+    coding_agent_module.download_github_archive = download_github_archive
+    coding_agent_module.CODING_AGENT_GITHUB_MAX_REPO_BYTES = 500 * 1024 * 1024
+    github_module.download_github_archive = download_github_archive
+    fake_tools_module.coding_agent = coding_agent_module
+    tools_module.fake_tools = fake_tools_module
     utils_module.github = github_module
+    onyx_module.tools = tools_module
     onyx_module.utils = utils_module
     return (
         {
             "onyx": onyx_module,
+            "onyx.tools": tools_module,
+            "onyx.tools.fake_tools": fake_tools_module,
+            "onyx.tools.fake_tools.coding_agent": coding_agent_module,
             "onyx.utils": utils_module,
             "onyx.utils.github": github_module,
         },
-        github_module,
+        coding_agent_module,
     )
 
 
 class CodingAgentRepoDownloadLimitTests(unittest.TestCase):
     def test_default_limit_matches_code_interpreter_default(self) -> None:
         wrapper = _load_wrapper_module()
-        fake_modules, github_module = _fake_onyx_modules()
+        fake_modules, coding_agent_module = _fake_onyx_modules()
 
         with patch.dict(
             os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
@@ -68,14 +90,13 @@ class CodingAgentRepoDownloadLimitTests(unittest.TestCase):
             wrapper.apply_coding_agent_repo_download_limit_patch()
 
         expected = 1000 * 1024 * 1024
-        self.assertEqual(github_module.DEFAULT_MAX_TARBALL_SIZE_BYTES, expected)
         self.assertEqual(
-            github_module.download_github_repo.__defaults__, (None, expected)
+            coding_agent_module.CODING_AGENT_GITHUB_MAX_REPO_BYTES, expected
         )
 
     def test_limit_rewrites_constant_and_bound_default(self) -> None:
         wrapper = _load_wrapper_module()
-        fake_modules, github_module = _fake_onyx_modules()
+        fake_modules, coding_agent_module = _fake_onyx_modules()
         env = {
             "WRAPPER_PATCH_STRICT": "true",
             "ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB": "64",
@@ -87,9 +108,8 @@ class CodingAgentRepoDownloadLimitTests(unittest.TestCase):
             wrapper.apply_coding_agent_repo_download_limit_patch()
 
         expected = 64 * 1024 * 1024
-        self.assertEqual(github_module.DEFAULT_MAX_TARBALL_SIZE_BYTES, expected)
         self.assertEqual(
-            github_module.download_github_repo.__defaults__, (None, expected)
+            coding_agent_module.CODING_AGENT_GITHUB_MAX_REPO_BYTES, expected
         )
 
     def test_non_positive_limit_fails_in_strict_mode(self) -> None:
@@ -104,13 +124,13 @@ class CodingAgentRepoDownloadLimitTests(unittest.TestCase):
 
     def test_signature_drift_fails_in_strict_mode(self) -> None:
         wrapper = _load_wrapper_module()
-        fake_modules, github_module = _fake_onyx_modules()
+        fake_modules, _ = _fake_onyx_modules()
 
-        def changed_download(repo: str, max_bytes: int = 1) -> bytes:
-            del repo, max_bytes
+        def changed_download(source, max_bytes: int = 1) -> bytes:
+            del source, max_bytes
             return b""
 
-        github_module.download_github_repo = changed_download
+        fake_modules["onyx.utils.github"].download_github_archive = changed_download
         env = {
             "WRAPPER_PATCH_STRICT": "true",
             "ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB": "64",

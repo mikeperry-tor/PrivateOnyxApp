@@ -58,6 +58,11 @@ class BackgroundSupervisorTests(unittest.TestCase):
             "-Q docprocessing,port",
             config.get("program:celery_worker_docprocessing", "command"),
         )
+        self.assertIn(
+            "-Q user_file_processing,user_file_project_sync,user_file_delete,"
+            "user_file_port",
+            config.get("program:celery_worker_user_file_processing", "command"),
+        )
 
         logs = config.get("program:log-redirect-handler", "command")
         self.assertNotIn("celery_worker_monitoring.log", logs)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import functools
 import json
 import linecache
 import os
@@ -19,6 +20,16 @@ MODULE_PATH = (
     / "shared"
     / "wrapper_env_patches.py"
 )
+
+
+class _SourcePatchAnnotation:
+    pass
+
+
+def _source_patch_annotated_fixture(
+    value: _SourcePatchAnnotation,
+) -> _SourcePatchAnnotation:
+    return value
 
 
 def _load_wrapper(env: dict[str, str] | None = None) -> ModuleType:
@@ -272,6 +283,34 @@ def _code_description_modules(
 
 
 class SharedAgentPatchContractTests(unittest.TestCase):
+    def test_source_patch_uses_unwrapped_function_globals(self) -> None:
+        wrapper = _load_wrapper()
+        decorator_module = ModuleType("source_patch_decorator_fixture")
+        decorator_module.functools = functools
+        exec(
+            "def decorate(function):\n"
+            "    @functools.wraps(function)\n"
+            "    def wrapped(*args, **kwargs):\n"
+            "        return function(*args, **kwargs)\n"
+            "    return wrapped\n",
+            decorator_module.__dict__,
+        )
+        module = SimpleNamespace(
+            _source_patch_annotated_fixture=decorator_module.decorate(
+                _source_patch_annotated_fixture
+            )
+        )
+
+        wrapper._patch_function_source(
+            module=module,
+            function_name="_source_patch_annotated_fixture",
+            patch_name="annotated decorator fixture",
+            replacements={"    return value\n": "    return value\n"},
+        )
+
+        value = _SourcePatchAnnotation()
+        self.assertIs(module._source_patch_annotated_fixture(value), value)
+
     def test_source_patches_compose_on_the_same_function(self) -> None:
         wrapper = _load_wrapper()
         module = SimpleNamespace(

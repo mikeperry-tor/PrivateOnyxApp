@@ -122,12 +122,17 @@ def _apply_sleepy_background_patch() -> None:
         from onyx.background.celery.apps import app_base
         from onyx.background.celery.apps import beat as beat_app
         from onyx.background.celery.tasks import beat_schedule
+        from onyx.configs.app_configs import DISABLE_TELEMETRY
         from onyx.configs.constants import OnyxCeleryQueues
         from onyx.configs.constants import OnyxCeleryTask
         from shared_configs.configs import MULTI_TENANT
 
         if MULTI_TENANT:
             raise RuntimeError("sleepy background policy requires MULTI_TENANT=false")
+        if not DISABLE_TELEMETRY:
+            raise RuntimeError(
+                "sleepy background policy requires DISABLE_TELEMETRY=true"
+            )
 
         discovery = {
             "check-for-user-file-processing": timedelta(seconds=20),
@@ -173,6 +178,10 @@ def _apply_sleepy_background_patch() -> None:
             "celery-beat-heartbeat": (
                 OnyxCeleryTask.CELERY_BEAT_HEARTBEAT,
                 timedelta(minutes=1),
+            ),
+            "emit-version-telemetry": (
+                OnyxCeleryTask.EMIT_VERSION_TELEMETRY,
+                timedelta(hours=1),
             ),
         }
         craft_enabled = os.environ.get("ENABLE_CRAFT", "false").lower() in {
@@ -253,6 +262,7 @@ def _apply_sleepy_background_patch() -> None:
             raise RuntimeError("get_tasks_to_schedule no longer returns the materialized list")
 
         housekeeping = {
+            "check-for-incognito-file-cleanup": timedelta(minutes=10),
             "check-for-checkpoint-cleanup": timedelta(hours=1),
             "check-for-index-attempt-cleanup": timedelta(minutes=30),
             "check-for-hierarchy-fetching": timedelta(hours=1),
@@ -1255,6 +1265,12 @@ def _install() -> None:
     _apply_web_connector_http_freshness_patch()
 
 
+def _strict() -> bool:
+    return os.environ.get("WRAPPER_PATCH_STRICT", "true").lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 def _is_background_control_process() -> bool:
     """Keep strict application patches out of exact wrapper control programs."""
     return bool(sys.argv) and sys.argv[0] in _CONTROL_PROCESS_ARGV0
@@ -1264,5 +1280,16 @@ def _is_background_control_process() -> bool:
 # onyx.utils.isolated_runner, which imports sitecustomize before writing its
 # single pickled result. Docker captures stderr alongside stdout.
 if not _is_background_control_process():
-    with redirect_stdout(sys.stderr):
-        _install()
+    try:
+        with redirect_stdout(sys.stderr):
+            _install()
+    except Exception as exc:
+        print(
+            f"sitecustomize_background: patch initialization failed: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        if _strict():
+            # The site loader suppresses ordinary exceptions from
+            # sitecustomize. A direct exit is required for fail-closed startup.
+            os._exit(78)

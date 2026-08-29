@@ -1034,9 +1034,14 @@ def _patch_function_source(
         # source patch for the same function recompiles the pristine upstream
         # body and silently discards the first patch.
         source = getattr(function, "_wrapper_patched_source", None)
-        if not isinstance(source, str):
-            source = inspect.getsource(function)
-        filename = inspect.getsourcefile(function) or f"<{patch_name}>"
+        if isinstance(source, str):
+            rebuild_globals = function.__globals__
+            source_function = function
+        else:
+            source_function = inspect.unwrap(function)
+            source = inspect.getsource(source_function)
+            rebuild_globals = source_function.__globals__
+        filename = inspect.getsourcefile(source_function) or f"<{patch_name}>"
     except Exception as e:  # pragma: no cover
         _warn_or_raise(f"could not inspect {patch_name}: {e}")
         return
@@ -1049,7 +1054,7 @@ def _patch_function_source(
         patched_source = patched_source.replace(old, new, 1)
 
     namespace: dict[str, Any] = {}
-    exec(compile(patched_source, filename, "exec"), function.__globals__, namespace)
+    exec(compile(patched_source, filename, "exec"), rebuild_globals, namespace)
     patched_function = namespace.get(function_name)
     if not callable(patched_function):
         _warn_or_raise(f"{patch_name} patch did not rebuild {function_name}")
@@ -3399,7 +3404,7 @@ def apply_coding_agent_repo_download_limit_patch() -> None:
     Onyx downloads a GitHub tarball in the API server and then uploads the
     resulting bytes to code-interpreter. Upstream currently permits a 500 MiB
     download while code-interpreter accepts 100 MiB by default. Patch the
-    bound downloader default so an oversized archive fails at the producer,
+    coding-agent call-site limit so an oversized archive fails at the producer,
     before Onyx attempts an upload that code-interpreter must reject.
     """
 
@@ -3416,32 +3421,41 @@ def apply_coding_agent_repo_download_limit_patch() -> None:
         return
 
     try:
+        from onyx.tools.fake_tools import coding_agent
         from onyx.utils import github as github_utils
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed importing onyx.utils.github: {e}", flush=True)
         _raise_if_strict()
         return
 
-    function = github_utils.download_github_repo
+    function = github_utils.download_github_archive
     signature = inspect.signature(function)
     parameter_names = tuple(signature.parameters)
-    defaults = function.__defaults__
-    if parameter_names != ("repo", "github_token", "max_size_bytes"):
+    if parameter_names != (
+        "source",
+        "revision",
+        "authorization_header",
+        "max_size_bytes",
+        "timeout",
+    ):
         _warn_or_raise(
-            "onyx.utils.github.download_github_repo parameters changed; "
+            "onyx.utils.github.download_github_archive parameters changed; "
             f"found signature={signature}"
         )
         return
-    if defaults is None or len(defaults) != 2 or defaults[0] is not None:
+    setup_source = inspect.getsource(coding_agent._setup_session)
+    expected_call = (
+        "max_size_bytes=CODING_AGENT_GITHUB_MAX_REPO_BYTES,"
+    )
+    if setup_source.count(expected_call) != 1:
         _warn_or_raise(
-            "onyx.utils.github.download_github_repo expected defaults "
-            f"(None, max_size_bytes), found {defaults!r}; signature={signature}"
+            "coding_agent._setup_session no longer passes the bounded GitHub "
+            "archive limit exactly once"
         )
         return
 
     max_size_bytes = max_size_mb * 1024 * 1024
-    github_utils.DEFAULT_MAX_TARBALL_SIZE_BYTES = max_size_bytes
-    function.__defaults__ = (None, max_size_bytes)
+    coding_agent.CODING_AGENT_GITHUB_MAX_REPO_BYTES = max_size_bytes
     print(
         "sitecustomize: aligned coding-agent repository download limit with "
         f"code-interpreter uploads ({max_size_mb} MiB)",

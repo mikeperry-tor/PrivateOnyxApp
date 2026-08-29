@@ -216,6 +216,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
 
         app_configs_module = ModuleType("onyx.configs.app_configs")
         app_configs_module.REQUEST_TIMEOUT_SECONDS = 30
+        app_configs_module.DISABLE_TELEMETRY = True
         constants_module = ModuleType("onyx.configs.constants")
         constants_module.DocumentSource = SimpleNamespace(WEB="web")
         connector_models_module = ModuleType("onyx.connectors.models")
@@ -282,6 +283,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             MONITOR_BACKGROUND_PROCESSES="monitor-background-processes-task",
             MONITOR_PROCESS_MEMORY="monitor-process-memory-task",
             CELERY_BEAT_HEARTBEAT="celery-beat-heartbeat-task",
+            EMIT_VERSION_TELEMETRY="emit-version-telemetry-task",
             CLEANUP_IDLE_SANDBOXES="cleanup-idle-sandboxes-task",
             SCHEDULED_TASKS_DISPATCH_DUE="dispatch-due-scheduled-tasks-task",
             SCHEDULED_TASKS_CLEANUP_STUCK="cleanup-stuck-scheduled-runs-task",
@@ -298,6 +300,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             "check-for-connector-deletion": timedelta(seconds=20),
             "check-for-vespa-sync": timedelta(seconds=20),
             "check-for-pruning": timedelta(seconds=20),
+            "check-for-incognito-file-cleanup": timedelta(minutes=10),
             "check-for-checkpoint-cleanup": timedelta(hours=1),
             "check-for-index-attempt-cleanup": timedelta(minutes=30),
             "check-for-hierarchy-fetching": timedelta(hours=1),
@@ -307,6 +310,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             "monitor-background-processes": (task_ids.MONITOR_BACKGROUND_PROCESSES, timedelta(minutes=5)),
             "monitor-process-memory": (task_ids.MONITOR_PROCESS_MEMORY, timedelta(minutes=5)),
             "celery-beat-heartbeat": (task_ids.CELERY_BEAT_HEARTBEAT, timedelta(minutes=1)),
+            "emit-version-telemetry": (task_ids.EMIT_VERSION_TELEMETRY, timedelta(hours=1)),
             "cleanup-idle-sandboxes": (task_ids.CLEANUP_IDLE_SANDBOXES, timedelta(minutes=1)),
             "dispatch-due-scheduled-tasks": (task_ids.SCHEDULED_TASKS_DISPATCH_DUE, timedelta(seconds=30)),
             "cleanup-stuck-scheduled-runs": (task_ids.SCHEDULED_TASKS_CLEANUP_STUCK, timedelta(hours=1)),
@@ -315,7 +319,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             {"name": name, "task": name + "-task", "schedule": cadence, "options": {}}
             for name, cadence in schedule_specs.items()
         ] + [
-            {"name": name, "task": task_id, "schedule": cadence, "options": {"queue": queue_ids.MONITORING} if name.startswith("monitor-") else {}}
+            {"name": name, "task": task_id, "schedule": cadence, "options": {"queue": queue_ids.MONITORING} if name.startswith("monitor-") or name == "emit-version-telemetry" else {}}
             for name, (task_id, cadence) in removal_specs.items()
             if name not in {"monitor-celery-queues", "monitor-process-memory", "celery-beat-heartbeat"}
         ]
@@ -323,7 +327,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             {"name": task["name"], "task": task["task"], "schedule": task["schedule"], "options": dict(task["options"])}
             for task in beat_schedule_module.beat_task_templates
         ] + [
-            {"name": name, "task": task_id, "schedule": cadence, "options": {"queue": queue_ids.MONITORING} if name.startswith("monitor-") else {}}
+            {"name": name, "task": task_id, "schedule": cadence, "options": {"queue": queue_ids.MONITORING} if name.startswith("monitor-") or name == "emit-version-telemetry" else {}}
             for name, (task_id, cadence) in removal_specs.items()
             if name in {"monitor-celery-queues", "monitor-process-memory", "celery-beat-heartbeat"}
         ]
@@ -440,10 +444,12 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         for name in discovery:
             self.assertEqual(by_name[name]["schedule"], timedelta(minutes=5))
         self.assertEqual(by_name["check-for-checkpoint-cleanup"]["schedule"], timedelta(hours=1))
+        self.assertEqual(by_name["check-for-incognito-file-cleanup"]["schedule"], timedelta(minutes=10))
         self.assertEqual(by_name["check-for-index-attempt-cleanup"]["schedule"], timedelta(minutes=30))
         self.assertEqual(by_name["check-for-hierarchy-fetching"]["schedule"], timedelta(hours=1))
         for removed in (
             "monitor-celery-queues",
+            "emit-version-telemetry",
             "monitor-background-processes",
             "monitor-process-memory",
             "celery-beat-heartbeat",

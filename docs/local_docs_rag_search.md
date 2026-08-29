@@ -609,6 +609,12 @@ Full mode trades some background responsiveness for lower idle CPU and memory:
 - Onyx indices use zero replicas because this wrapper intentionally deploys
   one OpenSearch data node; an unassigned replica was not an additional data
   copy. This is an index-creation default; there is no existing-index migration.
+- An existing index that rejects a mapping refresh because OpenSearch applied a
+  write block remains readable. Onyx logs the blocked refresh and allows the API
+  to serve search while retrying verification on later index construction;
+  indexing remains unavailable until the operator clears the block. A missing
+  index or blocked index creation is still a startup error rather than a
+  degraded-read exception.
 - MinIO uses `MINIO_SCANNER_SPEED=slowest`; object healing, lifecycle cleanup,
   and scanner-driven maintenance can therefore take longer. Its retained
   healthcheck uses the common slow steady cadence.
