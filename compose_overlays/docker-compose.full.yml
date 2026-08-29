@@ -28,6 +28,11 @@ services:
       LANGFUSE_SECRET_KEY: ""
       LANGFUSE_PUBLIC_KEY: ""
       LANGFUSE_HOST: ""
+      # Celery work has no request user identity, so Onyx's per-user usage
+      # recorder cannot produce attributable records here. Avoid one idle
+      # recorder thread and its bounded queue in every background worker.
+      # API-side usage and cost reporting remains enabled.
+      USER_USAGE_TRACKING_ENABLED: "false"
       # Keep the all-editions document-content export sink disabled. Local RAG
       # indexing must not acquire an implicit external document-copy path.
       DOCUMENT_PUSH_ENDPOINT_URL: ""

@@ -143,6 +143,11 @@ hour. Do not copy fixed counts into documentation.
   is active; the discovery task does not create a second simultaneous attempt.
 - Retained Celery workers run without event heartbeat or gossip. Their upstream
   file-liveness bootstep is disabled.
+- Per-user usage accounting is disabled in the background service. Celery work
+  has no request user identity, so its recorder cannot produce attributable
+  usage rows; disabling it avoids one idle recorder thread and its bounded
+  queue in every worker process. API-side usage and cost reporting remains
+  enabled for user-attributed generations.
 - Beat reloads the materialized schedule every five minutes. The upstream
   `DynamicTenantScheduler.tick()` implementation is not replaced: its local
   marker represents event-loop liveness, while schedule-refresh failures remain

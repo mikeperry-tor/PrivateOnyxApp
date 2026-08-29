@@ -1167,6 +1167,13 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertEqual(services["minio"]["environment"]["MINIO_SCANNER_SPEED"], "slowest")
         background = services["background"]
         self.assertEqual(background["environment"]["PROMETHEUS_METRICS_ENABLED"], "false")
+        self.assertEqual(
+            background["environment"]["USER_USAGE_TRACKING_ENABLED"], "false"
+        )
+        self.assertNotIn(
+            "USER_USAGE_TRACKING_ENABLED",
+            services["api_server"]["environment"],
+        )
         self.assertEqual(background["environment"]["ONYX_AGENT_SLACK_BOT"], "false")
         self.assertEqual(background["environment"]["ONYX_AGENT_DISCORD_BOT"], "false")
         self.assertEqual(
@@ -1185,6 +1192,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )["services"]["background"]
         self.assertEqual(
             podman_background["environment"]["MAX_CONCURRENT_PORT_ATTEMPTS"], "1"
+        )
+        self.assertEqual(
+            podman_background["environment"]["USER_USAGE_TRACKING_ENABLED"],
+            "false",
         )
         self.assertEqual(podman_background["environment"]["LOG_TO_FILE"], "false")
 
