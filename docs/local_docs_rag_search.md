@@ -459,6 +459,12 @@ to the macOS Podman host document relay; it is not application-layer client
 authentication. Rejected direct LAN sockets are closed without parsing enough
 HTTP to return an application response.
 
+The macOS Podman overlay maps the exact `host.docker.internal` alias on the
+host-capable policy path to libkrun/gvproxy's fixed `192.168.127.254` macOS
+host-loopback endpoint. The embedding request then traverses the same
+exact-authority host policy; the mapping is not present on the shim or other
+application containers and does not grant them unrestricted host access.
+
 Idle unload starts only after ten minutes since the last request completed and
 never stops an active batch. A request that races an idle child stop simply
 waits for the owned process to exit and then launches one new child; it is not

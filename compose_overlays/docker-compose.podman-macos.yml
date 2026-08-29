@@ -1,0 +1,15 @@
+## macOS-only Podman host-loopback routing.
+##
+## The libkrun/gvproxy machine exposes macOS host loopback at the fixed
+## 192.168.127.254 address. Podman's rootless bridge may inject a different
+## host alias that is not routed back to macOS, so override only the wrapper
+## services that own an explicit host capability.
+
+services:
+  netns-holder:
+    extra_hosts: !override
+      - "host.docker.internal:192.168.127.254"
+
+  onyx-host-egress-proxy:
+    environment:
+      EGRESS_PODMAN_HOST_GATEWAY_IP: "192.168.127.254"

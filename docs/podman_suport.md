@@ -180,11 +180,23 @@ All external image references owned by this wrapper include an explicit
 Podman installations may intentionally have no unqualified-search registries,
 and changing that host-wide policy is not a stack prerequisite.
 
-Native rootless Podman resolves `host.docker.internal` to its fixed
-`169.254.1.2` link-local engine gateway. The Podman overlay supplies that exact
-address only to the host-capable final-hop policy. The exception remains
-restricted to the exact logical host name and the configured embedding or
-operator-selected port; all other link-local addresses remain blocked.
+Native Linux rootless Podman resolves `host.docker.internal` to its fixed
+`169.254.1.2` link-local engine gateway. The common Podman overlay supplies
+that exact address only to the host-capable final-hop policy. Its exception
+remains restricted to the exact logical host name and the configured embedding
+or operator-selected port; all other link-local addresses remain blocked.
+
+On macOS, the libkrun/gvproxy machine exposes macOS host loopback at the fixed
+`192.168.127.254` address. Podman's rootless bridge may inject
+`host.containers.internal` and `host.docker.internal` as `169.254.1.2`, but
+that address is not the routed macOS host endpoint. The macOS overlay replaces
+the alias only on `netns-holder`, whose network namespace and generated host
+mapping are shared by the host policy; it does not change the VM user's
+`containers.conf` or grant unrelated containers a host route. The final-hop
+policy continues to require the exact logical host name and configured port.
+The host document relay separately maps
+`host.containers.internal` to the same fixed endpoint and is the only service
+that joins its host-uplink network.
 
 Docker Compose 5.3.1 may otherwise honor the host's selected Docker Desktop
 context or Podman's SSH system connection. The Makefile therefore exports an
@@ -286,6 +298,8 @@ The Makefile assembles the ordinary base/mode/optional layers first and adds
 the engine-specific layers when `CONTAINER_BIN` resolves to Podman:
 
 - `compose_overlays/docker-compose.podman.yml` applies to lite and full modes;
+- `compose_overlays/docker-compose.podman-macos.yml` applies to lite and full
+  modes on macOS;
 - `compose_overlays/docker-compose.podman-full.yml` applies only to full mode;
   and
 - `compose_overlays/docker-compose.podman-macos-full.yml` applies only to
@@ -323,6 +337,14 @@ replaced.
 - API startup waits for PostgreSQL to become healthy. Podman creates more of
   the graph concurrently and otherwise can expose database initialization
   races earlier than the Docker path.
+
+### macOS Podman override
+
+`compose_overlays/docker-compose.podman-macos.yml` replaces the common
+Podman host alias on `netns-holder` with libkrun/gvproxy's fixed
+`192.168.127.254` macOS host-loopback endpoint. The host-capable final-hop
+policy shares that network namespace and mapping. No application service
+receives the alias, and native Linux retains the common fixed link-local route.
 
 ### Full-mode override
 
@@ -600,7 +622,9 @@ The Podman Makefile lifecycle is consequently create/configure/start:
    and remove only the unsafe PostgreSQL mount-root override when present. Full
    On macOS, full mode also starts or validates the PID-tracked host document
    server.
-3. `podman compose create` creates stopped containers.
+3. `podman compose create` creates stopped containers. On macOS, the selected
+   overlay gives only the route-owning wrapper services their exact fixed
+   gvproxy host-loopback aliases.
 4. `startup_health.py configure` installs and verifies native startup checks.
 5. `podman compose up -d --wait --wait-timeout 420` starts the verified graph.
 6. The wrapper inspects the host bridge after the provider returns and requires

@@ -150,12 +150,16 @@ direct fallback. Allowed ports authorize whichever host process is listening,
 not a service identity. Enabling broad LAN access retains a possible known
 RFC1918 host-gateway path.
 
-Native rootless Podman maps its exact engine-host alias to the fixed
-link-local gateway `169.254.1.2`. The Podman overlay exposes only that one
-address to the host-capable policy's exact-host resolver. It remains usable
-only for `host.docker.internal` and an operator-selected host port or the exact
-configured embedding authority. Every other link-local address, including
-metadata ranges, remains denied; public policies receive no such exception.
+Native Linux rootless Podman maps its exact engine-host alias to the fixed
+link-local gateway `169.254.1.2`. On macOS, the wrapper maps that alias on the
+route-owning shared network namespace to libkrun/gvproxy's fixed
+`192.168.127.254` macOS host-loopback endpoint. The host-capable policy's
+exact-host resolver validates the macOS endpoint as private unicast, while its
+internal Podman setting accepts only these two known engine addresses. They
+remain usable only for `host.docker.internal` and an operator-selected host
+port or the exact configured embedding authority. Every other link-local
+address, including metadata ranges, remains denied; public policies receive no
+such exception.
 
 Saved Admin SSRF levels remain an independent route-selection layer. MCP uses
 the public route for `VALIDATE_ALL` and `VALIDATE_LLM`, and the host route for

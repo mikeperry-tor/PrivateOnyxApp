@@ -144,10 +144,10 @@ CONFIGURED_EMBEDDING_URL = os.environ.get(
 PODMAN_HOST_GATEWAY_IP = os.environ.get(
     "EGRESS_PODMAN_HOST_GATEWAY_IP", ""
 ).strip()
-if PODMAN_HOST_GATEWAY_IP not in {"", "169.254.1.2"}:
+if PODMAN_HOST_GATEWAY_IP not in {"", "169.254.1.2", "192.168.127.254"}:
     raise RuntimeError(
         "EGRESS_PODMAN_HOST_GATEWAY_IP is an internal fixed setting and must "
-        "be empty or 169.254.1.2"
+        "be empty, 169.254.1.2, or 192.168.127.254"
     )
 
 # Upstream proxy (EGRESS_UPSTREAM_PROXY_URL from .env.wrapper). When set,

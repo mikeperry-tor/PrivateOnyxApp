@@ -169,9 +169,30 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reason)
         self.assertEqual(addresses, ("192.168.65.2",))
 
-    async def test_exact_host_accepts_only_fixed_podman_link_local_gateway(
+    async def test_exact_host_accepts_only_fixed_podman_gateways(
         self,
     ) -> None:
+        for gateway in ("169.254.1.2", "192.168.127.254"):
+            module = _load_module(
+                "host",
+                {
+                    "EGRESS_PODMAN_HOST_GATEWAY_IP": gateway,
+                    "ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL": (
+                        "http://host.docker.internal:8337/v1/embeddings"
+                    ),
+                },
+            )
+            with self.subTest(gateway=gateway), patch.object(
+                module,
+                "_resolve_system_host",
+                AsyncMock(return_value={gateway}),
+            ):
+                reason, addresses = await module._validate_destination(
+                    "host.docker.internal", 8337
+                )
+            self.assertIsNone(reason)
+            self.assertEqual(addresses, (gateway,))
+
         module = _load_module(
             "host",
             {
@@ -181,11 +202,7 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 ),
             },
         )
-        for address, expected_reason in (
-            ("169.254.1.2", None),
-            ("169.254.1.1", "Docker-host resolved to a forbidden address"),
-            ("169.254.169.254", "Docker-host resolved to a forbidden address"),
-        ):
+        for address in ("169.254.1.1", "169.254.169.254"):
             with self.subTest(address=address), patch.object(
                 module,
                 "_resolve_system_host",
@@ -194,11 +211,11 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
                 reason, addresses = await module._validate_destination(
                     "host.docker.internal", 8337
                 )
-            self.assertEqual(reason, expected_reason)
-            self.assertEqual(addresses, (address,) if expected_reason is None else ())
+            self.assertEqual(reason, "Docker-host resolved to a forbidden address")
+            self.assertEqual(addresses, ())
 
     def test_podman_host_gateway_setting_is_fixed(self) -> None:
-        for value in ("169.254.1.1", "192.168.1.2", "true"):
+        for value in ("169.254.1.1", "192.168.127.253", "192.168.1.2", "true"):
             with self.subTest(value=value), self.assertRaisesRegex(
                 RuntimeError, "internal fixed setting"
             ):

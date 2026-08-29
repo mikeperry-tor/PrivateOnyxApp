@@ -233,6 +233,7 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
                     "full",
                     (
                         "docker-compose.podman.yml",
+                        "docker-compose.podman-macos.yml",
                         "docker-compose.podman-full.yml",
                         "docker-compose.podman-macos-full.yml",
                     ),
@@ -311,6 +312,7 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             "docker-compose.full.yml",
             "docker-compose.lite.yml",
             "docker-compose.podman-full.yml",
+            "docker-compose.podman-macos.yml",
             "docker-compose.podman-macos-full.yml",
             "docker-compose.podman.yml",
             "docker-compose.tailscale-vpn.yml",
@@ -722,7 +724,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
 
     def test_podman_override_reuses_docker_storage_and_gates_database_consumers(self) -> None:
         for mode in ("lite", "full"):
-            extra = ["docker-compose.podman.yml"]
+            extra = [
+                "docker-compose.podman.yml",
+                "docker-compose.podman-macos.yml",
+            ]
             if mode == "full":
                 extra.extend(
                     (
@@ -736,8 +741,13 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 services["onyx-host-egress-proxy"]["environment"][
                     "EGRESS_PODMAN_HOST_GATEWAY_IP"
                 ],
-                "169.254.1.2",
+                "192.168.127.254",
             )
+            self.assertIn(
+                "host.docker.internal=192.168.127.254",
+                services["netns-holder"]["extra_hosts"],
+            )
+            self.assertNotIn("extra_hosts", services["onyx-host-egress-proxy"])
             self.assertNotIn(
                 "EGRESS_PODMAN_HOST_GATEWAY_IP",
                 services["onyx-public-egress-proxy"]["environment"],
@@ -787,6 +797,10 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                         "tcp-connect:host.containers.internal:18091",
                     ],
                 )
+                self.assertIn(
+                    "host.containers.internal=192.168.127.254",
+                    doc_relay["extra_hosts"],
+                )
                 self.assertEqual(
                     set(doc_relay["networks"]),
                     {"doc-drop-route", "doc-drop-publish", "podman-doc-host-uplink"},
@@ -801,6 +815,14 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 }
                 self.assertEqual(joined, {"doc-drop-web"})
                 self.assertNotIn("podman-rag-docs", model.get("volumes", {}))
+
+        native_linux = _compose_model("lite", "docker-compose.podman.yml")
+        self.assertEqual(
+            native_linux["services"]["onyx-host-egress-proxy"]["environment"][
+                "EGRESS_PODMAN_HOST_GATEWAY_IP"
+            ],
+            "169.254.1.2",
+        )
 
     def test_native_linux_docker_preserves_rootless_postgres_ownership(self) -> None:
         linux_files = _make_compose_files(
@@ -945,6 +967,8 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             self.assertNotIn("podman-docker-postgres", files)
             self.assertNotIn("podman-docker-opensearch", files)
         self.assertNotIn("docker-compose.podman-macos-full.yml", linux_files)
+        self.assertNotIn("docker-compose.podman-macos.yml", linux_files)
+        self.assertIn("docker-compose.podman-macos.yml", macos_files)
         self.assertIn("docker-compose.podman-macos-full.yml", macos_files)
 
         linux = _compose_model(
@@ -1045,6 +1069,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 ROOT / "compose_overlays/docker-compose.lite.yml",
                 ROOT / "compose_overlays/docker-compose.podman.yml",
                 ROOT / "compose_overlays/docker-compose.podman-full.yml",
+                ROOT / "compose_overlays/docker-compose.podman-macos.yml",
                 ROOT / "compose_overlays/docker-compose.podman-macos-full.yml",
             )
         )
@@ -1187,6 +1212,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         podman_background = _compose_model(
             "full",
             "docker-compose.podman.yml",
+            "docker-compose.podman-macos.yml",
             "docker-compose.podman-full.yml",
             "docker-compose.podman-macos-full.yml",
         )["services"]["background"]
@@ -1217,6 +1243,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             "podman-macos-full": _compose_model(
                 "full",
                 "docker-compose.podman.yml",
+                "docker-compose.podman-macos.yml",
                 "docker-compose.podman-full.yml",
                 "docker-compose.podman-macos-full.yml",
             ),
