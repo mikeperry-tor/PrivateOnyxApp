@@ -4,30 +4,61 @@ from __future__ import annotations
 
 import inspect
 import json
+import sys
 from importlib.metadata import version
 from types import SimpleNamespace
 
 import wrapper_env_patches as patches
 
 
-def _install_wrapper_patches() -> None:
-    patches.apply_llm_max_tokens_override_patch()
-    patches.apply_open_url_char_limit_patches()
-    patches.apply_coding_agent_repo_download_limit_patch()
-    patches.apply_internal_search_context_patches()
-    patches.apply_native_reasoning_detection_override_patch()
-    patches.apply_python_file_link_prompt_patches()
-    patches.apply_chat_file_id_validation_patch()
-    patches.apply_python_package_capability_patches()
-    patches.apply_vllm_glm_auto_tool_choice_patch()
-    patches.apply_deep_research_chat_agent_tools_patch()
-    patches.apply_reasoning_content_preservation_patch()
-    patches.apply_native_tool_calls_only_patch()
-    patches.apply_midstream_inference_continuation_patch()
-    patches.apply_coding_agent_final_answer_fallback_patch()
-    patches.apply_preserve_tool_results_patch()
-    patches.apply_python_file_link_enforcement_patches()
-    patches.apply_searxng_single_attempt_patch()
+def _validate_production_bootstrap() -> None:
+    """Prove this process was patched by the same bootstrap as api_server."""
+    import sitecustomize
+
+    from onyx.prompts import tool_prompts
+    from onyx.prompts.coding_agent import coding_agent as coding_agent_prompts
+    from onyx.server.features.mcp import ssrf as mcp_ssrf
+    from onyx.tools.tool_implementations.bash.bash_tool import BashTool
+    from onyx.tools.tool_implementations.open_url import onyx_web_crawler
+    from onyx.tools.tool_implementations.open_url.open_url_tool import OpenURLTool
+    from onyx.tools.tool_implementations.python.python_tool import PythonTool
+    from onyx.utils import playwright_fetch
+    from onyx.utils import url as url_utils
+
+    assert sitecustomize.__file__ == "/api-patches/sitecustomize.py"
+    assert sys.modules["sitecustomize"] is sitecustomize
+    assert getattr(playwright_fetch, "_wrapper_helper_proxy_patched", False)
+    assert mcp_ssrf.mcp_ssrf_httpx_client_factory.__module__ == (
+        "wrapper_env_patches"
+    )
+    assert onyx_web_crawler.OnyxWebCrawler.contents.__module__ == (
+        "obscura_crawler_patch"
+    )
+    assert getattr(url_utils, "_wrapper_url_identity_preservation_patch", False)
+    assert getattr(OpenURLTool, "_wrapper_failure_reporting_patch", False)
+    assert getattr(OpenURLTool, "_wrapper_explicit_url_limit_patch", False)
+
+    restricted = "Network access is available through a restricted HTTP/HTTPS proxy."
+    assert restricted in PythonTool.DESCRIPTION
+    assert restricted in BashTool.DESCRIPTION
+    assert restricted in tool_prompts.PYTHON_TOOL_GUIDANCE
+    assert "restricted proxy-only network access" in (
+        coding_agent_prompts.CODING_AGENT_PROMPT
+    )
+
+    from onyx.llm.multi_llm import LitellmLLM
+
+    configured = LitellmLLM(
+        api_key="contract-key",
+        model_provider="openai_compatible",
+        model_name="wrapper-configured-inference-contract",
+        max_input_tokens=4096,
+        api_base="https://inference.example/v1",
+        timeout=1,
+    )
+    assert configured._wrapper_configured_inference_client is not None
+    assert configured._wrapper_configured_inference_http_client is not None
+    configured._wrapper_configured_inference_http_client.close()
 
 
 def _validate_python_tool_identity() -> None:
@@ -271,7 +302,11 @@ def _validate_indexed_open_url_contract() -> None:
     assert "build_access_filters_for_user(self._user, db_session)" in filter_source
     assert "access_control_list=access_control_list" in filter_source
 
-    run_source = inspect.getsource(open_url_tool.OpenURLTool.run)
+    # The production bootstrap composes failure reporting and the explicit
+    # ten-URL guard around this upstream implementation. Inspect the stored
+    # source callable so this contract remains valid under the final wrappers.
+    upstream_run = open_url_tool.OpenURLTool._wrapper_failure_reporting_original_run
+    run_source = inspect.getsource(upstream_run)
     assert "run_functions_tuples_in_parallel" in run_source
     assert "(_retrieve_indexed_with_filters, (all_requests,))" in run_source
     assert "self._fetch_web_content," in run_source
@@ -305,7 +340,9 @@ def _validate_lite_open_url_contract() -> None:
     from onyx.tools.tool_implementations.open_url import open_url_tool
 
     assert open_url_tool.OpenURLTool.is_available(None) is True
-    run_source = inspect.getsource(open_url_tool.OpenURLTool.run)
+    run_source = inspect.getsource(
+        open_url_tool.OpenURLTool._wrapper_failure_reporting_original_run
+    )
     assert "if DISABLE_VECTOR_DB:" in run_source
     assert "IndexedRetrievalResult(" in run_source
     assert "self._fetch_web_content" in run_source
@@ -492,6 +529,7 @@ def _validate_litellm_contract() -> None:
 
 
 def _validate_incognito_gateway_contract() -> None:
+    from litellm.exceptions import BadRequestError
     from onyx.chat import process_message
     from onyx.chat.incognito import incognito_llm_request_policy
     from onyx.chat.incognito_context import INCOGNITO_CONTEXT_TTL_SECONDS
@@ -547,6 +585,165 @@ def _validate_incognito_gateway_contract() -> None:
     assert not multi_llm._rejection_names_strippable_kwargs(
         ValueError("context length exceeded"), {"reasoning_effort", "temperature"}
     )
+
+    # Exercise the installed v4.6.5 completion method rather than relying on
+    # source markers alone. Incognito policy fields must survive both provider
+    # fallback attempts while reasoning and then temperature are removed.
+    from onyx.llm.interfaces import ReasoningEffort
+    from onyx.llm.litellm_singleton import litellm
+
+    policy_llm = factory.get_llm(
+        provider="openai",
+        model="gpt-5",
+        deployment_name=None,
+        api_key="contract-key",
+        max_input_tokens=4096,
+        additional_headers={"x-wrapper-policy": "ordinary"},
+        model_kwargs={"store": True},
+        policy_headers={"x-wrapper-policy": "incognito"},
+        policy_model_kwargs={"store": False},
+    )
+    completion_calls: list[dict] = []
+    sentinel = object()
+
+    def provider_rejects_best_effort_kwargs(**kwargs):
+        completion_calls.append(kwargs)
+        if len(completion_calls) == 1:
+            raise BadRequestError(
+                "unsupported reasoning",
+                model="gpt-5",
+                llm_provider="openai",
+            )
+        if len(completion_calls) == 2:
+            raise BadRequestError(
+                "unsupported temperature",
+                model="gpt-5",
+                llm_provider="openai",
+            )
+        return sentinel
+
+    original_completion = litellm.completion
+    try:
+        litellm.completion = provider_rejects_best_effort_kwargs
+        result = policy_llm._completion(
+            prompt=[],
+            tools=None,
+            tool_choice=None,
+            stream=False,
+            parallel_tool_calls=False,
+            reasoning_effort=ReasoningEffort.HIGH,
+        )
+    finally:
+        litellm.completion = original_completion
+
+    assert result is sentinel
+    assert len(completion_calls) == 3
+    assert "reasoning" in completion_calls[0]
+    assert "temperature" in completion_calls[0]
+    assert not multi_llm._REASONING_KWARG_KEYS.intersection(completion_calls[1])
+    assert "temperature" in completion_calls[1]
+    assert not multi_llm._BEST_EFFORT_KWARG_KEYS.intersection(completion_calls[2])
+    for call in completion_calls:
+        assert call["store"] is False
+        assert call["extra_headers"]["x-wrapper-policy"] == "incognito"
+
+
+def _validate_local_embedding_caller_contract() -> None:
+    """Exercise Onyx's side of the local embedding-shim protocol."""
+    from requests import RequestException
+    from tenacity import wait_none
+
+    from onyx.natural_language_processing import search_nlp_models
+    from onyx.natural_language_processing.search_nlp_models import EmbeddingModel
+    from shared_configs.configs import (
+        MODEL_SERVER_CONNECT_TIMEOUT,
+        MODEL_SERVER_READ_TIMEOUT,
+    )
+    from shared_configs.enums import EmbedTextType
+    from shared_configs.model_server_models import EmbedRequest
+
+    assert MODEL_SERVER_CONNECT_TIMEOUT == 30
+    assert MODEL_SERVER_READ_TIMEOUT == 600
+
+    model = EmbeddingModel(
+        server_host="local-embedding-shim",
+        server_port=9101,
+        model_name="nomic-ai/nomic-embed-text-v1",
+        normalize=True,
+        query_prefix=None,
+        passage_prefix=None,
+        api_key=None,
+        api_url=None,
+        provider_type=None,
+    )
+
+    def request(text_type: EmbedTextType) -> EmbedRequest:
+        return EmbedRequest(
+            texts=["wrapper embedding contract"],
+            model_name=model.model_name,
+            max_context_length=8192,
+            normalize_embeddings=True,
+            text_type=text_type,
+        )
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"embeddings": [[0.1, 0.2, 0.3]]}
+
+    original_post = search_nlp_models.requests.post
+    original_wait_fixed = search_nlp_models.wait_fixed
+    calls: list[dict] = []
+    failures_remaining = 0
+
+    def fake_post(endpoint, **kwargs):
+        nonlocal failures_remaining
+        calls.append({"endpoint": endpoint, **kwargs})
+        if failures_remaining:
+            failures_remaining -= 1
+            raise RequestException("synthetic embedding failure")
+        return FakeResponse()
+
+    try:
+        search_nlp_models.requests.post = fake_post
+        search_nlp_models.wait_fixed = lambda _seconds: wait_none()
+
+        query_response = model._make_model_server_request(
+            request(EmbedTextType.QUERY)
+        )
+        assert query_response.embeddings == [[0.1, 0.2, 0.3]]
+        assert len(calls) == 1
+
+        failures_remaining = 2
+        passage_response = model._make_model_server_request(
+            request(EmbedTextType.PASSAGE)
+        )
+        assert passage_response.embeddings == [[0.1, 0.2, 0.3]]
+        assert len(calls) == 4
+
+        failures_remaining = 3
+        try:
+            model._make_model_server_request(request(EmbedTextType.PASSAGE))
+        except Exception as exc:
+            assert "synthetic embedding failure" in str(exc)
+        else:
+            raise AssertionError("terminal passage embedding failure was hidden")
+        assert len(calls) == 7
+    finally:
+        search_nlp_models.requests.post = original_post
+        search_nlp_models.wait_fixed = original_wait_fixed
+
+    for call in calls:
+        assert call["endpoint"] == (
+            "http://local-embedding-shim:9101/encoder/bi-encoder-embed"
+        )
+        assert call["timeout"] == (30, 600)
+        assert call["json"]["texts"] == ["wrapper embedding contract"]
 
 
 def _validate_opensearch_startup_contract() -> None:
@@ -770,7 +967,7 @@ def _validate_midstream_continuation_state_persistence() -> None:
 
 
 if __name__ == "__main__":
-    _install_wrapper_patches()
+    _validate_production_bootstrap()
     _validate_python_tool_identity()
     _validate_python_tool_generated_id_identity()
     _validate_python_file_link_enforcement()
@@ -780,6 +977,7 @@ if __name__ == "__main__":
     _validate_web_search_concurrency_contract()
     _validate_litellm_contract()
     _validate_incognito_gateway_contract()
+    _validate_local_embedding_caller_contract()
     _validate_opensearch_startup_contract()
     _validate_textual_tool_output_persistence()
     _validate_midstream_continuation_state_persistence()

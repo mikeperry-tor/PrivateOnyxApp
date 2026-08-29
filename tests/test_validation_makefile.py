@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE = (ROOT / "Makefile").read_text()
 IMAGE_SCRIPT_PATH = ROOT / "tests" / "validate_pinned_patch_images.sh"
 IMAGE_SCRIPT = IMAGE_SCRIPT_PATH.read_text()
+PINNED_API_VALIDATOR = (ROOT / "tests" / "validate_pinned_api.py").read_text()
 EXECUTOR_NETWORK_VALIDATOR = (
     ROOT / "tests" / "validate_code_interpreter_executor_network.py"
 ).read_text()
@@ -84,6 +85,19 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertNotRegex(IMAGE_SCRIPT, r'(?m)^.*"\$container_bin" (pull|build)\b')
         self.assertEqual(IMAGE_SCRIPT.count("--network none"), 12)
         self.assertIn("WRAPPER_PATCH_STRICT=true", IMAGE_SCRIPT)
+        self.assertIn(
+            "PYTHONPATH=/api-patches:/wrapper:/obscura-client:/app",
+            IMAGE_SCRIPT,
+        )
+        self.assertIn(
+            "onyx/patches/sitecustomize_api_server:/api-patches:ro",
+            IMAGE_SCRIPT,
+        )
+        self.assertIn(
+            'sitecustomize.__file__ == "/api-patches/sitecustomize.py"',
+            PINNED_API_VALIDATOR,
+        )
+        self.assertNotIn("def _install_wrapper_patches", PINNED_API_VALIDATOR)
         self.assertIn("PINNED_URL_IDENTITY_PRESERVATION_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_STOCK_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)

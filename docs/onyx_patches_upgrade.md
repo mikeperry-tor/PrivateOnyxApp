@@ -997,12 +997,17 @@ obsolete. Keep the [README](../README.md) description user-facing and accurate
 about the resulting re-indexing savings.
 
 `make check-upgrade` preserves the required order: deterministic checks first,
-then `make test-patch-images`, which strictly installs the API and PDF freshness
-patch families inside the pinned Onyx backend image, the executor patch inside
-the pinned code-interpreter image, the SymPy contract inside the derived Python
-executor, and the SearXNG runtime/parser checks inside the derived image. Any
-source, signature, model, prompt, or command shape mismatch is an upgrade
-blocker, not a reason to weaken validation.
+then `make test-patch-images`, which executes the production API bootstrap as
+`sitecustomize` and the production background bootstrap inside the pinned Onyx
+backend image. The API contract validates the final composed callables plus
+configured-inference, MCP, Playwright, restricted-executor descriptions,
+incognito gateway fallback, local-embedding caller behavior, and the selected
+direct-Obscura crawler in composition with every `open_url` wrapper. A separate
+pinned-image contract retains stock-crawler coverage. The target also installs
+the executor patch inside the pinned code-interpreter image, checks SymPy inside
+the derived Python executor, and runs the SearXNG runtime/parser checks inside
+the derived image. Any source, signature, model, prompt, or command shape
+mismatch is an upgrade blocker, not a reason to weaken validation.
 
 The executor image contract is Docker-only because the socket-dependent code
 interpreter is not supported or stored under Podman. With

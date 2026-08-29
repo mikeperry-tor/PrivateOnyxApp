@@ -71,7 +71,7 @@ echo "Validating API patch contracts in $onyx_backend_image"
 "$container_bin" run --rm \
     --network none \
     --entrypoint python \
-    -e PYTHONPATH=/app:/wrapper \
+    -e PYTHONPATH=/api-patches:/wrapper:/obscura-client:/app \
     -e WRAPPER_PATCH_STRICT=true \
     -e LITELLM_LOCAL_MODEL_COST_MAP=true \
     -e LLM_FIRST_CHUNK_MAX_RETRIES=1 \
@@ -83,7 +83,19 @@ echo "Validating API patch contracts in $onyx_backend_image"
     -e ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=16000 \
     -e ONYX_OPEN_URL_MAX_CHARS_PER_URL=4000 \
     -e ONYX_OPEN_URL_MAX_TOTAL_CHARS=16000 \
+    -e ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB=7 \
+    -e ONYX_EMBEDDING_TOKENIZER_FILE=/offline-tokenizer/tokenizer.json \
+    -e ONYX_AGENT_USE_OBSCURA_BROWSER=true \
+    -e ONYX_HELPER_HTTP_PROXY_URL=http://onyx-public-egress-bridge:3128 \
+    -e ONYX_MCP_PUBLIC_HTTP_PROXY_URL=http://onyx-public-egress-bridge:3128 \
+    -e ONYX_MCP_HOST_HTTP_PROXY_URL=http://onyx-host-egress-bridge:3128 \
+    -e ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL=http://onyx-host-egress-bridge:3128 \
+    -e ONYX_CONFIGURED_INFERENCE_INTERNAL_BASE_URL=http://teep:8337/v1 \
+    -e ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true \
+    -v "$repo_root/onyx/patches/sitecustomize_api_server:/api-patches:ro" \
     -v "$repo_root/onyx/patches/shared:/wrapper:ro" \
+    -v "$repo_root/browser/obscura_client:/obscura-client:ro" \
+    -v "$tokenizer_tmp/tokenizer.json:/offline-tokenizer/tokenizer.json:ro" \
     -v "$repo_root/tests/validate_pinned_api.py:/validation/validate_pinned_api.py:ro" \
     "$onyx_backend_image" \
     /validation/validate_pinned_api.py
