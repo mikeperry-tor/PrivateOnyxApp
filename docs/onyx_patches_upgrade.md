@@ -68,12 +68,17 @@ contains read-only audit checkouts when present.
 5. Inspect effective Compose models and complete every practical live-matrix
    row available in the environment. Record rows blocked by credentials,
    funding, provider stability, private documents, or long runtimes.
-6. Complete the documentation applicability gate below for every component,
+6. For every Onyx upgrade, complete all four mandatory release-wide audits
+   below even when the candidate source still imports every patched symbol and
+   the deterministic suite passes. New upstream code can add an unpatched
+   route, indexing path, periodic owner, or browser behavior without causing
+   patch installation to drift.
+7. Complete the documentation applicability gate below for every component,
    dependency, image, runtime, or Compose layer changed by the upgrade. Update
    the living documents and their tests in the same change; do not add a
    version history or preserve descriptions of removed behavior. README changes
    must remain user-facing.
-7. Remove a wrapper patch only when the pinned upstream behavior provides the
+8. Remove a wrapper patch only when the pinned upstream behavior provides the
    same strict, fail-closed semantics and tests prove it.
 
 Keep API and background bootstrap diagnostics on stderr. Onyx isolated child
@@ -156,6 +161,87 @@ narrowest row. This includes runtime and base images such as Python, Alpine,
 nginx, and fixed proxy/bridge images. Update `AGENTS.md` if contributor
 instructions or validation commands change. Do not use implemented plans or
 reference checkouts as current behavior documentation.
+
+### Mandatory Onyx release-wide audits
+
+Complete every audit in this section for every Onyx release upgrade. These are
+release applicability gates, not checks triggered only by a changed import,
+failed runtime patch, modified Compose file, or upstream release-note claim.
+Use the owning documents as the acceptance criteria and the detailed sections
+later in this checklist as the implementation-oriented prompts. Do not copy
+their complete contracts into an upgrade report or this checklist.
+
+#### Network, API, SSRF, and leak-surface audit
+
+Audit the complete candidate Onyx source and effective runtime topology against
+[Internal network security](internal_network_security.md), then run its
+[verification checklist](internal_network_security.md#verification-checklist).
+Use the [Onyx API patch audit](#onyx-api-patch-audit) and
+[routing and Compose audit](#routing-and-compose-audit) below for the recurring
+source and topology questions. This audit must discover new network clients,
+APIs, callbacks, background producers, browser fetches, internal authorities,
+and database-configurable egress, then re-derive SSRF-level consumers, DNS and
+redirect enforcement, proxy inheritance, and effective compromise reachability.
+Either prove each surface fits the owning document or change/disable it and
+update its tests and current security documentation.
+
+#### RAG, parsing, indexing, and embedding audit
+
+Audit the candidate against [Local document RAG search](local_docs_rag_search.md)
+and complete its
+[major-upgrade checklist](local_docs_rag_search.md#major-upgrade-checklist).
+Use the relevant parts of the [Onyx API patch audit](#onyx-api-patch-audit),
+[OpenSearch single-node policy audit](#opensearch-single-node-policy-audit),
+and [runtime patch contract audit](#runtime-patch-contract-audit) below rather
+than creating a parallel specification here.
+
+Establish the applicability, necessity, and obsolescence of every wrapper RAG
+patch and shim, including re-download/re-parse/re-index avoidance, content-hash
+and secondary-index paths, parser/Pydantic shapes, nomic spoofing, embedding
+prefix/request/retry/normalization contracts, and OpenSearch query/index
+compatibility. Audit new ingestion and query paths as well as wrapped symbols,
+and run the owning document's full validation matrix. Prefer equivalent native
+Onyx behavior and remove superseded shims without a compatibility path.
+
+#### Resource ownership and minimization audit
+
+Audit the candidate against
+[Resource minimization](resource_minimization.md) and run its
+[regression-protection checks](resource_minimization.md#regression-protection),
+using the [resource minimization audit](#resource-minimization-audit) below as
+the recurring upgrade prompt.
+
+Inventory new or changed processes, threads, workers, schedules, health and
+telemetry callbacks, monitors, caches, model loads, pools, storage/indexing
+work, logging, retries, and default-enabled services in source and effective
+lite/full Docker and Podman models. Look for regressions and for new upstream
+settings or ownership that make wrapper work obsolete. Run the documented idle
+and representative-load measurements; functional success alone is insufficient.
+
+#### WebUI, streaming, and CSP audit
+
+Audit both the candidate WebUI source and the exact built image against the
+[privacy and WebUI CSP audit](#privacy-and-webui-csp-audit),
+[Internal network security](internal_network_security.md), and the WebUI/CSP
+contract in
+[Wrapper patch information](onyx_patch_info.md#telemetry-automatic-fetches-and-webui-egress).
+Build-time `NEXT_PUBLIC_*` values, compiled chunks, and runtime environment must
+all be inspected; source defaults alone are insufficient evidence.
+
+Recheck browser API and resource destinations, authentication/origin behavior,
+chat send/resume/error/persistence paths, single- and multi-model streaming,
+incognito, generated files, previews, and every CSP resource class. Prove the
+stock UI still continues and reloads wrapper-recovered inference instead of
+halting or clearing it. Test both upstream and tracked nginx CSP policies with
+real login, hydration, streaming, lazy chunks, recovery, local/blob/data
+resources, blocked remote resources, and every enabled ingress; headers or HTML
+text alone do not prove WebUI compatibility.
+
+For all four audits, record exactly which deterministic, image, live-stack, or
+external-provider rows could not be executed and why. A blocked practical row
+does not waive source, effective-Compose, and deterministic evidence. Resolve
+every newly discovered surface by updating or removing implementation, tests,
+and its owning documentation in the same upgrade.
 
 ## Direct Obscura audit
 
