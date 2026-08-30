@@ -73,6 +73,10 @@ echo "Validating API patch contracts in $onyx_backend_image"
     --entrypoint python \
     -e PYTHONPATH=/api-patches:/wrapper:/obscura-client:/app \
     -e WRAPPER_PATCH_STRICT=true \
+    -e ENABLE_CRAFT=false \
+    -e IDP_PROFILE_ENRICHMENT_ENABLED=false \
+    -e LICENSE_ENFORCEMENT_ENABLED=false \
+    -e ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=false \
     -e LITELLM_LOCAL_MODEL_COST_MAP=true \
     -e LLM_FIRST_CHUNK_MAX_RETRIES=1 \
     -e ONYX_LLM_NATIVE_TOOL_CALLS_ONLY=true \
@@ -149,6 +153,7 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     -e WRAPPER_PATCH_STRICT=true \
     -e ENABLE_CRAFT=false \
     -e DISABLE_TELEMETRY=true \
+    -e LITELLM_LOCAL_MODEL_COST_MAP=true \
     -e ONYX_DISABLE_VESPA=true \
     -e AUTO_LLM_CONFIG_URL= \
     -e LICENSE_ENFORCEMENT_ENABLED=false \

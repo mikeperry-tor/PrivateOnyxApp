@@ -359,7 +359,11 @@ Re-derive the pinned Onyx SSRF levels and every consumer rather than assuming
 one global policy covers Web Connectors, `open_url`, MCP, OAuth, integrations,
 callbacks, and redirects. Inspect validation-time DNS, connection-time DNS,
 redirect handling, proxy environment use, and final-hop destination pinning,
-including DNS-rebinding/TOCTOU cases. Verify canonical CORS is not widened.
+including DNS-rebinding/TOCTOU cases. For MCP, validate both the ordinary HTTP
+factory and the synthetic OAuth-challenge factory used for discovery,
+registration, and token exchange; exercise their public/private saved-level
+route selection and fail startup if either contract drifts. Verify canonical
+CORS is not widened.
 Inventory new authenticated and unauthenticated APIs, provider exports,
 tracing, voice, Craft, mobile/SSO, and OpenAPI surfaces and their feature/auth
 gates. Keep `DOCUMENT_PUSH_ENDPOINT_URL` and `DOCUMENT_PUSH_API_KEY` blank in
@@ -368,6 +372,16 @@ Onyx pin, re-audit stock activation and the exact text, metadata, identifiers,
 and credentials it transmits. Treat database-configurable tracing and provider
 exports as network egress even when no Compose environment variable enables
 them.
+
+Specifically re-audit incognito provider-retention and tracing behavior without
+treating it as a separate network boundary; GitHub skill preview/import hosts,
+redirects, credentials, archive limits, and executor consequences; public MCP
+OAuth client metadata; local usage/cost APIs; login-time IdP profile enrichment;
+paid-EE query/ingestion/document hooks; and the full-admin LLM custom-config
+environment-injection setting. Keep IdP enrichment and paid-EE disabled unless
+their data retention and outbound transports are deliberately supported. An
+enterprise hook delivery client without connection-time DNS pinning requires a
+new adapter before it may be enabled.
 
 The stock crawler is the current reliability-oriented default. Every Obscura
 pin upgrade must repeat comparable parallel URL batches, recording blocked,

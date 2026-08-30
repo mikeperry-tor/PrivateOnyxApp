@@ -85,6 +85,13 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertNotRegex(IMAGE_SCRIPT, r'(?m)^.*"\$container_bin" (pull|build)\b')
         self.assertEqual(IMAGE_SCRIPT.count("--network none"), 12)
         self.assertIn("WRAPPER_PATCH_STRICT=true", IMAGE_SCRIPT)
+        for setting in (
+            "ENABLE_CRAFT=false",
+            "IDP_PROFILE_ENRICHMENT_ENABLED=false",
+            "LICENSE_ENFORCEMENT_ENABLED=false",
+            "ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=false",
+        ):
+            self.assertIn(setting, IMAGE_SCRIPT)
         self.assertIn(
             "PYTHONPATH=/api-patches:/wrapper:/obscura-client:/app",
             IMAGE_SCRIPT,

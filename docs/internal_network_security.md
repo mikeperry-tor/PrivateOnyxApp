@@ -127,10 +127,12 @@ final-hop policy.
 For HTTPS, upstream Onyx validates one DNS answer and then lets the HTTP client
 resolve the hostname again, leaving a DNS time-of-check/time-of-use window.
 The wrapper's direct-DNS final hops close that window by resolving, validating,
-and pinning the address used for the connection. Its MCP transport deliberately
-delegates redirect, OAuth-discovery, registration, token, and request
-destination authority to that same final hop rather than relying on the
-upstream transport's earlier DNS result.
+and pinning the address used for the connection. Both MCP HTTP factories,
+including the synthetic OAuth-challenge transport used by automatic discovery,
+delegate redirect, discovery, registration, token, and request destination
+authority to that same selected final hop rather than relying on an upstream
+transport's earlier DNS result. Startup validation fails if either pinned
+factory or the challenge state machine drifts.
 
 `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` adds validated RFC1918 LAN
 destinations only to the host-capable route used by configured MCP/Web
@@ -211,6 +213,18 @@ background services. This prevents the optional all-editions feature from
 copying the complete text and metadata of each newly indexed public document
 to an external endpoint.
 
+IdP profile enrichment is explicitly disabled in both Onyx processes. Enabling
+it would add login-time bearer-authenticated requests to an OIDC userinfo URL
+or Microsoft Graph and retain the returned claims snapshot in Redis. This
+wrapper does not expose that feature as an operator option.
+
+Paid enterprise hooks are inactive because paid-EE and license enforcement are
+explicitly disabled. Their delivery path is not a supported route: it validates
+an HTTPS endpoint when the hook is configured, then uses a direct HTTP client
+without connection-time DNS pinning. Enabling paid-EE therefore requires a new
+network adapter and SSRF/DNS-rebinding audit before query, ingestion, or
+document hooks can be supported.
+
 Environment-configured Braintrust and Langfuse tracing is also blank, but a
 full administrator can configure and enable tracing in the database. An
 enabled provider can export LLM inputs, outputs, reasoning, tool calls, and
@@ -222,6 +236,36 @@ wrapper's reviewed adapters. On an internal-only application network, clients
 without a working proxy fail closed for public Internet access, but they can
 still address reachable internal service names. Full administrators are
 therefore trusted data-export and network-configuration principals.
+
+That trust includes Onyx's single-tenant LLM custom-configuration setting.
+Unsupported provider keys may be installed temporarily as process environment
+variables around a LiteLLM call. Onyx serializes those calls and restores the
+environment afterward, but values such as provider endpoints, credentials, or
+transport settings can still influence the selected provider. Only a trusted
+full administrator may configure LLM providers; the final-hop restrictions and
+explicit configured-inference adapter remain authoritative where applicable.
+Portkey model discovery plus its OpenAI- and Anthropic-compatible inference
+modes use explicit environment-independent clients on the host-capable bridge;
+their API keys do not authorize another route.
+
+Incognito chat uses the same LLM, MCP, web-search, `open_url`, and code-tool
+network routes as ordinary chat. It suppresses supported external tracing and
+adds provider-specific no-retention controls where the provider implements
+them, while keeping live context in Redis with a one-hour sliding lifetime. It
+does not make an enabled provider or tool local, erase final-hop/provider logs,
+or add a retention guarantee for OpenAI-compatible providers that ignore those
+controls. Treat incognito as a chat-persistence policy, not as a separate
+network-isolation boundary.
+
+Authenticated skill preview/import accepts GitHub repository syntax and fetches
+only fixed `api.github.com` and `codeload.github.com` authorities through the
+public route. Redirects receive the normal SSRF-safe validation, archive
+credentials are not forwarded, and archive member/count/size bounds apply.
+Imported instructions and code subsequently inherit the existing code
+interpreter boundary; Craft remains disabled. The unauthenticated MCP OAuth
+client-metadata endpoint publishes only the canonical client identifier, name,
+and redirect URIs and contains no client secret. Usage and cost APIs remain
+authenticated local-database views and create no outbound callback.
 
 By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` means the LLM-controlled
 stock crawler does not inherit that Admin private-network allowance. Its

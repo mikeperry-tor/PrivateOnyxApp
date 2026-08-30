@@ -356,7 +356,11 @@ both `NO_PROXY` forms for trusted internal peers, including the exact
 `obscura-cdp-gateway` name. Public targets must never be added there.
 
 Saved MCP/OAuth and Web Connector choices, configured inference, and the
-embedding shim retain their public/host route-class selection. The exact
+embedding shim retain their public/host route-class selection. Both MCP client
+factories are patched: the ordinary client and the synthetic OAuth-challenge
+client used for discovery, registration, and token exchange. The challenge
+state machine is retained while every real request delegates to the selected
+fixed proxy. The exact
 internal Teep base is a startup-validated direct exception. Full-mode doc-drop
 uses its exact local gateway rather than a process-wide direct crawl.
 Configured OpenAI-compatible inference also gives the shared `/v1/models`
@@ -365,6 +369,9 @@ direct, while host and opt-in LAN endpoints use the same fixed host-capable
 bridge as completion traffic. The patch validates the pinned helper signature
 and HTTP/error-handling source shape at startup so model discovery cannot
 silently return to the public proxy or inherit a process-wide bypass.
+Portkey's OpenAI- and Anthropic-compatible modes use corresponding explicit
+clients over that bridge, and its full-admin `/v1/models` discovery route uses
+the same patched metadata helper.
 The Compose final-hop host policy separately restricts exact
 `host.docker.internal` by TCP port with operator default `none`. Full mode
 separately supplies only the exact configured embedding authority, and each
@@ -402,6 +409,8 @@ Pinned backend defaults make third-party requests independently of
   list download. Disposable-address filtering is consequently unavailable;
   ordinary authentication and the configured valid-domain controls are
   unchanged.
+- `IDP_PROFILE_ENRICHMENT_ENABLED=false` disables login-time OIDC userinfo or
+  Microsoft Graph enrichment and the associated Redis snapshot of IdP claims.
 - `LITELLM_LOCAL_MODEL_COST_MAP=true` makes LiteLLM use its packaged
   model-cost and context-window map instead of fetching the mutable map from
   GitHub during import.

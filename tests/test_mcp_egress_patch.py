@@ -46,6 +46,9 @@ class MCPProxyPatchTests(unittest.TestCase):
 
         httpx_module = ModuleType("httpx")
 
+        class AsyncBaseTransport:
+            pass
+
         class AsyncHTTPTransport:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
@@ -61,9 +64,19 @@ class MCPProxyPatchTests(unittest.TestCase):
                 self.timeout = timeout
                 self.kwargs = kwargs
 
+        class URL(str):
+            pass
+
+        class Response:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        httpx_module.AsyncBaseTransport = AsyncBaseTransport
         httpx_module.AsyncHTTPTransport = AsyncHTTPTransport
         httpx_module.AsyncClient = AsyncClient
         httpx_module.Timeout = Timeout
+        httpx_module.URL = URL
+        httpx_module.Response = Response
 
         onyx = ModuleType("onyx")
         server = ModuleType("onyx.server")
@@ -85,7 +98,42 @@ class MCPProxyPatchTests(unittest.TestCase):
             del headers, timeout, auth
             return None
 
+        class OriginalOAuthChallengeTransport:
+            def __init__(self, server_url, metadata_url):
+                self._server_url = httpx_module.URL(server_url)
+                self._metadata_url = metadata_url
+                self._challenged = False
+                self._delegate = AsyncHTTPTransport()
+
+            async def handle_async_request(self, request):
+                if request.method == "GET" and request.url == self._server_url:
+                    if not self._challenged:
+                        self._challenged = True
+                        return httpx_module.Response(
+                            status_code=401,
+                            headers={
+                                "WWW-Authenticate": (
+                                    f'Bearer resource_metadata="{self._metadata_url}"'
+                                )
+                            },
+                            request=request,
+                        )
+                    return httpx_module.Response(status_code=204, request=request)
+                return await self._delegate.handle_async_request(request)
+
+        def original_challenge_factory(server_url, metadata_url, auth, timeout):
+            return AsyncClient(
+                auth=auth,
+                follow_redirects=True,
+                timeout=timeout,
+                transport=OriginalOAuthChallengeTransport(server_url, metadata_url),
+            )
+
         mcp_ssrf.mcp_ssrf_httpx_client_factory = original_factory
+        mcp_ssrf.mcp_oauth_challenge_httpx_client_factory = (
+            original_challenge_factory
+        )
+        mcp_ssrf._OAuthChallengeTransport = OriginalOAuthChallengeTransport
         mcp_ssrf._MCP_DEFAULT_TIMEOUT = 30.0
         mcp_ssrf._MCP_DEFAULT_SSE_READ_TIMEOUT = 300.0
         mcp_ssrf.validate_mcp_outbound_url = Mock(
@@ -96,6 +144,9 @@ class MCPProxyPatchTests(unittest.TestCase):
         mcp_package.mcp_ssrf = mcp_ssrf
         mcp_client.mcp_ssrf_httpx_client_factory = original_factory
         mcp_oauth.mcp_ssrf_httpx_client_factory = original_factory
+        mcp_oauth.mcp_oauth_challenge_httpx_client_factory = (
+            original_challenge_factory
+        )
 
         modules = {
             "httpx": httpx_module,
@@ -139,23 +190,57 @@ class MCPProxyPatchTests(unittest.TestCase):
                 ].mcp_ssrf_httpx_client_factory,
                 factory,
             )
+            challenge_factory = (
+                mcp_ssrf.mcp_oauth_challenge_httpx_client_factory
+            )
+            self.assertIs(
+                modules[
+                    "onyx.server.features.mcp.oauth"
+                ].mcp_oauth_challenge_httpx_client_factory,
+                challenge_factory,
+            )
             client = factory(headers={"x-test": "1"}, auth="auth")
-        return client, state, transports, clients, levels, mcp_ssrf
+            challenge_client = challenge_factory(
+                "https://mcp.example.test",
+                "https://mcp.example.test/.well-known/oauth",
+                "oauth-auth",
+                modules["httpx"].Timeout(30),
+            )
+        return (
+            client,
+            challenge_client,
+            state,
+            transports,
+            clients,
+            levels,
+            mcp_ssrf,
+        )
 
     def test_strict_level_selects_public_proxy_without_wrapper_validation(self) -> None:
         for level in ("VALIDATE_ALL", "VALIDATE_LLM"):
             with self.subTest(level=level):
-                client, _state, transports, clients, _levels, mcp_ssrf = self._apply(
-                    level
-                )
+                (
+                    client,
+                    challenge_client,
+                    _state,
+                    transports,
+                    clients,
+                    _levels,
+                    mcp_ssrf,
+                ) = self._apply(level)
                 self.assertEqual(
-                    transports[-1].kwargs["proxy"],
+                    client.kwargs["transport"].kwargs["proxy"],
                     "http://onyx-public-egress-bridge:3128",
                 )
-                self.assertIs(client.kwargs["transport"], transports[-1])
+                self.assertEqual(
+                    challenge_client.kwargs["transport"]._delegate.kwargs["proxy"],
+                    "http://onyx-public-egress-bridge:3128",
+                )
+                self.assertIn(client.kwargs["transport"], transports)
                 self.assertFalse(client.kwargs["trust_env"])
+                self.assertFalse(challenge_client.kwargs["trust_env"])
                 self.assertTrue(client.kwargs["follow_redirects"])
-                self.assertEqual(clients[-1]["headers"], {"x-test": "1"})
+                self.assertEqual(client.kwargs["headers"], {"x-test": "1"})
                 mcp_ssrf.validate_mcp_outbound_url.assert_not_called()
 
     def test_private_level_selects_host_proxy_and_egress_remains_authoritative(
@@ -163,15 +248,25 @@ class MCPProxyPatchTests(unittest.TestCase):
     ) -> None:
         for level in ("ALLOW_PRIVATE_NETWORK", "DISABLED"):
             with self.subTest(level=level):
-                client, state, transports, _clients, levels, mcp_ssrf = self._apply(
-                    level
+                (
+                    client,
+                    challenge_client,
+                    state,
+                    transports,
+                    _clients,
+                    levels,
+                    mcp_ssrf,
+                ) = self._apply(level)
+                self.assertEqual(
+                    client.kwargs["transport"].kwargs["proxy"],
+                    "http://onyx-host-egress-bridge:3128",
                 )
                 self.assertEqual(
-                    transports[-1].kwargs["proxy"],
+                    challenge_client.kwargs["transport"]._delegate.kwargs["proxy"],
                     "http://onyx-host-egress-bridge:3128",
                 )
                 state.level = levels.DISABLED
-                self.assertIs(client.kwargs["transport"], transports[-1])
+                self.assertIn(client.kwargs["transport"], transports)
                 mcp_ssrf.validate_mcp_outbound_url.assert_not_called()
 
 

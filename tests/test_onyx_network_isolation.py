@@ -1238,6 +1238,16 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                     environment = services[service_name]["environment"]
                     self.assertEqual(environment["DOCUMENT_PUSH_ENDPOINT_URL"], "")
                     self.assertEqual(environment["DOCUMENT_PUSH_API_KEY"], "")
+                    self.assertEqual(
+                        environment["IDP_PROFILE_ENRICHMENT_ENABLED"], "false"
+                    )
+                    self.assertEqual(
+                        environment["ENABLE_PAID_ENTERPRISE_EDITION_FEATURES"],
+                        "false",
+                    )
+                    self.assertEqual(
+                        environment["LICENSE_ENFORCEMENT_ENABLED"], "false"
+                    )
 
     def test_bot_options_are_full_mode_only(self) -> None:
         lite = _compose_model("lite")

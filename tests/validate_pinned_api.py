@@ -31,6 +31,9 @@ def _validate_production_bootstrap() -> None:
     assert mcp_ssrf.mcp_ssrf_httpx_client_factory.__module__ == (
         "wrapper_env_patches"
     )
+    assert mcp_ssrf.mcp_oauth_challenge_httpx_client_factory.__module__ == (
+        "wrapper_env_patches"
+    )
     assert onyx_web_crawler.OnyxWebCrawler.contents.__module__ == (
         "obscura_crawler_patch"
     )
@@ -59,6 +62,162 @@ def _validate_production_bootstrap() -> None:
     assert configured._wrapper_configured_inference_client is not None
     assert configured._wrapper_configured_inference_http_client is not None
     configured._wrapper_configured_inference_http_client.close()
+
+    for custom_config, expected_client_module in (
+        (None, "openai"),
+        ({"portkey_api_mode": "messages"}, "litellm"),
+    ):
+        portkey = LitellmLLM(
+            api_key="contract-key",
+            model_provider="portkey",
+            model_name="wrapper-portkey-contract",
+            max_input_tokens=4096,
+            api_base="https://api.portkey.ai/v1",
+            custom_config=custom_config,
+            timeout=1,
+        )
+        assert portkey._wrapper_configured_inference_client.__module__.startswith(
+            expected_client_module
+        )
+        assert portkey._wrapper_configured_inference_http_client is not None
+        portkey._wrapper_configured_inference_http_client.close()
+
+
+def _validate_native_ssrf_contract() -> None:
+    from onyx.server.security.models import (
+        SSRFProtectionLevel,
+        outbound_ssrf_params,
+        web_connector_ssrf_enforced,
+    )
+    from onyx.utils.url import SSRFException, validate_outbound_http_url
+
+    strict = outbound_ssrf_params(SSRFProtectionLevel.VALIDATE_ALL)
+    assert strict.allow_private_network is False
+    assert strict.block_loopback_and_link_local is True
+    assert strict.block_link_local_only is False
+
+    private = outbound_ssrf_params(SSRFProtectionLevel.ALLOW_PRIVATE_NETWORK)
+    assert private.allow_private_network is True
+    assert private.block_loopback_and_link_local is True
+    assert private.block_link_local_only is False
+
+    disabled = outbound_ssrf_params(SSRFProtectionLevel.DISABLED)
+    assert disabled.allow_private_network is True
+    assert disabled.block_loopback_and_link_local is False
+    assert disabled.block_link_local_only is True
+
+    assert web_connector_ssrf_enforced(SSRFProtectionLevel.VALIDATE_ALL)
+    for level in (
+        SSRFProtectionLevel.VALIDATE_LLM,
+        SSRFProtectionLevel.ALLOW_PRIVATE_NETWORK,
+        SSRFProtectionLevel.DISABLED,
+    ):
+        assert not web_connector_ssrf_enforced(level)
+
+    assert (
+        validate_outbound_http_url(
+            "https://10.23.45.67/service",
+            allow_private_network=True,
+            block_loopback_and_link_local=True,
+        )
+        == "https://10.23.45.67/service"
+    )
+    for blocked_url in (
+        "http://127.0.0.1/service",
+        "http://169.254.169.254/latest/meta-data",
+        "http://0.0.0.0/service",
+    ):
+        try:
+            validate_outbound_http_url(
+                blocked_url,
+                allow_private_network=True,
+                block_loopback_and_link_local=True,
+            )
+        except SSRFException:
+            pass
+        else:
+            raise AssertionError(f"private-network floor accepted {blocked_url}")
+
+    assert (
+        validate_outbound_http_url(
+            "http://127.0.0.1/service",
+            allow_private_network=True,
+            block_link_local_only=True,
+        )
+        == "http://127.0.0.1/service"
+    )
+    try:
+        validate_outbound_http_url(
+            "http://169.254.169.254/latest/meta-data",
+            allow_private_network=True,
+            block_link_local_only=True,
+        )
+    except SSRFException:
+        pass
+    else:
+        raise AssertionError("disabled SSRF level accepted link-local metadata")
+
+
+def _validate_new_network_surface_contract() -> None:
+    from onyx.configs.app_configs import ENTERPRISE_EDITION_ENABLED
+    from onyx.configs.app_configs import IDP_PROFILE_ENRICHMENT_ENABLED
+    from onyx.error_handling.exceptions import OnyxError
+    from onyx.server.features.mcp.client_metadata import (
+        build_mcp_oauth_client_metadata,
+    )
+    from onyx.server.features.skill import api as skill_api
+    from onyx.skills import ingest_from_github
+    from onyx.utils import github
+    from onyx.utils.variable_functionality import _LICENSE_ENFORCEMENT_ENABLED
+
+    assert IDP_PROFILE_ENRICHMENT_ENABLED is False
+    assert ENTERPRISE_EDITION_ENABLED is False
+    assert _LICENSE_ENFORCEMENT_ENABLED is False
+
+    metadata = build_mcp_oauth_client_metadata().model_dump(mode="json")
+    assert set(metadata) == {
+        "client_id",
+        "client_name",
+        "redirect_uris",
+        "grant_types",
+        "response_types",
+        "token_endpoint_auth_method",
+    }
+    assert metadata["token_endpoint_auth_method"] == "none"
+
+    assert github._GITHUB_CODELOAD_ARCHIVE_URL_TEMPLATE.startswith(
+        "https://codeload.github.com/"
+    )
+    for source in (
+        "https://example.com/owner/repository",
+        "http://github.com/owner/repository",
+        "https://github.com.evil.example/owner/repository",
+    ):
+        try:
+            github.parse_github_source(source, allow_tree_path=True)
+        except OnyxError:
+            pass
+        else:
+            raise AssertionError(f"GitHub source parser accepted {source}")
+
+    github_get_source = inspect.getsource(github._github_get)
+    assert "ssrf_safe_get(" in github_get_source
+    archive_source = inspect.getsource(github.download_github_archive)
+    assert "follow_redirects=False" in archive_source
+    assert archive_source.count(
+        "_github_get(archive_url, stream=True, timeout=timeout)"
+    ) == 2
+    assert ingest_from_github._ARCHIVE_MAX_BYTES == 25 * 1024 * 1024
+    assert ingest_from_github._ARCHIVE_MAX_MEMBERS == 10_000
+
+    skill_api_source = inspect.getsource(skill_api)
+    for route in (
+        '@user_router.post("/github/preview")',
+        '@user_router.post("/github/import")',
+    ):
+        route_offset = skill_api_source.index(route)
+        route_source = skill_api_source[route_offset : route_offset + 500]
+        assert "require_permission(Permission.BASIC_ACCESS)" in route_source
 
 
 def _validate_python_tool_identity() -> None:
@@ -979,6 +1138,8 @@ def _validate_midstream_continuation_state_persistence() -> None:
 
 if __name__ == "__main__":
     _validate_production_bootstrap()
+    _validate_native_ssrf_contract()
+    _validate_new_network_surface_contract()
     _validate_python_tool_identity()
     _validate_python_tool_generated_id_identity()
     _validate_python_file_link_enforcement()

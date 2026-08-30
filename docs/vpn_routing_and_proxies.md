@@ -65,7 +65,7 @@ with `MYST_VPN_ENABLED=true`; an upstream proxy can be used in either mode.
 
 | Class | Callers | Fixed bridge | Policy |
 | --- | --- | --- | --- |
-| Public Onyx | generic helpers, saved public MCP/Web Connector traffic, optional stock `open_url` requests/local Chromium | `onyx-public-egress-bridge` | public destinations only |
+| Public Onyx | generic helpers, saved public MCP/Web Connector traffic (including MCP OAuth discovery/token exchange), optional stock `open_url` requests/local Chromium | `onyx-public-egress-bridge` | public destinations only |
 | Browser | Obscura | `obscura-egress-bridge` | same public listener and destination policy |
 | Executor | enabled code-interpreter pods | `executor-egress-bridge` | same public listener and destination policy |
 | Host-capable Onyx | explicitly selected saved-level host routes, configured inference, embedding shim | `onyx-host-egress-bridge` | public plus exact documented host/RFC1918 exceptions |

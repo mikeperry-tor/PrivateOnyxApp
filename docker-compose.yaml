@@ -388,6 +388,9 @@ services:
       LANGFUSE_SECRET_KEY: ""
       LANGFUSE_PUBLIC_KEY: ""
       LANGFUSE_HOST: ""
+      # Prevent the optional login-time userinfo/Graph fetch and full IdP-claim
+      # snapshot. This wrapper does not expose profile enrichment.
+      IDP_PROFILE_ENRICHMENT_ENABLED: "false"
       # Onyx can otherwise push the complete text of every newly indexed public
       # document to an operator-configured endpoint. This wrapper does not
       # expose that data-export feature.

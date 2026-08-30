@@ -245,7 +245,9 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
         onyx_module = ModuleType("onyx")
         llm_package = ModuleType("onyx.llm")
         multi_llm_module = ModuleType("onyx.llm.multi_llm")
+        api_surfaces_module = ModuleType("onyx.llm.api_surfaces")
         constants_module = ModuleType("onyx.llm.constants")
+        litellm_module = ModuleType("litellm")
         server_package = ModuleType("onyx.server")
         manage_package = ModuleType("onyx.server.manage")
         manage_llm_package = ModuleType("onyx.server.manage.llm")
@@ -290,6 +292,15 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
                 self.base_url = kwargs["base_url"]
                 self.http_client = kwargs["http_client"]
 
+        class HTTPHandler:
+            def __init__(self, **kwargs):
+                self.timeout = kwargs["timeout"]
+                self.client = kwargs["client"]
+
+        class LlmApiSurface:
+            OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
+            ANTHROPIC_MESSAGES = "anthropic_messages"
+
         class LlmProviderNames:
             OPENAI = "openai"
             OPENAI_COMPATIBLE = "openai_compatible"
@@ -297,6 +308,7 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
             LITELLM_PROXY = "litellm_proxy"
             LM_STUDIO = "lm_studio"
             OLLAMA_CHAT = "ollama_chat"
+            PORTKEY = "portkey"
 
         class LitellmLLM:
             def __init__(
@@ -307,12 +319,18 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
                 max_input_tokens,
                 timeout=30,
                 api_base=None,
+                custom_config=None,
             ):
                 del model_name, max_input_tokens
                 self._api_key = api_key
                 self._model_provider = model_provider
                 self._timeout = timeout
                 self._api_base = api_base
+                self._api_surface = (
+                    LlmApiSurface.ANTHROPIC_MESSAGES
+                    if (custom_config or {}).get("portkey_api_mode") == "messages"
+                    else LlmApiSurface.OPENAI_CHAT_COMPLETIONS
+                )
 
             def _completion(self, prompt, client=None):
                 return prompt, client
@@ -339,7 +357,9 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
         httpx_module.Client = Client
         httpx_module.HTTPStatusError = HTTPStatusError
         httpx_module.RequestError = RequestError
+        litellm_module.HTTPHandler = HTTPHandler
         openai_module.OpenAI = OpenAI
+        api_surfaces_module.LlmApiSurface = LlmApiSurface
         constants_module.LlmProviderNames = LlmProviderNames
         multi_llm_module.LitellmLLM = LitellmLLM
         llm_package.multi_llm = multi_llm_module
@@ -357,9 +377,11 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
         return (
             {
                 "httpx": httpx_module,
+                "litellm": litellm_module,
                 "openai": openai_module,
                 "onyx": onyx_module,
                 "onyx.llm": llm_package,
+                "onyx.llm.api_surfaces": api_surfaces_module,
                 "onyx.llm.multi_llm": multi_llm_module,
                 "onyx.llm.constants": constants_module,
                 "onyx.server": server_package,
@@ -505,6 +527,46 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
                             "timeout": 10.0,
                         }
                     ],
+                )
+
+    def test_portkey_modes_use_fixed_host_proxy_clients(self) -> None:
+        for custom_config in (None, {"portkey_api_mode": "messages"}):
+            with self.subTest(custom_config=custom_config):
+                (
+                    wrapper,
+                    fake_modules,
+                    multi_llm_module,
+                    _manage_llm_api_module,
+                    clients,
+                    _model_requests,
+                    env,
+                ) = self._apply_patch()
+                with patch.dict(os.environ, env, clear=True), patch.dict(
+                    sys.modules, fake_modules
+                ):
+                    wrapper.apply_configured_inference_proxy_patch()
+                    llm = multi_llm_module.LitellmLLM(
+                        api_key="test",
+                        model_provider="portkey",
+                        model_name="model",
+                        max_input_tokens=1000,
+                        api_base="https://api.portkey.ai/v1",
+                        custom_config=custom_config,
+                    )
+
+                self.assertEqual(
+                    clients,
+                    [
+                        {
+                            "trust_env": False,
+                            "timeout": 30,
+                            "proxy": "http://onyx-host-egress-bridge:3128",
+                        }
+                    ],
+                )
+                self.assertEqual(
+                    llm._wrapper_configured_inference_client.__class__.__name__,
+                    "HTTPHandler" if custom_config else "OpenAI",
                 )
 
     def test_exact_internal_teep_model_discovery_is_direct(self) -> None:

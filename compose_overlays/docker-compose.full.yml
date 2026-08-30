@@ -28,6 +28,7 @@ services:
       LANGFUSE_SECRET_KEY: ""
       LANGFUSE_PUBLIC_KEY: ""
       LANGFUSE_HOST: ""
+      IDP_PROFILE_ENRICHMENT_ENABLED: "false"
       # Celery work has no request user identity, so Onyx's per-user usage
       # recorder cannot produce attributable records here. Avoid one idle
       # recorder thread and its bounded queue in every background worker.

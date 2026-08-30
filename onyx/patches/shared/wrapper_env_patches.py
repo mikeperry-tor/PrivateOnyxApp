@@ -3637,21 +3637,68 @@ def apply_mcp_egress_proxy_patch() -> None:
         _warn_or_raise(f"MCP HTTP client factory signature changed: {signature}")
         return
 
-    def _patched_factory(headers=None, timeout=None, auth=None):  # noqa: ANN001
+    original_challenge_factory = mcp_ssrf.mcp_oauth_challenge_httpx_client_factory
+    challenge_signature = inspect.signature(original_challenge_factory)
+    if tuple(challenge_signature.parameters) != (
+        "server_url",
+        "metadata_url",
+        "auth",
+        "timeout",
+    ):
+        _warn_or_raise(
+            "MCP OAuth challenge HTTP client factory signature changed: "
+            f"{challenge_signature}"
+        )
+        return
+    challenge_transport = mcp_ssrf._OAuthChallengeTransport
+    if tuple(inspect.signature(challenge_transport.__init__).parameters) != (
+        "self",
+        "server_url",
+        "metadata_url",
+    ) or tuple(inspect.signature(challenge_transport.handle_async_request).parameters) != (
+        "self",
+        "request",
+    ):
+        _warn_or_raise("MCP OAuth challenge transport signature changed")
+        return
+    try:
+        challenge_source = inspect.getsource(
+            challenge_transport.handle_async_request
+        )
+    except (OSError, TypeError) as e:
+        _warn_or_raise(f"could not inspect MCP OAuth challenge transport: {e}")
+        return
+    for marker in (
+        'request.method == "GET"',
+        "request.url == self._server_url",
+        "status_code=401",
+        '"WWW-Authenticate"',
+        "status_code=204",
+        "self._delegate.handle_async_request(request)",
+    ):
+        if marker not in challenge_source:
+            _warn_or_raise(
+                "MCP OAuth challenge transport source contract changed; "
+                f"missing {marker!r}"
+            )
+            return
+
+    def _selected_transport():
         level = get_security_settings().ssrf_protection_level
         use_host = level in {
             SSRFProtectionLevel.ALLOW_PRIVATE_NETWORK,
             SSRFProtectionLevel.DISABLED,
         }
+        return httpx.AsyncHTTPTransport(proxy=host_proxy if use_host else public_proxy)
+
+    def _patched_factory(headers=None, timeout=None, auth=None):  # noqa: ANN001
         kwargs: dict[str, Any] = {
             "follow_redirects": True,
             # The selected policy and route broker validate every initial and
             # SDK-derived destination. Keep the Onyx transport deliberately
             # limited to explicit route selection so destination policy is not
             # duplicated here with subtly different hostname/DNS semantics.
-            "transport": httpx.AsyncHTTPTransport(
-                proxy=host_proxy if use_host else public_proxy
-            ),
+            "transport": _selected_transport(),
             "trust_env": False,
             "timeout": timeout
             or httpx.Timeout(
@@ -3665,7 +3712,47 @@ def apply_mcp_egress_proxy_patch() -> None:
             kwargs["auth"] = auth
         return httpx.AsyncClient(**kwargs)
 
+    class _PatchedOAuthChallengeTransport(httpx.AsyncBaseTransport):
+        """Preserve Onyx's synthetic OAuth challenge over the selected route."""
+
+        def __init__(self, server_url, metadata_url):  # noqa: ANN001
+            self._server_url = httpx.URL(server_url)
+            self._metadata_url = metadata_url
+            self._challenged = False
+            self._delegate = _selected_transport()
+
+        async def handle_async_request(self, request):  # noqa: ANN001
+            if request.method == "GET" and request.url == self._server_url:
+                if not self._challenged:
+                    self._challenged = True
+                    return httpx.Response(
+                        status_code=401,
+                        headers={
+                            "WWW-Authenticate": (
+                                f'Bearer resource_metadata="{self._metadata_url}"'
+                            )
+                        },
+                        request=request,
+                    )
+                return httpx.Response(status_code=204, request=request)
+            return await self._delegate.handle_async_request(request)
+
+        async def aclose(self) -> None:
+            await self._delegate.aclose()
+
+    def _patched_challenge_factory(
+        server_url, metadata_url, auth, timeout  # noqa: ANN001
+    ):
+        return httpx.AsyncClient(
+            auth=auth,
+            follow_redirects=True,
+            timeout=timeout,
+            transport=_PatchedOAuthChallengeTransport(server_url, metadata_url),
+            trust_env=False,
+        )
+
     mcp_ssrf.mcp_ssrf_httpx_client_factory = _patched_factory
+    mcp_ssrf.mcp_oauth_challenge_httpx_client_factory = _patched_challenge_factory
     # The client module imports the factory by name; update it if source import
     # order caused it to be cached while applying this startup patch.
     for module_name in (
@@ -3679,6 +3766,12 @@ def apply_mcp_egress_proxy_patch() -> None:
                 "mcp_ssrf_httpx_client_factory",
                 _patched_factory,
             )
+            if module_name == "onyx.server.features.mcp.oauth":
+                setattr(
+                    cached_module,
+                    "mcp_oauth_challenge_httpx_client_factory",
+                    _patched_challenge_factory,
+                )
     print(
         "sitecustomize: routed MCP/OAuth HTTP through saved-level-selected fixed egress",
         flush=True,
@@ -3716,8 +3809,10 @@ def apply_configured_inference_proxy_patch() -> None:
     try:
         import httpx
         import openai
+        from litellm import HTTPHandler
 
         from onyx.llm import multi_llm
+        from onyx.llm.api_surfaces import LlmApiSurface
         from onyx.llm.constants import LlmProviderNames
         from onyx.server.manage.llm import api as llm_api
         from onyx.utils.url import validate_outbound_http_url
@@ -3777,6 +3872,7 @@ def apply_configured_inference_proxy_patch() -> None:
         str(LlmProviderNames.LITELLM_PROXY),
         str(LlmProviderNames.LM_STUDIO),
         str(LlmProviderNames.OLLAMA_CHAT),
+        str(LlmProviderNames.PORTKEY),
     }
 
     @functools.wraps(original_init)
@@ -3816,11 +3912,22 @@ def apply_configured_inference_proxy_patch() -> None:
         if not is_internal_teep:
             client_kwargs["proxy"] = proxy_url
         http_client = httpx.Client(**client_kwargs)
-        inference_client = openai.OpenAI(
-            api_key=self._api_key or "not-needed",
-            base_url=self._api_base,
-            http_client=http_client,
-        )
+        if self._api_surface is LlmApiSurface.ANTHROPIC_MESSAGES:
+            if provider != str(LlmProviderNames.PORTKEY):
+                raise RuntimeError(
+                    "configured Anthropic-compatible inference is not "
+                    f"proxy-covered for provider {provider!r}"
+                )
+            inference_client = HTTPHandler(
+                timeout=self._timeout,
+                client=http_client,
+            )
+        else:
+            inference_client = openai.OpenAI(
+                api_key=self._api_key or "not-needed",
+                base_url=self._api_base,
+                http_client=http_client,
+            )
         self._wrapper_configured_inference_http_client = http_client
         self._wrapper_configured_inference_client = inference_client
 
