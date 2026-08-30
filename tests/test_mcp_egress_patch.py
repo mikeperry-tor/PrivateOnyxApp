@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
 import sys
@@ -52,7 +53,16 @@ class MCPProxyPatchTests(unittest.TestCase):
         class AsyncHTTPTransport:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
+                self.requests = []
+                self.closed = False
                 transports.append(self)
+
+            async def handle_async_request(self, request):
+                self.requests.append(request)
+                return SimpleNamespace(delegated_request=request)
+
+            async def aclose(self):
+                self.closed = True
 
         class AsyncClient:
             def __init__(self, **kwargs):
@@ -268,6 +278,37 @@ class MCPProxyPatchTests(unittest.TestCase):
                 state.level = levels.DISABLED
                 self.assertIn(client.kwargs["transport"], transports)
                 mcp_ssrf.validate_mcp_outbound_url.assert_not_called()
+
+    def test_oauth_challenge_state_machine_delegates_and_closes_transport(self) -> None:
+        (
+            _client,
+            challenge_client,
+            _state,
+            _transports,
+            _clients,
+            _levels,
+            _mcp_ssrf,
+        ) = self._apply("VALIDATE_ALL")
+        transport = challenge_client.kwargs["transport"]
+        server_url = type(transport._server_url)("https://mcp.example.test")
+        first_request = SimpleNamespace(method="GET", url=server_url)
+        second_request = SimpleNamespace(method="GET", url=server_url)
+        delegated_request = SimpleNamespace(method="POST", url=server_url)
+
+        async def exercise():
+            first = await transport.handle_async_request(first_request)
+            second = await transport.handle_async_request(second_request)
+            delegated = await transport.handle_async_request(delegated_request)
+            await transport.aclose()
+            return first, second, delegated
+
+        first, second, delegated = asyncio.run(exercise())
+        self.assertEqual(first.kwargs["status_code"], 401)
+        self.assertIn("resource_metadata=", first.kwargs["headers"]["WWW-Authenticate"])
+        self.assertEqual(second.kwargs["status_code"], 204)
+        self.assertIs(delegated.delegated_request, delegated_request)
+        self.assertEqual(transport._delegate.requests, [delegated_request])
+        self.assertTrue(transport._delegate.closed)
 
 
 if __name__ == "__main__":
