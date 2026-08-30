@@ -1020,13 +1020,17 @@ def _validate_midstream_continuation_state_persistence() -> None:
                 llm_provider="wrapper-contract-provider",
             )
 
-    def packet(content: str, finish_reason: str | None = None) -> ModelResponseStream:
+    def packet(
+        content: str | None = None,
+        finish_reason: str | None = None,
+        reasoning: str | None = None,
+    ) -> ModelResponseStream:
         return ModelResponseStream(
             id="midstream-state-contract",
             created="now",
             choice=StreamingChoice(
                 finish_reason=finish_reason,
-                delta=Delta(content=content),
+                delta=Delta(content=content, reasoning_content=reasoning),
             ),
         )
 
@@ -1058,7 +1062,25 @@ def _validate_midstream_continuation_state_persistence() -> None:
         assert visible == state.get_answer_tokens()
         assert visible == llm_step_result.answer
         assert visible == llm_step_result.raw_answer
-        return visible, llm_step_result
+        packet_types = [emitted.obj.type for emitted in packets]
+        # These are the exact packets consumed by the stock WebUI. Recovery is
+        # one ordinary answer phase: it must not enter the fatal error branch,
+        # restart the answer, or reopen reasoning after answer rendering began.
+        assert packet_types.count("message_start") == 1
+        assert "error" not in packet_types
+        answer_start = packet_types.index("message_start")
+        assert not {
+            "reasoning_start",
+            "reasoning_delta",
+            "reasoning_done",
+        }.intersection(packet_types[answer_start + 1 :])
+        answer_placement = packets[answer_start].placement
+        assert all(
+            emitted.placement == answer_placement
+            for emitted in packets[answer_start + 1 :]
+            if emitted.obj.type == "message_delta"
+        )
+        return visible, llm_step_result, packets
 
     def make_llm() -> LitellmLLM:
         return LitellmLLM(
@@ -1087,7 +1109,7 @@ def _validate_midstream_continuation_state_persistence() -> None:
             raise ContractTimeout()
 
         llm._completion = fail_continuation
-        visible, result = drain(llm)
+        visible, result, _packets = drain(llm)
         assert completion_calls == 3
         assert "partial answer" in visible
         assert "inference stream was interrupted" in visible
@@ -1111,7 +1133,7 @@ def _validate_midstream_continuation_state_persistence() -> None:
             return progressing_stream()
 
         progressing_llm._completion = keep_progressing
-        visible, result = drain(progressing_llm)
+        visible, result, _packets = drain(progressing_llm)
         assert progressing_calls == 4
         assert visible.count("inference stream was interrupted") == 3
         assert "Recovery also failed" not in visible
@@ -1128,9 +1150,61 @@ def _validate_midstream_continuation_state_persistence() -> None:
             return finishing_stream()
 
         finalizing_llm._completion = fail_after_finish
-        visible, result = drain(finalizing_llm)
+        visible, result, _packets = drain(finalizing_llm)
         assert "complete answer" in visible
         assert "stream finalization then failed" in visible
+        assert result.finish_reason == "stop"
+
+        reasoning_llm = make_llm()
+        reasoning_calls = 0
+
+        def continue_reasoning_then_answer(**_kwargs):
+            nonlocal reasoning_calls
+            reasoning_calls += 1
+
+            def reasoning_stream():
+                if reasoning_calls == 1:
+                    yield packet(reasoning="initial reasoning")
+                    raise ContractTimeout()
+                yield packet(reasoning=" continued reasoning")
+                yield packet("final answer", "stop")
+
+            return reasoning_stream()
+
+        reasoning_llm._completion = continue_reasoning_then_answer
+        visible, result, packets = drain(reasoning_llm)
+        reasoning_types = [emitted.obj.type for emitted in packets]
+        assert reasoning_calls == 2
+        assert reasoning_types.count("reasoning_start") == 1
+        assert reasoning_types.count("reasoning_done") == 1
+        assert reasoning_types.count("message_start") == 1
+        assert "reasoning stream was interrupted" in result.reasoning
+        assert visible == "final answer"
+        assert result.finish_reason == "stop"
+
+        post_answer_reasoning_llm = make_llm()
+        post_answer_calls = 0
+
+        def suppress_post_answer_reasoning(**_kwargs):
+            nonlocal post_answer_calls
+            post_answer_calls += 1
+
+            def post_answer_stream():
+                if post_answer_calls == 1:
+                    yield packet("partial answer")
+                    raise ContractTimeout()
+                yield packet(reasoning="provider restarted reasoning")
+                yield packet(" continued", "stop")
+
+            return post_answer_stream()
+
+        post_answer_reasoning_llm._completion = suppress_post_answer_reasoning
+        visible, result, packets = drain(post_answer_reasoning_llm)
+        packet_types = [emitted.obj.type for emitted in packets]
+        assert post_answer_calls == 2
+        assert not any(kind.startswith("reasoning_") for kind in packet_types)
+        assert "partial answer" in visible
+        assert " continued" in visible
         assert result.finish_reason == "stop"
     finally:
         model_response.from_litellm_model_response_stream = original_converter

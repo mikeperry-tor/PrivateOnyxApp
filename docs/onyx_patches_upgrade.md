@@ -956,10 +956,17 @@ wrappers.
   but no native tool delta has begun. The pinned-image contract must drive
   terminal recovery and post-finish failure through the real LLM-step
   translator and `ChatStateContainer`, proving emitted, returned, and saved
-  answer identity. During live upgrade validation, confirm the stock WebUI
-  persists and reloads both visible recovery notices and malformed textual tool
-  payloads with partial output; the deterministic state-container contract does
-  not replace this browser/database integration check.
+  answer identity. It must also prove the translated recovery has exactly one
+  `message_start`, no `error` packet, no reasoning packet after answer start,
+  one reasoning start/done pair for reasoning-first recovery, and unchanged
+  placement across the answer start and deltas. Inspect the shipped WebUI
+  bundle for its message/reasoning/stop consumers, durable resume endpoint,
+  heartbeat filtering, and incognito-mode acknowledgement rather than assuming
+  the source checkout is the built artifact. During live upgrade validation,
+  confirm the stock WebUI persists and reloads both visible recovery notices
+  and malformed textual tool payloads with partial output; the deterministic
+  packet/state and built-bundle contracts do not replace this browser/database
+  integration check.
 - **Context and output limits:** re-audit both configured-token lookup source
   markers, the complete internal-search formatter signature/JSON construction,
   all three `open_url`/search positional defaults, and the repository archive

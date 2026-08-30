@@ -723,6 +723,22 @@ failures before any preservable output after upstream's one pre-chunk retry,
 structured-output streams, and incomplete tool calls retain upstream error
 handling.
 
+The WebUI boundary remains stock. The LLM-step translator turns the original,
+warning, and recovered content into exactly one `message_start` followed by
+ordinary `message_delta` packets; it emits no `error` packet and does not reopen
+reasoning after answer rendering begins. Reasoning-only recovery stays within
+one `reasoning_start`/`reasoning_done` phase before that answer. The resulting
+answer deltas retain the single answer-start placement, while Onyx may perform
+its normal turn increment between reasoning and answer; the same contract
+therefore applies to a selected model panel in multi-model chat. Incognito uses
+this packet path while the tab is open; its content-free teardown intentionally
+removes the completed replay buffer. Recorded chats retain the warning and
+recovered text in both the incremental `ChatStateContainer` and the saved
+assistant answer, so reload and durable-run replay render the same content. A
+browser-to-Onyx SSE transport failure is a separate failure domain: the
+provider continuation wrapper cannot repair that connection, and the stock
+durable-run resume path reconciles it on session reload.
+
 Like pinned stock Onyx, normal iterator exhaustion after answer text is treated
 as completion even when no terminal `finish_reason` was observed. Stock Onyx
 saves that accumulated answer without a warning or retry. Changing this requires

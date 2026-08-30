@@ -60,12 +60,12 @@ echo "Validating offline embedding tokenizer contract in $onyx_backend_image"
     "$onyx_backend_image" \
     -c "import wrapper_env_patches as p; p.apply_embedding_tokenizer_alias_patch(); from onyx.natural_language_processing.utils import HuggingFaceTokenizer; tokenizers=[HuggingFaceTokenizer(name) for name in ('nomic-ai/nomic-embed-text-v1', 'nomic-ai/nomic-embed-text-v23')]; assert all(t.encoder.encode('offline tokenizer').tokens for t in tokenizers); print('PINNED_OFFLINE_TOKENIZER_CONTRACT_OK')"
 
-echo "Validating WebUI build-time privacy controls in $onyx_web_server_image"
+echo "Validating WebUI privacy and streaming contracts in $onyx_web_server_image"
 "$container_bin" run --rm \
     --network none \
     --entrypoint node \
     "$onyx_web_server_image" \
-    -e 'for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.6.5") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK");'
+    -e 'const fs=require("fs"),path=require("path"); for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.6.5") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); const chunks=[]; const visit=(dir)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const item=path.join(dir,entry.name); if(entry.isDirectory()) visit(item); else if(item.endsWith(".js")) chunks.push(fs.readFileSync(item,"utf8"));}}; visit("/app/.next"); const bundle=chunks.join("\n"); for(const marker of ["/api/chat/send-chat-message","/resume-stream?cursor=","chat_heartbeat","message_start","message_delta","reasoning_start","reasoning_delta","reasoning_done","stop_reason","Failed to resume in-flight run","Server did not honor the incognito request","Unknown packet:"]) { if(!bundle.includes(marker)) throw new Error(`missing WebUI streaming marker: ${marker}`); } console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK"); console.log("PINNED_WEBUI_STREAMING_CONTRACT_OK");'
 
 echo "Validating API patch contracts in $onyx_backend_image"
 "$container_bin" run --rm \

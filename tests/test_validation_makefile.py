@@ -105,6 +105,18 @@ class ValidationMakefileTests(unittest.TestCase):
             PINNED_API_VALIDATOR,
         )
         self.assertNotIn("def _install_wrapper_patches", PINNED_API_VALIDATOR)
+        self.assertIn("PINNED_WEBUI_STREAMING_CONTRACT_OK", IMAGE_SCRIPT)
+        for marker in (
+            "/resume-stream?cursor=",
+            "chat_heartbeat",
+            "message_start",
+            "message_delta",
+            "reasoning_start",
+            "reasoning_done",
+            "stop_reason",
+            "Server did not honor the incognito request",
+        ):
+            self.assertIn(marker, IMAGE_SCRIPT)
         self.assertIn("PINNED_URL_IDENTITY_PRESERVATION_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_STOCK_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
