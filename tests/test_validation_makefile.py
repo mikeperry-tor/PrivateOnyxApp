@@ -83,7 +83,7 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertTrue(os.access(IMAGE_SCRIPT_PATH, os.X_OK))
         self.assertIn('image inspect "$image"', IMAGE_SCRIPT)
         self.assertNotRegex(IMAGE_SCRIPT, r'(?m)^.*"\$container_bin" (pull|build)\b')
-        self.assertEqual(IMAGE_SCRIPT.count("--network none"), 12)
+        self.assertEqual(IMAGE_SCRIPT.count("--network none"), 13)
         self.assertIn("WRAPPER_PATCH_STRICT=true", IMAGE_SCRIPT)
         for setting in (
             "ENABLE_CRAFT=false",
@@ -106,6 +106,11 @@ class ValidationMakefileTests(unittest.TestCase):
         )
         self.assertNotIn("def _install_wrapper_patches", PINNED_API_VALIDATOR)
         self.assertIn("PINNED_WEBUI_STREAMING_CONTRACT_OK", IMAGE_SCRIPT)
+        self.assertIn("PINNED_NATIVE_CODING_AGENT_REPO_LIMIT_OK", IMAGE_SCRIPT)
+        self.assertIn(
+            "CODING_AGENT_GITHUB_MAX_REPO_BYTES == 500 * 1024 * 1024",
+            IMAGE_SCRIPT,
+        )
         for marker in (
             "/resume-stream?cursor=",
             "chat_heartbeat",

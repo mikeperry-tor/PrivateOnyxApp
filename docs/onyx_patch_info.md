@@ -781,9 +781,12 @@ patch validates the complete formatter signature and result/content JSON
 construction before applying optional per-result and aggregate character caps.
 With empty or zero settings it is inert; positive settings cap only the
 model-facing serialization after retrieval and section selection. The
-`open_url`/web-search patch validates the positional defaults it changes, and
-the repository-download patch validates the downloader signature and defaults
-before aligning it with the code-interpreter upload receiver.
+`open_url`/web-search patch validates the positional defaults it changes.
+
+Coding-agent GitHub repository archives use Onyx's native 500 MiB download
+limit. The wrapper fixes the code-interpreter upload receiver at the same
+500 MiB ceiling so every archive accepted by the native downloader can be
+staged. This receiver limit also applies to ordinary code-interpreter uploads.
 
 The per-URL `open_url` character cap applies while crawler output is converted
 to an inference section. Exact-ID indexed sections bypass it. The aggregate cap

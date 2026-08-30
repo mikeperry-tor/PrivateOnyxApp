@@ -453,10 +453,6 @@ services:
       ONYX_OBSCURA_CDP_URL: "ws://obscura-cdp-gateway:9222/devtools/browser"
       OBSCURA_BROWSER_WAIT_UNTIL_WEB: "${OBSCURA_BROWSER_WAIT_UNTIL_WEB:-domcontentloaded}"
       EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
-      # One byte-oriented ceiling for coding-agent repository tarballs and the
-      # code-interpreter file API that receives them. This is intentionally
-      # separate from the post-fetch open_url character budgets above.
-      ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB: "${ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB:-1000}"
       HTTP_PROXY: "http://onyx-public-egress-bridge:3128"
       HTTPS_PROXY: "http://onyx-public-egress-bridge:3128"
       http_proxy: "http://onyx-public-egress-bridge:3128"
@@ -608,7 +604,9 @@ services:
       CPU_TIME_LIMIT_SEC: "${ONYX_CODE_INTERPRETER_CPU_TIME_LIMIT_SEC:-60}"
       MAX_OUTPUT_BYTES: "${ONYX_CODE_INTERPRETER_MAX_OUTPUT_BYTES:-20000000}"
       MAX_EXEC_TIMEOUT_MS: "${ONYX_CODE_INTERPRETER_MAX_EXEC_TIMEOUT_MS:-120000}"
-      MAX_FILE_SIZE_MB: "${ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB:-1000}"
+      # Match Onyx's native coding-agent repository download ceiling. Omitting
+      # this would restore code-interpreter's lower 100 MiB image default.
+      MAX_FILE_SIZE_MB: "500"
     depends_on: !reset {}
 
   # Teep: private verified LLM inference proxy.

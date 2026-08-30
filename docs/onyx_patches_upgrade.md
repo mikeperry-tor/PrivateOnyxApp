@@ -1056,8 +1056,9 @@ wrappers.
   integration check.
 - **Context and output limits:** re-audit both configured-token lookup source
   markers, the complete internal-search formatter signature/JSON construction,
-  all three `open_url`/search positional defaults, and the repository archive
-  downloader signature plus coding-agent call-site limit. Test invalid,
+  and all three `open_url`/search positional defaults. Confirm that the native
+  coding-agent repository archive remains bounded before upload and that the
+  fixed code-interpreter receiver ceiling remains at least as large. Test invalid,
   zero/unlimited, normal, and smaller-than-
   notice budgets; no result may exceed its per-result or aggregate cap. Keep
   the crawler-only per-URL cap distinct from the post-merge aggregate cap and

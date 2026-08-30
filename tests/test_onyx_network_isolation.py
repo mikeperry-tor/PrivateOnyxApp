@@ -1399,6 +1399,24 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         self.assertNotIn(option, services["code-interpreter"]["environment"])
 
+    def test_code_interpreter_file_limit_matches_native_repository_bound(
+        self,
+    ) -> None:
+        services = _compose_model("full")["services"]
+        self.assertEqual(
+            services["code-interpreter"]["environment"]["MAX_FILE_SIZE_MB"],
+            "500",
+        )
+        removed_preference = "ONYX_CODE_INTERPRETER_MAX_FILE_SIZE_MB"
+        self.assertNotIn(
+            removed_preference,
+            (ROOT / ".env.wrapper.example").read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(
+            removed_preference,
+            (ROOT / "docker-compose.yaml").read_text(encoding="utf-8"),
+        )
+
     def test_every_restricted_listener_has_an_explicit_route_class(self) -> None:
         model = _compose_model(
             "full", "docker-compose.code-interpreter-network.yml"

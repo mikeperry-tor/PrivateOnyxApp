@@ -17,7 +17,6 @@ def _install() -> None:
     from wrapper_env_patches import apply_code_interpreter_network_description_patches
     from wrapper_env_patches import apply_chat_file_id_validation_patch
     from wrapper_env_patches import apply_coding_agent_final_answer_fallback_patch
-    from wrapper_env_patches import apply_coding_agent_repo_download_limit_patch
     from wrapper_env_patches import apply_configured_inference_proxy_patch
     from wrapper_env_patches import apply_deep_research_chat_agent_tools_patch
     from wrapper_env_patches import apply_embedding_tokenizer_alias_patch
@@ -50,7 +49,6 @@ def _install() -> None:
     apply_embedding_tokenizer_alias_patch()
     apply_llm_max_tokens_override_patch()
     apply_open_url_char_limit_patches()
-    apply_coding_agent_repo_download_limit_patch()
     apply_configured_inference_proxy_patch()
     apply_mcp_egress_proxy_patch()
     apply_playwright_helper_proxy_patch()

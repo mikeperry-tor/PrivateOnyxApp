@@ -104,6 +104,13 @@ echo "Validating API patch contracts in $onyx_backend_image"
     "$onyx_backend_image" \
     /validation/validate_pinned_api.py
 
+echo "Validating native coding-agent repository bound in $onyx_backend_image"
+"$container_bin" run --rm \
+    --network none \
+    --entrypoint python \
+    "$onyx_backend_image" \
+    -c "import inspect; from onyx.tools.fake_tools import coding_agent; assert coding_agent.CODING_AGENT_GITHUB_MAX_REPO_BYTES == 500 * 1024 * 1024; source=inspect.getsource(coding_agent._setup_session); assert source.count('max_size_bytes=CODING_AGENT_GITHUB_MAX_REPO_BYTES,') == 1; print('PINNED_NATIVE_CODING_AGENT_REPO_LIMIT_OK')"
+
 echo "Validating complete URL identity in $onyx_backend_image"
 "$container_bin" run --rm \
     --network none \
