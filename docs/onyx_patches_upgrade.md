@@ -875,8 +875,9 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
   verify a
   non-UUID opaque chat-file ID bypasses the UUID-only `UserFile.id` lookup
   without weakening subsequent authorization or unknown-file handling;
-- uploaded/local/background images, a `blob:` image preview, and an embedded
-  `data:` DOCX image must still render;
+- uploaded/local/background images, a `blob:` image preview, a DOCX preview
+  fetched from its browser-local `blob:` URL, and an embedded `data:` DOCX image
+  must still render;
 - login, chat hydration/streaming, same-origin fetches, voice HTTP/WebSockets,
   lazy route chunks, downloads, and local/blob PDF previews must still work;
 - Stripe Elements, GTM, reCAPTCHA, external analytics/crash clients, remote

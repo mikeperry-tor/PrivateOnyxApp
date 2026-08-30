@@ -51,7 +51,7 @@ class OnyxPrivacyConfigTests(unittest.TestCase):
     def test_webui_csp_restricts_browser_egress_and_script_attributes(self) -> None:
         self.assertIn("script-src 'self' 'unsafe-inline'", self.csp)
         self.assertIn("script-src-attr 'none'", self.csp)
-        self.assertIn("connect-src 'self'", self.csp)
+        self.assertIn("connect-src 'self' blob:", self.csp)
         self.assertIn("frame-src 'self' blob:", self.csp)
         self.assertIn("img-src 'self' blob: data:", self.csp)
         self.assertNotIn("'strict-dynamic'", self.csp)

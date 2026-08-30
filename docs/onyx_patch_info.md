@@ -437,7 +437,7 @@ script-src-attr 'none';
 style-src 'self' 'unsafe-inline';
 img-src 'self' blob: data:;
 font-src 'self';
-connect-src 'self';
+connect-src 'self' blob:;
 media-src 'self' blob:;
 frame-src 'self' blob:;
 worker-src 'self' blob:;
@@ -450,9 +450,10 @@ connections, frames, media, fonts, workers, manifests, arbitrary remote
 Markdown images, and the Web-result Google favicon request before a network
 request is made. It also blocks inline event-handler attributes. Same-origin
 API calls, packaged assets, backgrounds, logos, uploaded images, and
-`/api/chat/file/{id}` remain available. `blob:` keeps local image/audio/PDF and
-worker URLs working, and `data:` is limited to images so embedded DOCX preview
-images work without permitting a general data-document source.
+`/api/chat/file/{id}` remain available. `blob:` keeps local image/audio/PDF,
+worker, and DOCX-preview fetch URLs working without permitting network egress,
+and `data:` is limited to images so embedded DOCX preview images work without
+permitting a general data-document source.
 
 The official image's dynamic Next.js HTML contains inline bootstrap and React
 stream scripts, so a static `script-src 'self'` policy breaks hydration. A
