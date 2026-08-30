@@ -178,12 +178,12 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     /validation/validate_pinned_background.py
 
 if [ "$validate_code_interpreter" = true ]; then
-    echo "Validating SymPy in $python_executor_image"
+    echo "Validating executor package functionality in $python_executor_image"
     "$container_bin" run --rm \
         --network none \
         --entrypoint python \
         "$python_executor_image" \
-        -c "import sympy; x = sympy.symbols('x'); assert sympy.__version__ == '1.14.0'; assert sympy.solve(x**2 - 4, x) == [-2, 2]; print('PINNED_EXECUTOR_SYMPY_OK')"
+        -c "from io import BytesIO; import sympy; from reportlab.graphics import renderPDF; from reportlab.pdfgen import canvas; from svglib.svglib import svg2rlg; x = sympy.symbols('x'); assert sympy.__version__ == '1.14.0'; assert sympy.solve(x**2 - 4, x) == [-2, 2]; pdf = BytesIO(); doc = canvas.Canvas(pdf); doc.drawString(10, 10, 'private-onyx'); doc.save(); assert pdf.getvalue().startswith(b'%PDF-'); drawing = svg2rlg(BytesIO(b'<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"8\"><rect width=\"12\" height=\"8\"/></svg>')); assert drawing is not None and drawing.width > 0 and drawing.height > 0; assert renderPDF.drawToString(drawing).startswith(b'%PDF-'); print('PINNED_EXECUTOR_PACKAGES_OK')"
 
     echo "Validating executor command contract in $code_interpreter_image"
     "$container_bin" run --rm \

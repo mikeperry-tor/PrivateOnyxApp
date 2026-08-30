@@ -121,7 +121,13 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertIn("PINNED_STOCK_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_OBSCURA_CRAWLER_PATCH_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("PINNED_OPEN_URL_LIMIT_CONTRACT_OK", IMAGE_SCRIPT)
-        self.assertIn("PINNED_EXECUTOR_SYMPY_OK", IMAGE_SCRIPT)
+        self.assertIn("PINNED_EXECUTOR_PACKAGES_OK", IMAGE_SCRIPT)
+        for package_probe in (
+            "import sympy",
+            "from reportlab.graphics import renderPDF",
+            "from svglib.svglib import svg2rlg",
+        ):
+            self.assertIn(package_probe, IMAGE_SCRIPT)
         self.assertIn(
             "validate_code_interpreter_executor_network.py", IMAGE_SCRIPT
         )

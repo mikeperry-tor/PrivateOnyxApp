@@ -350,7 +350,8 @@ class SharedAgentPatchContractTests(unittest.TestCase):
 
         for description in (PythonTool.DESCRIPTION, tool_prompts.PYTHON_TOOL_GUIDANCE):
             self.assertIn("Pre-installed packages include", description)
-            self.assertIn("sympy", description)
+            for package in ("sympy", "reportlab", "svglib"):
+                self.assertIn(package, description)
             self.assertIn("Pillow", description)
 
     def test_python_package_description_drift_fails_strict(self) -> None:
@@ -1033,6 +1034,10 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         )
         self.assertIn("sympy", PythonTool.DESCRIPTION)
         self.assertIn("sympy", tool_prompts.PYTHON_TOOL_GUIDANCE)
+        self.assertIn("reportlab", PythonTool.DESCRIPTION)
+        self.assertIn("reportlab", tool_prompts.PYTHON_TOOL_GUIDANCE)
+        self.assertIn("svglib", PythonTool.DESCRIPTION)
+        self.assertIn("svglib", tool_prompts.PYTHON_TOOL_GUIDANCE)
 
     def test_code_interpreter_description_drift_fails_strict(self) -> None:
         wrapper = _load_wrapper()

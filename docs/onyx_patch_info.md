@@ -799,8 +799,9 @@ format boundaries.
 Python execution uses a wrapper-derived executor image rather than the
 code-interpreter API image. Its local tag is coupled to the pinned upstream
 `python-executor-sci` release, `executor/Dockerfile`, and the generated hashed
-`executor/requirements.txt` lock. The derived image adds SymPy 1.14.0 and its
-locked `mpmath` dependency to the existing scientific environment. Docker-mode
+`executor/requirements.txt` lock. The upstream executor supplies ReportLab and
+svglib for PDF/SVG generation, and the derived image adds SymPy 1.14.0 plus its
+locked `mpmath` dependency to the scientific environment. Docker-mode
 startup builds the exact selected image before the API starts, and Compose sets
 `PYTHON_EXECUTOR_DOCKER_IMAGE` explicitly; the upstream bare reference cannot
 resolve to or pull mutable `latest` during API startup.

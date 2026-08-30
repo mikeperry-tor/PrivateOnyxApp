@@ -1086,7 +1086,8 @@ wrappers.
 - **Executor dependencies:** inspect the pinned upstream executor environment,
   regenerate the hashed wrapper lock, and confirm the derived tag changes for
   every Dockerfile or lock change. Run the selected image with networking
-  disabled; verify the exact SymPy version and a symbolic solve. Confirm the
+  disabled; verify the exact SymPy version and a symbolic solve, create a PDF
+  with ReportLab, and parse an SVG drawing with svglib. Confirm the
   unconditional Python tool description and guidance list only packages the
   executor actually contains. Confirm the LLM-facing tool name, built-in map,
   saved-row remapping, and prompt use only `run_python`, while the display name

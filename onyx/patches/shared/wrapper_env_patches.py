@@ -4714,7 +4714,7 @@ def apply_python_file_link_prompt_patches() -> None:
 _PYTHON_PACKAGE_LIST = (
     "numpy, pandas, scipy, sympy, matplotlib, seaborn, scikit-learn, "
     "scikit-image, opencv-python, xgboost, openpyxl, pdfplumber, pypdf, "
-    "python-docx, python-pptx, fpdf2, pydantic, Pillow"
+    "python-docx, python-pptx, fpdf2, reportlab, svglib, pydantic, Pillow"
 )
 
 

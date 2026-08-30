@@ -31,7 +31,7 @@ class PythonExecutorImageTests(unittest.TestCase):
 
     def test_executor_uses_hash_locked_sympy_layer(self) -> None:
         self.assertIn(
-            "ARG PYTHON_EXECUTOR_UPSTREAM_IMAGE=docker.io/onyxdotapp/python-executor-sci:0.4.4@sha256:a8a3ef036c732917143d3aea4a1a4c6ea0ce3664d5563f52d8163c16f782c947",
+            "ARG PYTHON_EXECUTOR_UPSTREAM_IMAGE=docker.io/onyxdotapp/python-executor-sci:0.4.5@sha256:9fad684ba9588ca37312a3a561da0566394d89051677294d0b262d1470797bff",
             self.dockerfile,
         )
         self.assertIn("FROM ${PYTHON_EXECUTOR_UPSTREAM_IMAGE}", self.dockerfile)
@@ -58,9 +58,10 @@ class PythonExecutorImageTests(unittest.TestCase):
         )
         self.assertIn("--build-arg PYTHON_EXECUTOR_UPSTREAM_IMAGE=", self.makefile)
 
-    def test_sympy_capability_text_is_unconditional(self) -> None:
+    def test_executor_capability_text_is_unconditional_and_current(self) -> None:
         self.assertIn("def apply_python_package_capability_patches()", self.wrapper)
-        self.assertIn("sympy", self.wrapper)
+        for package in ("sympy", "reportlab", "svglib"):
+            self.assertIn(package, self.wrapper)
         package_call = self.bootstrap.index("apply_python_package_capability_patches()")
         network_call = self.bootstrap.index(
             "apply_code_interpreter_network_description_patches()"
