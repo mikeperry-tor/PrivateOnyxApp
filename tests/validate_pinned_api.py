@@ -13,11 +13,14 @@ import wrapper_env_patches as patches
 
 def _validate_production_bootstrap() -> None:
     """Prove this process was patched by the same bootstrap as api_server."""
+    from enterprise_settings_compat_patch import REGRESSION_INTRODUCING_COMMIT
     import sitecustomize
 
     from onyx.prompts import tool_prompts
     from onyx.prompts.coding_agent import coding_agent as coding_agent_prompts
     from onyx.server.features.mcp import ssrf as mcp_ssrf
+    from onyx.server.auth_check import PUBLIC_ENDPOINT_SPECS
+    from onyx.server.manage.get_state import router as state_router
     from onyx.tools.tool_implementations.bash.bash_tool import BashTool
     from onyx.tools.tool_implementations.open_url import onyx_web_crawler
     from onyx.tools.tool_implementations.open_url.open_url_tool import OpenURLTool
@@ -26,6 +29,9 @@ def _validate_production_bootstrap() -> None:
     from onyx.utils import url as url_utils
 
     assert sitecustomize.__file__ == "/api-patches/sitecustomize.py"
+    assert REGRESSION_INTRODUCING_COMMIT == (
+        "a1a60b5cf07969dc4b3cb2b23be0d5d378bf042e"
+    )
     assert sys.modules["sitecustomize"] is sitecustomize
     assert getattr(playwright_fetch, "_wrapper_helper_proxy_patched", False)
     assert mcp_ssrf.mcp_ssrf_httpx_client_factory.__module__ == (
@@ -40,6 +46,37 @@ def _validate_production_bootstrap() -> None:
     assert getattr(url_utils, "_wrapper_url_identity_preservation_patch", False)
     assert getattr(OpenURLTool, "_wrapper_failure_reporting_patch", False)
     assert getattr(OpenURLTool, "_wrapper_explicit_url_limit_patch", False)
+    assert getattr(state_router, "_wrapper_enterprise_settings_compat_patch", False)
+    assert ("/enterprise-settings", {"GET"}) in PUBLIC_ENDPOINT_SPECS
+
+    enterprise_routes = [
+        route
+        for route in state_router.routes
+        if getattr(route, "path", None) == "/enterprise-settings"
+    ]
+    assert len(enterprise_routes) == 1
+    assert enterprise_routes[0].methods == {"GET"}
+    neutral_settings = enterprise_routes[0].endpoint()
+    assert neutral_settings["application_name"] is None
+    assert neutral_settings["use_custom_logo"] is False
+    assert neutral_settings["use_custom_logotype"] is False
+    assert neutral_settings["custom_nav_items"] == []
+
+    from onyx.main import get_application
+
+    application = get_application()
+    application_routes = [
+        route
+        for route in application.routes
+        if getattr(route, "path", None) == "/enterprise-settings"
+    ]
+    assert len(application_routes) == 1
+    assert application_routes[0].methods == {"GET"}
+    assert not any(
+        getattr(route, "path", "").startswith("/admin/enterprise-settings")
+        or getattr(route, "path", "").startswith("/enterprise-settings/")
+        for route in application.routes
+    )
 
     restricted = "Network access is available through a restricted HTTP/HTTPS proxy."
     assert restricted in PythonTool.DESCRIPTION
