@@ -27,6 +27,7 @@ If you do not need intense multi-agent deep research, code research subagents, a
 In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
 
 - Onyx telemetry, third-party analytics and error reporting, cloud billing, CAPTCHA, and remote configuration are explicitly disabled.
+- The Community Edition login page remains usable despite the pinned WebUI's optional Enterprise-branding endpoint regression; the wrapper exposes only a fixed neutral branding response and does not enable Enterprise features.
 - A more restrictive browser Content Security Policy now blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's selected Tor/VPN/proxy via the user's browser. Additionally, this policy blocks Onyx WebUI queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
 - Stock Onyx strips agent reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality. This has been patched.
 - Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results. This has been patched.

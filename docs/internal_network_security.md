@@ -225,6 +225,14 @@ without connection-time DNS pinning. Enabling paid-EE therefore requires a new
 network adapter and SSRF/DNS-rebinding audit before query, ingestion, or
 document hooks can be supported.
 
+The API exposes one wrapper-owned unauthenticated compatibility read at exact
+`GET /api/enterprise-settings` so the pinned Community Edition WebUI can load
+its login page. The response is a fixed neutral branding object and performs
+no database, file-store, tenant, user, request-derived, or outbound work. No
+other Enterprise settings, logo, administration, hook, billing, or license
+route is enabled. The route participates in Onyx's normal public-route startup
+audit and is rejected at patch installation if either paid-EE mode is active.
+
 Environment-configured Braintrust and Langfuse tracing is also blank, but a
 full administrator can configure and enable tracing in the database. An
 enabled provider can export LLM inputs, outputs, reasoning, tool calls, and
@@ -375,6 +383,9 @@ accepts this only under its single-user trust assumption.
 - OpenAPI/docs remain unregistered, and tracing, provider, voice, Craft,
   mobile/SSO, and other expanded routes retain their intended authentication
   and feature gates.
+- Unauthenticated `GET /api/enterprise-settings` returns only the wrapper's
+  fixed neutral Community Edition branding schema; no sibling Enterprise route
+  is registered, and non-GET methods are rejected.
 - Docker executor children receive neither the engine socket nor an alternate
   route; the socket-bearing controller is absent from the Podman topology.
 - Exact Docker-host allow/deny tests cover the default, numeric, `all`, and

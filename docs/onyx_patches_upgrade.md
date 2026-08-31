@@ -469,6 +469,19 @@ their data retention and outbound transports are deliberately supported. An
 enterprise hook delivery client without connection-time DNS pinning requires a
 new adapter before it may be enabled.
 
+Re-audit the Community Edition login compatibility route introduced for the
+WebUI regression in upstream commit
+`a1a60b5cf07969dc4b3cb2b23be0d5d378bf042e`. Inspect
+`web/src/lib/settings/hooks.ts`, `web/src/lib/fetcher.ts`,
+`web/src/providers/SettingsProvider.tsx`, `backend/onyx/main.py`, and
+`backend/ee/onyx/main.py`. Remove the wrapper route if auth pages no longer
+probe `/api/enterprise-settings` in Community Edition or if the WebUI treats
+the optional endpoint's 404 as neutral branding. If it remains necessary,
+confirm the endpoint is exact GET-only, returns only the fixed neutral schema,
+is installed only with paid-EE and license enforcement disabled, remains in
+the normal `PUBLIC_ENDPOINT_SPECS` audit, and fails startup when upstream adds
+the route or changes application/router construction.
+
 The stock crawler is the current reliability-oriented default. Every Obscura
 pin upgrade must repeat comparable parallel URL batches, recording blocked,
 empty-content, timeout, and successful results. Switch the default to `true`
@@ -1098,6 +1111,12 @@ wrappers.
   phrase. Then exercise a real `run_python` tool call.
 - **Lite `open_url`, helper routes, embedding tokenizer/shim, privacy settings,
   and CSP:** retain their dedicated audits elsewhere in this checklist.
+- **Community Edition login settings compatibility:** validate the neutral
+  `GET /enterprise-settings` response through the pinned API application and
+  the external `/api/enterprise-settings` nginx path without authentication.
+  Confirm no other Enterprise route appears, then repeat the source/removal
+  audit for upstream commit
+  `a1a60b5cf07969dc4b3cb2b23be0d5d378bf042e` described in the Onyx API audit.
 
 For local-document, tokenizer, model-name compatibility, embedding shim,
 freshness, content-cap, and re-index avoidance changes, also complete the

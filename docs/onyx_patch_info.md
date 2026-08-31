@@ -43,6 +43,44 @@ part of the isolated-process protocol: Onyx reserves child stdout for the
 pickled return value, so even a successful startup message on stdout corrupts
 PDF extraction and other isolated results.
 
+## Community Edition login settings compatibility
+
+Pinned Onyx v4.6.5 contains a Community Edition login regression introduced by
+upstream commit `a1a60b5cf07969dc4b3cb2b23be0d5d378bf042e`. Its
+`web/src/lib/settings/hooks.ts` change makes every `/auth/*` page request
+`/api/enterprise-settings` for pre-login branding even when paid Enterprise
+Edition support is disabled. The same hook returns the resulting `FetchError`,
+`web/src/lib/fetcher.ts` classifies the expected Community Edition 404 as an
+error, and `web/src/providers/SettingsProvider.tsx` renders the fatal settings
+page for every status other than 401 or 403. The source comment says the 404
+should settle on default branding, but the implementation does not discard it.
+
+The API bootstrap therefore installs one exact unauthenticated
+`GET /enterprise-settings` compatibility route in Community Edition. Nginx
+exposes it through the ordinary `/api/enterprise-settings` prefix. It returns
+only a fixed neutral branding object: no application name or custom content,
+all logo and branding switches disabled, and an empty navigation list. It does
+not read the database, file store, request, user, tenant, license, or
+environment and does not expose an Enterprise mutation or asset route.
+
+The patch is valid only while both paid-EE and license enforcement are disabled
+and the selected application factory is the Community Edition factory. It
+registers the route on Onyx's existing pre-login state router before
+`get_application()` includes that router, adds the exact GET path to the same
+`PUBLIC_ENDPOINT_SPECS` list consumed by `check_router_auth()`, and validates
+that inclusion still precedes the auth audit. Startup fails if Onyx already
+supplies the route, selects an EE application, changes the factory/audit shape,
+or pre-registers a public specification for that path.
+
+This patch exists only for the named WebUI regression. On every Onyx upgrade,
+inspect `web/src/lib/settings/hooks.ts`, `web/src/lib/fetcher.ts`,
+`web/src/providers/SettingsProvider.tsx`, the Community Edition router assembly
+in `backend/onyx/main.py`, and the Enterprise implementation in
+`backend/ee/onyx/main.py`. Remove the compatibility route when the Community
+Edition login no longer probes the EE endpoint or when an absent optional
+branding endpoint is handled as neutral state without reaching
+`SettingsProvider`'s fatal branch.
+
 ## Selectable built-in crawler
 
 `ONYX_AGENT_USE_OBSCURA_BROWSER` accepts exactly `true` or `false` and defaults
