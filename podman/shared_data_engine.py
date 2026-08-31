@@ -118,6 +118,35 @@ def _podman_machine_is_stopped(command: str) -> bool:
     return inspected.returncode == 0 and states == {"stopped"}
 
 
+def _podman_machine_is_running(command: str) -> bool:
+    inspected = subprocess.run(
+        [command, "machine", "inspect", "--format", "{{.State}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    states = {
+        line.strip().lower()
+        for line in inspected.stdout.splitlines()
+        if line.strip()
+    }
+    return inspected.returncode == 0 and states == {"running"}
+
+
+def _has_running_containers(command: str) -> bool:
+    inspected = subprocess.run(
+        [command, "ps", "--filter", "status=running", "--format", "{{.ID}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if inspected.returncode != 0:
+        detail = inspected.stderr.strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        raise GuardError(f"could not inspect {command} for running containers{suffix}")
+    return any(line.strip() for line in inspected.stdout.splitlines())
+
+
 def _docker_local_endpoint_is_absent(command: str) -> str | None:
     """Return an absent local Docker endpoint, or None when absence is unproved."""
     inspected = subprocess.run(
@@ -186,6 +215,93 @@ def inspect_first_claim(commands: Iterable[str], engine: str) -> None:
             )
 
 
+def _engine_stop_instruction(owner: str) -> str:
+    if _engine_family(owner) == "podman":
+        if sys.platform == "darwin":
+            return "run `podman machine stop`"
+        return (
+            "run `podman machine stop` for a machine-backed engine, or "
+            "`systemctl --user stop podman.service podman.socket` for a "
+            "native rootless API service"
+        )
+    if sys.platform == "darwin":
+        return "quit Docker Desktop"
+    if owner == "docker-rootless":
+        return "run `systemctl --user stop docker.service docker.socket`"
+    return "run `sudo systemctl stop docker.service docker.socket`"
+
+
+def verify_stale_owner_is_down(
+    commands: Iterable[str], owner: str, engine: str
+) -> None:
+    """Reject adoption when the former engine can be proved active."""
+    owner_family = _engine_family(owner)
+    if owner_family == _engine_family(engine):
+        # A single Docker CLI cannot identify the former daemon when switching
+        # between rootful and rootless endpoints. The explicit operator
+        # assertion remains authoritative for that same-family recovery.
+        return
+
+    checked: set[tuple[str, str]] = set()
+    for command in commands:
+        if _engine_for_command(command) != owner_family:
+            continue
+        identity = (
+            owner_family,
+            os.path.realpath(command) if os.sep in command else command,
+        )
+        if identity in checked or not _available_command(command):
+            continue
+        checked.add(identity)
+        try:
+            writers = _running_shared_writers(command)
+        except GuardError:
+            if owner_family == "podman" and _podman_machine_is_stopped(command):
+                print(f"Verified stopped former Podman machine ({command}).")
+                continue
+            if owner_family == "docker":
+                absent_endpoint = _docker_local_endpoint_is_absent(command)
+                if absent_endpoint is not None:
+                    print(
+                        "Verified absent former Docker endpoint "
+                        f"({command}: {absent_endpoint})."
+                    )
+                    continue
+            raise GuardError(
+                f"cannot verify that the former {owner} engine is down; stop "
+                "its matching make down-* stack and the engine itself before "
+                "retrying adoption"
+            )
+
+        if writers:
+            names = ", ".join(sorted(writers))
+            raise GuardError(
+                f"refusing to adopt {owner}'s claim for {engine}: the former "
+                f"engine still has running shared-data writer(s): {names}. Run "
+                f"the matching make down-* target with CONTAINER_BIN={command}, "
+                f"then {_engine_stop_instruction(owner)} before retrying adoption"
+            )
+        if owner_family == "docker":
+            raise GuardError(
+                f"refusing to adopt {owner}'s claim for {engine}: the former "
+                f"Docker engine is still active; {_engine_stop_instruction(owner)}, "
+                "then retry make adopt-shared-data-engine"
+            )
+        if _podman_machine_is_running(command):
+            raise GuardError(
+                f"refusing to adopt {owner}'s claim for {engine}: the former "
+                "Podman machine is still active; run `podman machine stop`, "
+                "then retry make adopt-shared-data-engine"
+            )
+        if _has_running_containers(command):
+            raise GuardError(
+                f"refusing to adopt {owner}'s claim for {engine}: native Podman "
+                "still has running containers; stop them with the matching "
+                f"make down-* target using CONTAINER_BIN={command}, then "
+                f"{_engine_stop_instruction(owner)} before retrying adoption"
+            )
+
+
 def claim(
     marker: Path,
     engine: str,
@@ -202,11 +318,12 @@ def claim(
                 raise GuardError(
                     f"shared persistent data is claimed by {owner}; run that "
                     "engine's matching make down-* target before starting "
-                    f"{engine}. If {owner} is no longer running, verify it has "
-                    "no Onyx or Myst containers, then run "
-                    "make adopt-shared-data-engine with the selected "
-                    "CONTAINER_BIN"
+                    f"{engine}. If the former stack and engine are fully down "
+                    "but the claim is stale, run make adopt-shared-data-engine "
+                    "with the new CONTAINER_BIN; adoption refuses a former "
+                    "engine that it can still prove active"
                 )
+            verify_stale_owner_is_down(inspect_commands, owner, engine)
             temporary = marker.with_name(marker.name + ".adopt")
             temporary.write_text(engine + "\n", encoding="ascii")
             os.chmod(temporary, 0o600)
