@@ -331,11 +331,26 @@ class SharedDataEngineTests(unittest.TestCase):
             with patch.object(shared_data_engine, "inspect_first_claim") as inspect:
                 self.assertEqual(
                     shared_data_engine.claim(
-                        marker, "podman", adopt_unclaimed=True
+                        marker, "podman", adopt=True
                     ),
                     "podman",
                 )
             inspect.assert_not_called()
+
+    def test_explicit_adoption_replaces_stale_other_engine_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            marker.write_text("podman\n", encoding="ascii")
+            with patch.object(shared_data_engine, "inspect_first_claim") as inspect:
+                self.assertEqual(
+                    shared_data_engine.claim(marker, "docker-rootful", adopt=True),
+                    "docker-rootful",
+                )
+            inspect.assert_not_called()
+            self.assertEqual(
+                shared_data_engine.read_owner(marker), "docker-rootful"
+            )
+            self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

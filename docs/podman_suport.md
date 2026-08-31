@@ -413,10 +413,16 @@ A failed start deliberately retains its claim for a safe retry. If both engines
 are verifiably down but an ambiguous unavailable engine prevents first-use
 inspection,
 `make adopt-shared-data-engine` is the explicit operator override;
-it seeds the absent marker for the selected `CONTAINER_BIN` without inspection.
-Do not use it to bypass a reported writer. If a machine failure leaves a stale
-claim, verify both engines have no Onyx containers before removing the marker
-manually or adopting the new owner.
+it creates an absent marker or atomically replaces a stale marker for the
+selected `CONTAINER_BIN` without contacting either engine. This makes recovery
+possible when the former Podman machine or socket is no longer running. Before
+using it, verify every reachable engine has no running Onyx PostgreSQL,
+OpenSearch, or Myst container and independently establish that an unreachable
+former engine is stopped. Do not use it to bypass a reported writer. After a
+crash leaves a stale Podman claim and Docker is selected, use
+`make adopt-shared-data-engine CONTAINER_BIN=docker`, confirm
+`make shared-data-engine-status` reports the selected Docker flavor, and then
+run the matching `make up-*` target.
 
 The two stack-start targets are `.NOTPARALLEL` Make targets. Their ownership
 claim, shared-data preparation, host-side services, and Compose launch therefore
@@ -792,7 +798,8 @@ The primary Podman-specific tests are:
   stopped-container update, running-container fail-closed behavior, and
   shared-data preflight.
 - `tests/test_shared_data_engine.py`: same-engine claim reuse, cross-engine
-  exclusion, matching release, and corrupt-marker failure.
+  exclusion, explicit stale-claim adoption, matching release, and corrupt-marker
+  failure.
 - `tests/test_myst_lifecycle_makefile.py`: capability placement,
   serialized prerequisites, bounded create/configure/start ordering, host
   document-server lifecycle, direct Onyx image pulls, and exclusion of the

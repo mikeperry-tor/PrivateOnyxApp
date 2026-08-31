@@ -191,21 +191,31 @@ def claim(
     engine: str,
     *,
     inspect_commands: Iterable[str] = ("docker", "podman"),
-    adopt_unclaimed: bool = False,
+    adopt: bool = False,
 ) -> str:
     engine = _validate_engine(engine)
     marker.parent.mkdir(parents=True, exist_ok=True)
     owner = read_owner(marker)
     if owner is not None:
         if owner != engine and not _legacy_owner_matches(owner, engine):
-            raise GuardError(
-                f"shared persistent data is claimed by {owner}; run that "
-                "engine's matching make down-* target before starting " + engine
-            )
+            if not adopt:
+                raise GuardError(
+                    f"shared persistent data is claimed by {owner}; run that "
+                    "engine's matching make down-* target before starting "
+                    f"{engine}. If {owner} is no longer running, verify it has "
+                    "no Onyx or Myst containers, then run "
+                    "make adopt-shared-data-engine with the selected "
+                    "CONTAINER_BIN"
+                )
+            temporary = marker.with_name(marker.name + ".adopt")
+            temporary.write_text(engine + "\n", encoding="ascii")
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, marker)
+            return engine
         # Re-inspect on every same-engine claim. This catches an out-of-band
         # container started by the other engine after the marker was created,
         # especially a Myst daemon sharing the wallet/database bind.
-        if not adopt_unclaimed:
+        if not adopt:
             inspect_first_claim(inspect_commands, engine)
         if owner != engine:
             temporary = marker.with_name(marker.name + ".upgrade")
@@ -215,7 +225,7 @@ def claim(
             return engine
         return owner
 
-    if not adopt_unclaimed:
+    if not adopt:
         inspect_first_claim(inspect_commands, engine)
     try:
         descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -224,7 +234,7 @@ def claim(
         if owner != engine:
             raise GuardError(
                 f"shared persistent data is claimed by {owner}; run that "
-                "engine's matching make down-* target before starting {engine}"
+                f"engine's matching make down-* target before starting {engine}"
             )
         return owner
     try:
@@ -261,9 +271,12 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="selected engine command to inspect before the first claim",
     )
     parser.add_argument(
-        "--adopt-unclaimed",
+        "--adopt",
         action="store_true",
-        help="seed an absent marker after the operator has verified both engines are down",
+        help=(
+            "claim or replace the marker after the operator has verified both "
+            "engines are down"
+        ),
     )
     args = parser.parse_args(argv)
     if args.action != "status" and args.engine is None:
@@ -281,7 +294,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.marker,
                 args.engine,
                 inspect_commands=commands,
-                adopt_unclaimed=args.adopt_unclaimed,
+                adopt=args.adopt,
             )
             print(f"Shared persistent data claimed by {owner}.")
         elif args.action == "release":
