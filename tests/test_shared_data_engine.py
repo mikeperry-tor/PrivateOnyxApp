@@ -278,6 +278,28 @@ class SharedDataEngineTests(unittest.TestCase):
                     shared_data_engine._podman_machine_is_stopped("podman")
                 )
 
+    def test_running_podman_machine_requires_exact_positive_state(self) -> None:
+        with patch.object(
+            shared_data_engine.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="running\n", stderr=""
+            ),
+        ):
+            self.assertTrue(shared_data_engine._podman_machine_is_running("podman"))
+
+        for returncode, stdout in ((0, "stopped\n"), (0, ""), (125, "running\n")):
+            with patch.object(
+                shared_data_engine.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    args=[], returncode=returncode, stdout=stdout, stderr=""
+                ),
+            ):
+                self.assertFalse(
+                    shared_data_engine._podman_machine_is_running("podman")
+                )
+
     def test_first_claim_keeps_unknown_unselected_podman_failure_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / "owner"
@@ -343,7 +365,12 @@ class SharedDataEngineTests(unittest.TestCase):
             marker.write_text("podman\n", encoding="ascii")
             with patch.object(shared_data_engine, "inspect_first_claim") as inspect:
                 self.assertEqual(
-                    shared_data_engine.claim(marker, "docker-rootful", adopt=True),
+                    shared_data_engine.claim(
+                        marker,
+                        "docker-rootful",
+                        inspect_commands=(),
+                        adopt=True,
+                    ),
                     "docker-rootful",
                 )
             inspect.assert_not_called()
@@ -351,6 +378,161 @@ class SharedDataEngineTests(unittest.TestCase):
                 shared_data_engine.read_owner(marker), "docker-rootful"
             )
             self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+
+    def test_adoption_refuses_running_former_shared_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            marker.write_text("podman\n", encoding="ascii")
+            with (
+                patch.object(
+                    shared_data_engine, "_available_command", return_value=True
+                ),
+                patch.object(
+                    shared_data_engine,
+                    "_running_shared_writers",
+                    return_value={"relational_db"},
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    shared_data_engine.GuardError,
+                    r"running shared-data writer.*make down-\*.*CONTAINER_BIN=podman",
+                ):
+                    shared_data_engine.claim(
+                        marker,
+                        "docker-rootful",
+                        inspect_commands=("podman",),
+                        adopt=True,
+                    )
+            self.assertEqual(shared_data_engine.read_owner(marker), "podman")
+
+    def test_adoption_refuses_running_former_podman_machine(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            marker.write_text("podman\n", encoding="ascii")
+            with (
+                patch.object(
+                    shared_data_engine, "_available_command", return_value=True
+                ),
+                patch.object(
+                    shared_data_engine, "_running_shared_writers", return_value=set()
+                ),
+                patch.object(
+                    shared_data_engine,
+                    "_podman_machine_is_running",
+                    return_value=True,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    shared_data_engine.GuardError, r"podman machine stop"
+                ):
+                    shared_data_engine.claim(
+                        marker,
+                        "docker-rootful",
+                        inspect_commands=("podman",),
+                        adopt=True,
+                    )
+            self.assertEqual(shared_data_engine.read_owner(marker), "podman")
+
+    def test_adoption_refuses_running_native_podman_containers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            marker.write_text("podman\n", encoding="ascii")
+            with (
+                patch.object(
+                    shared_data_engine, "_available_command", return_value=True
+                ),
+                patch.object(
+                    shared_data_engine, "_running_shared_writers", return_value=set()
+                ),
+                patch.object(
+                    shared_data_engine,
+                    "_podman_machine_is_running",
+                    return_value=False,
+                ),
+                patch.object(
+                    shared_data_engine, "_has_running_containers", return_value=True
+                ),
+                patch.object(shared_data_engine.sys, "platform", "linux"),
+            ):
+                with self.assertRaisesRegex(
+                    shared_data_engine.GuardError,
+                    r"native Podman still has running containers.*podman\.socket",
+                ):
+                    shared_data_engine.claim(
+                        marker,
+                        "docker-rootful",
+                        inspect_commands=("podman",),
+                        adopt=True,
+                    )
+            self.assertEqual(shared_data_engine.read_owner(marker), "podman")
+
+    def test_adoption_accepts_positively_stopped_former_podman_machine(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            marker.write_text("podman\n", encoding="ascii")
+            with (
+                patch.object(
+                    shared_data_engine, "_available_command", return_value=True
+                ),
+                patch.object(
+                    shared_data_engine,
+                    "_running_shared_writers",
+                    side_effect=shared_data_engine.GuardError(
+                        "could not inspect podman"
+                    ),
+                ),
+                patch.object(
+                    shared_data_engine,
+                    "_podman_machine_is_stopped",
+                    return_value=True,
+                ),
+            ):
+                self.assertEqual(
+                    shared_data_engine.claim(
+                        marker,
+                        "docker-rootful",
+                        inspect_commands=("podman",),
+                        adopt=True,
+                    ),
+                    "docker-rootful",
+                )
+
+    def test_adoption_refuses_active_former_docker_daemon(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            marker.write_text("docker-rootful\n", encoding="ascii")
+            with (
+                patch.object(
+                    shared_data_engine, "_available_command", return_value=True
+                ),
+                patch.object(
+                    shared_data_engine, "_running_shared_writers", return_value=set()
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    shared_data_engine.GuardError, r"Docker engine is still active"
+                ):
+                    shared_data_engine.claim(
+                        marker,
+                        "podman",
+                        inspect_commands=("docker",),
+                        adopt=True,
+                    )
+            self.assertEqual(
+                shared_data_engine.read_owner(marker), "docker-rootful"
+            )
+
+    def test_cross_owner_error_explains_safe_adoption(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "owner"
+            marker.write_text("podman\n", encoding="ascii")
+            with self.assertRaisesRegex(
+                shared_data_engine.GuardError,
+                r"former stack and engine are fully down.*adopt-shared-data-engine",
+            ):
+                shared_data_engine.claim(
+                    marker, "docker-rootful", inspect_commands=()
+                )
 
 
 if __name__ == "__main__":

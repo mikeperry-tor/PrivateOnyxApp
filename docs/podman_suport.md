@@ -414,13 +414,23 @@ are verifiably down but an ambiguous unavailable engine prevents first-use
 inspection,
 `make adopt-shared-data-engine` is the explicit operator override;
 it creates an absent marker or atomically replaces a stale marker for the
-selected `CONTAINER_BIN` without contacting either engine. This makes recovery
-possible when the former Podman machine or socket is no longer running. Before
-using it, verify every reachable engine has no running Onyx PostgreSQL,
-OpenSearch, or Myst container and independently establish that an unreachable
-former engine is stopped. Do not use it to bypass a reported writer. After a
-crash leaves a stale Podman claim and Docker is selected, use
-`make adopt-shared-data-engine CONTAINER_BIN=docker`, confirm
+selected `CONTAINER_BIN`. This makes recovery possible when the former Podman
+machine or socket is no longer running. When the former engine command is
+available, adoption checks it before replacing a cross-family claim. It refuses
+a running PostgreSQL, OpenSearch, or Myst writer; an active Docker daemon; an
+active Podman machine; or running native-Podman containers. The diagnostic
+names the matching `make down-*` selector and, where applicable,
+`podman machine stop`, the rootless Docker systemd-user stop command, the
+rootful Docker system stop command, or Docker Desktop shutdown. A positively
+stopped Podman machine or absent local Docker Unix endpoint is accepted.
+
+An unavailable former command cannot be inspected, and a selected Docker CLI
+cannot identify a different former Docker daemon during a rootful/rootless
+switch. Before using adoption, verify every reachable engine has no running
+Onyx PostgreSQL, OpenSearch, or Myst container and independently establish that
+an unreachable or same-family former engine is stopped. Do not use it to bypass
+a reported writer. After a crash leaves a stale Podman claim and Docker is
+selected, use `make adopt-shared-data-engine CONTAINER_BIN=docker`, confirm
 `make shared-data-engine-status` reports the selected Docker flavor, and then
 run the matching `make up-*` target.
 
