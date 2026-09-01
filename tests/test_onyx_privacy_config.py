@@ -70,6 +70,25 @@ class OnyxPrivacyConfigTests(unittest.TestCase):
             self.compose,
         )
 
+    def test_reconnect_settings_are_internal_and_same_origin_only(self) -> None:
+        example = (ROOT / ".env.wrapper.example").read_text(encoding="utf-8")
+        for name in (
+            "CHAT_STREAM_BUFFER_TTL_S",
+            "CHAT_STREAM_BUFFER_DONE_TTL_S",
+            "CHAT_STREAM_BUFFER_MAX_BYTES",
+        ):
+            self.assertNotIn(name, example)
+        self.assertIn("script-src 'self'", self.csp)
+        self.assertIn("connect-src 'self'", self.csp)
+        self.assertNotIn("data:; script-src", self.csp)
+        for mount in (
+            "webui-reconnect-http.conf:/etc/nginx/conf.d/webui-reconnect-http.conf:ro",
+            "webui-reconnect-server.inc:/etc/nginx/wrapper/webui-reconnect-server.inc:ro",
+            "webui-reconnect.js:/usr/share/private-onyx/webui-reconnect.js:ro",
+            "run-nginx-wrapper.sh:/usr/local/bin/run-nginx-wrapper.sh:ro",
+        ):
+            self.assertIn(mount, self.compose)
+
 
 if __name__ == "__main__":
     unittest.main()

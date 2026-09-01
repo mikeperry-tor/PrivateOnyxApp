@@ -324,6 +324,12 @@ replaced.
   the graph concurrently and otherwise can expose database initialization
   races earlier than the Docker path.
 
+The common base, without a Podman-only override, supplies nginx's read-only
+reconnect asset, HTTP/server fragments, and startup wrapper mounts plus its
+exact command. Rootless Podman must retain those mounts and execute the
+ephemeral derived runner through `/bin/sh`; the wrapper never depends on an
+executable bind or a writable host source.
+
 ### Full-mode override
 
 `compose_overlays/docker-compose.podman-full.yml` additionally:
@@ -821,6 +827,11 @@ The primary Podman-specific tests are:
   selection, optional VPN behavior, tmpfs options, unconditional shared Docker
   PostgreSQL/OpenSearch storage, database health dependencies, native-Linux
   document binds, and the fixed hardened macOS host document relay.
+- `tests/test_nginx_webui_reconnect.py` and the selected-image gate: generated
+  nginx source-shape failure, no-exec-safe derived runner execution, exact
+  read-only common mounts, HTML-only injection/compression, and companion
+  behavior. Effective lite/full and macOS-full models prove Podman overlays do
+  not reset the command, mounts, or API stream policy.
 - `tests/validate_tor_image.py`: the selected Tor image, one fresh engine-local
   SOCKS volume, keep-id/tmpfs modes, explicit state bind, authenticated private
   control path, and unprivileged read-only policy-container socket access.
@@ -892,6 +903,9 @@ direct inspection; do not mix Docker engine results into the evidence.
    socket broadly.
 8. Exercise local WebUI, document server, embedding readiness, MinIO/OpenSearch,
    SearXNG, and route/fail-closed behavior in proportion to the changed feature.
+   For reconnect changes, also run `nginx -t`, fetch gzip-advertising HTML and
+   the exact companion asset, and prove the read-only binds work under the
+   active rootless UID mapping without a Podman-only overlay.
 9. Recheck after a VM/Desktop restart when the change depends on mounts,
    storage, startup health, or generated containers. Clean first-start and
    warm repeated-start behavior are both required lifecycle cases.

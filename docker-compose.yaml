@@ -424,6 +424,11 @@ services:
       POSTGRES_API_SERVER_POOL_OVERFLOW: "15"
       POSTGRES_API_SERVER_READ_ONLY_POOL_SIZE: "2"
       ONYX_API_THREADPOOL_SIZE: "12"
+      # Native durable chat-stream policy used by recorded WebUI recovery.
+      # Values are literal stack policy rather than user-facing tuning knobs.
+      CHAT_STREAM_BUFFER_TTL_S: "14400"
+      CHAT_STREAM_BUFFER_DONE_TTL_S: "3600"
+      CHAT_STREAM_BUFFER_MAX_BYTES: "33554432"
       # Container stdout/stderr is the single bounded application-log sink.
       LOG_TO_FILE: "false"
       # Controls Web connector SSRF-style URL checks.
@@ -559,6 +564,11 @@ services:
       # restrictive policy at the same time, so remote scripts and resource
       # loads cannot bypass the container VPN/proxy path through the client.
       - ./onyx/nginx/webui-csp.conf:/etc/nginx/conf.d/webui-csp.conf:ro
+      - ./onyx/nginx/webui-reconnect-http.conf:/etc/nginx/conf.d/webui-reconnect-http.conf:ro
+      - ./onyx/nginx/webui-reconnect-server.inc:/etc/nginx/wrapper/webui-reconnect-server.inc:ro
+      - ./onyx/nginx/webui-reconnect.js:/usr/share/private-onyx/webui-reconnect.js:ro
+      - ./onyx/nginx/run-nginx-wrapper.sh:/usr/local/bin/run-nginx-wrapper.sh:ro
+    command: ["/usr/local/bin/run-nginx-wrapper.sh"]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/ || exit 1"]
       interval: 10m

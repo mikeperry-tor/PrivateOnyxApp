@@ -1,10 +1,10 @@
 # WebUI Stream Reconnection Plan
 
-> **Status: ready for implementation.** This is an implementation plan, not a
-> description of current stack behavior. The lasting behavior and maintenance
-> contract must be moved into the owning documents listed below as part of the
-> implementation. Do not retain investigation notes or a version history in
-> those documents.
+> **Status: implementation and Docker live boundary validation complete;
+> authenticated browser and unavailable engine/ingress validation pending.**
+> The lasting behavior and maintenance contract are in the owning documents
+> listed below. This plan remains the acceptance and outstanding-validation
+> artifact until the practical browser/engine matrix is complete.
 
 ## Objective
 
@@ -618,3 +618,38 @@ This plan is complete only when all of the following are true:
   and
 - canonical docs and the README key-patch list describe only the resulting
   current behavior.
+
+## Current validation status
+
+`make check-upgrade` passes all 632 deterministic tests, compile and diff
+checks, the selected Onyx v4.6.5 backend and WebUI, nginx 1.25.5, executor,
+derived SearXNG, Obscura, Tor, and OpenSearch image gates. The reconnect gate
+includes the executable browser companion, native stream-buffer
+TTL/cap/gap/incognito fixtures, nginx module/configuration/serving behavior,
+HTML-only compression selection, CSP, and excluded-response checks. Effective
+Docker and Podman lite/full models, including the macOS Podman full overlay,
+retain the exact common nginx command/read-only mounts and API-only stream
+settings. Generated files under `onyx/onyx_data/` are unchanged.
+
+Docker lite and full both start healthy through their Makefile targets and
+stop cleanly. In each mode the live nginx configuration passes `nginx -t`, a
+gzip-advertising HTML navigation receives exactly one companion tag and both
+CSP policies, the exact companion asset has the required JavaScript,
+`nosniff`, and `no-store` headers, an API resume request remains uninjected,
+and the effective API proxy locations retain `proxy_buffering off`. Full mode
+uses its healthy Redis cache, while lite uses the PostgreSQL cache path; the
+live API process receives the exact `14400`, `3600`, and `33554432` policy
+values. Targeted nginx, API, and cache startup logs contain no reconnect
+integration error. No matching stack is left running.
+
+Authenticated real-chat interruption scenarios remain unexecuted because this
+environment provides neither an authenticated browser session nor repository
+browser automation capable of driving the private WebUI without private user
+credentials and provider-backed chat activity. This includes the control,
+single- and multi-model suspension, completion-while-hidden, repeated
+suspension, offline/online, back-forward-cache, intentional-navigation,
+explicit-stop, provider-plus-browser interruption, and incognito scenarios.
+No Safari/iOS runtime is available for the required mobile test. Podman is not
+the selected available engine, and configured Tailscale and onion frontends
+are not available for live ingress smoke tests; their effective Compose
+models remain covered deterministically.

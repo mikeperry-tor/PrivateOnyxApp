@@ -5,10 +5,101 @@ from __future__ import annotations
 import inspect
 import json
 import sys
+import zlib
 from importlib.metadata import version
 from types import SimpleNamespace
+from uuid import UUID
 
 import wrapper_env_patches as patches
+
+
+def _validate_durable_stream_buffer_policy() -> None:
+    from onyx.chat import stream_buffer
+    from onyx.configs.chat_configs import (
+        CHAT_STREAM_BUFFER_DONE_TTL_S,
+        CHAT_STREAM_BUFFER_MAX_BYTES,
+        CHAT_STREAM_BUFFER_TTL_S,
+    )
+
+    assert CHAT_STREAM_BUFFER_TTL_S == 14400
+    assert CHAT_STREAM_BUFFER_DONE_TTL_S == 3600
+    assert CHAT_STREAM_BUFFER_MAX_BYTES == 33554432
+
+    class MemoryCache:
+        def __init__(self) -> None:
+            self.values: dict[str, bytes | str] = {}
+            self.set_ttls: list[tuple[str, int | None]] = []
+            self.expirations: list[tuple[str, int]] = []
+
+        def set(self, key, value, ex=None) -> None:
+            self.values[key] = value
+            self.set_ttls.append((key, ex))
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def exists(self, key) -> bool:
+            return key in self.values
+
+        def expire(self, key, ttl) -> None:
+            self.expirations.append((key, ttl))
+
+        def delete(self, key) -> None:
+            self.values.pop(key, None)
+
+    session_id = UUID("11111111-1111-4111-8111-111111111111")
+    cache = MemoryCache()
+    writer = stream_buffer.StreamBufferWriter(cache, session_id, 7)
+    writer.append_line("first packet\n")
+    writer.flush()
+    writer.append_line("second packet\n")
+    writer.flush()
+    assert all(ttl == 14400 for _key, ttl in cache.set_ttls)
+
+    first_read = stream_buffer.read_stream_chunks(cache, session_id, 7, 0)
+    assert first_read is not None
+    assert first_read.blocks == ["first packet\n", "second packet\n"]
+    assert not first_read.gap
+    chunk_keys = [key for key in cache.values if not key.endswith(":meta")]
+    cache.delete(chunk_keys[0])
+    gap_read = stream_buffer.read_stream_chunks(cache, session_id, 7, 0)
+    assert gap_read is not None and gap_read.gap
+
+    writer.mark_done()
+    assert cache.expirations
+    assert all(ttl == 3600 for _key, ttl in cache.expirations)
+    assert any(ttl == 3600 and key.endswith(":meta") for key, ttl in cache.set_ttls)
+
+    payload = "capacity fixture that does not compress to nothing\n"
+    compressed_size = len(zlib.compress(payload.encode("utf-8")))
+    original_cap = stream_buffer.CHAT_STREAM_BUFFER_MAX_BYTES
+    try:
+        stream_buffer.CHAT_STREAM_BUFFER_MAX_BYTES = compressed_size
+        bounded_cache = MemoryCache()
+        bounded = stream_buffer.StreamBufferWriter(bounded_cache, session_id, 8)
+        bounded.append_line(payload)
+        bounded.flush()
+        accepted = stream_buffer.read_stream_chunks(bounded_cache, session_id, 8, 0)
+        assert accepted is not None and not accepted.gap and accepted.blocks == [payload]
+
+        truncated_cache = MemoryCache()
+        truncated = stream_buffer.StreamBufferWriter(truncated_cache, session_id, 9)
+        truncated.append_line(payload + "additional incompressible-ish bytes")
+        truncated.flush()
+        rejected = stream_buffer.read_stream_chunks(truncated_cache, session_id, 9, 0)
+        assert rejected is not None and rejected.gap and rejected.blocks == []
+    finally:
+        stream_buffer.CHAT_STREAM_BUFFER_MAX_BYTES = original_cap
+
+    incognito_cache = MemoryCache()
+    incognito = stream_buffer.StreamBufferWriter(
+        incognito_cache, session_id, 10, delete_on_done=True
+    )
+    incognito.append_line("content-free teardown fixture\n")
+    incognito.flush()
+    assert incognito_cache.values
+    incognito.mark_done()
+    assert not incognito_cache.values
 
 
 def _validate_production_bootstrap() -> None:
@@ -1248,6 +1339,7 @@ def _validate_midstream_continuation_state_persistence() -> None:
 
 
 if __name__ == "__main__":
+    _validate_durable_stream_buffer_policy()
     _validate_production_bootstrap()
     _validate_native_ssrf_contract()
     _validate_new_network_surface_contract()

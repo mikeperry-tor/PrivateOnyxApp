@@ -6,6 +6,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 container_bin=${CONTAINER_BIN:-docker}
 onyx_backend_image=${ONYX_BACKEND_IMAGE:?ONYX_BACKEND_IMAGE is required}
 onyx_web_server_image=${ONYX_WEB_SERVER_IMAGE:?ONYX_WEB_SERVER_IMAGE is required}
+nginx_image=${NGINX_IMAGE:?NGINX_IMAGE is required}
 code_interpreter_image=${CODE_INTERPRETER_IMAGE:-}
 python_executor_image=${PYTHON_EXECUTOR_IMAGE:-}
 searxng_wrapper_image=${SEARXNG_WRAPPER_IMAGE:?SEARXNG_WRAPPER_IMAGE is required}
@@ -27,6 +28,7 @@ require_image() {
 
 require_image "$onyx_backend_image" "Run 'make onyx-build' before 'make test-patch-images'."
 require_image "$onyx_web_server_image" "Run 'make onyx-build' before 'make test-patch-images'."
+require_image "$nginx_image" "Install the pinned nginx support image before 'make test-patch-images'."
 if [ "$validate_code_interpreter" = true ]; then
     [ -n "$code_interpreter_image" ] || {
         echo "ERROR: CODE_INTERPRETER_IMAGE is required for Docker validation" >&2
@@ -67,6 +69,22 @@ echo "Validating WebUI privacy and streaming contracts in $onyx_web_server_image
     "$onyx_web_server_image" \
     -e 'const fs=require("fs"),path=require("path"); for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.6.5") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); const chunks=[]; const visit=(dir)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const item=path.join(dir,entry.name); if(entry.isDirectory()) visit(item); else if(item.endsWith(".js")) chunks.push(fs.readFileSync(item,"utf8"));}}; visit("/app/.next"); const bundle=chunks.join("\n"); for(const marker of ["/api/chat/send-chat-message","/resume-stream?cursor=","chat_heartbeat","message_start","message_delta","reasoning_start","reasoning_delta","reasoning_done","stop_reason","Failed to resume in-flight run","Server did not honor the incognito request","Unknown packet:"]) { if(!bundle.includes(marker)) throw new Error(`missing WebUI streaming marker: ${marker}`); } console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK"); console.log("PINNED_WEBUI_STREAMING_CONTRACT_OK");'
 
+echo "Validating wrapper WebUI reconnect companion in $onyx_web_server_image"
+"$container_bin" run --rm \
+    --network none \
+    --entrypoint node \
+    -v "$repo_root:/workspace:ro" \
+    -w /workspace \
+    "$onyx_web_server_image" \
+    tests/webui_reconnect_harness.js onyx/nginx/webui-reconnect.js
+
+echo "Validating nginx reconnect injection in $nginx_image"
+python3 "$repo_root/tests/validate_nginx_reconnect_image.py" \
+    --container-bin "$container_bin" \
+    --image "$nginx_image" \
+    --client-image "$onyx_backend_image" \
+    --repo-root "$repo_root"
+
 echo "Validating API patch contracts in $onyx_backend_image"
 "$container_bin" run --rm \
     --network none \
@@ -88,6 +106,9 @@ echo "Validating API patch contracts in $onyx_backend_image"
     -e ONYX_OPEN_URL_MAX_CHARS_PER_URL=4000 \
     -e ONYX_OPEN_URL_MAX_TOTAL_CHARS=16000 \
     -e ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB=7 \
+    -e CHAT_STREAM_BUFFER_TTL_S=14400 \
+    -e CHAT_STREAM_BUFFER_DONE_TTL_S=3600 \
+    -e CHAT_STREAM_BUFFER_MAX_BYTES=33554432 \
     -e ONYX_EMBEDDING_TOKENIZER_FILE=/offline-tokenizer/tokenizer.json \
     -e ONYX_AGENT_USE_OBSCURA_BROWSER=true \
     -e ONYX_HELPER_HTTP_PROXY_URL=http://onyx-public-egress-bridge:3128 \

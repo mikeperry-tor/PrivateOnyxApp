@@ -600,6 +600,65 @@ Google Fonts, optional Sentry, and Onyx CDN media, so it is not a replacement
 for the narrower tracked nginx policy. Browsers enforce both CSP headers
 together.
 
+## WebUI recorded-stream recovery
+
+Recorded chat recovery has four distinct owners. The LiteLLM wrapper may
+continue a provider stream after a retryable inference interruption. Onyx's
+native shared-cache stream buffer durably records exact outbound NDJSON. Nginx
+injects one wrapper-owned same-origin companion into successful ordinary HTML,
+and stock WebUI hydration remains the sole packet reducer and replay/tail
+consumer. The companion never constructs, retries, or resends
+`/api/chat/send-chat-message`.
+
+The companion records a versioned, four-hour tab-local `sessionStorage` marker
+only after observing an exact same-origin recorded-chat send. The marker holds
+the session UUID, a random request token, timestamps, recovery generation, and
+bounded multi-model polling state; it never holds prompts, packets, model or
+provider names, files, credentials, headers, error bodies, or exception text.
+It transparently forwards the original successful response body through one
+`TransformStream`, clears only the matching token on clean completion,
+non-success, or explicit cancellation, and retains the marker when a browser
+transport failure may have happened after server acceptance.
+
+After a genuine hidden/pagehide, restored-page, or offline transition, a
+visible tab reloads its selected marked chat once. Stock single-model hydration
+then replays from cursor zero and tails the current run, or renders the saved
+answer when completion happened while hidden. A later genuine suspension may
+advance the recovery generation once more; debouncing, a minimum interval, and
+clearing the hidden transition before reload prevent churn. The companion does
+not redirect or reload a different selected chat.
+
+The pinned WebUI cannot attach a multi-model `current_run` to assistant panels
+because that run ID names the user message. Multi-model recovery therefore
+performs one reconciliation reload, polls the bounded session-detail endpoint
+only while that recovery is visible and online with backoff capped at one
+minute, and reloads once after `current_run` disappears. There is no idle
+poller. Explicit stock cancellation clears the marker. An incognito session
+detail or exact end-session fetch/beacon clears it only after the original
+operation is invoked; the original call count, return value, error, immediate
+teardown, and completed-buffer deletion remain unchanged.
+
+`run-nginx-wrapper.sh` copies the generated templates into their ordinary
+ephemeral container location, requires one current `server` and WebUI
+`location /` marker, injects the tracked include and HTML-only upstream
+encoding directive once, derives the generated runner without editing tracked
+upstream artifacts, and inserts `nginx -t` immediately before the pinned start
+line. Startup fails on structural drift, an unreadable asset/include, missing
+`http_sub_module`, or invalid configuration. `Accept: text/html` suppresses
+upstream compression only for document requests; static resources and API/SSE
+negotiation are unchanged. Successful non-attachment HTML receives one
+external same-origin script before `</head>`; APIs, RSC, downloads, errors, and
+wrapper-asset paths do not. Both the upstream and tracked CSP policies permit
+the same-origin script/API calls without adding a remote, data-script, eval,
+worker, or connection source.
+
+This integration is maintained against the pinned send payload and response
+consumer, FIFO error path, `chatId` selection, session `current_run` response,
+resume cursor/endpoint, single- versus multi-model run IDs, incognito
+`pagehide`, generated nginx markers, HTML compression, and nginx modules.
+Remove the companion and transform when upstream supplies equivalent recorded,
+multi-model, cancellation, and incognito reconnect semantics.
+
 ## Background Web connector PDF freshness
 
 Full mode narrows Onyx's Web connector PDF freshness behavior for trusted
@@ -775,8 +834,9 @@ removes the completed replay buffer. Recorded chats retain the warning and
 recovered text in both the incremental `ChatStateContainer` and the saved
 assistant answer, so reload and durable-run replay render the same content. A
 browser-to-Onyx SSE transport failure is a separate failure domain: the
-provider continuation wrapper cannot repair that connection, and the stock
-durable-run resume path reconciles it on session reload.
+provider continuation wrapper cannot repair that connection. The wrapper-owned
+WebUI recovery boundary above triggers the session reload that lets the stock
+durable-run path reconcile it.
 
 Like pinned stock Onyx, normal iterator exhaustion after answer text is treated
 as completion even when no terminal `finish_reason` was observed. Stock Onyx
@@ -954,10 +1014,11 @@ RAG services; lite mode does not install an anonymous substitute bootstrap.
 The optional code-interpreter network overlay adds only the executor network
 and bridge selected by the strict runtime patch.
 
-The nginx service additionally mounts the tracked restrictive CSP fragment
-directly into `/etc/nginx/conf.d`. The fragment is independent of the generated
-upstream nginx template and survives regeneration of `onyx/onyx_data`; nginx
-startup remains fatal if the fragment is syntactically invalid.
+The nginx service additionally mounts the tracked restrictive CSP fragment,
+WebUI reconnect HTTP/server fragments and asset, and strict startup wrapper.
+They are independent of the generated upstream nginx sources and survive
+regeneration of `onyx/onyx_data`; the wrapper transforms only ephemeral copies
+and nginx startup remains fatal on source drift or invalid configuration.
 
 ## Maintenance rule
 

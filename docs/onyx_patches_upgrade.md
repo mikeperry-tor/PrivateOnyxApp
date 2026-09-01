@@ -237,6 +237,29 @@ real login, hydration, streaming, lazy chunks, recovery, local/blob/data
 resources, blocked remote resources, and every enabled ingress; headers or HTML
 text alone do not prove WebUI compatibility.
 
+For recorded-stream reconnect, re-read
+`web/src/app/app/services/lib.tsx` (`sendMessage()` and `resumeStream()`),
+`currentMessageFIFO.ts`, `useChatController.ts`,
+`useChatSessionController.ts` (`resumeInFlightRun()`), `AppPage.tsx`
+(`pagehide` incognito teardown), `chat_backend.py` (`get_chat_session()`,
+`resume_chat_stream()`, and `end_incognito_session()`), `stream_buffer.py`, and
+`chat_configs.py`. Confirm the send payload and `llm_overrides` shape, response
+properties consumed after fetch, exact `chatId` parameter, FIFO error state,
+recorded hydration, `current_run`, cursor-zero resume endpoint, single- versus
+multi-model run IDs, and immediate incognito teardown. A changed response
+consumer property or multi-model ownership requires redesign, not a
+compatibility alias.
+
+Audit the stock HTML compression behavior, exact generated `server`, WebUI
+`location /`, and runner-start markers, both CSP policies, companion same-origin
+path, and selected nginx image's `http_sub_module`. Run the executable companion
+harness, selected-image nginx fixture, effective Docker/Podman lite/full models,
+and the live interruption matrix covering repeated suspension, offline/online,
+back-forward cache, cancellation, multi-model completion, incognito, and every
+enabled ingress. If upstream provides equivalent recorded, multi-model,
+cancellation, and incognito reconnect behavior, removal of the wrapper
+companion and transform is an upgrade gate.
+
 For all four audits, record exactly which deterministic, image, live-stack, or
 external-provider rows could not be executed and why. A blocked practical row
 does not waive source, effective-Compose, and deterministic evidence. Resolve
@@ -995,9 +1018,11 @@ does not rewrite compiled chunks because their immutable cache URLs would make
 that incomplete for existing clients. Remove this checkpoint once the pinned
 source and built image contain the safe fallback.
 
-Validate the nginx fragment with the pinned nginx image and inspect the
-effective Compose mount. A generated `onyx/onyx_data` refresh must not remove
-the tracked `/etc/nginx/conf.d/webui-csp.conf` bind mount.
+Validate the CSP and reconnect fragments, companion bytes, strict transform,
+and `http_sub_module` with the pinned nginx image. Inspect effective Docker and
+Podman Compose mounts and command. A generated `onyx/onyx_data` refresh must not
+remove the tracked binds or modify the generated source files; zero or multiple
+template/runner markers must fail before nginx starts.
 
 ## Runtime patch contract audit
 
@@ -1327,6 +1352,14 @@ cleanup workflow or reduce the container engine's configured retention as a
 substitute. Confirm `MAX_CONCURRENT_PORT_ATTEMPTS=1` still leaves one of the
 two doc-processing slots available for ordinary indexing and that ownership
 of the `port` queue has not changed.
+
+Re-audit native chat stream buffering against both the Redis full-mode and
+PostgreSQL lite-mode cache backends. Require the literal four-hour live TTL,
+one-hour recorded-completion TTL, and 32 MiB compressed per-run cap only on the
+API service; verify write refresh, completion expiry, incognito deletion, and
+gap fallback at eviction/corruption/truncation boundaries. Confirm the WebUI
+companion has no idle poller and multi-model recovery polling remains visible,
+online, backed off, and four-hour bounded.
 
 Run the document's deterministic, pinned-image, lifecycle, and integration
 checks, including `make health-inventory`, effective lite/full Docker and

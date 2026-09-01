@@ -141,6 +141,56 @@ def _make_compose_files(
 
 
 class ComposeOverlayLayoutTests(unittest.TestCase):
+    def test_webui_reconnect_policy_survives_every_engine_mode(self) -> None:
+        variants = {
+            "docker-lite": ("lite", ()),
+            "docker-full": ("full", ()),
+            "podman-lite": ("lite", ("docker-compose.podman.yml",)),
+            "podman-full": (
+                "full",
+                (
+                    "docker-compose.podman.yml",
+                    "docker-compose.podman-full.yml",
+                ),
+            ),
+            "podman-macos-full": (
+                "full",
+                (
+                    "docker-compose.podman.yml",
+                    "docker-compose.podman-full.yml",
+                    "docker-compose.podman-macos-full.yml",
+                ),
+            ),
+        }
+        expected_mounts = {
+            (str(ROOT / "onyx/nginx/webui-reconnect-http.conf"), "/etc/nginx/conf.d/webui-reconnect-http.conf"),
+            (str(ROOT / "onyx/nginx/webui-reconnect-server.inc"), "/etc/nginx/wrapper/webui-reconnect-server.inc"),
+            (str(ROOT / "onyx/nginx/webui-reconnect.js"), "/usr/share/private-onyx/webui-reconnect.js"),
+            (str(ROOT / "onyx/nginx/run-nginx-wrapper.sh"), "/usr/local/bin/run-nginx-wrapper.sh"),
+        }
+        stream_policy = {
+            "CHAT_STREAM_BUFFER_TTL_S": "14400",
+            "CHAT_STREAM_BUFFER_DONE_TTL_S": "3600",
+            "CHAT_STREAM_BUFFER_MAX_BYTES": "33554432",
+        }
+        for name, (mode, overlays) in variants.items():
+            with self.subTest(name=name):
+                services = _compose_model(mode, *overlays)["services"]
+                nginx = services["nginx"]
+                self.assertEqual(nginx["command"], ["/usr/local/bin/run-nginx-wrapper.sh"])
+                mounts = {
+                    (mount["source"], mount["target"])
+                    for mount in nginx["volumes"]
+                    if mount.get("type") == "bind" and mount.get("read_only")
+                }
+                self.assertTrue(expected_mounts <= mounts)
+                self.assertEqual(services["api_server"]["environment"] | stream_policy, services["api_server"]["environment"])
+                for service_name in ("background", "web_server", "nginx"):
+                    if service_name not in services:
+                        continue
+                    environment = services[service_name].get("environment", {})
+                    self.assertTrue(stream_policy.keys().isdisjoint(environment))
+
     def test_hidden_policy_options_keep_explicit_compose_defaults(self) -> None:
         hidden_options = {
             "MYST_VPN_WIREGUARD_MTU",

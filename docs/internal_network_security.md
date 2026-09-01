@@ -345,6 +345,15 @@ resource-load boundary with a documented inline-script XSS residual; it neither
 places the browser in the trusted routing namespace nor changes server-side
 destination policy.
 
+Nginx also serves the recorded-chat reconnect companion as one tracked exact
+same-origin asset and injects it into successful ordinary HTML. The companion
+observes only exact same-origin Onyx chat endpoints and makes only recovery-
+scoped same-origin session-detail requests. It adds no service, network, host
+port, socket, private mount, credential, cross-origin permission, SSRF surface,
+private-network reachability, or final-hop authority. Browser requests remain
+outside container egress routing and are constrained by both the upstream and
+tracked CSP policies.
+
 Wrapper logs redact query strings, bodies, cookies, credentials, and response
 content. Upstream Obscura does not provide the same guarantee and may expose
 full URLs in some logging modes; its logs are private data. Multi-worker child
@@ -377,6 +386,10 @@ accepts this only under its single-user trust assumption.
 - WebUI responses include the wrapper CSP; remote resources, inline event
   handler attributes, and eval are blocked while login hydration, same-origin
   APIs/WebSockets, and local previews work.
+- Successful ordinary WebUI HTML contains one tracked same-origin reconnect
+  companion; API/SSE, RSC, static, download, error, and unknown wrapper-asset
+  responses do not. Its session checks cannot select a container egress route
+  or expand browser connection authority.
 - Full-mode doc-drop remains a local path and does not gain browser/CDP access.
 - Document push remains explicitly blank. Tracing has no enabled provider
   unless a full administrator deliberately configures that sensitive export.

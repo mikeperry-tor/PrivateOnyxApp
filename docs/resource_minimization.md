@@ -176,6 +176,20 @@ are not duplicate enforcement.
 - AnyIO's API thread pool is capped at 12 workers. This bounds synchronous
   endpoint and streaming-generator concurrency without changing request
   semantics or adding a queue outside AnyIO's normal limiter.
+- Recorded chat runs use Onyx's native durable stream buffer with a four-hour
+  live TTL refreshed on each write, a one-hour TTL applied to recorded chunks
+  and metadata at completion, and a 32 MiB compressed cap per run. The cap is
+  neither reserved memory nor a whole-cache limit; worst-case concurrent use
+  is the sum of active runs plus cache overhead. Full mode uses the shared
+  Redis cache while lite mode uses the PostgreSQL cache backend. Eviction,
+  expiry, corruption, or truncation remains a replay gap and falls back to the
+  persisted recorded message. Incognito completion deletes its buffer instead
+  of retaining it for the completed TTL.
+- The WebUI reconnect companion adds no idle timer or poller. Single-model
+  recovery is lifecycle-triggered. Multi-model status polling exists only for
+  an interrupted, visible, online recovery, backs off from two seconds to at
+  most one minute, pauses when hidden/offline, and expires with the four-hour
+  tab marker.
 
 ### Onyx Craft
 
