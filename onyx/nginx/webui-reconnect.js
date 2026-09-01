@@ -12,6 +12,7 @@
   const RESUME_PREFIX = "/api/chat/chat-session/";
   const RESUME_SUFFIX = "/resume-stream";
   const INCOGNITO_PREFIX = "/api/chat/end-incognito-session/";
+  const STOP_PREFIX = "/api/chat/stop-chat-session/";
   const allowedRecordKeys = new Set([
     "version",
     "token",
@@ -212,35 +213,24 @@
     return Boolean(response.body) && typeof TransformStream === "function" && typeof response.body.pipeTo === "function";
   }
 
-  function wrapStreamResponse(response, token, signal, recoverOnError) {
+  function wrapStreamResponse(response, token, recoverOnError) {
     if (!canWrapStreamResponse(response)) {
       showManualNotice();
       return response;
     }
     let failureObserved = false;
-    let abortHandler = null;
     const transparent = new TransformStream({
       transform(chunk, controller) {
         controller.enqueue(chunk);
       },
       flush() {
         clearMatching(token);
-        if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
       },
     });
-    if (signal && typeof signal.addEventListener === "function") {
-      abortHandler = () => clearMatching(token);
-      signal.addEventListener("abort", abortHandler, { once: true });
-      if (signal.aborted) clearMatching(token);
-    }
     response.body.pipeTo(transparent.writable).catch(() => {
       if (failureObserved) return;
       failureObserved = true;
-      if (signal && signal.aborted) {
-        clearMatching(token);
-      } else if (recoverOnError) {
-        markForRecovery(token);
-      }
+      if (recoverOnError) markForRecovery(token);
     });
     return new Response(transparent.readable, {
       status: response.status,
@@ -284,12 +274,8 @@
     if (!saveRecord(record)) showManualNotice();
 
     const signal = init.signal;
-    let abortHandler = null;
-    if (signal && typeof signal.addEventListener === "function") {
-      abortHandler = () => clearMatching(token);
-      signal.addEventListener("abort", abortHandler, { once: true });
-      if (signal.aborted) clearMatching(token);
-    }
+    const abortedBeforeSend = Boolean(signal && signal.aborted);
+    if (abortedBeforeSend) clearMatching(token);
 
     let result;
     try {
@@ -303,10 +289,9 @@
         clearMatching(token);
         return response;
       }
-      if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
-      return wrapStreamResponse(response, token, signal, true);
+      return wrapStreamResponse(response, token, true);
     }, (error) => {
-      if (signal && signal.aborted) clearMatching(token);
+      if (abortedBeforeSend) clearMatching(token);
       else markForRecovery(token);
       throw error;
     });
@@ -320,20 +305,21 @@
     const method = requestMethod(input, init);
     if (!url || url.origin !== location.origin) return originalFetch.apply(this, args);
 
-    const incognitoId = method === "POST" && matchingSameOrigin(url)
-      ? exactSessionId(url.pathname, INCOGNITO_PREFIX)
+    const terminalSessionId = method === "POST" && matchingSameOrigin(url)
+      ? exactSessionId(url.pathname, INCOGNITO_PREFIX) ||
+        exactSessionId(url.pathname, STOP_PREFIX)
       : null;
-    if (incognitoId) {
+    if (terminalSessionId) {
       let result;
       try {
         result = originalFetch.apply(this, args);
       } catch (error) {
         const record = loadRecord();
-        if (record && record.sessionId === incognitoId) clearMatching(record.token);
+        if (record && record.sessionId === terminalSessionId) clearMatching(record.token);
         throw error;
       }
       const record = loadRecord();
-      if (record && record.sessionId === incognitoId) clearMatching(record.token);
+      if (record && record.sessionId === terminalSessionId) clearMatching(record.token);
       return result;
     }
 
@@ -351,7 +337,7 @@
         const current = loadRecord();
         if (!current || current.token !== record.token) return response;
         if (canWrapStreamResponse(response)) resumeOwnerToken = record.token;
-        return wrapStreamResponse(response, record.token, init && init.signal, true);
+        return wrapStreamResponse(response, record.token, true);
       }, (error) => {
         const current = loadRecord();
         if (current && current.token === record.token) markForRecovery(record.token);

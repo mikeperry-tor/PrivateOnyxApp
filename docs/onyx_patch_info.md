@@ -619,10 +619,15 @@ never holds prompts, packets, model or provider names, files, credentials,
 headers, error bodies, or exception text.
 It forwards successful exact send and resume bodies through one transparent
 `TransformStream`, clears only the matching token on clean completion,
-non-success, or explicit cancellation, and retains the marker when a browser
-transport failure may have happened after server acceptance. Other session
-requests remain untouched; they are not a second recovery owner. A later send
-supersedes the marker and cancels recovery work owned by the earlier token.
+non-success, or a send that was already aborted before invocation, and retains
+the marker when a browser transport failure may have happened after server
+acceptance. An abort after invocation is not authoritative: stock route cleanup
+and `resumeInFlightRun()`'s `finally` both abort stream controllers. The exact
+same-origin stop-session POST is the explicit user-cancellation owner; the
+companion invokes it once and then clears only its matching marker while
+preserving the result or exception. Other session requests remain untouched;
+they are not a second recovery owner. A later send supersedes the marker and
+cancels recovery work owned by the earlier token.
 
 After a genuine hidden/pagehide, restored-page, offline transition, or visible
 stream failure, the companion owns one token-correlated abortable request to
@@ -679,11 +684,12 @@ manufacture another interruption or displace an active stock resume owner; an
 actual resumed-body failure owns that transition. Persisted recovery phase
 self-starts in the new document and does not depend on intercepting or ordering
 a stock session GET.
-There is no idle poller. Explicit stock cancellation clears the marker. An
-incognito or missing status clears it without reload; an exact end-session
-fetch/beacon also clears it only after invoking the original operation. The
-original call count, return value, error, immediate teardown, and completed-
-buffer deletion remain unchanged.
+There is no idle poller. The exact stock stop request clears the marker;
+controller cleanup after a resumed-body failure cannot erase the resulting
+recovery. An incognito or missing status clears it without reload; an exact
+end-session fetch/beacon also clears it only after invoking the original
+operation. The original call count, return value, error, immediate teardown,
+and completed-buffer deletion remain unchanged.
 
 `run-nginx-wrapper.sh` copies the generated templates into their ordinary
 ephemeral container location, requires one current `server` and WebUI

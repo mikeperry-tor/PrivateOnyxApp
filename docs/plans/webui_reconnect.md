@@ -46,12 +46,15 @@ stock behavior. Before editing, re-read and validate these v4.6.5 sources in
   `updateCurrentMessageFIFO()` turns a browser-side stream exception into
   `CurrentMessageFIFO.error` and completes the FIFO.
 - `web/src/hooks/useChatController.ts`: the stock active-send consumer turns
-  that FIFO error into the current chat error state.
+  that FIFO error into the current chat error state; explicit user cancellation
+  calls the exact `stop-chat-session` endpoint, while route cleanup can abort a
+  stream controller without expressing cancellation intent.
 - `web/src/hooks/useChatSessionController.ts`:
   `resumeInFlightRun()` replays a recorded single-model run from cursor zero,
-  tails it, and then refreshes the persisted session. It intentionally does not
-  attach to a multi-model run because that run id identifies the user message,
-  not an assistant node.
+  tails it, aborts its controller in `finally` as local cleanup, and then
+  refreshes the persisted session. It intentionally does not attach to a
+  multi-model run because that run id identifies the user message, not an
+  assistant node.
 - `web/src/views/AppPage.tsx`: incognito sessions register a `pagehide`
   `sendBeacon()` teardown and are intentionally deleted when the page closes.
 - `backend/onyx/server/query_and_chat/chat_backend.py`:
@@ -234,8 +237,11 @@ and errors. Only instrument exact same-origin requests:
   rethrow the exact error.
 - Never issue a replacement POST after synchronous failure, HTTP failure,
   response-stream failure, or wake-up.
-- Clear the matching token on a non-success response or an explicit stock
-  `AbortSignal` cancellation.
+- Clear the matching token on a non-success response or a signal that was
+  already aborted before the send was invoked. An abort after invocation is
+  ambiguous: stock route cleanup and resumed-stream `finally` cleanup use the
+  same signal mechanism, so it must retain the marker unless an exact stop
+  request proves user intent.
 - For a successful send or exact
   `GET /api/chat/chat-session/{session_id}/resume-stream?cursor={integer}`,
   pass the original bytes through one transparent `TransformStream`. Clear
@@ -251,6 +257,10 @@ and errors. Only instrument exact same-origin requests:
 - Leave ordinary `GET /api/chat/get-chat-session/{session_id}` requests
   untouched. Recovery owns its own bounded status request instead of coupling
   correctness to an upstream fetch's timing, promise, or response body.
+- Observe exact same-origin
+  `POST /api/chat/stop-chat-session/{session_id}` as the authoritative explicit
+  user-cancellation signal. Invoke the original operation exactly once, then
+  clear only the matching marker while preserving its result or exception.
 - Observe exact incognito end-session fetch/beacon calls only to clear a
   matching companion marker after invoking the original operation. Never
   block, alter, defer, retry, or claim success for the teardown operation.
@@ -473,8 +483,12 @@ Cover at least:
 - unrelated and cross-origin fetches remain byte/identity transparent;
 - one exact send creates one sanitized marker and calls the original once;
 - prompts, headers, packets, and errors never enter storage or logs;
-- clean EOF, HTTP failure, and explicit abort clear only the matching token;
+- clean EOF, HTTP failure, and a pre-aborted send clear only the matching token;
+- an in-flight send abort retains an ambiguously accepted marker, while an
+  exact stop-session POST calls the original once and clears that marker;
 - stream failure retains the marker and propagates the original failure;
+- a resumed-body failure followed by stock's `finally` controller abort retains
+  the marker and schedules another recovery;
 - the stream is forwarded incrementally without cloning, teeing, buffering,
   parsing, reordering, or combining chunks;
 - a later send cannot be cleared by completion of an earlier token;
@@ -582,8 +596,9 @@ starts. Recovery must never increase either count.
 8. **Intentional navigation:** switch to another chat while the marked run is
    active. The companion does not redirect or reload the other chat. Returning
    to the original chat permits reconciliation.
-9. **Explicit stop:** cancel from the stock UI. The abort remains a cancellation
-   and does not become an automatic reconnect.
+9. **Explicit stop:** cancel from the stock UI. The exact stop-session POST
+   clears recovery state, is issued once, and does not become an automatic
+   reconnect; later local stream cleanup cannot change that outcome.
 10. **Multi-model:** interrupt a recorded multi-model run. The companion does
     not claim live panel replay, uses only recovery-scoped backed-off status
     checks, reloads after completion, and renders every persisted panel once.

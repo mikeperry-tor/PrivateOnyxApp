@@ -239,13 +239,14 @@ text alone do not prove WebUI compatibility.
 
 For recorded-stream reconnect, re-read
 `web/src/app/app/services/lib.tsx` (`sendMessage()` and `resumeStream()`),
-`currentMessageFIFO.ts`, `useChatController.ts`,
+`currentMessageFIFO.ts`, `useChatController.ts` (`stopChatSession()`, active
+send handling, and route cleanup),
 `useChatSessionController.ts` (`resumeInFlightRun()`), `AppPage.tsx`
 (`pagehide` incognito teardown), `chat_backend.py` (`get_chat_session()`,
-`resume_chat_stream()`, and `end_incognito_session()`), `stream_buffer.py`,
+`resume_chat_stream()`, `stop_chat_session()`, and `end_incognito_session()`), `stream_buffer.py`,
 `chat_processing_checker.py`, `cache/interface.py`, and `chat_configs.py`.
 Confirm the send payload and `llm_overrides` shape, response properties consumed
-after fetch, exact `chatId` parameter, FIFO error state, recorded hydration,
+after fetch, exact `chatId` and stop-session paths, FIFO error state, recorded hydration,
 `current_run`, cursor-zero resume endpoint, processing-fence encoding, transient
 cache exceptions, single- versus multi-model run IDs, the two-or-more
 `llm_overrides` threshold, and immediate incognito teardown. The runtime patch
@@ -275,8 +276,14 @@ guard and resume settling, while a replacement document self-starts normally;
 neither path may create another interruption or a reload loop.
 The pre-reload status check must clear incognito and missing sessions without a
 reload; exact stock incognito fetch/beacon and cancellation behavior must remain
-unchanged. A visible send or resume stream failure must enter the same bounded
-recovery path, while clean EOF clears only its own token. Prove single-model
+unchanged. Re-audit the exact stop-session POST as the authoritative explicit
+cancellation signal: it must call the original once and clear only its matching
+marker. A pre-aborted send clears its new marker, while an abort after invocation
+remains ambiguous and retains it. In particular, a resumed-body failure must
+enter recovery before `resumeInFlightRun()` aborts its controller in `finally`,
+and that cleanup abort must not erase recovery. A visible send or resume stream
+failure must enter the same bounded recovery path, while clean EOF clears only
+its own token. Prove single-model
 post-reload settling stops only after a successful stock resume response and
 leaves that body as the completion owner. Without an observed resume owner,
 active checks continue and completion performs a final hydration reload. Prove

@@ -290,7 +290,7 @@ async function main() {
     browser.window.fetch("/api/chat/send-chat-message", { ...sendInit(), signal: controller.signal });
     controller.abort();
     await Promise.resolve();
-    assert(!browser.storage.has(browser.key), "explicit abort retained marker");
+    assert(browser.storage.has(browser.key), "ambiguous in-flight abort discarded an accepted send marker");
   }
 
   {
@@ -793,6 +793,16 @@ async function main() {
 
   {
     let calls = 0;
+    const sentinel = Promise.resolve(new Response(null, { status: 200 }));
+    const browser = createBrowser(() => { calls += 1; return sentinel; });
+    browser.window.__privateOnyxReconnectTest.saveRecord(recoveryRecord());
+    const result = browser.window.fetch(`/api/chat/stop-chat-session/${SESSION}`, { method: "POST" });
+    assert(result === sentinel && calls === 1, "stop fetch identity/call count changed");
+    assert(!browser.storage.has(browser.key), "explicit stop retained reconnect state");
+  }
+
+  {
+    let calls = 0;
     const controller = new AbortController();
     controller.abort();
     const rejection = new Error("already aborted");
@@ -843,6 +853,29 @@ async function main() {
       observed = error;
     }
     assert(observed === failure && browser.pendingTimers().length === 1, "resume rejection did not retain identity and schedule recovery");
+  }
+
+  {
+    const failure = new Error("resumed body disconnected");
+    const controller = new AbortController();
+    const browser = createBrowser((url) => {
+      if (String(url).includes("/resume-stream")) {
+        return Promise.resolve(streamResponse(["partial"], failure));
+      }
+      return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+    });
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    const response = await browser.window.fetch(
+      `/api/chat/chat-session/${SESSION}/resume-stream?cursor=8`,
+      { signal: controller.signal }
+    );
+    let observed = null;
+    try { await response.text(); } catch (error) { observed = error; }
+    await settle();
+    controller.abort();
+    await settle();
+    assert(observed === failure, "resumed body failure identity changed");
+    assert(browser.storage.has(browser.key) && browser.pendingTimers().length === 1, "stock cleanup abort erased resumed-body recovery");
   }
 
   {
