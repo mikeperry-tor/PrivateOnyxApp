@@ -242,12 +242,17 @@ For recorded-stream reconnect, re-read
 `currentMessageFIFO.ts`, `useChatController.ts`,
 `useChatSessionController.ts` (`resumeInFlightRun()`), `AppPage.tsx`
 (`pagehide` incognito teardown), `chat_backend.py` (`get_chat_session()`,
-`resume_chat_stream()`, and `end_incognito_session()`), `stream_buffer.py`, and
-`chat_configs.py`. Confirm the send payload and `llm_overrides` shape, response
-properties consumed after fetch, exact `chatId` parameter, FIFO error state,
-recorded hydration, `current_run`, cursor-zero resume endpoint, single- versus
-multi-model run IDs, the two-or-more `llm_overrides` threshold, and immediate
-incognito teardown. A changed response
+`resume_chat_stream()`, and `end_incognito_session()`), `stream_buffer.py`,
+`chat_processing_checker.py`, `cache/interface.py`, and `chat_configs.py`.
+Confirm the send payload and `llm_overrides` shape, response properties consumed
+after fetch, exact `chatId` parameter, FIFO error state, recorded hydration,
+`current_run`, cursor-zero resume endpoint, processing-fence encoding, transient
+cache exceptions, single- versus multi-model run IDs, the two-or-more
+`llm_overrides` threshold, and immediate incognito teardown. The runtime patch
+must install exactly one authenticated
+`/api/chat/reconnect-status/{session_id}` route, reject an upstream collision,
+and fail startup when the stock session endpoint no longer has the audited
+cache-error behavior. A changed response
 consumer property or multi-model ownership requires redesign, not a
 compatibility alias.
 
@@ -261,12 +266,14 @@ phase self-starts after reload without relying on a stock fetch being observed.
 The pre-reload status check must clear incognito and missing sessions without a
 reload; exact stock incognito fetch/beacon and cancellation behavior must remain
 unchanged. A visible send or resume stream failure must enter the same bounded
-recovery path, while clean EOF clears only its own token. Prove a single-model
-status result cannot silently clear the token while a resume body is still
-draining: completion observed before clean EOF must reconcile the page with a
-reload. Prove `pushState`, `replaceState`, and `popstate` preserve their native
-call behavior, schedule nothing without a marker, and restart a retained multi-
-model recovery when client-side navigation returns to its `chatId`.
+recovery path, while clean EOF clears only its own token. Prove single-model
+post-reload settling stops only after a successful stock resume response and
+leaves that body as the completion owner. Without an observed resume owner,
+active checks continue and completion performs a final hydration reload. Prove
+`pushState`, `replaceState`, and `popstate`
+preserve their native call behavior, schedule nothing without a marker, and
+restart a retained multi-model recovery when client-side navigation returns to
+its `chatId`.
 
 Audit the stock HTML compression behavior, exact generated `server`, WebUI
 `location /`, and runner-start markers, both CSP policies, companion same-origin
@@ -1377,15 +1384,23 @@ two doc-processing slots available for ordinary indexing and that ownership
 of the `port` queue has not changed.
 
 Re-audit native chat stream buffering against both the Redis full-mode and
-PostgreSQL lite-mode cache backends. Require the literal four-hour live TTL,
-one-hour recorded-completion TTL, and 32 MiB compressed per-run cap only on the
-API service; verify write refresh, completion expiry, incognito deletion, and
-gap fallback at eviction/corruption/truncation boundaries. Confirm the WebUI
+PostgreSQL lite-mode cache backends. Require the literal four-hour per-chunk
+live TTL, one-hour recorded-completion TTL, and 32 MiB compressed per-run cap
+only on the API service. Verify that a new write does not refresh older chunk
+TTLs, completion resets every surviving chunk and metadata expiry, incognito
+deletes, and eviction/corruption/truncation/expiry produces a gap. Run
+`make integration-chat-stream-cache-lite` against a healthy lite stack and
+`make integration-chat-stream-cache-full` against a healthy full stack to
+exercise the selected PostgreSQL and Redis implementations. Confirm the WebUI
 companion has no idle poller, marker-free History navigation schedules no work,
 and recovery polling remains visible, online, backed off, and four-hour
-bounded. Recheck that clean resume EOF cancels single-model polling and that a
-completion-status race performs reconciliation rather than silently dropping
-the marker.
+bounded. Recheck that the dedicated recovery-status route retains the stock
+read-chat permission, avoids full message hydration, and returns a retryable
+failure for transient cache errors or a present fence without a run ID. After
+the first single-model reload, require settling to stop only after observing a
+successful stock resume response. That wrapped body owns completion; if no
+resume owner appears, bounded checks continue and completion performs one final
+hydration reload. Multi-model recovery also polls until its final reload.
 
 Run the document's deterministic, pinned-image, lifecycle, and integration
 checks, including `make health-inventory`, effective lite/full Docker and

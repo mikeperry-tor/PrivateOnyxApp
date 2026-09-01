@@ -33,6 +33,8 @@ class ValidationMakefileTests(unittest.TestCase):
             "test-opensearch-image",
             "test-all-images",
             "check-upgrade",
+            "integration-chat-stream-cache-lite",
+            "integration-chat-stream-cache-full",
             "integration-opensearch",
             "integration-opensearch-restart",
             "integration-opensearch-onyx",
@@ -66,6 +68,21 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertIn('tests/validate_obscura_image.py', MAKEFILE)
         self.assertIn('tests/opensearch_runtime_validation.py', MAKEFILE)
         self.assertIn('tests/onyx_opensearch_runtime_validation.py', MAKEFILE)
+        self.assertEqual(
+            MAKEFILE.count("tests/validate_chat_stream_cache_backend.py"), 2
+        )
+        self.assertRegex(
+            MAKEFILE,
+            r"(?m)^integration-chat-stream-cache-lite:\n"
+            r"\t@COMPOSE_FILE=\$\(LITE_FILES\).*\n"
+            r"\t\tpython - postgres < tests/validate_chat_stream_cache_backend.py$",
+        )
+        self.assertRegex(
+            MAKEFILE,
+            r"(?m)^integration-chat-stream-cache-full:\n"
+            r"\t@COMPOSE_FILE=\$\(FULL_FILES\).*\n"
+            r"\t\tpython - redis < tests/validate_chat_stream_cache_backend.py$",
+        )
 
     def test_opensearch_validation_is_container_engine_neutral(self) -> None:
         runtime = (ROOT / "tests" / "opensearch_runtime_validation.py").read_text()

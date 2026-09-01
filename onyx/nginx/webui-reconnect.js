@@ -8,7 +8,7 @@
   const POLL_DELAYS_MS = [2000, 5000, 15000, 30000, 60000];
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const SEND_PATH = "/api/chat/send-chat-message";
-  const SESSION_PREFIX = "/api/chat/get-chat-session/";
+  const SESSION_PREFIX = "/api/chat/reconnect-status/";
   const RESUME_PREFIX = "/api/chat/chat-session/";
   const RESUME_SUFFIX = "/resume-stream";
   const INCOGNITO_PREFIX = "/api/chat/end-incognito-session/";
@@ -33,6 +33,7 @@
   let statusRequest = null;
   let storageUsable = true;
   let reloadingToken = null;
+  let resumeOwnerToken = null;
 
   function now() {
     return Date.now();
@@ -118,6 +119,7 @@
     if (!record || record.token !== token) return false;
     removeStored();
     cancelRecoveryWork(token);
+    if (resumeOwnerToken === token) resumeOwnerToken = null;
     return true;
   }
 
@@ -193,8 +195,12 @@
     scheduleRecovery();
   }
 
+  function canWrapStreamResponse(response) {
+    return Boolean(response.body) && typeof TransformStream === "function" && typeof response.body.pipeTo === "function";
+  }
+
   function wrapStreamResponse(response, token, signal, recoverOnError) {
-    if (!response.body || typeof TransformStream !== "function" || typeof response.body.pipeTo !== "function") {
+    if (!canWrapStreamResponse(response)) {
       showManualNotice();
       return response;
     }
@@ -261,6 +267,7 @@
     };
     cancelRecoveryWork();
     reloadingToken = null;
+    resumeOwnerToken = null;
     if (!saveRecord(record)) showManualNotice();
 
     const signal = init.signal;
@@ -328,6 +335,9 @@
       if (!record || record.sessionId !== resumedSession) return result;
       return Promise.resolve(result).then((response) => {
         if (!response.ok) return response;
+        const current = loadRecord();
+        if (!current || current.token !== record.token) return response;
+        if (canWrapStreamResponse(response)) resumeOwnerToken = record.token;
         return wrapStreamResponse(response, record.token, init && init.signal, true);
       }, (error) => {
         const current = loadRecord();
@@ -440,6 +450,18 @@
       return;
     }
 
+    if (purpose === "single-settle") {
+      if (payload.current_run == null) {
+        if (resumeOwnerToken === token) return;
+        clearMatching(token);
+        location.reload();
+        return;
+      }
+      if (resumeOwnerToken !== token) {
+        scheduleStatus(current, false, purpose);
+      }
+      return;
+    }
     if (payload.current_run == null) {
       clearMatching(token);
       location.reload();
@@ -453,8 +475,12 @@
     const record = loadRecord();
     if (!record || document.visibilityState !== "visible" || navigator.onLine === false) return;
     if (currentChatId() !== record.sessionId) return;
-    if (record.pollPhase !== null && record.hiddenAt === null) {
+    if (record.pollPhase === "multi" && record.hiddenAt === null) {
       scheduleStatus(record, true, "settle");
+      return;
+    }
+    if (record.pollPhase === "single" && record.hiddenAt === null) {
+      scheduleStatus(record, true, "single-settle");
       return;
     }
     if (record.pollPhase === "multi") {

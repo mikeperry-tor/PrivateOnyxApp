@@ -349,8 +349,11 @@ Nginx also serves the recorded-chat reconnect companion as one tracked exact
 same-origin asset and injects it into successful ordinary HTML. The companion
 wraps only exact same-origin send/resume streams and incognito teardown calls;
 ordinary session requests remain untouched. During recovery it owns at most
-one token-correlated, abortable same-origin session-detail request, which
-classifies incognito or missing sessions before any reload. Marker-gated History
+one token-correlated, abortable request to the wrapper's authenticated
+same-origin recovery-status endpoint. That route retains the stock read-chat
+permission, reads no message contents, and reports cache uncertainty as a
+retryable failure rather than false completion. It classifies incognito or
+missing sessions before any reload. Marker-gated History
 API observation notices client-side returns to the selected chat but creates no
 request or timer without recovery state and cannot select or redirect a chat.
 It adds no service, network, host port, socket, private mount, credential,

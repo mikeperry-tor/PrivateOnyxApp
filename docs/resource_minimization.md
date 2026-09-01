@@ -176,26 +176,33 @@ are not duplicate enforcement.
 - AnyIO's API thread pool is capped at 12 workers. This bounds synchronous
   endpoint and streaming-generator concurrency without changing request
   semantics or adding a queue outside AnyIO's normal limiter.
-- Recorded chat runs use Onyx's native durable stream buffer with a four-hour
-  live TTL refreshed on each write, a one-hour TTL applied to recorded chunks
-  and metadata at completion, and a 32 MiB compressed cap per run. The cap is
+- Recorded chat runs use Onyx's native durable stream buffer. Each compressed
+  chunk receives a four-hour live TTL when that chunk is written, while each
+  flush refreshes the metadata TTL; later writes do not refresh older chunks.
+  Completion applies a one-hour TTL to every surviving recorded chunk and its
+  metadata. A run that remains active for more than four hours can therefore
+  lose its earliest chunks and is treated as a replay gap. The buffer has a
+  32 MiB compressed cap per run. The cap is
   neither reserved memory nor a whole-cache limit; worst-case concurrent use
   is the sum of active runs plus cache overhead. Full mode uses the shared
   Redis cache while lite mode uses the PostgreSQL cache backend. Eviction,
   expiry, corruption, or truncation remains a replay gap and falls back to the
   persisted recorded message. Incognito completion deletes its buffer instead
   of retaining it for the completed TTL.
-- The WebUI reconnect companion adds no idle timer or poller. One status
-  request exists only for an interrupted, visible, online single- or multi-
-  model recovery. The initial check classifies incognito/missing sessions
-  before reload; post-reload checks settle the persisted recovery phase. A
-  single-model clean resume EOF cancels that work; if backend completion wins
-  the race, the status path performs a final reconciliation reload instead of
-  dropping recovery state. Marker-gated History API calls only schedule the
-  same bounded recovery check after client-side navigation and add no work when
-  the tab has no marker. Checks back off from two seconds to at most one minute,
-  retry temporary failures, abort when hidden, pause while offline, and expire
-  with the four-hour tab marker.
+- The WebUI reconnect companion adds no idle timer or poller. Its dedicated
+  recovery-status endpoint uses the stock read-chat permission and a narrow
+  session lookup; an unavailable cache or an in-flight fence without a usable
+  run ID is retryable and cannot be mistaken for completion. One status request
+  exists only for an interrupted, visible, online recovery. After the initial
+  single-model reload, settling stops once a successful stock resume response
+  is observed and that body owns completion. If no resume owner appears,
+  bounded checks continue and completion causes one final hydration reload.
+  Multi-model recovery also polls until its final reconciliation reload.
+  Marker-gated History API calls only
+  schedule the same bounded recovery check after client-side navigation and add
+  no work when the tab has no marker. Checks back off from two seconds to at
+  most one minute, retry temporary failures, abort when hidden, pause while
+  offline, and expire with the four-hour tab marker.
 
 ### Onyx Craft
 

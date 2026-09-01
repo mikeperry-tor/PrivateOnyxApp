@@ -161,6 +161,10 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
 - `make integration-opensearch`, `make integration-opensearch-restart`, and
   `make integration-opensearch-onyx` - validate the running full-stack
   OpenSearch volume, restart recovery, and pinned Onyx integration.
+- `make integration-chat-stream-cache-lite` and
+  `make integration-chat-stream-cache-full` - validate durable chat replay,
+  per-chunk/completion TTL behavior, and the compressed-cap gap against the
+  running mode's selected PostgreSQL or Redis cache backend.
 - `make up-lite` / `make up-full` - start the selected stack; full mode also
   performs its documented staged embedding-readiness flow; `CONTAINER_BIN` selects
   between docker and podman runtimes for the stack.

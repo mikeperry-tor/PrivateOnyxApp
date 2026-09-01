@@ -543,7 +543,7 @@ FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-stop-if-started
 endif
 endif
 
-.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine release-myst-data-ownership prepare-lite-host-data prepare-full-host-data prepare-onyx-tokenizer up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-sync-environment embedserv-sync-if-installed embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-chat-stream-cache-lite integration-chat-stream-cache-full integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine release-myst-data-ownership prepare-lite-host-data prepare-full-host-data prepare-onyx-tokenizer up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-sync-environment embedserv-sync-if-installed embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
 
 .NOTPARALLEL: up-lite up-full
 
@@ -739,6 +739,14 @@ test-all-images:
 	@$(MAKE) --no-print-directory test-obscura-image
 	@$(MAKE) --no-print-directory test-tor-image
 	@$(MAKE) --no-print-directory test-opensearch-image
+
+integration-chat-stream-cache-lite:
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) exec -T api_server \
+		python - postgres < tests/validate_chat_stream_cache_backend.py
+
+integration-chat-stream-cache-full:
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) exec -T api_server \
+		python - redis < tests/validate_chat_stream_cache_backend.py
 
 integration-opensearch:
 	@python3 tests/opensearch_runtime_validation.py \

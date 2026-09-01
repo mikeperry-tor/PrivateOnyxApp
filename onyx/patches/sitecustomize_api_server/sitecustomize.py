@@ -48,6 +48,9 @@ def _install() -> None:
     from url_identity_preservation_patch import (
         install as install_url_identity_preservation,
     )
+    from webui_reconnect_status_patch import (
+        install as install_webui_reconnect_status,
+    )
 
     apply_embedding_tokenizer_alias_patch()
     apply_llm_max_tokens_override_patch()
@@ -72,6 +75,7 @@ def _install() -> None:
     apply_chat_file_id_validation_patch()
     apply_searxng_single_attempt_patch()
     install_enterprise_settings_compat()
+    install_webui_reconnect_status()
     install_url_identity_preservation()
     install_open_url_failure_reporting()
     install_open_url_limit()

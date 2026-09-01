@@ -52,9 +52,11 @@ def _validate_durable_stream_buffer_policy() -> None:
     writer = stream_buffer.StreamBufferWriter(cache, session_id, 7)
     writer.append_line("first packet\n")
     writer.flush()
+    first_chunk_key = next(key for key in cache.values if not key.endswith(":meta"))
     writer.append_line("second packet\n")
     writer.flush()
     assert all(ttl == 14400 for _key, ttl in cache.set_ttls)
+    assert [key for key, _ttl in cache.set_ttls].count(first_chunk_key) == 1
 
     first_read = stream_buffer.read_stream_chunks(cache, session_id, 7, 0)
     assert first_read is not None
@@ -112,6 +114,7 @@ def _validate_production_bootstrap() -> None:
     from onyx.server.features.mcp import ssrf as mcp_ssrf
     from onyx.server.auth_check import PUBLIC_ENDPOINT_SPECS
     from onyx.server.manage.get_state import router as state_router
+    from onyx.server.query_and_chat.chat_backend import router as chat_router
     from onyx.tools.tool_implementations.bash.bash_tool import BashTool
     from onyx.tools.tool_implementations.open_url import onyx_web_crawler
     from onyx.tools.tool_implementations.open_url.open_url_tool import OpenURLTool
@@ -139,6 +142,16 @@ def _validate_production_bootstrap() -> None:
     assert getattr(OpenURLTool, "_wrapper_explicit_url_limit_patch", False)
     assert getattr(state_router, "_wrapper_enterprise_settings_compat_patch", False)
     assert ("/enterprise-settings", {"GET"}) in PUBLIC_ENDPOINT_SPECS
+    assert getattr(chat_router, "_wrapper_webui_reconnect_status_patch", False)
+
+    reconnect_routes = [
+        route
+        for route in chat_router.routes
+        if getattr(route, "path", None) == "/chat/reconnect-status/{session_id}"
+    ]
+    assert len(reconnect_routes) == 1
+    assert reconnect_routes[0].methods == {"GET"}
+    assert reconnect_routes[0].name == "wrapper_webui_reconnect_status"
 
     enterprise_routes = [
         route

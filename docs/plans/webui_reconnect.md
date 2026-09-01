@@ -25,7 +25,7 @@ Increase Onyx's native durable-stream limits at the same time:
 
 | Onyx environment variable | Required value | Meaning |
 | --- | ---: | --- |
-| `CHAT_STREAM_BUFFER_TTL_S` | `14400` | Four-hour live-buffer TTL, refreshed by each write. |
+| `CHAT_STREAM_BUFFER_TTL_S` | `14400` | Four-hour TTL assigned to each chunk when written and to metadata on each flush. |
 | `CHAT_STREAM_BUFFER_DONE_TTL_S` | `3600` | One-hour retention after recorded-chat completion. |
 | `CHAT_STREAM_BUFFER_MAX_BYTES` | `33554432` | 32 MiB compressed cap per run. |
 
@@ -58,6 +58,9 @@ stock behavior. Before editing, re-read and validate these v4.6.5 sources in
   `get_chat_session()` exposes `current_run`, `resume_chat_stream()` owns the
   replay/tail endpoint, and `end_incognito_session()` owns immediate incognito
   teardown.
+- `backend/onyx/chat/chat_processing_checker.py` and
+  `backend/onyx/cache/interface.py`: the processing-fence encoding and selected
+  backend transient exceptions used by the wrapper recovery-status route.
 - `backend/onyx/chat/stream_buffer.py`: buffers exact outbound NDJSON as
   compressed chunks, treats truncation/eviction as a gap, deletes completed
   incognito buffers, and gives recorded completed buffers the done TTL.
@@ -281,6 +284,17 @@ marker session. If the user intentionally navigated to another chat, retain
 the bounded marker for a later return to its chat but do not reload or redirect
 the current view. Never change the selected chat automatically.
 
+Install one API runtime route at
+`GET /api/chat/reconnect-status/{session_id}`. It uses the stock `READ_CHAT`
+dependency and a narrow session lookup, returns only `incognito` and
+`current_run`, and does not load or translate message history. It must not
+replace or wrap the ordinary session-detail endpoint. If the selected cache
+raises a declared transient exception, or a processing fence exists without a
+usable positive run ID, return `503`; absence is authoritative completion only
+after those checks succeed. Startup must reject an upstream route collision or
+drift in the stock cache-error behavior that makes this patch unnecessary or
+unsafe.
+
 #### Recorded single-model recovery
 
 When the marked chat becomes visible after suspension, first make the owned
@@ -289,12 +303,13 @@ recorded in-flight session, persist the `single` phase and perform one initial
 reconciliation reload. The new stock WebUI fetches the session, sees
 `current_run`, and invokes
 `resumeInFlightRun()` from cursor zero; if the run completed while hidden, the
-reload renders the persisted result instead. The startup phase check continues
-until the resumed response reaches clean EOF or `current_run` disappears. Clean
-EOF is the preferred completion owner. If the status fallback observes
-`current_run` disappear while the response can still be draining, it clears the
-marker only together with a final reconciliation reload; it never silently
-discards recovery state before the rendered page is settled.
+reload renders the persisted result instead. The new document performs bounded
+settling checks until the companion observes a successful stock resume response;
+that body's clean EOF then owns completion even if status reports that the run
+has ended while bytes are still draining. If no resume owner appears, checks
+continue while the run is active and completion performs one final hydration
+reload. A later body failure or genuine suspension can re-enter recovery for
+the same token.
 
 If another hide/show cycle interrupts the resumed stock stream, permit another
 bounded recovery for the same token. The phase and minimum interval prohibit
@@ -308,15 +323,18 @@ pre-reload status request proves the session is recorded:
 
 1. reload once to reconcile the current session and remove the active-send
    error view;
-2. while the tab is visible, query the bounded session-detail endpoint until
+2. while the tab is visible, query the bounded recovery-status endpoint until
    `current_run` is absent; and
 3. reload once more to render every persisted model response and clear the
    marker.
 
-Status checks exist only for an interrupted, visible single- or multi-model
-recovery. Use backoff of 2, 5, 15, 30, and at most 60 seconds, abort immediately
-when hidden, pause while offline, retry temporary failures, and expire at the
-four-hour marker TTL. Do not create an idle global poller. Show at most a small
+Status checks exist only for an interrupted, visible recovery. Single-model
+recovery uses an initial check and post-reload settling only until stock resume
+ownership is observed; multi-model recovery continues polling. Use backoff of
+2, 5, 15, 30, and at most 60 seconds,
+abort immediately when hidden, pause while offline, retry temporary failures,
+and expire at the four-hour marker TTL. Do not create an idle global poller.
+Show at most a small
 wrapper-owned, accessible same-origin recovery notice; do not imitate or
 modify Onyx message nodes. Remove the fallback if upstream gains proper multi-
 model live resume.
@@ -342,7 +360,9 @@ Document their resource meaning accurately:
 
 - The 32 MiB limit is compressed data per active recorded run, not a reserved
   allocation and not a whole-cache limit.
-- Each write refreshes the four-hour live TTL for existing chunks.
+- Each new chunk receives its own four-hour live TTL, and each flush refreshes
+  the metadata TTL. Later writes do not refresh existing chunks, so a run that
+  remains active beyond four hours can lose early chunks and produce a gap.
 - Completion changes each recorded chunk and metadata key to the one-hour done
   TTL.
 - Incognito completion still deletes its buffer rather than retaining it for
@@ -457,11 +477,13 @@ Cover at least:
 - status ownership is token-correlated, aborts on hide, never overlaps, and a
   stale result cannot clear a later send;
 - transient HTTP/network/JSON status failures retain state and retry;
-- single- and multi-model polling backs off, pauses while hidden/offline,
-  stops on completion, and expires after four hours;
+- single-model settling stops after a successful stock resume response, while
+  no-owner and multi-model polling back off, pause while hidden/offline, stop
+  on completion, and expire after four hours;
 - a visible send/resume stream failure schedules recovery;
-- a single-model completion status racing a still-draining resume body performs
-  one reconciliation reload and a later body failure cannot start duplicate
+- a successful single-model resume response leaves clean EOF as the completion
+  owner even when status reports completion; without that owner, completion
+  performs one hydration reload, and a later body failure starts only one
   recovery;
 - incognito is classified and cleared before any companion reload;
 - incognito teardown calls the original fetch/beacon exactly once, preserves
@@ -599,12 +621,12 @@ catalogs, or an investigation narrative.
     Docker/Podman models, and the live interruption matrix on upgrades.
   - State that native upstream reconnect support is a patch-removal gate.
 - `docs/resource_minimization.md`
-  - Document the 4-hour active TTL, 1-hour completed TTL, 32 MiB compressed
-    per-run cap, cache-backend distinction, non-reserved/worst-case nature, and
-    incognito deletion exception.
-  - Document that the companion adds no idle poller; token-owned single- and
-    multi-model status checks exist only during visible recovery and back off
-    to a bounded cadence.
+  - Document the per-chunk 4-hour live TTL, 1-hour completed TTL, 32 MiB
+    compressed per-run cap, cache-backend distinction, non-reserved/worst-case
+    nature, and incognito deletion exception.
+  - Document that the companion adds no idle poller; single-model recovery uses
+    bounded initial/settling checks until stock resume ownership is observed,
+    while multi-model recovery continues polling.
 - `docs/internal_network_security.md`
   - Record that the companion is a tracked same-origin asset served directly
     by nginx, makes only same-origin Onyx API requests, adds no route/network,
@@ -654,16 +676,20 @@ This plan is complete only when all of the following are true:
 
 ## Current validation status
 
-`make check` passes all 632 deterministic tests, compile checks, help
+`make check` passes all 639 deterministic tests, compile checks, help
 validation, and diff checks. `make test-patch-images` passes the selected Onyx
 v4.6.5 backend and WebUI, nginx 1.25.5, executor, and derived SearXNG gates. The
 reconnect gate includes the executable browser companion's stream, lifecycle,
 incognito, startup-bootstrap, retry, stale-token, and overlapping-request
 contracts. It also covers the two-model threshold, marker-free History API
-transparency, multi-model recovery after client-side route return, and the
-single-model completion-status/resume-body race. Native stream-buffer
-TTL/cap/gap/incognito fixtures, nginx module/configuration/serving behavior,
-HTML-only compression selection, CSP, and excluded-response checks pass.
+transparency, multi-model recovery after client-side route return, the
+single-model resume-owner handoff/no-owner fallback, and retryable status
+uncertainty. The pinned API
+bootstrap proves the authenticated recovery-status route is installed exactly
+once and ordinary session requests remain untouched. Native stream-buffer
+per-chunk TTL/cap/gap/incognito fixtures, nginx module/configuration/serving
+behavior, HTML-only compression selection, CSP, and excluded-response checks
+pass.
 Effective Docker and Podman lite/full models,
 including the macOS Podman full overlay, retain the exact common nginx image,
 command/read-only mounts, and API-only stream settings. Generated files under
@@ -675,11 +701,13 @@ cleanly. The live lite nginx uses the exact selected
 companion tag into HTML with both CSP policies, and serves the v2 companion
 with JavaScript, `nosniff`, and `no-store` headers. The API resume request
 remains uninjected and the effective API proxy locations retain
-`proxy_buffering off`. Full mode uses its healthy Redis cache, while lite uses
-the PostgreSQL cache path; the live API process receives the exact `14400`,
-`3600`, and `33554432` policy values. Targeted nginx, API, and cache startup
-logs contain no reconnect integration error. No matching stack is left
-running.
+`proxy_buffering off`. `make integration-chat-stream-cache-lite` and
+`make integration-chat-stream-cache-full` pass against the selected PostgreSQL
+and Redis implementations. They prove native expiry, that later writes do not
+refresh older chunk TTLs, completion expiry reset, exact replay, and compressed
+capacity gap behavior. The live API process receives the exact `14400`, `3600`,
+and `33554432` policy values. Targeted nginx, API, and cache startup logs contain
+no reconnect integration error. No matching stack is left running.
 
 Authenticated real-chat interruption scenarios remain unexecuted because this
 environment provides neither an authenticated browser session nor repository

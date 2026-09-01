@@ -625,10 +625,17 @@ requests remain untouched; they are not a second recovery owner. A later send
 supersedes the marker and cancels recovery work owned by the earlier token.
 
 After a genuine hidden/pagehide, restored-page, offline transition, or visible
-stream failure, the companion owns one token-correlated abortable session
-status request. It classifies `incognito` and missing sessions before any
-reload, retries temporary HTTP, network, and JSON failures with bounded
-backoff, and aborts the request when hidden. A recorded visible tab then
+stream failure, the companion owns one token-correlated abortable request to
+`/api/chat/reconnect-status/{session_id}`.
+`sitecustomize_api_server/webui_reconnect_status_patch.py` gives this route the
+stock read-chat permission and a narrow session lookup without loading message
+history. It checks the processing fence without the stock
+session endpoint's broad cache-error suppression: a transient Redis/PostgreSQL
+failure, or a present fence without a usable run ID, returns `503` and remains
+retryable instead of being misclassified as completion. The route classifies
+`incognito` and missing sessions before any reload. The companion retries
+temporary HTTP, network, and JSON failures with bounded backoff and aborts the
+request when hidden. A recorded visible tab then
 reloads its selected marked chat once. Stock single-model hydration replays
 from cursor zero and tails the current run, or renders the saved answer when
 completion happened while hidden. A later genuine suspension may recover the
@@ -645,14 +652,16 @@ cannot reload, redirect, or poll the marked chat.
 
 The pinned WebUI cannot attach a multi-model `current_run` to assistant panels
 because that run ID names the user message. Multi-model recovery therefore
-performs one reconciliation reload, checks the bounded session-detail endpoint
+performs one reconciliation reload, checks the bounded recovery-status endpoint
 only while that recovery is visible and online with backoff capped at one
 minute, and reloads once after `current_run` disappears. Single-model recovery
-normally clears on the wrapped resume stream's clean EOF. Its bounded status
-fallback may observe backend completion before those response bytes finish
-draining; in that case it clears the marker only together with a final
-reconciliation reload. It never silently discards recovery state merely because
-`current_run` disappeared. Persisted recovery phase self-starts in the new
+normally clears on the wrapped resume stream's clean EOF. After the initial
+recovery reload, settling checks stop only after the companion observes a
+successful stock resume response; that body then owns completion even if a
+status snapshot says the run has completed. If the stock page never establishes
+that owner, checks continue while active and completion triggers one final
+hydration reload. A later body failure or genuine suspension can re-enter
+recovery. Persisted recovery phase self-starts in the new
 document and does not depend on intercepting or ordering a stock session GET.
 There is no idle poller. Explicit stock cancellation clears the marker. An
 incognito or missing status clears it without reload; an exact end-session
@@ -677,8 +686,9 @@ worker, or connection source.
 This integration is maintained against the pinned send payload and response
 consumer, FIFO error path, `chatId` selection, session `current_run` and
 `incognito` response, resume cursor/endpoint, single- versus multi-model run
-IDs, incognito `pagehide`, generated nginx markers, HTML compression, and nginx
-modules.
+IDs, stock session cache-error behavior, processing-fence helpers and transient
+cache exception types, incognito `pagehide`, generated nginx markers, HTML
+compression, and nginx modules.
 Remove the companion and transform when upstream supplies equivalent recorded,
 multi-model, cancellation, and incognito reconnect semantics.
 

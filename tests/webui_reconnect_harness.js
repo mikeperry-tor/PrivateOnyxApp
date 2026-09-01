@@ -311,7 +311,7 @@ async function main() {
 
   {
     const browser = createBrowser((url) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
         return Promise.resolve(sessionResponse(true, false));
       }
       return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
@@ -351,7 +351,7 @@ async function main() {
 
   {
     const browser = createBrowser((url) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
         return Promise.resolve(sessionResponse(true, false));
       }
       return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
@@ -365,7 +365,7 @@ async function main() {
 
   {
     const browser = createBrowser((url) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) return Promise.resolve(sessionResponse(false, false));
+      if (String(url).startsWith("/api/chat/reconnect-status/")) return Promise.resolve(sessionResponse(false, false));
       return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
     });
     await browser.window.fetch("/api/chat/send-chat-message", sendInit());
@@ -392,7 +392,7 @@ async function main() {
   {
     let currentRun = true;
     const browser = createBrowser((url) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
         return Promise.resolve(sessionResponse(currentRun, false));
       }
       return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
@@ -427,7 +427,7 @@ async function main() {
   {
     let statusCalls = 0;
     const browser = createBrowser((url) => {
-      if (!String(url).startsWith("/api/chat/get-chat-session/")) throw new Error("unexpected fetch");
+      if (!String(url).startsWith("/api/chat/reconnect-status/")) throw new Error("unexpected fetch");
       statusCalls += 1;
       return Promise.resolve(sessionResponse(true, false));
     }, {
@@ -454,7 +454,7 @@ async function main() {
   {
     let statusCalls = 0;
     const browser = createBrowser((url) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
         statusCalls += 1;
         return Promise.resolve(sessionResponse(true, false));
       }
@@ -471,7 +471,7 @@ async function main() {
   {
     let statusCalls = 0;
     const browser = createBrowser((url) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
         statusCalls += 1;
         return Promise.resolve(statusCalls === 1
           ? new Response("temporary", { status: 503 })
@@ -484,14 +484,14 @@ async function main() {
     assert(browser.storage.has(browser.key) && browser.pendingTimers()[0] === 2000, "transient status failure stopped recovery");
     await browser.runTimers(1);
     await settle();
-    assert(statusCalls === 2 && browser.pendingTimers()[0] === 5000, "status recovery did not continue after a transient failure");
+    assert(statusCalls === 2 && browser.pendingTimers()[0] === 5000 && browser.storage.has(browser.key), "single-model settling stopped without a stock resume owner");
   }
 
   {
     let resolveStatus;
     let resumeController;
     const browser = createBrowser((url) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
         return new Promise((resolve) => { resolveStatus = resolve; });
       }
       if (String(url).includes("/resume-stream")) {
@@ -506,18 +506,73 @@ async function main() {
     const consumed = resumed.text().catch(() => null);
     resolveStatus(sessionResponse(false, false));
     await settle();
-    assert(browser.reloads() === 1 && !browser.storage.has(browser.key), "completed single-model status cleared recovery without reconciliation reload");
-    resumeController.error(new Error("late resumed-stream failure"));
+    assert(browser.reloads() === 0 && browser.storage.has(browser.key), "completion status displaced the stock resume owner");
+    resumeController.close();
     await consumed;
     await settle();
-    assert(browser.reloads() === 1 && browser.pendingTimers().length === 0, "late stream failure scheduled duplicate recovery after reconciliation reload");
+    assert(!browser.storage.has(browser.key) && browser.pendingTimers().length === 0, "clean resume EOF did not own single-model completion");
+  }
+
+  {
+    let resumeController;
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
+        return Promise.resolve(sessionResponse(true, false));
+      }
+      if (String(url).includes("/resume-stream")) {
+        return Promise.resolve(new Response(new ReadableStream({
+          start(controller) { resumeController = controller; },
+        }), { status: 200 }));
+      }
+      throw new Error("unexpected fetch");
+    }, { initialRecord: recoveryRecord({ pollPhase: "single" }) });
+    const resumed = await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=0`);
+    const consumed = resumed.text();
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.storage.has(browser.key) && browser.pendingTimers().length === 0, "single-model polling continued after stock resume ownership");
+    resumeController.close();
+    await consumed;
+    await settle();
+    assert(!browser.storage.has(browser.key), "owned active resume EOF retained its marker");
+  }
+
+  {
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
+        return Promise.resolve(sessionResponse(true, false));
+      }
+      if (String(url).includes("/resume-stream")) {
+        return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+      }
+      throw new Error("unexpected fetch");
+    }, {
+      initialRecord: recoveryRecord({ pollPhase: "single" }),
+      noTransform: true,
+    });
+    await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=0`);
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.pendingTimers()[0] === 2000 && browser.notices.length === 1, "unwrappable resume incorrectly claimed completion ownership");
+  }
+
+  {
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
+        return Promise.resolve(sessionResponse(false, false));
+      }
+      throw new Error("unexpected fetch");
+    }, { initialRecord: recoveryRecord({ pollPhase: "single" }) });
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.reloads() === 1 && !browser.storage.has(browser.key), "single-model completion without a resume owner skipped final hydration");
   }
 
   {
     let resolveOldStatus;
     let oldStatusSignal;
     const browser = createBrowser((url, init) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
         oldStatusSignal = init.signal;
         return new Promise((resolve) => { resolveOldStatus = resolve; });
       }
@@ -538,7 +593,7 @@ async function main() {
     let maximumActive = 0;
     let statusCalls = 0;
     const browser = createBrowser((url, init) => {
-      if (!String(url).startsWith("/api/chat/get-chat-session/")) throw new Error("unexpected fetch");
+      if (!String(url).startsWith("/api/chat/reconnect-status/")) throw new Error("unexpected fetch");
       statusCalls += 1;
       active += 1;
       maximumActive = Math.max(maximumActive, active);
@@ -566,7 +621,7 @@ async function main() {
   {
     const failure = new Error("visible stream disconnected");
     const browser = createBrowser((url) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) return Promise.resolve(sessionResponse(true, false));
+      if (String(url).startsWith("/api/chat/reconnect-status/")) return Promise.resolve(sessionResponse(true, false));
       return Promise.resolve(streamResponse(["partial"], failure));
     });
     const response = await browser.window.fetch("/api/chat/send-chat-message", sendInit());
@@ -579,7 +634,7 @@ async function main() {
 
   {
     const browser = createBrowser((url) => {
-      if (String(url).startsWith("/api/chat/get-chat-session/")) return Promise.resolve(sessionResponse(true, true));
+      if (String(url).startsWith("/api/chat/reconnect-status/")) return Promise.resolve(sessionResponse(true, true));
       return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
     });
     await browser.window.fetch("/api/chat/send-chat-message", sendInit());
