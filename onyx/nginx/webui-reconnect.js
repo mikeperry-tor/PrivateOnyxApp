@@ -1,8 +1,8 @@
 (function () {
   "use strict";
 
-  const STORAGE_KEY = "private-onyx:webui-reconnect:v2";
-  const SCHEMA_VERSION = 2;
+  const STORAGE_KEY = "private-onyx:webui-reconnect:v1";
+  const SCHEMA_VERSION = 1;
   const RECORD_TTL_MS = 4 * 60 * 60 * 1000;
   const PENDING_RESERVATION_GRACE_MS = 15 * 60 * 1000;
   const MIN_RECOVERY_INTERVAL_MS = 1500;

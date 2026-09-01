@@ -617,6 +617,14 @@ is single-model. The marker holds only the session UUID, a random request token,
 timestamps, the multi-model flag, and bounded recovery phase/backoff state; it
 never holds prompts, packets, model or provider names, files, credentials,
 headers, error bodies, or exception text.
+Version 1 is the initial and only marker schema. There is no compatibility or
+migration code: this marker coordinates recovery of one in-progress browser
+request and is not persisted chat data. Migrating it would matter only to keep
+that live recovery across deployment of a changed companion, while the
+supported stack upgrade restarts the services that own the run and therefore
+does not preserve a normally resumable in-flight generation. Completed chats
+and later turns use Onyx database state and are unaffected; invalid or
+mismatched markers are simply discarded.
 It forwards successful exact send and resume bodies through one transparent
 `TransformStream`. Send-body clean completion, non-success, or a send that was
 already aborted before invocation clears only the matching token. Resume-body

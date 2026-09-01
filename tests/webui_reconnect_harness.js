@@ -9,10 +9,6 @@ const script = fs.readFileSync(scriptPath, "utf8");
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
 
-if (script.includes("private-onyx:webui-reconnect:v1")) {
-  throw new Error("unreleased v1 storage compatibility must not be retained");
-}
-
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -26,7 +22,7 @@ function createBrowser(fetchImpl, options = {}) {
   const storage = new Map();
   if (options.initialRecord) {
     storage.set(
-      "private-onyx:webui-reconnect:v2",
+      "private-onyx:webui-reconnect:v1",
       JSON.stringify(options.initialRecord)
     );
   }
@@ -173,7 +169,7 @@ function createBrowser(fetchImpl, options = {}) {
 
 function recoveryRecord(overrides = {}) {
   return {
-    version: 2,
+    version: 1,
     token: "aaaaaaaa-aaaa-4aaa-8aaa-000000000001",
     sessionId: SESSION,
     startedAt: 1700000000000,

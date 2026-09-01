@@ -221,6 +221,16 @@ Use a versioned `sessionStorage` record scoped to the tab. Store only:
 - last recovery timestamp; and
 - bounded `single`/`multi` recovery phase and backoff state.
 
+Version 1 is the initial schema. It is transient recovery coordination, not a
+chat or message storage format, and has no migration path. A future schema
+migration would be useful only if the wrapper intended to preserve an
+already-in-progress browser recovery across deployment of a changed companion.
+The supported stack upgrade restarts the services that own the active run, so
+such a run cannot normally remain resumable across that upgrade; stale or
+mismatched markers should be discarded. Completed chats live in Onyx's
+database and are unrelated to this schema, including when a later message is
+sent in one of them.
+
 Never store the prompt, response packets, filenames, model/provider names,
 credentials, headers, error bodies, or exception strings. Validate parsed
 storage strictly and discard malformed, unknown-version, expired, or

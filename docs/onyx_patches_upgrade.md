@@ -262,6 +262,14 @@ observation window across hidden/offline/navigation pauses. A changed response
 consumer property or multi-model ownership requires redesign, not a
 compatibility alias.
 
+The companion marker is an ephemeral per-tab recovery record, not chat data.
+Its initial schema is version 1 and intentionally has no migration path. Only
+add a migration if an upgrade is explicitly required to preserve an active
+browser recovery across companion versions; the supported stack upgrade
+restarts the services owning that active run, so this is not normally a
+recoverable boundary. Schema changes may discard mismatched markers and must
+not imply migration of completed chats or backend messages.
+
 The companion must remain the sole browser recovery owner: exact send and
 resume bodies are the only wrapped streams, ordinary session-detail requests
 remain byte/promise transparent, and one token-owned `AbortController` governs
