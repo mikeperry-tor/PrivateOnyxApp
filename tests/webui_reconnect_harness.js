@@ -180,6 +180,7 @@ function recoveryRecord(overrides = {}) {
     multiModel: false,
     hiddenAt: null,
     lastRecoveryAt: null,
+    pendingSince: null,
     pollPhase: null,
     pollAttempt: 0,
     ...overrides,
@@ -518,19 +519,44 @@ async function main() {
   }
 
   {
-    const grace = 10 * 60 * 1000;
+    const grace = 15 * 60 * 1000;
     const browser = createBrowser((url) => {
       if (!String(url).startsWith("/api/chat/reconnect-status/")) throw new Error("unexpected fetch");
       return Promise.resolve(sessionResponse(false, false, true));
     }, {
       initialRecord: recoveryRecord({
-        startedAt: 1700000000000 - grace,
+        startedAt: 1700000000000 - (30 * 60 * 1000),
         hiddenAt: 1700000000000,
       }),
     });
     await browser.runTimers(2);
     await settle();
+    assert(browser.reloads() === 0 && browser.storage.has(browser.key), "old send time shortened the observed pending grace");
+    browser.advance(grace);
+    await browser.runTimers(1);
+    await settle();
     assert(browser.reloads() === 1 && !browser.storage.has(browser.key), "stale abandoned reservation remained in recovery forever");
+  }
+
+  for (const pause of ["hidden", "offline", "navigation"]) {
+    const browser = createBrowser((url) => {
+      if (!String(url).startsWith("/api/chat/reconnect-status/")) throw new Error("unexpected fetch");
+      return Promise.resolve(sessionResponse(false, false, true));
+    }, { initialRecord: recoveryRecord({ hiddenAt: 1700000000000 }) });
+    await browser.runTimers(2);
+    await settle();
+    assert(JSON.parse(browser.storage.get(browser.key)).pendingSince !== null, `${pause}: pending observation clock did not start`);
+    if (pause === "hidden") {
+      browser.document.visibilityState = "hidden";
+      await browser.dispatch("document", "visibilitychange");
+    } else if (pause === "offline") {
+      browser.navigator.onLine = false;
+      await browser.dispatch("window", "offline");
+    } else {
+      browser.window.history.pushState({}, "", `/chat?chatId=${OTHER}`);
+    }
+    const stored = JSON.parse(browser.storage.get(browser.key));
+    assert(stored.pendingSince === null && browser.notices.length === 0, `${pause}: recovery pause did not reset pending observation`);
   }
 
   {

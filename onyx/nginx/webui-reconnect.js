@@ -4,7 +4,7 @@
   const STORAGE_KEY = "private-onyx:webui-reconnect:v2";
   const SCHEMA_VERSION = 2;
   const RECORD_TTL_MS = 4 * 60 * 60 * 1000;
-  const PENDING_RESERVATION_GRACE_MS = 10 * 60 * 1000;
+  const PENDING_RESERVATION_GRACE_MS = 15 * 60 * 1000;
   const MIN_RECOVERY_INTERVAL_MS = 1500;
   const POLL_DELAYS_MS = [2000, 5000, 15000, 30000, 60000];
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -22,6 +22,7 @@
     "multiModel",
     "hiddenAt",
     "lastRecoveryAt",
+    "pendingSince",
     "pollPhase",
     "pollAttempt",
   ]);
@@ -59,6 +60,7 @@
     if (typeof value.multiModel !== "boolean") return false;
     if (value.hiddenAt !== null && !validTimestamp(value.hiddenAt, value.startedAt)) return false;
     if (value.lastRecoveryAt !== null && !validTimestamp(value.lastRecoveryAt, value.startedAt)) return false;
+    if (value.pendingSince !== null && !validTimestamp(value.pendingSince, value.startedAt)) return false;
     if (![null, "single", "multi"].includes(value.pollPhase)) return false;
     if (!Number.isInteger(value.pollAttempt) || value.pollAttempt < 0 || value.pollAttempt > POLL_DELAYS_MS.length) return false;
     return true;
@@ -303,6 +305,7 @@
       multiModel: Array.isArray(payload.llm_overrides) && payload.llm_overrides.length >= 2,
       hiddenAt: document.visibilityState === "hidden" ? now() : null,
       lastRecoveryAt: null,
+      pendingSince: null,
       pollPhase: null,
       pollAttempt: 0,
     };
@@ -480,16 +483,21 @@
     // The assistant reservation is committed before the processing fence is
     // published. During that pre-stream window, current_run=null is not
     // completion: accepting it would strand the stock error placeholder.
-    if (
-      payload.current_run == null &&
-      payload.pending_reservation &&
-      now() - current.startedAt < PENDING_RESERVATION_GRACE_MS
-    ) {
-      showRecoveryNotice();
-      scheduleStatus(current, false, purpose);
-      return;
+    if (payload.current_run == null && payload.pending_reservation) {
+      const observedAt = now();
+      if (current.pendingSince === null) current.pendingSince = observedAt;
+      if (observedAt - current.pendingSince < PENDING_RESERVATION_GRACE_MS) {
+        if (!saveRecord(current)) {
+          showManualNotice();
+          return;
+        }
+        showRecoveryNotice();
+        scheduleStatus(current, false, purpose);
+        return;
+      }
     }
     hideRecoveryNotice();
+    current.pendingSince = null;
 
     if (purpose === "recover") {
       current.hiddenAt = null;
@@ -596,7 +604,14 @@
   function scheduleRouteRecovery() {
     const record = loadRecord();
     if (record && currentChatId() === record.sessionId) scheduleRecovery();
-    else hideRecoveryNotice();
+    else {
+      hideRecoveryNotice();
+      if (record && record.pendingSince !== null) {
+        record.pendingSince = null;
+        record.pollAttempt = 0;
+        saveRecord(record);
+      }
+    }
   }
 
   function wrapHistoryMethod(name) {
@@ -620,6 +635,7 @@
       hideRecoveryNotice();
       if (record.token !== reloadingToken) {
         record.hiddenAt = now();
+        record.pendingSince = null;
         record.pollAttempt = 0;
         saveRecord(record);
       }
@@ -632,6 +648,7 @@
     const record = loadRecord();
     if (record && record.token !== reloadingToken) {
       record.hiddenAt = now();
+      record.pendingSince = null;
       record.pollAttempt = 0;
       saveRecord(record);
     }
@@ -665,6 +682,15 @@
       resumeOwnerToken === record.token
     ) return;
     scheduleRecovery();
+  });
+  window.addEventListener("offline", () => {
+    const record = loadRecord();
+    hideRecoveryNotice();
+    if (!record || record.token === reloadingToken) return;
+    record.pendingSince = null;
+    record.pollAttempt = 0;
+    saveRecord(record);
+    cancelRecoveryWork(record.token);
   });
 
   const initialRecord = loadRecord();

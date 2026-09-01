@@ -647,8 +647,10 @@ returns a content-free `pending_reservation` flag when the newest row is the
 exact unerrored stock placeholder. A fresh flagged reservation keeps bounded
 status polling instead of accepting `current_run: null`; a run ID triggers the
 normal reconciliation reload and a settled row permits final hydration. This
-pre-run interpretation expires ten minutes after the marked send so an
-abandoned placeholder cannot poll indefinitely. While it is active, a small
+pre-run interpretation expires after fifteen continuously visible, online
+minutes measured from the first observed pending status, not from the send.
+Hiding, going offline, or leaving the marked chat resets that observation
+window so an abandoned placeholder cannot poll indefinitely. While it is active, a small
 accessible wrapper notice makes the reconnecting state explicit instead of
 leaving the stock error placeholder as the only feedback; hiding or leaving
 the marked chat removes the notice. Startup audits both stock

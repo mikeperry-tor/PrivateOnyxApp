@@ -329,8 +329,11 @@ The assistant reservation commit and processing-fence publication are not
 atomic. While `pending_reservation` is true, an absent `current_run` is not
 completion evidence: retain the marker and poll with the ordinary bounded
 backoff until the run becomes resumable or the persisted message settles. Cap
-this special pre-run interpretation at ten minutes from the marked send so an
-actually abandoned stock placeholder cannot retain active recovery forever.
+this special pre-run interpretation at fifteen minutes from the first visible,
+online observation of `pending_reservation`, independently of the original
+send time. Hiding, going offline, or leaving the marked chat resets that
+observation window, so an actually abandoned stock placeholder cannot retain
+one uninterrupted active recovery forever.
 While this state is visible, show a small accessible wrapper notice that says
 the response is reconnecting; remove it when recovery advances, pauses, or the
 user leaves the marked chat.

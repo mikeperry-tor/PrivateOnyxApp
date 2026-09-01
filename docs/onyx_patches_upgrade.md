@@ -256,7 +256,9 @@ return a content-free pending-reservation classification for the exact
 unerrored placeholder committed before fence publication, and fail startup
 when the stock session endpoint's cache-error behavior or either reservation
 function's placeholder has drifted. Re-test the commit-before-fence window,
-including a later turn suspended before its first answer token. A changed response
+including a later turn suspended before its first answer token, an old send
+whose pending state is first observed much later, and reset of the fifteen-minute
+observation window across hidden/offline/navigation pauses. A changed response
 consumer property or multi-model ownership requires redesign, not a
 compatibility alias.
 
