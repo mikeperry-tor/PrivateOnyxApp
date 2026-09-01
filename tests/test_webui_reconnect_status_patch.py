@@ -75,6 +75,30 @@ class Router:
         )
 
 
+class Query:
+    def __init__(self, latest):
+        self.latest = latest
+
+    def filter(self, *_args):
+        return self
+
+    def order_by(self, *_args):
+        return self
+
+    def first(self):
+        return self.latest
+
+
+class DescColumn:
+    def desc(self):
+        return self
+
+
+class ChatMessageModel:
+    chat_session_id = object()
+    id = DescColumn()
+
+
 class WebUIReconnectStatusPatchTests(unittest.TestCase):
     def resolve(
         self,
@@ -141,6 +165,24 @@ class WebUIReconnectStatusPatchTests(unittest.TestCase):
             self.resolve(get_error=failure)
         self.assertIs(caught.exception, failure)
 
+    def test_pending_reservation_requires_exact_unerrored_placeholder(self) -> None:
+        for latest, expected in (
+            (SimpleNamespace(message=patch_module._RESERVED_MESSAGE, error=None), True),
+            (SimpleNamespace(message=patch_module._RESERVED_MESSAGE, error="failed"), False),
+            (SimpleNamespace(message="settled answer", error=None), False),
+            (None, False),
+        ):
+            with self.subTest(latest=latest):
+                db_session = SimpleNamespace(query=lambda _model: Query(latest))
+                self.assertEqual(
+                    patch_module._has_pending_reservation(
+                        session_id=SESSION_ID,
+                        db_session=db_session,
+                        chat_message_model=ChatMessageModel,
+                    ),
+                    expected,
+                )
+
     def test_api_bootstrap_installs_patch(self) -> None:
         bootstrap = (
             ROOT / "onyx/patches/sitecustomize_api_server/sitecustomize.py"
@@ -160,6 +202,9 @@ class WebUIReconnectStatusPatchTests(unittest.TestCase):
             "onyx.cache.interface",
             "onyx.chat",
             "onyx.chat.chat_processing_checker",
+            "onyx.db",
+            "onyx.db.chat",
+            "onyx.db.models",
             "onyx.server",
             "onyx.server.query_and_chat",
             "onyx.server.query_and_chat.chat_backend",
@@ -169,6 +214,7 @@ class WebUIReconnectStatusPatchTests(unittest.TestCase):
             "onyx",
             "onyx.cache",
             "onyx.chat",
+            "onyx.db",
             "onyx.server",
             "onyx.server.query_and_chat",
         ):
@@ -180,6 +226,11 @@ class WebUIReconnectStatusPatchTests(unittest.TestCase):
         checker = modules["onyx.chat.chat_processing_checker"]
         checker.get_processing_run_id = lambda *_args: None
         checker.is_chat_session_processing = lambda *_args: False
+
+        db_chat = modules["onyx.db.chat"]
+        db_chat.reserve_message_id = lambda: None
+        db_chat.reserve_multi_model_message_ids = lambda: None
+        modules["onyx.db.models"].ChatMessage = ChatMessageModel
 
         chat_backend = modules["onyx.server.query_and_chat.chat_backend"]
         chat_backend.router = Router()
@@ -198,6 +249,7 @@ class WebUIReconnectStatusPatchTests(unittest.TestCase):
             "        logger.exception(\n"
             '            "An error occurred while checking if the chat session is processing"\n'
             "        )\n"
+            '    marker = "Response was terminated prior to completion, try regenerating."\n'
         )
         with patch.dict(sys.modules, modules, clear=False), patch.object(
             patch_module.inspect, "getsource", return_value=audited_source

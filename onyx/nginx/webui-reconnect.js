@@ -4,6 +4,7 @@
   const STORAGE_KEY = "private-onyx:webui-reconnect:v2";
   const SCHEMA_VERSION = 2;
   const RECORD_TTL_MS = 4 * 60 * 60 * 1000;
+  const PENDING_RESERVATION_GRACE_MS = 10 * 60 * 1000;
   const MIN_RECOVERY_INTERVAL_MS = 1500;
   const POLL_DELAYS_MS = [2000, 5000, 15000, 30000, 60000];
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -125,6 +126,7 @@
     const record = loadRecord();
     if (!record || record.token !== token) return false;
     removeStored();
+    hideRecoveryNotice();
     cancelRecoveryWork(token);
     if (resumeOwnerToken === token) resumeOwnerToken = null;
     return true;
@@ -180,6 +182,22 @@
     notice.textContent = "Automatic chat reconnection is unavailable. Reload this chat manually if its response disconnects.";
     notice.style.cssText = "position:fixed;right:1rem;bottom:1rem;z-index:2147483647;max-width:24rem;padding:.75rem 1rem;border-radius:.5rem;background:#202124;color:#fff;font:14px/1.4 system-ui,sans-serif;box-shadow:0 2px 12px #0006";
     (document.body || document.documentElement).appendChild(notice);
+  }
+
+  function showRecoveryNotice() {
+    if (!document || document.getElementById("private-onyx-recovery-notice")) return;
+    const notice = document.createElement("div");
+    notice.id = "private-onyx-recovery-notice";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    notice.textContent = "Reconnecting to this response…";
+    notice.style.cssText = "position:fixed;right:1rem;bottom:1rem;z-index:2147483647;max-width:24rem;padding:.75rem 1rem;border-radius:.5rem;background:#202124;color:#fff;font:14px/1.4 system-ui,sans-serif;box-shadow:0 2px 12px #0006";
+    (document.body || document.documentElement).appendChild(notice);
+  }
+
+  function hideRecoveryNotice() {
+    const notice = document && document.getElementById("private-onyx-recovery-notice");
+    if (notice) notice.remove();
   }
 
   function currentChatId() {
@@ -431,7 +449,9 @@
         outcome = "missing";
       } else if (response.ok) {
         payload = await response.json();
-        outcome = payload && typeof payload.incognito === "boolean" && Object.hasOwn(payload, "current_run")
+        outcome = payload && typeof payload.incognito === "boolean" &&
+          typeof payload.pending_reservation === "boolean" &&
+          Object.hasOwn(payload, "current_run")
           ? "status"
           : "retry";
       }
@@ -456,6 +476,20 @@
       scheduleStatus(current, false, purpose);
       return;
     }
+
+    // The assistant reservation is committed before the processing fence is
+    // published. During that pre-stream window, current_run=null is not
+    // completion: accepting it would strand the stock error placeholder.
+    if (
+      payload.current_run == null &&
+      payload.pending_reservation &&
+      now() - current.startedAt < PENDING_RESERVATION_GRACE_MS
+    ) {
+      showRecoveryNotice();
+      scheduleStatus(current, false, purpose);
+      return;
+    }
+    hideRecoveryNotice();
 
     if (purpose === "recover") {
       current.hiddenAt = null;
@@ -560,7 +594,9 @@
   }
 
   function scheduleRouteRecovery() {
-    if (loadRecord()) scheduleRecovery();
+    const record = loadRecord();
+    if (record && currentChatId() === record.sessionId) scheduleRecovery();
+    else hideRecoveryNotice();
   }
 
   function wrapHistoryMethod(name) {
@@ -581,6 +617,7 @@
     const record = loadRecord();
     if (!record) return;
     if (document.visibilityState === "hidden") {
+      hideRecoveryNotice();
       if (record.token !== reloadingToken) {
         record.hiddenAt = now();
         record.pollAttempt = 0;
@@ -642,7 +679,7 @@
       saveRecord,
       recover,
       checkStatus,
-      constants: { RECORD_TTL_MS, MIN_RECOVERY_INTERVAL_MS, POLL_DELAYS_MS },
+      constants: { RECORD_TTL_MS, PENDING_RESERVATION_GRACE_MS, MIN_RECOVERY_INTERVAL_MS, POLL_DELAYS_MS },
     };
   }
 })();

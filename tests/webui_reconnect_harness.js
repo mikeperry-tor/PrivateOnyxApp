@@ -66,12 +66,17 @@ function createBrowser(fetchImpl, options = {}) {
     addEventListener(type, callback) { add("document", type, callback); },
     getElementById(id) { return notices.find((item) => item.id === id) || null; },
     createElement() {
-      return {
+      const node = {
         id: "",
         style: {},
         setAttribute() {},
         textContent: "",
+        remove() {
+          const index = notices.indexOf(node);
+          if (index >= 0) notices.splice(index, 1);
+        },
       };
+      return node;
     },
     body: { appendChild(node) { notices.push(node); } },
     documentElement: { appendChild(node) { notices.push(node); } },
@@ -181,10 +186,11 @@ function recoveryRecord(overrides = {}) {
   };
 }
 
-function sessionResponse(currentRun = true, incognito = false) {
+function sessionResponse(currentRun = true, incognito = false, pendingReservation = false) {
   return Response.json({
     current_run: currentRun ? { run_id: 9 } : null,
     incognito,
+    pending_reservation: pendingReservation,
   });
 }
 
@@ -487,6 +493,44 @@ async function main() {
     await browser.runTimers(2);
     await settle();
     assert(browser.reloads() === 2 && !browser.storage.has(browser.key), "multi-model completion did not settle with one final reload");
+  }
+
+  {
+    let statusCalls = 0;
+    const browser = createBrowser((url) => {
+      if (!String(url).startsWith("/api/chat/reconnect-status/")) throw new Error("unexpected fetch");
+      statusCalls += 1;
+      return Promise.resolve(statusCalls === 1
+        ? sessionResponse(false, false, true)
+        : sessionResponse(true, false));
+    }, { initialRecord: recoveryRecord({ hiddenAt: 1700000000000 }) });
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.reloads() === 0 && browser.storage.has(browser.key), "fresh pending reservation was mistaken for completion");
+    assert(browser.pendingTimers()[0] === 2000, "fresh pending reservation did not retain bounded recovery polling");
+    assert(browser.notices.some((notice) => notice.textContent === "Reconnecting to this response…"), "pending reservation did not expose recovery state");
+    await browser.runTimers(1);
+    await settle();
+    assert(browser.reloads() === 1, "published run did not resume recovery after the pre-stream gap");
+    assert(browser.notices.length === 0, "published run retained the recovery notice");
+    const stored = JSON.parse(browser.storage.get(browser.key));
+    assert(stored.pollPhase === "single", "pre-stream recovery did not retain the single-model phase");
+  }
+
+  {
+    const grace = 10 * 60 * 1000;
+    const browser = createBrowser((url) => {
+      if (!String(url).startsWith("/api/chat/reconnect-status/")) throw new Error("unexpected fetch");
+      return Promise.resolve(sessionResponse(false, false, true));
+    }, {
+      initialRecord: recoveryRecord({
+        startedAt: 1700000000000 - grace,
+        hiddenAt: 1700000000000,
+      }),
+    });
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.reloads() === 1 && !browser.storage.has(browser.key), "stale abandoned reservation remained in recovery forever");
   }
 
   {

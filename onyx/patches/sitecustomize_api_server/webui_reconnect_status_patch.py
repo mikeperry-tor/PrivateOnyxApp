@@ -14,6 +14,7 @@ _ROUTE_PATH = "/reconnect-status/{session_id}"
 _FULL_ROUTE_PATH = "/chat/reconnect-status/{session_id}"
 _PATCH_MARKER = "_wrapper_webui_reconnect_status_patch"
 _UNAVAILABLE_DETAIL = "Chat recovery status is temporarily unavailable"
+_RESERVED_MESSAGE = "Response was terminated prior to completion, try regenerating."
 
 
 class WebUIReconnectCurrentRun(BaseModel):
@@ -23,6 +24,7 @@ class WebUIReconnectCurrentRun(BaseModel):
 class WebUIReconnectStatus(BaseModel):
     incognito: bool
     current_run: WebUIReconnectCurrentRun | None = None
+    pending_reservation: bool = False
 
 
 def _route_paths(router: Any) -> list[tuple[str, set[str]]]:
@@ -57,10 +59,29 @@ def _reliable_current_run(
     return None
 
 
+def _has_pending_reservation(
+    *, session_id: UUID, db_session: Any, chat_message_model: Any
+) -> bool:
+    latest = (
+        db_session.query(chat_message_model)
+        .filter(chat_message_model.chat_session_id == session_id)
+        .order_by(chat_message_model.id.desc())
+        .first()
+    )
+    return bool(
+        latest
+        and latest.message == _RESERVED_MESSAGE
+        and latest.error is None
+    )
+
+
 def install() -> None:
     from onyx.cache.interface import CACHE_TRANSIENT_ERRORS
     from onyx.chat.chat_processing_checker import get_processing_run_id
     from onyx.chat.chat_processing_checker import is_chat_session_processing
+    from onyx.db.chat import reserve_message_id
+    from onyx.db.chat import reserve_multi_model_message_ids
+    from onyx.db.models import ChatMessage
     from onyx.server.query_and_chat import chat_backend
 
     router = chat_backend.router
@@ -79,6 +100,9 @@ def install() -> None:
     )
     if source.count(swallowed_cache_marker) != 1:
         raise RuntimeError("Onyx chat-session cache-error handling drifted")
+    for reservation_function in (reserve_message_id, reserve_multi_model_message_ids):
+        if inspect.getsource(reservation_function).count(_RESERVED_MESSAGE) != 1:
+            raise RuntimeError("Onyx reserved-message placeholder drifted")
 
     # Match the stock READ_CHAT dependency exactly.
     read_chat_dependency = chat_backend.require_permission(
@@ -109,9 +133,15 @@ def install() -> None:
             is_chat_session_processing=is_chat_session_processing,
             transient_errors=CACHE_TRANSIENT_ERRORS,
         )
+        pending_reservation = current_run is None and _has_pending_reservation(
+            session_id=session_id,
+            db_session=db_session,
+            chat_message_model=ChatMessage,
+        )
         return WebUIReconnectStatus(
             incognito=chat_session.incognito_record_mode is not None,
             current_run=current_run,
+            pending_reservation=pending_reservation,
         )
 
     router.add_api_route(

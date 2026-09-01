@@ -314,13 +314,28 @@ the current view. Never change the selected chat automatically.
 Install one API runtime route at
 `GET /api/chat/reconnect-status/{session_id}`. It uses the stock `READ_CHAT`
 dependency and a narrow session lookup, returns only `incognito` and
-`current_run`, and does not load or translate message history. It must not
+`current_run` plus a content-free `pending_reservation` flag, and does not load
+or translate message history. The flag is true only when the newest database
+message is the exact unerrored assistant placeholder committed before Onyx
+publishes its processing fence. It must not
 replace or wrap the ordinary session-detail endpoint. If the selected cache
 raises a declared transient exception, or a processing fence exists without a
 usable positive run ID, return `503`; absence is authoritative completion only
 after those checks succeed. Startup must reject an upstream route collision or
 drift in the stock cache-error behavior that makes this patch unnecessary or
 unsafe.
+
+The assistant reservation commit and processing-fence publication are not
+atomic. While `pending_reservation` is true, an absent `current_run` is not
+completion evidence: retain the marker and poll with the ordinary bounded
+backoff until the run becomes resumable or the persisted message settles. Cap
+this special pre-run interpretation at ten minutes from the marked send so an
+actually abandoned stock placeholder cannot retain active recovery forever.
+While this state is visible, show a small accessible wrapper notice that says
+the response is reconnecting; remove it when recovery advances, pauses, or the
+user leaves the marked chat.
+Runtime startup must also reject drift in the exact placeholder used by both
+single- and multi-model reservation functions.
 
 #### Recorded single-model recovery
 

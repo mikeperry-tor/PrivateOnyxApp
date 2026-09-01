@@ -252,8 +252,11 @@ cache exceptions, single- versus multi-model run IDs, the two-or-more
 `llm_overrides` threshold, and immediate incognito teardown. The runtime patch
 must install exactly one authenticated
 `/api/chat/reconnect-status/{session_id}` route, reject an upstream collision,
-and fail startup when the stock session endpoint no longer has the audited
-cache-error behavior. A changed response
+return a content-free pending-reservation classification for the exact
+unerrored placeholder committed before fence publication, and fail startup
+when the stock session endpoint's cache-error behavior or either reservation
+function's placeholder has drifted. Re-test the commit-before-fence window,
+including a later turn suspended before its first answer token. A changed response
 consumer property or multi-model ownership requires redesign, not a
 compatibility alias.
 
