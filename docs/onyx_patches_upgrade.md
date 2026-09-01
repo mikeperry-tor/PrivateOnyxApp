@@ -246,7 +246,8 @@ For recorded-stream reconnect, re-read
 `chat_configs.py`. Confirm the send payload and `llm_overrides` shape, response
 properties consumed after fetch, exact `chatId` parameter, FIFO error state,
 recorded hydration, `current_run`, cursor-zero resume endpoint, single- versus
-multi-model run IDs, and immediate incognito teardown. A changed response
+multi-model run IDs, the two-or-more `llm_overrides` threshold, and immediate
+incognito teardown. A changed response
 consumer property or multi-model ownership requires redesign, not a
 compatibility alias.
 
@@ -260,7 +261,12 @@ phase self-starts after reload without relying on a stock fetch being observed.
 The pre-reload status check must clear incognito and missing sessions without a
 reload; exact stock incognito fetch/beacon and cancellation behavior must remain
 unchanged. A visible send or resume stream failure must enter the same bounded
-recovery path, while clean EOF clears only its own token.
+recovery path, while clean EOF clears only its own token. Prove a single-model
+status result cannot silently clear the token while a resume body is still
+draining: completion observed before clean EOF must reconcile the page with a
+reload. Prove `pushState`, `replaceState`, and `popstate` preserve their native
+call behavior, schedule nothing without a marker, and restart a retained multi-
+model recovery when client-side navigation returns to its `chatId`.
 
 Audit the stock HTML compression behavior, exact generated `server`, WebUI
 `location /`, and runner-start markers, both CSP policies, companion same-origin
@@ -1375,8 +1381,11 @@ PostgreSQL lite-mode cache backends. Require the literal four-hour live TTL,
 one-hour recorded-completion TTL, and 32 MiB compressed per-run cap only on the
 API service; verify write refresh, completion expiry, incognito deletion, and
 gap fallback at eviction/corruption/truncation boundaries. Confirm the WebUI
-companion has no idle poller and multi-model recovery polling remains visible,
-online, backed off, and four-hour bounded.
+companion has no idle poller, marker-free History navigation schedules no work,
+and recovery polling remains visible, online, backed off, and four-hour
+bounded. Recheck that clean resume EOF cancels single-model polling and that a
+completion-status race performs reconciliation rather than silently dropping
+the marker.
 
 Run the document's deterministic, pinned-image, lifecycle, and integration
 checks, including `make health-inventory`, effective lite/full Docker and

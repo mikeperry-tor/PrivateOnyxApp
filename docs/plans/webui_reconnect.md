@@ -210,7 +210,7 @@ Use a versioned `sessionStorage` record scoped to the tab. Store only:
 - random request token generated in the browser;
 - recorded chat session UUID;
 - send start timestamp;
-- whether `llm_overrides` made the request multi-model;
+- whether at least two `llm_overrides` made the request multi-model;
 - hidden timestamp, if the active request was backgrounded;
 - last recovery timestamp; and
 - bounded `single`/`multi` recovery phase and backoff state.
@@ -225,8 +225,8 @@ and errors. Only instrument exact same-origin requests:
 
 - For a stock `POST /api/chat/send-chat-message`, parse the current JSON body
   only far enough to obtain `chat_session_id` and whether `llm_overrides` is a
-  nonempty array. Cancel recovery work for an older marker, then set a new
-  marker before calling the original fetch.
+  two-or-more-entry array. Cancel recovery work for an older marker, then set a
+  new marker before calling the original fetch.
 - If the original fetch throws synchronously, clear only that new marker and
   rethrow the exact error.
 - Never issue a replacement POST after synchronous failure, HTTP failure,
@@ -262,6 +262,11 @@ Register lifecycle listeners once:
   previous hidden marker exists.
 - `online`: retry a pending recovery check after connectivity returns.
 
+Wrap successful History API `pushState` and `replaceState` calls and observe
+`popstate` so a retained recovery is re-evaluated when client-side navigation
+returns to its `chatId`. Preserve receivers, arguments, results, and exceptions;
+schedule no timer when no marker exists, and never redirect or select a chat.
+
 Debounce simultaneous events. At most one token-correlated status request,
 poll timer, or reload decision may be active. The request has its own
 `AbortController`; hiding cancels it, and its result can mutate only the token
@@ -280,11 +285,16 @@ the current view. Never change the selected chat automatically.
 
 When the marked chat becomes visible after suspension, first make the owned
 status request. Clear an incognito or missing session without reload. For a
-recorded session, persist the `single` phase and reload exactly once. The new
-stock WebUI fetches the session, sees `current_run`, and invokes
+recorded in-flight session, persist the `single` phase and perform one initial
+reconciliation reload. The new stock WebUI fetches the session, sees
+`current_run`, and invokes
 `resumeInFlightRun()` from cursor zero; if the run completed while hidden, the
 reload renders the persisted result instead. The startup phase check continues
-until the resumed response reaches clean EOF or `current_run` disappears.
+until the resumed response reaches clean EOF or `current_run` disappears. Clean
+EOF is the preferred completion owner. If the status fallback observes
+`current_run` disappear while the response can still be draining, it clears the
+marker only together with a final reconciliation reload; it never silently
+discards recovery state before the rendered page is settled.
 
 If another hide/show cycle interrupts the resumed stock stream, permit another
 bounded recovery for the same token. The phase and minimum interval prohibit
@@ -439,6 +449,9 @@ Cover at least:
 - reload state cannot loop on the next document's initial `pageshow`;
 - a second genuine suspension permits another bounded recovery for the token;
 - a different current `chatId` is never reloaded or redirected;
+- `pushState`, `replaceState`, and `popstate` preserve native call behavior,
+  schedule nothing without a marker, and resume a retained multi-model recovery
+  after client-side navigation returns to the marked `chatId`;
 - malformed/expired/version-mismatched storage is discarded;
 - persisted recovery self-starts without observing a stock session GET;
 - status ownership is token-correlated, aborts on hide, never overlaps, and a
@@ -447,6 +460,9 @@ Cover at least:
 - single- and multi-model polling backs off, pauses while hidden/offline,
   stops on completion, and expires after four hours;
 - a visible send/resume stream failure schedules recovery;
+- a single-model completion status racing a still-draining resume body performs
+  one reconciliation reload and a later body failure cannot start duplicate
+  recovery;
 - incognito is classified and cleared before any companion reload;
 - incognito teardown calls the original fetch/beacon exactly once, preserves
   its return/error behavior, and never schedules recovery; and
@@ -643,9 +659,12 @@ validation, and diff checks. `make test-patch-images` passes the selected Onyx
 v4.6.5 backend and WebUI, nginx 1.25.5, executor, and derived SearXNG gates. The
 reconnect gate includes the executable browser companion's stream, lifecycle,
 incognito, startup-bootstrap, retry, stale-token, and overlapping-request
-contracts; native stream-buffer TTL/cap/gap/incognito fixtures; nginx module/
-configuration/serving behavior; HTML-only compression selection; CSP; and
-excluded-response checks. Effective Docker and Podman lite/full models,
+contracts. It also covers the two-model threshold, marker-free History API
+transparency, multi-model recovery after client-side route return, and the
+single-model completion-status/resume-body race. Native stream-buffer
+TTL/cap/gap/incognito fixtures, nginx module/configuration/serving behavior,
+HTML-only compression selection, CSP, and excluded-response checks pass.
+Effective Docker and Podman lite/full models,
 including the macOS Podman full overlay, retain the exact common nginx image,
 command/read-only mounts, and API-only stream settings. Generated files under
 `onyx/onyx_data/` are unchanged.

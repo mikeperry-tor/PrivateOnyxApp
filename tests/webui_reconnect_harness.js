@@ -9,6 +9,10 @@ const script = fs.readFileSync(scriptPath, "utf8");
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
 
+if (script.includes("private-onyx:webui-reconnect:v1")) {
+  throw new Error("unreleased v1 storage compatibility must not be retained");
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -33,9 +37,24 @@ function createBrowser(fetchImpl, options = {}) {
   let reloads = 0;
   let beaconCalls = 0;
   const location = {
-    href: `https://onyx.example/chat?chatId=${SESSION}`,
+    href: options.initialHref || `https://onyx.example/chat?chatId=${SESSION}`,
     origin: "https://onyx.example",
     reload() { reloads += 1; },
+  };
+  const historyCalls = [];
+  const history = {
+    pushState(state, unused, url) {
+      historyCalls.push(["pushState", state, unused, url]);
+      if (options.historyError) throw options.historyError;
+      if (url !== undefined && url !== null) location.href = new URL(url, location.href).href;
+      return options.historyResult;
+    },
+    replaceState(state, unused, url) {
+      historyCalls.push(["replaceState", state, unused, url]);
+      if (options.historyError) throw options.historyError;
+      if (url !== undefined && url !== null) location.href = new URL(url, location.href).href;
+      return options.historyResult;
+    },
   };
   function add(owner, type, callback) {
     const callbacks = events[owner].get(type) || [];
@@ -76,6 +95,7 @@ function createBrowser(fetchImpl, options = {}) {
   };
   const window = {
     fetch: fetchImpl,
+    history,
     crypto: {
       randomUUID: (() => {
         let counter = 0;
@@ -140,6 +160,7 @@ function createBrowser(fetchImpl, options = {}) {
     advance(ms) { clock += ms; },
     reloads: () => reloads,
     beaconCalls: () => beaconCalls,
+    historyCalls,
     pendingTimers: () => [...timers.values()].map((timer) => timer.delay),
     key: window.__privateOnyxReconnectTest.STORAGE_KEY,
   };
@@ -194,11 +215,30 @@ async function main() {
   {
     const sentinel = Promise.resolve(new Response("unrelated"));
     let calls = 0;
-    const browser = createBrowser(() => { calls += 1; return sentinel; });
+    const browser = createBrowser(() => { calls += 1; return sentinel; }, { historyResult: "history-result" });
     assert(browser.window.fetch("https://other.example/api", { method: "POST" }) === sentinel, "cross-origin fetch identity changed");
     assert(browser.window.fetch("/api/other") === sentinel, "unrelated fetch identity changed");
+    assert(browser.window.history.pushState({ safe: true }, "", "/chat?chatId=" + OTHER) === "history-result", "history return value changed");
+    assert(browser.window.history.replaceState({ safe: true }, "", "/chat?chatId=" + SESSION) === "history-result", "replaceState return value changed");
+    assert(browser.historyCalls.length === 2 && browser.pendingTimers().length === 0, "marker-free history navigation scheduled recovery");
     assert(calls === 2, "unrelated fetch was duplicated");
     assert(browser.storage.size === 0, "unrelated fetch created state");
+  }
+
+  {
+    const failure = new Error("native history failure");
+    const browser = createBrowser(() => { throw new Error("unexpected fetch"); }, { historyError: failure });
+    let observed = null;
+    try { browser.window.history.pushState({}, "", "/chat"); } catch (error) { observed = error; }
+    assert(observed === failure && browser.pendingTimers().length === 0, "history exception identity or scheduling changed");
+  }
+
+  {
+    const browser = createBrowser(() => Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 })));
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit({ llm_overrides: [{ model: "one" }] }));
+    assert(JSON.parse(browser.storage.get(browser.key)).multiModel === false, "one LLM override was misclassified as multi-model");
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit({ llm_overrides: [{ model: "one" }, { model: "two" }] }));
+    assert(JSON.parse(browser.storage.get(browser.key)).multiModel === true, "two LLM overrides were not classified as multi-model");
   }
 
   {
@@ -324,6 +364,21 @@ async function main() {
   }
 
   {
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/get-chat-session/")) return Promise.resolve(sessionResponse(false, false));
+      return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+    });
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    browser.document.visibilityState = "hidden";
+    await browser.dispatch("document", "visibilitychange");
+    browser.document.visibilityState = "visible";
+    await browser.dispatch("document", "visibilitychange");
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.reloads() === 1 && !browser.storage.has(browser.key), "completed-while-hidden single model retained a stale phase");
+  }
+
+  {
     const browser = createBrowser(() => Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 })));
     browser.storage.set(browser.key, "not json private prompt");
     assert(browser.window.__privateOnyxReconnectTest.loadRecord() === null, "malformed storage survived");
@@ -342,7 +397,7 @@ async function main() {
       }
       return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
     });
-    await browser.window.fetch("/api/chat/send-chat-message", sendInit({ llm_overrides: [{ model: "redacted" }] }));
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit({ llm_overrides: [{ model: "one" }, { model: "two" }] }));
     browser.document.visibilityState = "hidden";
     await browser.dispatch("document", "visibilitychange");
     browser.document.visibilityState = "visible";
@@ -367,6 +422,33 @@ async function main() {
     await browser.runTimers(2);
     await settle();
     assert(browser.reloads() === 2 && !browser.storage.has(browser.key), "multi-model completion did not settle with one final reload");
+  }
+
+  {
+    let statusCalls = 0;
+    const browser = createBrowser((url) => {
+      if (!String(url).startsWith("/api/chat/get-chat-session/")) throw new Error("unexpected fetch");
+      statusCalls += 1;
+      return Promise.resolve(sessionResponse(true, false));
+    }, {
+      initialHref: `https://onyx.example/chat?chatId=${OTHER}`,
+      initialRecord: recoveryRecord({ multiModel: true, pollPhase: "multi" }),
+      historyResult: "route-result",
+    });
+    await browser.runTimers(2);
+    assert(statusCalls === 0 && browser.pendingTimers().length === 0, "different-chat startup polled the marked session");
+    assert(browser.window.history.pushState({}, "", `/chat?chatId=${SESSION}`) === "route-result", "wrapped pushState changed its result");
+    await browser.runTimers(2);
+    await settle();
+    assert(statusCalls === 1 && browser.pendingTimers()[0] === 2000, "SPA return did not restart multi-model recovery");
+    browser.window.history.replaceState({}, "", `/chat?chatId=${OTHER}`);
+    await browser.runTimers(2);
+    assert(statusCalls === 1, "replaceState to another chat polled the marked session");
+    browser.location.href = `https://onyx.example/chat?chatId=${SESSION}`;
+    await browser.dispatch("window", "popstate");
+    await browser.runTimers(2);
+    await settle();
+    assert(statusCalls === 2, "popstate return did not restart multi-model recovery");
   }
 
   {
@@ -403,6 +485,32 @@ async function main() {
     await browser.runTimers(1);
     await settle();
     assert(statusCalls === 2 && browser.pendingTimers()[0] === 5000, "status recovery did not continue after a transient failure");
+  }
+
+  {
+    let resolveStatus;
+    let resumeController;
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+        return new Promise((resolve) => { resolveStatus = resolve; });
+      }
+      if (String(url).includes("/resume-stream")) {
+        return Promise.resolve(new Response(new ReadableStream({
+          start(controller) { resumeController = controller; },
+        }), { status: 200 }));
+      }
+      throw new Error("unexpected fetch");
+    }, { initialRecord: recoveryRecord({ pollPhase: "single" }) });
+    await browser.runTimers(2);
+    const resumed = await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=0`);
+    const consumed = resumed.text().catch(() => null);
+    resolveStatus(sessionResponse(false, false));
+    await settle();
+    assert(browser.reloads() === 1 && !browser.storage.has(browser.key), "completed single-model status cleared recovery without reconciliation reload");
+    resumeController.error(new Error("late resumed-stream failure"));
+    await consumed;
+    await settle();
+    assert(browser.reloads() === 1 && browser.pendingTimers().length === 0, "late stream failure scheduled duplicate recovery after reconciliation reload");
   }
 
   {

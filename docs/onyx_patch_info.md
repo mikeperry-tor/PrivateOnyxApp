@@ -611,10 +611,12 @@ consumer. The companion never constructs, retries, or resends
 `/api/chat/send-chat-message`.
 
 The companion records a versioned, four-hour tab-local `sessionStorage` marker
-before invoking an exact same-origin chat send. The marker holds only the
-session UUID, a random request token, timestamps, the multi-model flag, and
-bounded recovery phase/backoff state; it never holds prompts, packets, model or
-provider names, files, credentials, headers, error bodies, or exception text.
+before invoking an exact same-origin chat send. Two or more `llm_overrides`
+select the multi-model path, matching the pinned WebUI and backend; zero or one
+is single-model. The marker holds only the session UUID, a random request token,
+timestamps, the multi-model flag, and bounded recovery phase/backoff state; it
+never holds prompts, packets, model or provider names, files, credentials,
+headers, error bodies, or exception text.
 It forwards successful exact send and resume bodies through one transparent
 `TransformStream`, clears only the matching token on clean completion,
 non-success, or explicit cancellation, and retains the marker when a browser
@@ -634,13 +636,23 @@ same token again; debouncing, a minimum interval, and persisted phase state
 prevent churn. The companion does not redirect or reload a different selected
 chat.
 
+A retained marker is also re-evaluated after successful History API
+`pushState`/`replaceState` calls and `popstate`. The wrappers preserve the
+original receiver, arguments, return value, and exceptions and schedule no work
+when no marker exists. This lets a multi-model recovery resume when a user
+returns through Next.js client-side navigation; selecting another chat still
+cannot reload, redirect, or poll the marked chat.
+
 The pinned WebUI cannot attach a multi-model `current_run` to assistant panels
 because that run ID names the user message. Multi-model recovery therefore
 performs one reconciliation reload, checks the bounded session-detail endpoint
 only while that recovery is visible and online with backoff capped at one
 minute, and reloads once after `current_run` disappears. Single-model recovery
-uses the same recovery-scoped status owner until the resumed stream completes
-or `current_run` disappears. Persisted recovery phase self-starts in the new
+normally clears on the wrapped resume stream's clean EOF. Its bounded status
+fallback may observe backend completion before those response bytes finish
+draining; in that case it clears the marker only together with a final
+reconciliation reload. It never silently discards recovery state merely because
+`current_run` disappeared. Persisted recovery phase self-starts in the new
 document and does not depend on intercepting or ordering a stock session GET.
 There is no idle poller. Explicit stock cancellation clears the marker. An
 incognito or missing status clears it without reload; an exact end-session

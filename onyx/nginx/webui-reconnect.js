@@ -2,7 +2,6 @@
   "use strict";
 
   const STORAGE_KEY = "private-onyx:webui-reconnect:v2";
-  const LEGACY_STORAGE_KEY = "private-onyx:webui-reconnect:v1";
   const SCHEMA_VERSION = 2;
   const RECORD_TTL_MS = 4 * 60 * 60 * 1000;
   const MIN_RECOVERY_INTERVAL_MS = 1500;
@@ -254,7 +253,7 @@
       token,
       sessionId,
       startedAt: now(),
-      multiModel: Array.isArray(payload.llm_overrides) && payload.llm_overrides.length > 0,
+      multiModel: Array.isArray(payload.llm_overrides) && payload.llm_overrides.length >= 2,
       hiddenAt: document.visibilityState === "hidden" ? now() : null,
       lastRecoveryAt: null,
       pollPhase: null,
@@ -427,7 +426,7 @@
       current.hiddenAt = null;
       current.lastRecoveryAt = now();
       current.pollAttempt = 0;
-      if (current.multiModel && payload.current_run == null) {
+      if (payload.current_run == null) {
         removeStored();
       } else {
         current.pollPhase = current.multiModel ? "multi" : "single";
@@ -442,9 +441,8 @@
     }
 
     if (payload.current_run == null) {
-      const finalMultiReload = current.pollPhase === "multi";
       clearMatching(token);
-      if (finalMultiReload) location.reload();
+      location.reload();
       return;
     }
     scheduleStatus(current, false, purpose);
@@ -484,6 +482,24 @@
     if (recoveryTimer === null) recoveryTimer = setTimeout(recover, 0);
   }
 
+  function scheduleRouteRecovery() {
+    if (loadRecord()) scheduleRecovery();
+  }
+
+  function wrapHistoryMethod(name) {
+    if (!window.history || typeof window.history[name] !== "function") return;
+    const original = window.history[name];
+    window.history[name] = function () {
+      const result = original.apply(this, arguments);
+      scheduleRouteRecovery();
+      return result;
+    };
+  }
+
+  wrapHistoryMethod("pushState");
+  wrapHistoryMethod("replaceState");
+  window.addEventListener("popstate", scheduleRouteRecovery);
+
   document.addEventListener("visibilitychange", () => {
     const record = loadRecord();
     if (!record) return;
@@ -518,11 +534,6 @@
     else showManualNotice();
   });
 
-  try {
-    sessionStorage.removeItem(LEGACY_STORAGE_KEY);
-  } catch (_) {
-    storageUsable = false;
-  }
   const initialRecord = loadRecord();
   if (initialRecord && (initialRecord.hiddenAt !== null || initialRecord.pollPhase !== null)) {
     scheduleRecovery();

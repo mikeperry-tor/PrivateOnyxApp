@@ -350,11 +350,13 @@ same-origin asset and injects it into successful ordinary HTML. The companion
 wraps only exact same-origin send/resume streams and incognito teardown calls;
 ordinary session requests remain untouched. During recovery it owns at most
 one token-correlated, abortable same-origin session-detail request, which
-classifies incognito or missing sessions before any reload. It adds no service,
-network, host port, socket, private mount, credential, cross-origin permission,
-SSRF surface, private-network reachability, or final-hop authority. Browser
-requests remain outside container egress routing and are constrained by both
-the upstream and tracked CSP policies.
+classifies incognito or missing sessions before any reload. Marker-gated History
+API observation notices client-side returns to the selected chat but creates no
+request or timer without recovery state and cannot select or redirect a chat.
+It adds no service, network, host port, socket, private mount, credential,
+cross-origin permission, SSRF surface, private-network reachability, or final-
+hop authority. Browser requests remain outside container egress routing and are
+constrained by both the upstream and tracked CSP policies.
 
 Wrapper logs redact query strings, bodies, cookies, credentials, and response
 content. Upstream Obscura does not provide the same guarantee and may expose

@@ -188,10 +188,14 @@ are not duplicate enforcement.
 - The WebUI reconnect companion adds no idle timer or poller. One status
   request exists only for an interrupted, visible, online single- or multi-
   model recovery. The initial check classifies incognito/missing sessions
-  before reload; post-reload checks settle the persisted recovery phase. They
-  back off from two seconds to at most one minute, retry temporary failures,
-  abort when hidden, pause while offline, and expire with the four-hour tab
-  marker.
+  before reload; post-reload checks settle the persisted recovery phase. A
+  single-model clean resume EOF cancels that work; if backend completion wins
+  the race, the status path performs a final reconciliation reload instead of
+  dropping recovery state. Marker-gated History API calls only schedule the
+  same bounded recovery check after client-side navigation and add no work when
+  the tab has no marker. Checks back off from two seconds to at most one minute,
+  retry temporary failures, abort when hidden, pause while offline, and expire
+  with the four-hour tab marker.
 
 ### Onyx Craft
 
