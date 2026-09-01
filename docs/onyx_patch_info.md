@@ -653,6 +653,16 @@ when no marker exists. This lets a multi-model recovery resume when a user
 returns through Next.js client-side navigation; selecting another chat still
 cannot reload, redirect, or poll the marked chat.
 
+Once the companion commits a token to an intentional reload, the outgoing
+document freezes that token's persisted recovery marker. Browser teardown may
+deliver stream EOF, abort, failure, `visibilitychange`, and `pagehide` in any
+order; those signals cancel document-local work but cannot clear the marker or
+record another suspension. This prevents an intentional navigation from being
+mistaken for a fresh interruption and creating a reload loop. If that same
+JavaScript realm becomes active again through `pageshow`, it releases the
+in-memory reload guard and resumes the already-persisted phase. A new document
+starts with no in-memory guard and self-starts the phase normally.
+
 The pinned WebUI cannot attach a multi-model `current_run` to assistant panels
 because that run ID names the user message. Multi-model recovery therefore
 performs one reconciliation reload, checks the bounded recovery-status endpoint

@@ -115,6 +115,12 @@
   }
 
   function clearMatching(token) {
+    // Once this document has committed to a companion-owned reload, browser
+    // teardown events from the outgoing page no longer describe user intent
+    // or a fresh transport failure. Preserve the marker for the new document
+    // regardless of whether abort, stream completion, visibilitychange, or
+    // pagehide happens first.
+    if (reloadingToken === token) return false;
     const record = loadRecord();
     if (!record || record.token !== token) return false;
     removeStored();
@@ -190,6 +196,7 @@
   }
 
   function markForRecovery(token) {
+    if (reloadingToken === token) return;
     const record = loadRecord();
     if (!record || record.token !== token) return;
     record.hiddenAt = now();
@@ -454,8 +461,7 @@
           return;
         }
       }
-      reloadingToken = token;
-      location.reload();
+      reloadForRecovery(token);
       return;
     }
 
@@ -463,7 +469,7 @@
       if (payload.current_run == null) {
         if (resumeOwnerToken === token) return;
         clearMatching(token);
-        location.reload();
+        reloadForRecovery(token);
         return;
       }
       if (resumeOwnerToken !== token) {
@@ -473,7 +479,7 @@
     }
     if (payload.current_run == null) {
       clearMatching(token);
-      location.reload();
+      reloadForRecovery(token);
       return;
     }
     scheduleStatus(current, false, purpose);
@@ -513,7 +519,20 @@
   }
 
   function scheduleRecovery() {
+    const record = loadRecord();
+    if (!record || record.token === reloadingToken) return;
     if (recoveryTimer === null) recoveryTimer = setTimeout(recover, 0);
+  }
+
+  function reloadForRecovery(token) {
+    reloadingToken = token;
+    cancelRecoveryWork(token);
+    try {
+      location.reload();
+    } catch (_) {
+      reloadingToken = null;
+      showManualNotice();
+    }
   }
 
   function scheduleRouteRecovery() {
@@ -538,9 +557,11 @@
     const record = loadRecord();
     if (!record) return;
     if (document.visibilityState === "hidden") {
-      record.hiddenAt = now();
-      record.pollAttempt = 0;
-      saveRecord(record);
+      if (record.token !== reloadingToken) {
+        record.hiddenAt = now();
+        record.pollAttempt = 0;
+        saveRecord(record);
+      }
       cancelRecoveryWork(record.token);
     } else {
       scheduleRecovery();
@@ -556,12 +577,16 @@
     if (record) cancelRecoveryWork(record.token);
   });
   window.addEventListener("pageshow", (event) => {
+    // A pageshow in this same JavaScript realm means a requested navigation
+    // did not replace the document (for example, it was cancelled or restored
+    // from the back-forward cache). It is safe to resume the persisted phase.
+    reloadingToken = null;
     const record = loadRecord();
     if (record && (event.persisted || record.hiddenAt !== null || record.pollPhase !== null)) scheduleRecovery();
   });
   window.addEventListener("online", () => {
     const record = loadRecord();
-    if (!record) return;
+    if (!record || record.token === reloadingToken) return;
     // A new send has no persisted recovery phase, so restored connectivity is
     // itself enough to reconcile an ambiguously accepted request. Persisted
     // phases already describe their pending work. In particular, do not turn

@@ -267,6 +267,15 @@ Register lifecycle listeners once:
   synthesize a new interruption, status check, or reload while a successful
   stock single-model resume body owns completion.
 
+Treat a companion-owned reload as a committed navigation for its token before
+calling the browser API. From that point, the outgoing document may cancel
+local timers and requests but must not let stream EOF/abort/failure,
+`visibilitychange`, or `pagehide`, in any order, clear the persisted phase or
+record a new interruption. If the same JavaScript realm is restored through
+`pageshow`, release the in-memory navigation guard and resume the persisted
+phase; a replacement document starts without that guard and self-schedules the
+phase normally.
+
 Wrap successful History API `pushState` and `replaceState` calls and observe
 `popstate` so a retained recovery is re-evaluated when client-side navigation
 returns to its `chatId`. Preserve receivers, arguments, results, and exceptions;
@@ -470,6 +479,9 @@ Cover at least:
   parsing, reordering, or combining chunks;
 - a later send cannot be cleared by completion of an earlier token;
 - hidden/visible, persisted `pageshow`, and `online` coalesce to one recovery;
+- every ordering of outgoing stream EOF/abort/failure, `visibilitychange`, and
+  `pagehide` after an intentional reload leaves its persisted phase unchanged,
+  and a same-realm `pageshow` resumes settling without another reload;
 - visible-without-hidden and hidden-without-active-send do nothing;
 - reload state cannot loop on the next document's initial `pageshow`;
 - a second genuine suspension permits another bounded recovery for the token;

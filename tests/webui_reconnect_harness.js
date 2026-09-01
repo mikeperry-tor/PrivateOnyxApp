@@ -349,6 +349,71 @@ async function main() {
     assert(browser.reloads() === 2 && browser.storage.has(browser.key), "other chat was reloaded or marker discarded");
   }
 
+  for (const [name, order] of [
+    ["visibility then pagehide", ["visibilitychange", "pagehide"]],
+    ["pagehide then visibility", ["pagehide", "visibilitychange"]],
+    ["visibility only", ["visibilitychange"]],
+    ["pagehide only", ["pagehide"]],
+  ]) {
+    let statusCalls = 0;
+    const browser = createBrowser((url) => {
+      if (!String(url).startsWith("/api/chat/reconnect-status/")) throw new Error("unexpected fetch");
+      statusCalls += 1;
+      return Promise.resolve(sessionResponse(true, false));
+    }, { initialRecord: recoveryRecord({ hiddenAt: 1700000000000 }) });
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.reloads() === 1, `${name}: initial recovery reload missing`);
+    for (const event of order) {
+      if (event === "visibilitychange") {
+        browser.document.visibilityState = "hidden";
+        await browser.dispatch("document", event);
+      } else {
+        await browser.dispatch("window", event);
+      }
+    }
+    let stored = JSON.parse(browser.storage.get(browser.key));
+    assert(stored.pollPhase === "single" && stored.hiddenAt === null, `${name}: outgoing lifecycle event created a new interruption`);
+    browser.document.visibilityState = "visible";
+    await browser.dispatch("window", "pageshow", { persisted: true });
+    await browser.runTimers(2);
+    await settle();
+    stored = JSON.parse(browser.storage.get(browser.key));
+    assert(browser.reloads() === 1 && stored.hiddenAt === null, `${name}: restored outgoing document entered a reload loop`);
+    assert(statusCalls >= 2, `${name}: restored document did not resume settling`);
+  }
+
+  {
+    let streamController;
+    const abortController = new AbortController();
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
+        return Promise.resolve(sessionResponse(true, false));
+      }
+      return Promise.resolve(new Response(new ReadableStream({
+        start(controller) { streamController = controller; },
+      }), { status: 200 }));
+    });
+    const response = await browser.window.fetch("/api/chat/send-chat-message", {
+      ...sendInit(),
+      signal: abortController.signal,
+    });
+    const consumed = response.text().catch(() => null);
+    browser.document.visibilityState = "hidden";
+    await browser.dispatch("document", "visibilitychange");
+    browser.document.visibilityState = "visible";
+    await browser.dispatch("document", "visibilitychange");
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.reloads() === 1, "active stream did not enter recovery reload");
+    abortController.abort();
+    streamController.close();
+    await consumed;
+    await settle();
+    const stored = JSON.parse(browser.storage.get(browser.key));
+    assert(stored.pollPhase === "single" && stored.hiddenAt === null, "outgoing stream teardown cleared or re-interrupted the recovery marker");
+  }
+
   {
     const browser = createBrowser((url) => {
       if (String(url).startsWith("/api/chat/reconnect-status/")) {

@@ -268,6 +268,11 @@ result neither mutates recovery state nor reloads the newly selected chat;
 returning to the marked `chatId` must resume the retained recovery. Recheck
 visibility, connectivity, and selected-chat eligibility after every awaited
 status body, not only before starting it.
+Once an intentional companion reload is committed, verify every ordering of
+outgoing stream EOF/abort/failure, `visibilitychange`, and `pagehide` leaves the
+persisted phase unchanged. A same-realm `pageshow` must release that in-memory
+guard and resume settling, while a replacement document self-starts normally;
+neither path may create another interruption or a reload loop.
 The pre-reload status check must clear incognito and missing sessions without a
 reload; exact stock incognito fetch/beacon and cancellation behavior must remain
 unchanged. A visible send or resume stream failure must enter the same bounded
