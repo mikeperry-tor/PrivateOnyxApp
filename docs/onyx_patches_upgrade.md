@@ -253,9 +253,11 @@ cache exceptions, single- versus multi-model run IDs, the two-or-more
 must install exactly one authenticated
 `/api/chat/reconnect-status/{session_id}` route, reject an upstream collision,
 return a content-free pending-reservation classification for the exact
-unerrored placeholder committed before fence publication, and fail startup
+unerrored placeholder committed before fence publication, report native stream
+buffer readiness separately from the run fence, and fail startup
 when the stock session endpoint's cache-error behavior or either reservation
-function's placeholder has drifted. Re-test the commit-before-fence window,
+function's placeholder or the readiness-probe signature has drifted. Re-test
+both the commit-before-fence and fence-before-buffer-metadata windows,
 including a later turn suspended before its first answer token, an old send
 whose pending state is first observed much later, and reset of the fifteen-minute
 observation window across hidden/offline/navigation pauses. A changed response
@@ -282,6 +284,12 @@ result neither mutates recovery state nor reloads the newly selected chat;
 returning to the marked `chatId` must resume the retained recovery. Recheck
 visibility, connectivity, and selected-chat eligibility after every awaited
 status body, not only before starting it.
+Require active-but-not-resumable status to retain recovery, show the reconnecting
+notice, and poll without reload. Once buffer metadata exists, require exactly
+one reconciliation reload. A non-success stock resume response must remain
+byte/status transparent to Onyx while immediately returning the marker to
+bounded reconciliation; it must not leave the reserved failure placeholder as
+the apparent terminal state.
 Once an intentional companion reload is committed, verify every ordering of
 outgoing stream EOF/abort/failure, `visibilitychange`, and `pagehide` leaves the
 persisted phase unchanged. A same-realm `pageshow` must release that in-memory

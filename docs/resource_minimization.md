@@ -192,7 +192,10 @@ are not duplicate enforcement.
 - The WebUI reconnect companion adds no idle timer or poller. Its dedicated
   recovery-status endpoint uses the stock read-chat permission and a narrow
   session lookup; an unavailable cache or an in-flight fence without a usable
-  run ID is retryable and cannot be mistaken for completion. One status request
+  run ID is retryable and cannot be mistaken for completion. An active run also
+  reports native stream-buffer metadata readiness separately; recovery polls
+  with its visible notice and does not reload until the stock resume endpoint
+  can serve that buffer. One status request
   exists only for an interrupted, visible, online recovery. After the initial
   single-model reload, settling stops once a successful stock resume response
   is observed and that body owns completion. If no resume owner appears,

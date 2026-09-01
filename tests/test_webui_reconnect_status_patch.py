@@ -183,6 +183,48 @@ class WebUIReconnectStatusPatchTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_resumable_requires_an_active_run_and_buffer_metadata(self) -> None:
+        calls: list[tuple[UUID, int]] = []
+
+        def has_buffer(_cache, session_id, run_id):
+            calls.append((session_id, run_id))
+            return True
+
+        self.assertFalse(
+            patch_module._reliable_resumable(
+                session_id=SESSION_ID,
+                current_run=None,
+                cache=object(),
+                has_stream_buffer=has_buffer,
+                transient_errors=(TransientCacheError,),
+            )
+        )
+        self.assertEqual(calls, [])
+        self.assertTrue(
+            patch_module._reliable_resumable(
+                session_id=SESSION_ID,
+                current_run=patch_module.WebUIReconnectCurrentRun(run_id=23),
+                cache=object(),
+                has_stream_buffer=has_buffer,
+                transient_errors=(TransientCacheError,),
+            )
+        )
+        self.assertEqual(calls, [(SESSION_ID, 23)])
+
+    def test_resumable_cache_failure_is_retryable(self) -> None:
+        def has_buffer(*_args):
+            raise TransientCacheError("cache unavailable")
+
+        with self.assertRaises(HTTPException) as caught:
+            patch_module._reliable_resumable(
+                session_id=SESSION_ID,
+                current_run=patch_module.WebUIReconnectCurrentRun(run_id=23),
+                cache=object(),
+                has_stream_buffer=has_buffer,
+                transient_errors=(TransientCacheError,),
+            )
+        self.assertEqual(caught.exception.status_code, 503)
+
     def test_api_bootstrap_installs_patch(self) -> None:
         bootstrap = (
             ROOT / "onyx/patches/sitecustomize_api_server/sitecustomize.py"
@@ -202,6 +244,7 @@ class WebUIReconnectStatusPatchTests(unittest.TestCase):
             "onyx.cache.interface",
             "onyx.chat",
             "onyx.chat.chat_processing_checker",
+            "onyx.chat.stream_buffer",
             "onyx.db",
             "onyx.db.chat",
             "onyx.db.models",
@@ -226,6 +269,10 @@ class WebUIReconnectStatusPatchTests(unittest.TestCase):
         checker = modules["onyx.chat.chat_processing_checker"]
         checker.get_processing_run_id = lambda *_args: None
         checker.is_chat_session_processing = lambda *_args: False
+        def has_stream_buffer(cache, chat_session_id, run_id):
+            return False
+
+        modules["onyx.chat.stream_buffer"].has_stream_buffer = has_stream_buffer
 
         db_chat = modules["onyx.db.chat"]
         db_chat.reserve_message_id = lambda: None

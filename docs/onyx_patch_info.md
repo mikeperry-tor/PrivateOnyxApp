@@ -676,6 +676,15 @@ same token again; debouncing, a minimum interval, and persisted phase state
 prevent churn. The companion does not redirect or reload a different selected
 chat.
 
+The route also reports `resumable` from the native stream buffer's O(1)
+metadata-existence probe. Onyx publishes the processing fence before it creates
+and flushes `StreamBufferWriter`, so an active run is not yet sufficient reason
+to reload. The companion keeps the reconnecting notice visible and polls
+without reloading until the buffer is ready. A non-success stock resume response
+is returned unchanged to Onyx while immediately re-entering bounded
+reconciliation, covering a readiness race between the status probe and resume
+GET. Startup audits the native readiness-probe signature.
+
 A retained marker is also re-evaluated after successful History API
 `pushState`/`replaceState` calls and `popstate`. The wrappers preserve the
 original receiver, arguments, return value, and exceptions and schedule no work

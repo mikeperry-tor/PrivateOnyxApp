@@ -183,11 +183,12 @@ function recoveryRecord(overrides = {}) {
   };
 }
 
-function sessionResponse(currentRun = true, incognito = false, pendingReservation = false) {
+function sessionResponse(currentRun = true, incognito = false, pendingReservation = false, resumable = currentRun) {
   return Response.json({
     current_run: currentRun ? { run_id: 9 } : null,
     incognito,
     pending_reservation: pendingReservation,
+    resumable,
   });
 }
 
@@ -512,6 +513,24 @@ async function main() {
     assert(browser.notices.length === 0, "published run retained the recovery notice");
     const stored = JSON.parse(browser.storage.get(browser.key));
     assert(stored.pollPhase === "single", "pre-stream recovery did not retain the single-model phase");
+  }
+
+  {
+    let statusCalls = 0;
+    const browser = createBrowser((url) => {
+      if (!String(url).startsWith("/api/chat/reconnect-status/")) throw new Error("unexpected fetch");
+      statusCalls += 1;
+      return Promise.resolve(statusCalls === 1
+        ? sessionResponse(true, false, false, false)
+        : sessionResponse(true, false, false, true));
+    }, { initialRecord: recoveryRecord({ hiddenAt: 1700000000000 }) });
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.reloads() === 0 && browser.storage.has(browser.key), "active run reloaded before its stream buffer was resumable");
+    assert(browser.notices.some((notice) => notice.textContent === "Reconnecting to this response…"), "buffer-readiness wait was invisible");
+    await browser.runTimers(1);
+    await settle();
+    assert(browser.reloads() === 1 && browser.notices.length === 0, "buffer readiness did not trigger one reconciliation reload");
   }
 
   {
@@ -963,6 +982,25 @@ async function main() {
       observed = error;
     }
     assert(observed === failure && browser.pendingTimers().length === 1, "resume rejection did not retain identity and schedule recovery");
+  }
+
+  {
+    let statusCalls = 0;
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
+        statusCalls += 1;
+        return Promise.resolve(sessionResponse(true, false, false, true));
+      }
+      if (String(url).includes("/resume-stream")) {
+        return Promise.resolve(Response.json({ detail: "No resumable run" }, { status: 404 }));
+      }
+      throw new Error("unexpected fetch");
+    }, { initialRecord: recoveryRecord({ pollPhase: "single" }) });
+    const response = await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=0`);
+    assert(response.status === 404, "failed stock resume response was changed");
+    await browser.runTimers(2);
+    await settle();
+    assert(statusCalls === 1 && browser.reloads() === 1, "failed stock resume did not immediately return to reconciliation");
   }
 
   {

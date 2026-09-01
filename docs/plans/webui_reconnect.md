@@ -324,10 +324,12 @@ the current view. Never change the selected chat automatically.
 Install one API runtime route at
 `GET /api/chat/reconnect-status/{session_id}`. It uses the stock `READ_CHAT`
 dependency and a narrow session lookup, returns only `incognito` and
-`current_run` plus a content-free `pending_reservation` flag, and does not load
-or translate message history. The flag is true only when the newest database
-message is the exact unerrored assistant placeholder committed before Onyx
-publishes its processing fence. It must not
+`current_run` plus content-free `pending_reservation` and `resumable` flags,
+and does not load or translate message history. The pending flag is true only
+when the newest database message is the exact unerrored assistant placeholder
+committed before Onyx publishes its processing fence. `resumable` is true only
+when that fence has a positive run ID and the native stream buffer's O(1)
+metadata-existence probe succeeds. It must not
 replace or wrap the ordinary session-detail endpoint. If the selected cache
 raises a declared transient exception, or a processing fence exists without a
 usable positive run ID, return `503`; absence is authoritative completion only
@@ -348,14 +350,17 @@ While this state is visible, show a small accessible wrapper notice that says
 the response is reconnecting; remove it when recovery advances, pauses, or the
 user leaves the marked chat.
 Runtime startup must also reject drift in the exact placeholder used by both
-single- and multi-model reservation functions.
+single- and multi-model reservation functions or in the native readiness-probe
+signature.
 
 #### Recorded single-model recovery
 
 When the marked chat becomes visible after suspension, first make the owned
 status request. Clear an incognito or missing session without reload. For a
-recorded in-flight session, persist the `single` phase and perform one initial
-reconciliation reload. The new stock WebUI fetches the session, sees
+recorded in-flight session, wait while it is active but not yet `resumable`,
+showing the reconnecting notice and polling without reload. Once resumable,
+persist the `single` phase and perform one initial reconciliation reload. The
+new stock WebUI fetches the session, sees
 `current_run`, and invokes
 `resumeInFlightRun()` from cursor zero; if the run completed while hidden, the
 reload renders the persisted result instead. The new document performs bounded
@@ -366,8 +371,10 @@ status confirmation. Confirmed completion clears the marker and leaves stock's
 post-resume hydration in place; an active run means the EOF was premature and
 starts another bounded reconciliation. If no resume owner appears, checks
 continue while the run is active and completion performs one final hydration
-reload. A later body failure or genuine suspension can re-enter recovery for
-the same token.
+reload. A non-success stock resume response remains byte/status transparent and
+immediately re-enters reconciliation, covering readiness changing between the
+status probe and the resume GET. A later body failure or genuine suspension can
+re-enter recovery for the same token.
 
 If another hide/show cycle interrupts the resumed stock stream, permit another
 bounded recovery for the same token. The phase and minimum interval prohibit

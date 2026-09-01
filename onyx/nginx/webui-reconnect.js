@@ -220,6 +220,7 @@
     if (reloadingToken === token) return;
     const record = loadRecord();
     if (!record || record.token !== token) return;
+    cancelRecoveryWork(token);
     record.hiddenAt = now();
     record.pollAttempt = 0;
     if (!saveRecord(record)) {
@@ -374,7 +375,10 @@
       const record = loadRecord();
       if (!record || record.sessionId !== resumedSession) return result;
       return Promise.resolve(result).then((response) => {
-        if (!response.ok) return response;
+        if (!response.ok) {
+          markForRecovery(record.token);
+          return response;
+        }
         const current = loadRecord();
         if (!current || current.token !== record.token) return response;
         if (canWrapStreamResponse(response)) {
@@ -454,6 +458,7 @@
         payload = await response.json();
         outcome = payload && typeof payload.incognito === "boolean" &&
           typeof payload.pending_reservation === "boolean" &&
+          typeof payload.resumable === "boolean" &&
           Object.hasOwn(payload, "current_run")
           ? "status"
           : "retry";
@@ -495,6 +500,19 @@
         scheduleStatus(current, false, purpose);
         return;
       }
+    }
+    // The processing fence is published before the durable buffer writes its
+    // first metadata. Reloading in that gap makes stock resume fail once and
+    // leaves its persisted placeholder onscreen until another reconciliation.
+    if (payload.current_run != null && !payload.resumable) {
+      current.pendingSince = null;
+      if (!saveRecord(current)) {
+        showManualNotice();
+        return;
+      }
+      showRecoveryNotice();
+      scheduleStatus(current, false, purpose);
+      return;
     }
     hideRecoveryNotice();
     current.pendingSince = null;

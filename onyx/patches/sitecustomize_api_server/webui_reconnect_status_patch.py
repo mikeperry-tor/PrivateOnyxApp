@@ -25,6 +25,7 @@ class WebUIReconnectStatus(BaseModel):
     incognito: bool
     current_run: WebUIReconnectCurrentRun | None = None
     pending_reservation: bool = False
+    resumable: bool = False
 
 
 def _route_paths(router: Any) -> list[tuple[str, set[str]]]:
@@ -75,10 +76,27 @@ def _has_pending_reservation(
     )
 
 
+def _reliable_resumable(
+    *,
+    session_id: UUID,
+    current_run: WebUIReconnectCurrentRun | None,
+    cache: Any,
+    has_stream_buffer: Any,
+    transient_errors: tuple[type[Exception], ...],
+) -> bool:
+    if current_run is None:
+        return False
+    try:
+        return bool(has_stream_buffer(cache, session_id, current_run.run_id))
+    except transient_errors as exc:
+        raise HTTPException(status_code=503, detail=_UNAVAILABLE_DETAIL) from exc
+
+
 def install() -> None:
     from onyx.cache.interface import CACHE_TRANSIENT_ERRORS
     from onyx.chat.chat_processing_checker import get_processing_run_id
     from onyx.chat.chat_processing_checker import is_chat_session_processing
+    from onyx.chat.stream_buffer import has_stream_buffer
     from onyx.db.chat import reserve_message_id
     from onyx.db.chat import reserve_multi_model_message_ids
     from onyx.db.models import ChatMessage
@@ -103,6 +121,12 @@ def install() -> None:
     for reservation_function in (reserve_message_id, reserve_multi_model_message_ids):
         if inspect.getsource(reservation_function).count(_RESERVED_MESSAGE) != 1:
             raise RuntimeError("Onyx reserved-message placeholder drifted")
+    if tuple(inspect.signature(has_stream_buffer).parameters) != (
+        "cache",
+        "chat_session_id",
+        "run_id",
+    ):
+        raise RuntimeError("Onyx stream-buffer readiness probe drifted")
 
     # Match the stock READ_CHAT dependency exactly.
     read_chat_dependency = chat_backend.require_permission(
@@ -115,7 +139,7 @@ def install() -> None:
         db_session: Any = Depends(chat_backend.get_session),
     ) -> WebUIReconnectStatus:
         # Do not call get_chat_session here: it loads and translates the full
-        # message history even though recovery needs only these two fields.
+        # message history even though recovery needs only narrow status fields.
         try:
             chat_session = chat_backend.get_chat_session_by_id(
                 chat_session_id=session_id,
@@ -126,9 +150,10 @@ def install() -> None:
             raise HTTPException(
                 status_code=404, detail="Chat session not found"
             ) from exc
+        cache = chat_backend.get_cache_backend()
         current_run = _reliable_current_run(
             session_id=session_id,
-            cache=chat_backend.get_cache_backend(),
+            cache=cache,
             get_processing_run_id=get_processing_run_id,
             is_chat_session_processing=is_chat_session_processing,
             transient_errors=CACHE_TRANSIENT_ERRORS,
@@ -138,10 +163,18 @@ def install() -> None:
             db_session=db_session,
             chat_message_model=ChatMessage,
         )
+        resumable = _reliable_resumable(
+            session_id=session_id,
+            current_run=current_run,
+            cache=cache,
+            has_stream_buffer=has_stream_buffer,
+            transient_errors=CACHE_TRANSIENT_ERRORS,
+        )
         return WebUIReconnectStatus(
             incognito=chat_session.incognito_record_mode is not None,
             current_run=current_run,
             pending_reservation=pending_reservation,
+            resumable=resumable,
         )
 
     router.add_api_route(
