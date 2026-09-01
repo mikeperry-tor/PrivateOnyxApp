@@ -558,6 +558,9 @@ services:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: nginx
+    # Pin the exact image that the reconnect image gate validates instead of
+    # inheriting an independently selected generated-upstream reference.
+    image: ${NGINX_IMAGE:?NGINX_IMAGE must be set}
     networks: [onyx-frontend]
     volumes:
       # Onyx already emits its own CSP. Browsers enforce this additional

@@ -20,6 +20,12 @@ async function settle() {
 function createBrowser(fetchImpl, options = {}) {
   const events = { window: new Map(), document: new Map() };
   const storage = new Map();
+  if (options.initialRecord) {
+    storage.set(
+      "private-onyx:webui-reconnect:v2",
+      JSON.stringify(options.initialRecord)
+    );
+  }
   const timers = new Map();
   const notices = [];
   let nextTimer = 1;
@@ -73,7 +79,10 @@ function createBrowser(fetchImpl, options = {}) {
     crypto: {
       randomUUID: (() => {
         let counter = 0;
-        return () => `aaaaaaaa-aaaa-4aaa-8aaa-${String(++counter).padStart(12, "0")}`;
+        return () => {
+          if (options.cryptoFailure) throw new Error("crypto unavailable");
+          return `aaaaaaaa-aaaa-4aaa-8aaa-${String(++counter).padStart(12, "0")}`;
+        };
       })(),
       getRandomValues(array) { array.fill(7); return array; },
     },
@@ -92,6 +101,7 @@ function createBrowser(fetchImpl, options = {}) {
     Headers,
     ReadableStream,
     TransformStream: options.noTransform ? undefined : TransformStream,
+    AbortController,
     Promise,
     Date: { now: () => clock },
     setTimeout(callback, delay) {
@@ -133,6 +143,28 @@ function createBrowser(fetchImpl, options = {}) {
     pendingTimers: () => [...timers.values()].map((timer) => timer.delay),
     key: window.__privateOnyxReconnectTest.STORAGE_KEY,
   };
+}
+
+function recoveryRecord(overrides = {}) {
+  return {
+    version: 2,
+    token: "aaaaaaaa-aaaa-4aaa-8aaa-000000000001",
+    sessionId: SESSION,
+    startedAt: 1700000000000,
+    multiModel: false,
+    hiddenAt: null,
+    lastRecoveryAt: null,
+    pollPhase: null,
+    pollAttempt: 0,
+    ...overrides,
+  };
+}
+
+function sessionResponse(currentRun = true, incognito = false) {
+  return Response.json({
+    current_run: currentRun ? { run_id: 9 } : null,
+    incognito,
+  });
 }
 
 function sendInit(overrides = {}) {
@@ -209,6 +241,7 @@ async function main() {
     let observed = null;
     try { await browser.window.fetch("/api/chat/send-chat-message", sendInit()); } catch (error) { observed = error; }
     assert(observed === rejection && browser.storage.has(browser.key), "async network rejection was not retained exactly");
+    assert(browser.pendingTimers().length === 1, "visible network rejection did not schedule recovery");
   }
 
   {
@@ -237,7 +270,12 @@ async function main() {
   }
 
   {
-    const browser = createBrowser(() => Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 })));
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+        return Promise.resolve(sessionResponse(true, false));
+      }
+      return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+    });
     await browser.window.fetch("/api/chat/send-chat-message", sendInit());
     browser.document.visibilityState = "hidden";
     await browser.dispatch("document", "visibilitychange");
@@ -245,18 +283,21 @@ async function main() {
     await browser.dispatch("document", "visibilitychange");
     await browser.dispatch("window", "pageshow", { persisted: true });
     await browser.dispatch("window", "online");
-    await browser.runTimers(3);
+    await browser.runTimers(2);
+    await settle();
     assert(browser.reloads() === 1, "wake signals did not coalesce to one reload");
     await browser.dispatch("window", "pagehide");
     await browser.dispatch("window", "pageshow", { persisted: false });
-    await browser.runTimers(1);
+    await browser.runTimers(2);
+    await settle();
     assert(browser.reloads() === 1, "initial pageshow caused reload loop");
     browser.advance(2000);
     browser.document.visibilityState = "hidden";
     await browser.dispatch("document", "visibilitychange");
     browser.document.visibilityState = "visible";
     await browser.dispatch("document", "visibilitychange");
-    await browser.runTimers(1);
+    await browser.runTimers(2);
+    await settle();
     assert(browser.reloads() === 2, "second suspension did not permit recovery");
     browser.location.href = `https://onyx.example/chat?chatId=${OTHER}`;
     browser.advance(2000);
@@ -264,15 +305,21 @@ async function main() {
     await browser.dispatch("document", "visibilitychange");
     browser.document.visibilityState = "visible";
     await browser.dispatch("document", "visibilitychange");
-    await browser.runTimers(1);
+    await browser.runTimers(2);
     assert(browser.reloads() === 2 && browser.storage.has(browser.key), "other chat was reloaded or marker discarded");
   }
 
   {
-    const browser = createBrowser(() => Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 })));
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+        return Promise.resolve(sessionResponse(true, false));
+      }
+      return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+    });
     await browser.window.fetch("/api/chat/send-chat-message", sendInit());
     await browser.dispatch("window", "online");
-    await browser.runTimers(1);
+    await browser.runTimers(2);
+    await settle();
     assert(browser.reloads() === 1, "online transition did not recover an active visible send");
   }
 
@@ -281,18 +328,9 @@ async function main() {
     browser.storage.set(browser.key, "not json private prompt");
     assert(browser.window.__privateOnyxReconnectTest.loadRecord() === null, "malformed storage survived");
     assert(!browser.storage.has(browser.key), "malformed storage was not discarded");
-    browser.storage.set(browser.key, JSON.stringify({
-      version: 1,
-      token: "aaaaaaaa-aaaa-4aaa-8aaa-000000000001",
-      sessionId: SESSION,
+    browser.storage.set(browser.key, JSON.stringify(recoveryRecord({
       startedAt: 1700000000000 - (4 * 60 * 60 * 1000) - 1,
-      multiModel: false,
-      hiddenAt: null,
-      generation: 0,
-      lastRecoveryAt: null,
-      pollPhase: null,
-      pollAttempt: 0,
-    }));
+    })));
     assert(browser.window.__privateOnyxReconnectTest.loadRecord() === null, "expired storage survived");
   }
 
@@ -300,7 +338,7 @@ async function main() {
     let currentRun = true;
     const browser = createBrowser((url) => {
       if (String(url).startsWith("/api/chat/get-chat-session/")) {
-        return Promise.resolve(Response.json({ current_run: currentRun ? { run_id: 9 } : null, incognito: false }));
+        return Promise.resolve(sessionResponse(currentRun, false));
       }
       return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
     });
@@ -309,11 +347,14 @@ async function main() {
     await browser.dispatch("document", "visibilitychange");
     browser.document.visibilityState = "visible";
     await browser.dispatch("document", "visibilitychange");
-    await browser.runTimers(1);
-    assert(browser.reloads() === 1, "multi-model first reconciliation reload missing");
-    await browser.window.fetch(`/api/chat/get-chat-session/${SESSION}`);
+    await browser.runTimers(2);
     await settle();
-    assert(browser.pendingTimers().length === 1 && browser.pendingTimers()[0] === 2000, "multi-model poll did not start with backoff");
+    assert(browser.reloads() === 1, "multi-model first reconciliation reload missing");
+    assert(JSON.parse(browser.storage.get(browser.key)).pollPhase === "multi", "multi-model phase was not persisted before reload");
+    await browser.dispatch("window", "pageshow", { persisted: false });
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.pendingTimers().length === 1 && browser.pendingTimers()[0] === 2000, "persisted multi-model poll did not bootstrap with backoff");
     await browser.runTimers(1);
     await settle();
     assert(browser.pendingTimers().length === 1 && browser.pendingTimers()[0] === 5000, "multi-model poll did not advance backoff");
@@ -323,9 +364,126 @@ async function main() {
     currentRun = false;
     browser.document.visibilityState = "visible";
     await browser.dispatch("document", "visibilitychange");
-    await browser.runTimers(1);
+    await browser.runTimers(2);
     await settle();
     assert(browser.reloads() === 2 && !browser.storage.has(browser.key), "multi-model completion did not settle with one final reload");
+  }
+
+  {
+    let statusCalls = 0;
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+        statusCalls += 1;
+        return Promise.resolve(sessionResponse(true, false));
+      }
+      throw new Error("unexpected fetch");
+    }, {
+      initialRecord: recoveryRecord({ multiModel: true, pollPhase: "multi", lastRecoveryAt: 1700000000000 }),
+    });
+    await browser.runTimers(2);
+    await settle();
+    assert(statusCalls === 1, "persisted recovery phase depended on a stock session request");
+    assert(browser.pendingTimers().length === 1 && browser.pendingTimers()[0] === 2000, "startup recovery did not schedule its own poll");
+  }
+
+  {
+    let statusCalls = 0;
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+        statusCalls += 1;
+        return Promise.resolve(statusCalls === 1
+          ? new Response("temporary", { status: 503 })
+          : sessionResponse(true, false));
+      }
+      throw new Error("unexpected fetch");
+    }, { initialRecord: recoveryRecord({ pollPhase: "single" }) });
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.storage.has(browser.key) && browser.pendingTimers()[0] === 2000, "transient status failure stopped recovery");
+    await browser.runTimers(1);
+    await settle();
+    assert(statusCalls === 2 && browser.pendingTimers()[0] === 5000, "status recovery did not continue after a transient failure");
+  }
+
+  {
+    let resolveOldStatus;
+    let oldStatusSignal;
+    const browser = createBrowser((url, init) => {
+      if (String(url).startsWith("/api/chat/get-chat-session/")) {
+        oldStatusSignal = init.signal;
+        return new Promise((resolve) => { resolveOldStatus = resolve; });
+      }
+      return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+    }, { initialRecord: recoveryRecord({ token: "bbbbbbbb-bbbb-4bbb-8bbb-000000000001", pollPhase: "single" }) });
+    await browser.runTimers(2);
+    const send = browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    const newToken = JSON.parse(browser.storage.get(browser.key)).token;
+    assert(oldStatusSignal.aborted, "new send did not cancel the older token's status request");
+    resolveOldStatus(sessionResponse(false, false));
+    await settle();
+    assert(JSON.parse(browser.storage.get(browser.key)).token === newToken, "stale status response cleared a newer send");
+    void send;
+  }
+
+  {
+    let active = 0;
+    let maximumActive = 0;
+    let statusCalls = 0;
+    const browser = createBrowser((url, init) => {
+      if (!String(url).startsWith("/api/chat/get-chat-session/")) throw new Error("unexpected fetch");
+      statusCalls += 1;
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      if (statusCalls === 1) {
+        return new Promise((resolve, reject) => {
+          init.signal.addEventListener("abort", () => {
+            active -= 1;
+            reject(new DOMException("aborted", "AbortError"));
+          }, { once: true });
+        });
+      }
+      active -= 1;
+      return Promise.resolve(sessionResponse(true, false));
+    }, { initialRecord: recoveryRecord({ pollPhase: "multi" }) });
+    await browser.runTimers(2);
+    browser.document.visibilityState = "hidden";
+    await browser.dispatch("document", "visibilitychange");
+    browser.document.visibilityState = "visible";
+    await browser.dispatch("document", "visibilitychange");
+    await browser.runTimers(2);
+    await settle();
+    assert(statusCalls === 2 && maximumActive === 1, "hidden/visible transition overlapped status probes");
+  }
+
+  {
+    const failure = new Error("visible stream disconnected");
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/get-chat-session/")) return Promise.resolve(sessionResponse(true, false));
+      return Promise.resolve(streamResponse(["partial"], failure));
+    });
+    const response = await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    try { await response.text(); } catch (_) {}
+    await settle();
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.reloads() === 1, "visible stream failure did not initiate recovery");
+  }
+
+  {
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/get-chat-session/")) return Promise.resolve(sessionResponse(true, true));
+      return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+    });
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    browser.document.visibilityState = "hidden";
+    await browser.dispatch("document", "visibilitychange");
+    browser.document.visibilityState = "visible";
+    await browser.dispatch("document", "visibilitychange");
+    await browser.runTimers(2);
+    await settle();
+    assert(browser.reloads() === 0, "incognito session was reloaded before classification");
+    assert(!browser.storage.has(browser.key), "incognito classification retained reconnect state");
+    assert(browser.beaconCalls() === 0, "recovery synthesized an incognito teardown beacon");
   }
 
   {
@@ -340,21 +498,75 @@ async function main() {
     let calls = 0;
     const sentinel = Promise.resolve(new Response(null, { status: 204 }));
     const browser = createBrowser(() => { calls += 1; return sentinel; });
-    browser.window.__privateOnyxReconnectTest.saveRecord({
-      version: 1,
-      token: "aaaaaaaa-aaaa-4aaa-8aaa-000000000001",
-      sessionId: SESSION,
-      startedAt: 1700000000000,
-      multiModel: false,
-      hiddenAt: null,
-      generation: 0,
-      lastRecoveryAt: null,
-      pollPhase: null,
-      pollAttempt: 0,
-    });
+    browser.window.__privateOnyxReconnectTest.saveRecord(recoveryRecord());
     const result = browser.window.fetch(`/api/chat/end-incognito-session/${SESSION}`, { method: "POST" });
     assert(result === sentinel && calls === 1, "incognito fetch identity/call count changed");
     assert(!browser.storage.has(browser.key), "incognito fetch retained marker");
+  }
+
+  {
+    let calls = 0;
+    const controller = new AbortController();
+    controller.abort();
+    const rejection = new Error("already aborted");
+    const browser = createBrowser(() => { calls += 1; return Promise.reject(rejection); });
+    let observed = null;
+    try {
+      await browser.window.fetch("/api/chat/send-chat-message", { ...sendInit(), signal: controller.signal });
+    } catch (error) {
+      observed = error;
+    }
+    assert(calls === 1 && observed === rejection, "pre-aborted send changed or duplicated the stock request");
+    assert(!browser.storage.has(browser.key), "pre-aborted send retained reconnect state");
+  }
+
+  {
+    let calls = 0;
+    const browser = createBrowser(() => {
+      calls += 1;
+      return Promise.resolve(streamResponse(["stock"]));
+    }, { cryptoFailure: true });
+    const response = await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    assert(await response.text() === "stock" && calls === 1, "token-generation failure changed or duplicated the stock send");
+    assert(browser.notices.length === 1 && !browser.storage.has(browser.key), "token-generation failure did not degrade to manual recovery");
+  }
+
+  {
+    const browser = createBrowser((url) => {
+      if (String(url).includes("/resume-stream")) return Promise.resolve(streamResponse(["resumed"]));
+      return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+    });
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    const response = await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=8`);
+    assert(await response.text() === "resumed", "exact resume stream changed data");
+    assert(!browser.storage.has(browser.key), "clean resume EOF did not clear reconnect state");
+  }
+
+  {
+    const failure = new Error("resume disconnected");
+    const browser = createBrowser((url) => {
+      if (String(url).includes("/resume-stream")) return Promise.reject(failure);
+      return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+    });
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    let observed = null;
+    try {
+      await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=8`);
+    } catch (error) {
+      observed = error;
+    }
+    assert(observed === failure && browser.pendingTimers().length === 1, "resume rejection did not retain identity and schedule recovery");
+  }
+
+  {
+    const sentinel = Promise.resolve(sessionResponse(false, false));
+    const browser = createBrowser((url) => String(url).startsWith("/api/chat/get-chat-session/")
+      ? sentinel
+      : Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 })));
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    assert(browser.window.fetch(`/api/chat/get-chat-session/${SESSION}`) === sentinel, "generic session request identity changed");
+    await sentinel;
+    assert(browser.storage.has(browser.key), "generic session observation cleared reconnect state");
   }
 
   {

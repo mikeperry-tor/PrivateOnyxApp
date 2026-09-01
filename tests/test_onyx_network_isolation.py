@@ -177,6 +177,7 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             with self.subTest(name=name):
                 services = _compose_model(mode, *overlays)["services"]
                 nginx = services["nginx"]
+                self.assertEqual(nginx["image"], "docker.io/library/nginx:1.25.5-alpine")
                 self.assertEqual(nginx["command"], ["/usr/local/bin/run-nginx-wrapper.sh"])
                 mounts = {
                     (mount["source"], mount["target"])

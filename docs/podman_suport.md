@@ -328,7 +328,10 @@ The common base, without a Podman-only override, supplies nginx's read-only
 reconnect asset, HTTP/server fragments, and startup wrapper mounts plus its
 exact command. Rootless Podman must retain those mounts and execute the
 ephemeral derived runner through `/bin/sh`; the wrapper never depends on an
-executable bind or a writable host source.
+executable bind or a writable host source. The same common model resolves the
+nginx service image from `NGINX_IMAGE` in `stack.versions.env`; the Podman
+effective model and selected-image validation must therefore agree on that
+exact pin.
 
 ### Full-mode override
 

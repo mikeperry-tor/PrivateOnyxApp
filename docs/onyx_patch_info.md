@@ -611,32 +611,42 @@ consumer. The companion never constructs, retries, or resends
 `/api/chat/send-chat-message`.
 
 The companion records a versioned, four-hour tab-local `sessionStorage` marker
-only after observing an exact same-origin recorded-chat send. The marker holds
-the session UUID, a random request token, timestamps, recovery generation, and
-bounded multi-model polling state; it never holds prompts, packets, model or
+before invoking an exact same-origin chat send. The marker holds only the
+session UUID, a random request token, timestamps, the multi-model flag, and
+bounded recovery phase/backoff state; it never holds prompts, packets, model or
 provider names, files, credentials, headers, error bodies, or exception text.
-It transparently forwards the original successful response body through one
+It forwards successful exact send and resume bodies through one transparent
 `TransformStream`, clears only the matching token on clean completion,
 non-success, or explicit cancellation, and retains the marker when a browser
-transport failure may have happened after server acceptance.
+transport failure may have happened after server acceptance. Other session
+requests remain untouched; they are not a second recovery owner. A later send
+supersedes the marker and cancels recovery work owned by the earlier token.
 
-After a genuine hidden/pagehide, restored-page, or offline transition, a
-visible tab reloads its selected marked chat once. Stock single-model hydration
-then replays from cursor zero and tails the current run, or renders the saved
-answer when completion happened while hidden. A later genuine suspension may
-advance the recovery generation once more; debouncing, a minimum interval, and
-clearing the hidden transition before reload prevent churn. The companion does
-not redirect or reload a different selected chat.
+After a genuine hidden/pagehide, restored-page, offline transition, or visible
+stream failure, the companion owns one token-correlated abortable session
+status request. It classifies `incognito` and missing sessions before any
+reload, retries temporary HTTP, network, and JSON failures with bounded
+backoff, and aborts the request when hidden. A recorded visible tab then
+reloads its selected marked chat once. Stock single-model hydration replays
+from cursor zero and tails the current run, or renders the saved answer when
+completion happened while hidden. A later genuine suspension may recover the
+same token again; debouncing, a minimum interval, and persisted phase state
+prevent churn. The companion does not redirect or reload a different selected
+chat.
 
 The pinned WebUI cannot attach a multi-model `current_run` to assistant panels
 because that run ID names the user message. Multi-model recovery therefore
-performs one reconciliation reload, polls the bounded session-detail endpoint
+performs one reconciliation reload, checks the bounded session-detail endpoint
 only while that recovery is visible and online with backoff capped at one
-minute, and reloads once after `current_run` disappears. There is no idle
-poller. Explicit stock cancellation clears the marker. An incognito session
-detail or exact end-session fetch/beacon clears it only after the original
-operation is invoked; the original call count, return value, error, immediate
-teardown, and completed-buffer deletion remain unchanged.
+minute, and reloads once after `current_run` disappears. Single-model recovery
+uses the same recovery-scoped status owner until the resumed stream completes
+or `current_run` disappears. Persisted recovery phase self-starts in the new
+document and does not depend on intercepting or ordering a stock session GET.
+There is no idle poller. Explicit stock cancellation clears the marker. An
+incognito or missing status clears it without reload; an exact end-session
+fetch/beacon also clears it only after invoking the original operation. The
+original call count, return value, error, immediate teardown, and completed-
+buffer deletion remain unchanged.
 
 `run-nginx-wrapper.sh` copies the generated templates into their ordinary
 ephemeral container location, requires one current `server` and WebUI
@@ -653,9 +663,10 @@ the same-origin script/API calls without adding a remote, data-script, eval,
 worker, or connection source.
 
 This integration is maintained against the pinned send payload and response
-consumer, FIFO error path, `chatId` selection, session `current_run` response,
-resume cursor/endpoint, single- versus multi-model run IDs, incognito
-`pagehide`, generated nginx markers, HTML compression, and nginx modules.
+consumer, FIFO error path, `chatId` selection, session `current_run` and
+`incognito` response, resume cursor/endpoint, single- versus multi-model run
+IDs, incognito `pagehide`, generated nginx markers, HTML compression, and nginx
+modules.
 Remove the companion and transform when upstream supplies equivalent recorded,
 multi-model, cancellation, and incognito reconnect semantics.
 

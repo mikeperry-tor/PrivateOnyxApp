@@ -338,7 +338,10 @@ $(error ONYX_IMAGE_TAG is not set. Add ONYX_IMAGE_TAG=... to $(VERSION_FILE), ov
 endif
 ONYX_BACKEND_IMAGE ?= docker.io/onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
 ONYX_WEB_SERVER_IMAGE ?= docker.io/onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
-NGINX_IMAGE ?= docker.io/library/nginx:1.25.5-alpine
+NGINX_IMAGE ?= $(call env_value,NGINX_IMAGE)
+ifeq ($(strip $(NGINX_IMAGE)),)
+$(error NGINX_IMAGE is not set. Add NGINX_IMAGE=... to $(VERSION_FILE) or override it on the make command line)
+endif
 SEARXNG_IMAGE_TAG ?= $(call env_value,SEARXNG_IMAGE_TAG)
 ifeq ($(strip $(SEARXNG_IMAGE_TAG)),)
 $(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass SEARXNG_IMAGE_TAG=... on the make command line)

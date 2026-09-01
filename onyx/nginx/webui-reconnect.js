@@ -1,14 +1,17 @@
 (function () {
   "use strict";
 
-  const STORAGE_KEY = "private-onyx:webui-reconnect:v1";
-  const SCHEMA_VERSION = 1;
+  const STORAGE_KEY = "private-onyx:webui-reconnect:v2";
+  const LEGACY_STORAGE_KEY = "private-onyx:webui-reconnect:v1";
+  const SCHEMA_VERSION = 2;
   const RECORD_TTL_MS = 4 * 60 * 60 * 1000;
   const MIN_RECOVERY_INTERVAL_MS = 1500;
   const POLL_DELAYS_MS = [2000, 5000, 15000, 30000, 60000];
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const SEND_PATH = "/api/chat/send-chat-message";
   const SESSION_PREFIX = "/api/chat/get-chat-session/";
+  const RESUME_PREFIX = "/api/chat/chat-session/";
+  const RESUME_SUFFIX = "/resume-stream";
   const INCOGNITO_PREFIX = "/api/chat/end-incognito-session/";
   const allowedRecordKeys = new Set([
     "version",
@@ -17,7 +20,6 @@
     "startedAt",
     "multiModel",
     "hiddenAt",
-    "generation",
     "lastRecoveryAt",
     "pollPhase",
     "pollAttempt",
@@ -29,7 +31,7 @@
     : null;
   let recoveryTimer = null;
   let pollTimer = null;
-  let statusInFlight = false;
+  let statusRequest = null;
   let storageUsable = true;
   let reloadingToken = null;
 
@@ -41,6 +43,10 @@
     return typeof value === "string" && UUID_RE.test(value);
   }
 
+  function validTimestamp(value, minimum) {
+    return Number.isFinite(value) && value >= minimum && value - now() <= 60000;
+  }
+
   function validRecord(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     if (Object.keys(value).some((key) => !allowedRecordKeys.has(key))) return false;
@@ -49,10 +55,9 @@
     if (!isUuid(value.sessionId)) return false;
     if (!Number.isFinite(value.startedAt) || value.startedAt <= 0 || now() - value.startedAt > RECORD_TTL_MS || value.startedAt - now() > 60000) return false;
     if (typeof value.multiModel !== "boolean") return false;
-    if (value.hiddenAt !== null && (!Number.isFinite(value.hiddenAt) || value.hiddenAt < value.startedAt)) return false;
-    if (!Number.isInteger(value.generation) || value.generation < 0) return false;
-    if (value.lastRecoveryAt !== null && (!Number.isFinite(value.lastRecoveryAt) || value.lastRecoveryAt < value.startedAt)) return false;
-    if (![null, "poll"].includes(value.pollPhase)) return false;
+    if (value.hiddenAt !== null && !validTimestamp(value.hiddenAt, value.startedAt)) return false;
+    if (value.lastRecoveryAt !== null && !validTimestamp(value.lastRecoveryAt, value.startedAt)) return false;
+    if (![null, "single", "multi"].includes(value.pollPhase)) return false;
     if (!Number.isInteger(value.pollAttempt) || value.pollAttempt < 0 || value.pollAttempt > POLL_DELAYS_MS.length) return false;
     return true;
   }
@@ -98,9 +103,23 @@
     }
   }
 
+  function cancelRecoveryWork(token) {
+    if (recoveryTimer !== null) clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+    if (pollTimer !== null) clearTimeout(pollTimer);
+    pollTimer = null;
+    if (statusRequest && (!token || statusRequest.token === token)) {
+      statusRequest.controller.abort();
+      statusRequest = null;
+    }
+  }
+
   function clearMatching(token) {
     const record = loadRecord();
-    if (record && record.token === token) removeStored();
+    if (!record || record.token !== token) return false;
+    removeStored();
+    cancelRecoveryWork(token);
+    return true;
   }
 
   function requestToken() {
@@ -135,6 +154,15 @@
     return url && url.origin === location.origin && !url.search && !url.hash;
   }
 
+  function resumeSessionId(url) {
+    if (!url || url.origin !== location.origin || url.hash) return null;
+    if (!url.pathname.startsWith(RESUME_PREFIX) || !url.pathname.endsWith(RESUME_SUFFIX)) return null;
+    const sessionId = url.pathname.slice(RESUME_PREFIX.length, -RESUME_SUFFIX.length);
+    const keys = Array.from(url.searchParams.keys());
+    if (!isUuid(sessionId) || keys.length !== 1 || keys[0] !== "cursor") return null;
+    return /^\d+$/.test(url.searchParams.get("cursor") || "") ? sessionId : null;
+  }
+
   function showManualNotice() {
     if (!document || document.getElementById("private-onyx-reconnect-notice")) return;
     const notice = document.createElement("div");
@@ -146,38 +174,64 @@
     (document.body || document.documentElement).appendChild(notice);
   }
 
-  function observeSession(sessionId, response) {
-    if (!response.ok) {
-      if (response.status === 404) {
-        const record = loadRecord();
-        if (record && record.sessionId === sessionId) removeStored();
-      }
-      return;
+  function currentChatId() {
+    try {
+      return new URL(location.href).searchParams.get("chatId");
+    } catch (_) {
+      return null;
     }
-    response.clone().json().then((payload) => {
-      const record = loadRecord();
-      if (!record || record.sessionId !== sessionId) return;
-      if (payload && payload.incognito === true) {
-        removeStored();
-        cancelPolling();
-        return;
-      }
-      if (!payload || !("current_run" in payload)) return;
-      if (payload.current_run == null) {
-        if (record.multiModel && record.pollPhase === "poll") {
-          removeStored();
-          cancelPolling();
-          location.reload();
-        } else {
-          removeStored();
-        }
-      } else if (record.multiModel && record.pollPhase === "poll") {
-        schedulePoll(record);
-      }
-    }).catch(function () {});
   }
 
-  function instrumentSend(input, init, receiver, args) {
+  function markForRecovery(token) {
+    const record = loadRecord();
+    if (!record || record.token !== token) return;
+    record.hiddenAt = now();
+    record.pollAttempt = 0;
+    if (!saveRecord(record)) {
+      showManualNotice();
+      return;
+    }
+    scheduleRecovery();
+  }
+
+  function wrapStreamResponse(response, token, signal, recoverOnError) {
+    if (!response.body || typeof TransformStream !== "function" || typeof response.body.pipeTo !== "function") {
+      showManualNotice();
+      return response;
+    }
+    let failureObserved = false;
+    let abortHandler = null;
+    const transparent = new TransformStream({
+      transform(chunk, controller) {
+        controller.enqueue(chunk);
+      },
+      flush() {
+        clearMatching(token);
+        if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+      },
+    });
+    if (signal && typeof signal.addEventListener === "function") {
+      abortHandler = () => clearMatching(token);
+      signal.addEventListener("abort", abortHandler, { once: true });
+      if (signal.aborted) clearMatching(token);
+    }
+    response.body.pipeTo(transparent.writable).catch(() => {
+      if (failureObserved) return;
+      failureObserved = true;
+      if (signal && signal.aborted) {
+        clearMatching(token);
+      } else if (recoverOnError) {
+        markForRecovery(token);
+      }
+    });
+    return new Response(transparent.readable, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+
+  function instrumentSend(init, receiver, args) {
     let payload;
     try {
       if (!init || typeof init.body !== "string") return originalFetch.apply(receiver, args);
@@ -188,7 +242,13 @@
     const sessionId = payload && payload.chat_session_id;
     if (!isUuid(sessionId)) return originalFetch.apply(receiver, args);
 
-    const token = requestToken();
+    let token;
+    try {
+      token = requestToken();
+    } catch (_) {
+      showManualNotice();
+      return originalFetch.apply(receiver, args);
+    }
     const record = {
       version: SCHEMA_VERSION,
       token,
@@ -196,11 +256,12 @@
       startedAt: now(),
       multiModel: Array.isArray(payload.llm_overrides) && payload.llm_overrides.length > 0,
       hiddenAt: document.visibilityState === "hidden" ? now() : null,
-      generation: 0,
       lastRecoveryAt: null,
       pollPhase: null,
       pollAttempt: 0,
     };
+    cancelRecoveryWork();
+    reloadingToken = null;
     if (!saveRecord(record)) showManualNotice();
 
     const signal = init.signal;
@@ -208,6 +269,7 @@
     if (signal && typeof signal.addEventListener === "function") {
       abortHandler = () => clearMatching(token);
       signal.addEventListener("abort", abortHandler, { once: true });
+      if (signal.aborted) clearMatching(token);
     }
 
     let result;
@@ -222,28 +284,11 @@
         clearMatching(token);
         return response;
       }
-      if (!response.body || typeof TransformStream !== "function" || typeof response.body.pipeThrough !== "function") {
-        showManualNotice();
-        return response;
-      }
-      const transparent = new TransformStream({
-        transform(chunk, controller) {
-          controller.enqueue(chunk);
-        },
-        flush() {
-          clearMatching(token);
-          if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
-        },
-      });
-      const body = response.body.pipeThrough(transparent);
-      return new Response(body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
+      if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+      return wrapStreamResponse(response, token, signal, true);
     }, (error) => {
-      // A rejected fetch promise can occur after the server accepted the POST.
-      // Retain the marker so wake-up recovery may reconcile without resending.
+      if (signal && signal.aborted) clearMatching(token);
+      else markForRecovery(token);
       throw error;
     });
   }
@@ -265,26 +310,34 @@
         result = originalFetch.apply(this, args);
       } catch (error) {
         const record = loadRecord();
-        if (record && record.sessionId === incognitoId) removeStored();
+        if (record && record.sessionId === incognitoId) clearMatching(record.token);
         throw error;
       }
       const record = loadRecord();
-      if (record && record.sessionId === incognitoId) removeStored();
+      if (record && record.sessionId === incognitoId) clearMatching(record.token);
       return result;
     }
 
     if (method === "POST" && matchingSameOrigin(url) && url.pathname === SEND_PATH) {
-      return instrumentSend(input, init, this, args);
+      return instrumentSend(init, this, args);
     }
 
-    const sessionId = method === "GET" && matchingSameOrigin(url)
-      ? exactSessionId(url.pathname, SESSION_PREFIX)
-      : null;
-    const result = originalFetch.apply(this, args);
-    if (sessionId) {
-      Promise.resolve(result).then((response) => observeSession(sessionId, response)).catch(function () {});
+    const resumedSession = method === "GET" ? resumeSessionId(url) : null;
+    if (resumedSession) {
+      const result = originalFetch.apply(this, args);
+      const record = loadRecord();
+      if (!record || record.sessionId !== resumedSession) return result;
+      return Promise.resolve(result).then((response) => {
+        if (!response.ok) return response;
+        return wrapStreamResponse(response, record.token, init && init.signal, true);
+      }, (error) => {
+        const current = loadRecord();
+        if (current && current.token === record.token) markForRecovery(record.token);
+        throw error;
+      });
     }
-    return result;
+
+    return originalFetch.apply(this, args);
   };
 
   if (originalBeacon) {
@@ -299,57 +352,102 @@
       } catch (error) {
         if (sessionId) {
           const record = loadRecord();
-          if (record && record.sessionId === sessionId) removeStored();
+          if (record && record.sessionId === sessionId) clearMatching(record.token);
         }
         throw error;
       }
       if (sessionId) {
         const record = loadRecord();
-        if (record && record.sessionId === sessionId) removeStored();
+        if (record && record.sessionId === sessionId) clearMatching(record.token);
       }
       return result;
     };
   }
 
-  function currentChatId() {
-    try {
-      return new URL(location.href).searchParams.get("chatId");
-    } catch (_) {
-      return null;
-    }
-  }
-
-  function cancelPolling() {
-    if (pollTimer !== null) clearTimeout(pollTimer);
-    pollTimer = null;
-    statusInFlight = false;
-  }
-
-  function pollSession(token) {
-    if (statusInFlight || document.visibilityState !== "visible" || navigator.onLine === false) return;
-    const record = loadRecord();
-    if (!record || record.token !== token || record.pollPhase !== "poll" || currentChatId() !== record.sessionId) return;
-    statusInFlight = true;
-    originalFetch.call(window, SESSION_PREFIX + record.sessionId, { method: "GET" }).then((response) => {
-      statusInFlight = false;
-      observeSession(record.sessionId, response);
-    }, () => {
-      statusInFlight = false;
-      schedulePoll(record);
-    });
-  }
-
-  function schedulePoll(record) {
-    if (pollTimer !== null || document.visibilityState !== "visible" || navigator.onLine === false) return;
+  function scheduleStatus(record, immediate, purpose) {
+    if (pollTimer !== null || statusRequest !== null) return;
+    if (document.visibilityState !== "visible" || navigator.onLine === false) return;
+    if (currentChatId() !== record.sessionId) return;
     const current = loadRecord();
-    if (!current || current.token !== record.token || current.pollPhase !== "poll") return;
+    if (!current || current.token !== record.token) return;
     const index = Math.min(current.pollAttempt, POLL_DELAYS_MS.length - 1);
-    current.pollAttempt = Math.min(current.pollAttempt + 1, POLL_DELAYS_MS.length);
-    if (!saveRecord(current)) return;
+    const delay = immediate ? 0 : POLL_DELAYS_MS[index];
+    if (!immediate) current.pollAttempt = Math.min(current.pollAttempt + 1, POLL_DELAYS_MS.length);
+    if (!saveRecord(current)) {
+      showManualNotice();
+      return;
+    }
     pollTimer = setTimeout(() => {
       pollTimer = null;
-      pollSession(current.token);
-    }, POLL_DELAYS_MS[index]);
+      checkStatus(current.token, purpose);
+    }, delay);
+  }
+
+  async function checkStatus(token, purpose) {
+    if (statusRequest !== null || document.visibilityState !== "visible" || navigator.onLine === false) return;
+    const record = loadRecord();
+    if (!record || record.token !== token || currentChatId() !== record.sessionId) return;
+    const controller = new AbortController();
+    const owner = { token, controller };
+    statusRequest = owner;
+    let outcome = "retry";
+    let payload = null;
+    try {
+      const response = await originalFetch.call(window, SESSION_PREFIX + record.sessionId, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      if (response.status === 404) {
+        outcome = "missing";
+      } else if (response.ok) {
+        payload = await response.json();
+        outcome = payload && typeof payload.incognito === "boolean" && Object.hasOwn(payload, "current_run")
+          ? "status"
+          : "retry";
+      }
+    } catch (_) {
+      if (controller.signal.aborted) outcome = "aborted";
+    } finally {
+      if (statusRequest === owner) statusRequest = null;
+    }
+
+    const current = loadRecord();
+    if (!current || current.token !== token) return;
+    if (outcome === "aborted") return;
+    if (outcome === "missing" || (outcome === "status" && payload.incognito)) {
+      clearMatching(token);
+      return;
+    }
+    if (outcome !== "status") {
+      scheduleStatus(current, false, purpose);
+      return;
+    }
+
+    if (purpose === "recover") {
+      current.hiddenAt = null;
+      current.lastRecoveryAt = now();
+      current.pollAttempt = 0;
+      if (current.multiModel && payload.current_run == null) {
+        removeStored();
+      } else {
+        current.pollPhase = current.multiModel ? "multi" : "single";
+        if (!saveRecord(current)) {
+          showManualNotice();
+          return;
+        }
+      }
+      reloadingToken = token;
+      location.reload();
+      return;
+    }
+
+    if (payload.current_run == null) {
+      const finalMultiReload = current.pollPhase === "multi";
+      clearMatching(token);
+      if (finalMultiReload) location.reload();
+      return;
+    }
+    scheduleStatus(current, false, purpose);
   }
 
   function recover() {
@@ -357,8 +455,15 @@
     const record = loadRecord();
     if (!record || document.visibilityState !== "visible" || navigator.onLine === false) return;
     if (currentChatId() !== record.sessionId) return;
-    if (record.multiModel && record.pollPhase === "poll") {
-      pollSession(record.token);
+    if (record.pollPhase !== null && record.hiddenAt === null) {
+      scheduleStatus(record, true, "settle");
+      return;
+    }
+    if (record.pollPhase === "multi") {
+      record.hiddenAt = null;
+      record.pollAttempt = 0;
+      if (saveRecord(record)) scheduleStatus(record, true, "settle");
+      else showManualNotice();
       return;
     }
     if (record.hiddenAt === null) return;
@@ -367,19 +472,12 @@
       recoveryTimer = setTimeout(recover, MIN_RECOVERY_INTERVAL_MS - elapsed);
       return;
     }
-    record.hiddenAt = null;
-    record.generation += 1;
-    record.lastRecoveryAt = now();
-    if (record.multiModel) {
-      record.pollPhase = "poll";
-      record.pollAttempt = 0;
-    }
+    record.pollAttempt = 0;
     if (!saveRecord(record)) {
       showManualNotice();
       return;
     }
-    reloadingToken = record.token;
-    location.reload();
+    scheduleStatus(record, true, "recover");
   }
 
   function scheduleRecovery() {
@@ -391,8 +489,9 @@
     if (!record) return;
     if (document.visibilityState === "hidden") {
       record.hiddenAt = now();
+      record.pollAttempt = 0;
       saveRecord(record);
-      cancelPolling();
+      cancelRecoveryWork(record.token);
     } else {
       scheduleRecovery();
     }
@@ -401,24 +500,33 @@
     const record = loadRecord();
     if (record && record.token !== reloadingToken) {
       record.hiddenAt = now();
+      record.pollAttempt = 0;
       saveRecord(record);
     }
-    cancelPolling();
+    if (record) cancelRecoveryWork(record.token);
   });
   window.addEventListener("pageshow", (event) => {
     const record = loadRecord();
-    if (record && (event.persisted || record.hiddenAt !== null)) scheduleRecovery();
+    if (record && (event.persisted || record.hiddenAt !== null || record.pollPhase !== null)) scheduleRecovery();
   });
   window.addEventListener("online", () => {
     const record = loadRecord();
     if (!record) return;
-    if (record.hiddenAt === null) {
-      record.hiddenAt = now();
-      saveRecord(record);
-    }
-    scheduleRecovery();
+    if (record.pollPhase !== "multi") record.hiddenAt = now();
+    record.pollAttempt = 0;
+    if (saveRecord(record)) scheduleRecovery();
+    else showManualNotice();
   });
 
+  try {
+    sessionStorage.removeItem(LEGACY_STORAGE_KEY);
+  } catch (_) {
+    storageUsable = false;
+  }
+  const initialRecord = loadRecord();
+  if (initialRecord && (initialRecord.hiddenAt !== null || initialRecord.pollPhase !== null)) {
+    scheduleRecovery();
+  }
   if (!storageUsable) showManualNotice();
   if (window.__PRIVATE_ONYX_RECONNECT_TEST__ === true) {
     window.__privateOnyxReconnectTest = {
@@ -426,7 +534,7 @@
       loadRecord,
       saveRecord,
       recover,
-      pollSession,
+      checkStatus,
       constants: { RECORD_TTL_MS, MIN_RECOVERY_INTERVAL_MS, POLL_DELAYS_MS },
     };
   }

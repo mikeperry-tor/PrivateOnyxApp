@@ -250,6 +250,18 @@ multi-model run IDs, and immediate incognito teardown. A changed response
 consumer property or multi-model ownership requires redesign, not a
 compatibility alias.
 
+The companion must remain the sole browser recovery owner: exact send and
+resume bodies are the only wrapped streams, ordinary session-detail requests
+remain byte/promise transparent, and one token-owned `AbortController` governs
+each recovery status request. Prove stale status responses cannot clear a newer
+send, hide/offline transitions cancel outstanding work, temporary HTTP/network/
+JSON failures retain state and back off, and a persisted single- or multi-model
+phase self-starts after reload without relying on a stock fetch being observed.
+The pre-reload status check must clear incognito and missing sessions without a
+reload; exact stock incognito fetch/beacon and cancellation behavior must remain
+unchanged. A visible send or resume stream failure must enter the same bounded
+recovery path, while clean EOF clears only its own token.
+
 Audit the stock HTML compression behavior, exact generated `server`, WebUI
 `location /`, and runner-start markers, both CSP policies, companion same-origin
 path, and selected nginx image's `http_sub_module`. Run the executable companion
@@ -259,6 +271,11 @@ back-forward cache, cancellation, multi-model completion, incognito, and every
 enabled ingress. If upstream provides equivalent recorded, multi-model,
 cancellation, and incognito reconnect behavior, removal of the wrapper
 companion and transform is an upgrade gate.
+
+`NGINX_IMAGE` in `stack.versions.env` is the common Compose runtime pin and the
+selected-image validation input. Confirm the effective nginx service uses that
+exact value so the module/configuration gate cannot validate a different image
+from the one deployed.
 
 For all four audits, record exactly which deterministic, image, live-stack, or
 external-provider rows could not be executed and why. A blocked practical row

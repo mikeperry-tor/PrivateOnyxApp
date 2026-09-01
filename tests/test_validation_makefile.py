@@ -14,6 +14,8 @@ PINNED_API_VALIDATOR = (ROOT / "tests" / "validate_pinned_api.py").read_text()
 EXECUTOR_NETWORK_VALIDATOR = (
     ROOT / "tests" / "validate_code_interpreter_executor_network.py"
 ).read_text()
+STACK_VERSIONS = (ROOT / "stack.versions.env").read_text()
+COMPOSE = (ROOT / "docker-compose.yaml").read_text()
 
 
 class ValidationMakefileTests(unittest.TestCase):
@@ -108,6 +110,12 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertIn("PINNED_WEBUI_STREAMING_CONTRACT_OK", IMAGE_SCRIPT)
         self.assertIn("tests/webui_reconnect_harness.js", IMAGE_SCRIPT)
         self.assertIn("tests/validate_nginx_reconnect_image.py", IMAGE_SCRIPT)
+        self.assertIn("NGINX_IMAGE ?= $(call env_value,NGINX_IMAGE)", MAKEFILE)
+        self.assertIn(
+            "NGINX_IMAGE=docker.io/library/nginx:1.25.5-alpine",
+            STACK_VERSIONS,
+        )
+        self.assertIn("image: ${NGINX_IMAGE:?NGINX_IMAGE must be set}", COMPOSE)
         self.assertIn("PINNED_NATIVE_CODING_AGENT_REPO_LIMIT_OK", IMAGE_SCRIPT)
         self.assertIn(
             "CODING_AGENT_GITHUB_MAX_REPO_BYTES == 500 * 1024 * 1024",

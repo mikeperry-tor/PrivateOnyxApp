@@ -185,11 +185,13 @@ are not duplicate enforcement.
   expiry, corruption, or truncation remains a replay gap and falls back to the
   persisted recorded message. Incognito completion deletes its buffer instead
   of retaining it for the completed TTL.
-- The WebUI reconnect companion adds no idle timer or poller. Single-model
-  recovery is lifecycle-triggered. Multi-model status polling exists only for
-  an interrupted, visible, online recovery, backs off from two seconds to at
-  most one minute, pauses when hidden/offline, and expires with the four-hour
-  tab marker.
+- The WebUI reconnect companion adds no idle timer or poller. One status
+  request exists only for an interrupted, visible, online single- or multi-
+  model recovery. The initial check classifies incognito/missing sessions
+  before reload; post-reload checks settle the persisted recovery phase. They
+  back off from two seconds to at most one minute, retry temporary failures,
+  abort when hidden, pause while offline, and expire with the four-hour tab
+  marker.
 
 ### Onyx Craft
 
