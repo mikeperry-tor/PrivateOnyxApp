@@ -322,6 +322,62 @@ enabled ingress. If upstream provides equivalent recorded, multi-model,
 cancellation, and incognito reconnect behavior, removal of the wrapper
 companion and transform is an upgrade gate.
 
+When that gate is satisfied, remove the complete duplicate recovery owner in
+the same upgrade. Do not stop after deleting the injected script or retain
+dormant compatibility paths:
+
+1. Delete `onyx/nginx/webui-reconnect.js`,
+   `webui-reconnect-http.conf`, `webui-reconnect-server.inc`, and
+   `run-nginx-wrapper.sh`. In `docker-compose.yaml`, remove their four mounts
+   and the wrapper command override so nginx returns to the upgraded upstream
+   runner. Preserve the independently owned `webui-csp.conf` mount and its
+   restrictive policy.
+2. Delete
+   `onyx/patches/sitecustomize_api_server/webui_reconnect_status_patch.py` and
+   remove its import and install call from that service's `sitecustomize.py`.
+   Confirm `/api/chat/reconnect-status/{session_id}` is absent unless the new
+   upstream implementation itself deliberately owns an equivalent route.
+3. Delete the wrapper-only tests
+   `tests/test_nginx_webui_reconnect.py`,
+   `tests/validate_nginx_reconnect_image.py`,
+   `tests/webui_reconnect_harness.js`, and
+   `tests/test_webui_reconnect_status_patch.py`. Remove their invocations and
+   wrapper-specific assertions from `tests/validate_pinned_patch_images.sh`,
+   `tests/validate_pinned_api.py`, `tests/test_onyx_network_isolation.py`,
+   `tests/test_onyx_privacy_config.py`, and
+   `tests/test_validation_makefile.py`. Replace, rather than merely discard,
+   WebUI streaming assertions needed to prove the new upstream recovery
+   contract and repeat the full live interruption matrix.
+4. Reassess `NGINX_IMAGE` separately. If no remaining wrapper behavior needs
+   the selected nginx image/module gate, remove its `stack.versions.env` pin,
+   Makefile resolution/requirement, Compose image override, image-validation
+   input, and related tests and Podman documentation. Do not remove the pin if
+   another explicit nginx security or runtime contract has acquired ownership.
+5. Reassess the three literal `CHAT_STREAM_BUFFER_*` API settings independently
+   of browser-owner removal. Upstream resumption may still require the
+   four-hour live TTL, one-hour completed TTL, and 32 MiB compressed cap. If
+   those policies remain necessary, retain their Compose values,
+   `tests/validate_chat_stream_cache_backend.py`, the two
+   `integration-chat-stream-cache-*` Make targets, and their tests and resource
+   documentation under upstream ownership. Remove that group only when the
+   upgraded implementation makes it obsolete or replaces it with a newly
+   audited policy.
+6. Rewrite the reconnect sections in `docs/onyx_patch_info.md`,
+   `docs/podman_suport.md`, and `docs/resource_minimization.md` to describe only
+   retained upstream behavior and validation. Update or remove the active
+   `docs/plans/webui_reconnect.md` acceptance artifact as appropriate; if it
+   has already moved under `docs/plans/implemented/`, leave that frozen design
+   record unchanged. Remove obsolete reconnect-specific material from this
+   checklist while retaining the new upstream audit and live regression gate.
+
+After removal, use a repository-wide search for `webui-reconnect`,
+`webui_reconnect`, `reconnect-status`, `WEBUI_RECONNECT`, `NGINX_IMAGE`, and
+`CHAT_STREAM_BUFFER_` to account for every remaining reference. The last two
+names are conditional audit results, not automatic deletion targets. Render
+all effective Docker/Podman lite/full models, run the deterministic and
+selected-image gates that remain, and prove there is exactly one browser
+recovery owner.
+
 `NGINX_IMAGE` in `stack.versions.env` is the common Compose runtime pin and the
 selected-image validation input. Confirm the effective nginx service uses that
 exact value so the module/configuration gate cannot validate a different image
