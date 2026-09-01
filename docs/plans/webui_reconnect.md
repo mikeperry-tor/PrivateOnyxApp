@@ -244,9 +244,12 @@ and errors. Only instrument exact same-origin requests:
   request proves user intent.
 - For a successful send or exact
   `GET /api/chat/chat-session/{session_id}/resume-stream?cursor={integer}`,
-  pass the original bytes through one transparent `TransformStream`. Clear
-  only the matching token when the body reaches clean EOF. A visible body
-  failure enters recovery for that token. Preserve body errors and
+  pass the original bytes through one transparent `TransformStream`. A send
+  body reaching clean EOF clears only its matching token. A resume body reaching
+  clean EOF releases live ownership but retains its marker until the recovery
+  status route confirms the run has ended; the resume endpoint can also return
+  cleanly on a replay gap while the run remains active. A visible body failure
+  enters recovery for that token. Preserve body errors and
   cancellation unchanged. Do not clone or tee the stream, buffer packets,
   parse SSE, or change chunk timing.
 - Reconstructing a `Response` is permitted only for these exact successful
@@ -275,7 +278,7 @@ Register lifecycle listeners once:
   previous hidden marker exists.
 - `online`: retry pending recovery after connectivity returns, but do not
   synthesize a new interruption, status check, or reload while a successful
-  stock single-model resume body owns completion.
+  stock single-model resume body is open and owns completion.
 
 Treat a companion-owned reload as a committed navigation for its token before
 calling the browser API. From that point, the outgoing document may cancel
@@ -329,8 +332,11 @@ reconciliation reload. The new stock WebUI fetches the session, sees
 `resumeInFlightRun()` from cursor zero; if the run completed while hidden, the
 reload renders the persisted result instead. The new document performs bounded
 settling checks until the companion observes a successful stock resume response;
-that body's clean EOF then owns completion even if status reports that the run
-has ended while bytes are still draining. If no resume owner appears, checks
+that body owns completion while bytes are still draining, even if a concurrent
+status snapshot says the run has ended. Its clean EOF then requires one fresh
+status confirmation. Confirmed completion clears the marker and leaves stock's
+post-resume hydration in place; an active run means the EOF was premature and
+starts another bounded reconciliation. If no resume owner appears, checks
 continue while the run is active and completion performs one final hydration
 reload. A later body failure or genuine suspension can re-enter recovery for
 the same token.
@@ -483,7 +489,8 @@ Cover at least:
 - unrelated and cross-origin fetches remain byte/identity transparent;
 - one exact send creates one sanitized marker and calls the original once;
 - prompts, headers, packets, and errors never enter storage or logs;
-- clean EOF, HTTP failure, and a pre-aborted send clear only the matching token;
+- send clean EOF, HTTP failure, and a pre-aborted send clear only the matching
+  token;
 - an in-flight send abort retains an ambiguously accepted marker, while an
   exact stop-session POST calls the original once and clears that marker;
 - stream failure retains the marker and propagates the original failure;
@@ -515,12 +522,13 @@ Cover at least:
   no-owner and multi-model polling back off, pause while hidden/offline, stop
   on completion, and expire after four hours;
 - a visible send/resume stream failure schedules recovery;
-- a successful single-model resume response leaves clean EOF as the completion
-  owner even when status reports completion; without that owner, completion
-  performs one hydration reload, and a later body failure starts only one
-  recovery;
+- a successful single-model resume response owns completion while its body is
+  open; clean EOF requires a fresh status confirmation, clears without reload
+  when complete, and reconciles again when the run remains active;
+- without a resume owner, completion performs one hydration reload, and a later
+  body failure starts only one recovery;
 - an `online` event while that successful resume body owns completion schedules
-  no status request or reload, and clean EOF remains the completion owner;
+  no status request or reload;
 - incognito is classified and cleared before any companion reload;
 - incognito teardown calls the original fetch/beacon exactly once, preserves
   its return/error behavior, and never schedules recovery; and

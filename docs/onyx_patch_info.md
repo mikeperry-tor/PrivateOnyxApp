@@ -618,9 +618,13 @@ timestamps, the multi-model flag, and bounded recovery phase/backoff state; it
 never holds prompts, packets, model or provider names, files, credentials,
 headers, error bodies, or exception text.
 It forwards successful exact send and resume bodies through one transparent
-`TransformStream`, clears only the matching token on clean completion,
-non-success, or a send that was already aborted before invocation, and retains
-the marker when a browser transport failure may have happened after server
+`TransformStream`. Send-body clean completion, non-success, or a send that was
+already aborted before invocation clears only the matching token. Resume-body
+clean EOF is not authoritative because the backend replay endpoint also returns
+cleanly on a buffer gap: it releases live ownership and asks the recovery-status
+route to confirm completion. An absent `current_run` clears the marker without
+another reload; an active run starts another bounded reconciliation. The marker
+is retained whenever a browser transport failure may have happened after server
 acceptance. An abort after invocation is not authoritative: stock route cleanup
 and `resumeInFlightRun()`'s `finally` both abort stream controllers. The exact
 same-origin stop-session POST is the explicit user-cancellation owner; the
@@ -673,13 +677,14 @@ because that run ID names the user message. Multi-model recovery therefore
 performs one reconciliation reload, checks the bounded recovery-status endpoint
 only while that recovery is visible and online with backoff capped at one
 minute, and reloads once after `current_run` disappears. Single-model recovery
-normally clears on the wrapped resume stream's clean EOF. After the initial
-recovery reload, settling checks stop only after the companion observes a
-successful stock resume response; that body then owns completion even if a
-status snapshot says the run has completed. If the stock page never establishes
-that owner, checks continue while active and completion triggers one final
-hydration reload. A later body failure or genuine suspension can re-enter
-recovery. Restored connectivity schedules pending phase work but does not
+stops settling checks after the companion observes a successful stock resume
+response; that body owns completion while open even if a status snapshot says
+the run has completed. Clean EOF releases ownership and requires a fresh status
+confirmation, distinguishing actual completion from the resume endpoint's clean
+buffer-gap exit. If the stock page never establishes an owner, checks continue
+while active and completion triggers one final hydration reload. A later body
+failure, premature EOF, or genuine suspension can re-enter recovery. Restored
+connectivity schedules pending phase work but does not
 manufacture another interruption or displace an active stock resume owner; an
 actual resumed-body failure owns that transition. Persisted recovery phase
 self-starts in the new document and does not depend on intercepting or ordering

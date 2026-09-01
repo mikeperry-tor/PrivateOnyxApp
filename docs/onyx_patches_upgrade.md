@@ -282,14 +282,18 @@ marker. A pre-aborted send clears its new marker, while an abort after invocatio
 remains ambiguous and retains it. In particular, a resumed-body failure must
 enter recovery before `resumeInFlightRun()` aborts its controller in `finally`,
 and that cleanup abort must not erase recovery. A visible send or resume stream
-failure must enter the same bounded recovery path, while clean EOF clears only
-its own token. Prove single-model
-post-reload settling stops only after a successful stock resume response and
-leaves that body as the completion owner. Without an observed resume owner,
+failure must enter the same bounded recovery path. Send clean EOF clears only
+its own token; resume clean EOF must release ownership and use a fresh status
+check because the backend endpoint also returns cleanly on a replay gap. Prove
+confirmed completion clears without a reload and an active run enters another
+bounded reconciliation. Prove single-model post-reload settling stops only
+after a successful stock resume response and leaves that open body as the
+completion owner. Without an observed resume owner,
 active checks continue and completion performs a final hydration reload. Prove
 an `online` event does not restart status polling or reload while a successful
-stock single-model resume body owns completion; only that body's failure or a
-genuine suspension may re-enter recovery. Prove
+stock single-model resume body is open and owns completion; only that body's
+failure, a status-confirmed premature EOF, or a genuine suspension may re-enter
+recovery. Prove
 `pushState`, `replaceState`, and `popstate`
 preserve their native call behavior, schedule nothing without a marker, and
 restart a retained multi-model recovery when client-side navigation returns to
@@ -1418,9 +1422,11 @@ bounded. Recheck that the dedicated recovery-status route retains the stock
 read-chat permission, avoids full message hydration, and returns a retryable
 failure for transient cache errors or a present fence without a run ID. After
 the first single-model reload, require settling to stop only after observing a
-successful stock resume response. That wrapped body owns completion; if no
-resume owner appears, bounded checks continue and completion performs one final
-hydration reload. Multi-model recovery also polls until its final reload.
+successful stock resume response. That wrapped body owns completion while open;
+its clean EOF requires a fresh recovery-status confirmation and reconciles
+again if the run remains active. If no resume owner appears, bounded checks
+continue and completion performs one final hydration reload. Multi-model
+recovery also polls until its final reload.
 
 Run the document's deterministic, pinned-image, lifecycle, and integration
 checks, including `make health-inventory`, effective lite/full Docker and

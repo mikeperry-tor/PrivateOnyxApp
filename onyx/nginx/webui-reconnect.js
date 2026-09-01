@@ -209,11 +209,27 @@
     scheduleRecovery();
   }
 
+  function finishResumeCleanly(token) {
+    if (reloadingToken === token) return;
+    if (resumeOwnerToken === token) resumeOwnerToken = null;
+    const record = loadRecord();
+    if (!record || record.token !== token) return;
+    record.pollAttempt = 0;
+    if (!saveRecord(record)) {
+      showManualNotice();
+      return;
+    }
+    // The resume endpoint can end cleanly on a replay gap as well as actual
+    // completion. Keep the marker until the authoritative status route says
+    // the recorded run is no longer active.
+    scheduleStatus(record, true, "resume-eof");
+  }
+
   function canWrapStreamResponse(response) {
     return Boolean(response.body) && typeof TransformStream === "function" && typeof response.body.pipeTo === "function";
   }
 
-  function wrapStreamResponse(response, token, recoverOnError) {
+  function wrapStreamResponse(response, token, streamKind) {
     if (!canWrapStreamResponse(response)) {
       showManualNotice();
       return response;
@@ -224,13 +240,17 @@
         controller.enqueue(chunk);
       },
       flush() {
-        clearMatching(token);
+        if (streamKind === "resume") finishResumeCleanly(token);
+        else clearMatching(token);
       },
     });
     response.body.pipeTo(transparent.writable).catch(() => {
       if (failureObserved) return;
       failureObserved = true;
-      if (recoverOnError) markForRecovery(token);
+      if (streamKind === "resume" && resumeOwnerToken === token) {
+        resumeOwnerToken = null;
+      }
+      markForRecovery(token);
     });
     return new Response(transparent.readable, {
       status: response.status,
@@ -289,7 +309,7 @@
         clearMatching(token);
         return response;
       }
-      return wrapStreamResponse(response, token, true);
+      return wrapStreamResponse(response, token, "send");
     }, (error) => {
       if (abortedBeforeSend) clearMatching(token);
       else markForRecovery(token);
@@ -336,8 +356,11 @@
         if (!response.ok) return response;
         const current = loadRecord();
         if (!current || current.token !== record.token) return response;
-        if (canWrapStreamResponse(response)) resumeOwnerToken = record.token;
-        return wrapStreamResponse(response, record.token, true);
+        if (canWrapStreamResponse(response)) {
+          resumeOwnerToken = record.token;
+          cancelRecoveryWork(record.token);
+        }
+        return wrapStreamResponse(response, record.token, "resume");
       }, (error) => {
         const current = loadRecord();
         if (current && current.token === record.token) markForRecovery(record.token);
@@ -448,6 +471,21 @@
         }
       }
       reloadForRecovery(token);
+      return;
+    }
+
+    if (purpose === "resume-eof") {
+      if (payload.current_run == null) {
+        clearMatching(token);
+        return;
+      }
+      current.hiddenAt = now();
+      current.pollAttempt = 0;
+      if (!saveRecord(current)) {
+        showManualNotice();
+        return;
+      }
+      scheduleRecovery();
       return;
     }
 

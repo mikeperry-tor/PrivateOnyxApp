@@ -555,9 +555,14 @@ async function main() {
   {
     let resolveStatus;
     let resumeController;
+    let statusCalls = 0;
     const browser = createBrowser((url) => {
       if (String(url).startsWith("/api/chat/reconnect-status/")) {
-        return new Promise((resolve) => { resolveStatus = resolve; });
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          return new Promise((resolve) => { resolveStatus = resolve; });
+        }
+        return Promise.resolve(sessionResponse(false, false));
       }
       if (String(url).includes("/resume-stream")) {
         return Promise.resolve(new Response(new ReadableStream({
@@ -575,14 +580,18 @@ async function main() {
     resumeController.close();
     await consumed;
     await settle();
-    assert(!browser.storage.has(browser.key) && browser.pendingTimers().length === 0, "clean resume EOF did not own single-model completion");
+    assert(browser.storage.has(browser.key), "clean resume EOF bypassed status confirmation");
+    await browser.runTimers(1);
+    await settle();
+    assert(!browser.storage.has(browser.key) && browser.pendingTimers().length === 0, "confirmed resume completion retained reconnect state");
   }
 
   {
     let resumeController;
+    let currentRun = true;
     const browser = createBrowser((url) => {
       if (String(url).startsWith("/api/chat/reconnect-status/")) {
-        return Promise.resolve(sessionResponse(true, false));
+        return Promise.resolve(sessionResponse(currentRun, false));
       }
       if (String(url).includes("/resume-stream")) {
         return Promise.resolve(new Response(new ReadableStream({
@@ -596,19 +605,23 @@ async function main() {
     await browser.runTimers(2);
     await settle();
     assert(browser.storage.has(browser.key) && browser.pendingTimers().length === 0, "single-model polling continued after stock resume ownership");
+    currentRun = false;
     resumeController.close();
     await consumed;
     await settle();
-    assert(!browser.storage.has(browser.key), "owned active resume EOF retained its marker");
+    await browser.runTimers(1);
+    await settle();
+    assert(!browser.storage.has(browser.key), "confirmed active resume completion retained its marker");
   }
 
   {
     let resumeController;
     let statusCalls = 0;
+    let currentRun = true;
     const browser = createBrowser((url) => {
       if (String(url).startsWith("/api/chat/reconnect-status/")) {
         statusCalls += 1;
-        return Promise.resolve(sessionResponse(true, false));
+        return Promise.resolve(sessionResponse(currentRun, false));
       }
       if (String(url).includes("/resume-stream")) {
         return Promise.resolve(new Response(new ReadableStream({
@@ -629,10 +642,13 @@ async function main() {
     await browser.runTimers(2);
     await settle();
     assert(statusCalls === settledStatusCalls && browser.reloads() === 0 && browser.pendingTimers().length === 0, "online event displaced an active stock resume owner");
+    currentRun = false;
     resumeController.close();
     await consumed;
     await settle();
-    assert(!browser.storage.has(browser.key), "online-preserved resume owner did not clear on EOF");
+    await browser.runTimers(1);
+    await settle();
+    assert(!browser.storage.has(browser.key), "online-preserved resume owner did not clear after confirmation");
   }
 
   {
@@ -829,14 +845,42 @@ async function main() {
   }
 
   {
+    let statusCalls = 0;
     const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
+        statusCalls += 1;
+        return Promise.resolve(sessionResponse(false, false));
+      }
       if (String(url).includes("/resume-stream")) return Promise.resolve(streamResponse(["resumed"]));
       return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
     });
     await browser.window.fetch("/api/chat/send-chat-message", sendInit());
     const response = await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=8`);
     assert(await response.text() === "resumed", "exact resume stream changed data");
-    assert(!browser.storage.has(browser.key), "clean resume EOF did not clear reconnect state");
+    assert(browser.storage.has(browser.key), "clean resume EOF bypassed completion confirmation");
+    await browser.runTimers(1);
+    await settle();
+    assert(statusCalls === 1 && !browser.storage.has(browser.key), "completed resume EOF did not clear after status confirmation");
+    assert(browser.reloads() === 0, "completed resume EOF caused an unnecessary reload");
+  }
+
+  {
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
+        return Promise.resolve(sessionResponse(true, false));
+      }
+      if (String(url).includes("/resume-stream")) return Promise.resolve(streamResponse(["partial"]));
+      return Promise.resolve(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+    });
+    await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+    const response = await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=8`);
+    assert(await response.text() === "partial", "premature resume EOF changed data");
+    await browser.runTimers(1);
+    await settle();
+    await browser.runTimers(3);
+    await settle();
+    const stored = JSON.parse(browser.storage.get(browser.key));
+    assert(browser.reloads() === 1 && stored.pollPhase === "single", "active resume EOF did not reconcile the still-running chat");
   }
 
   {
