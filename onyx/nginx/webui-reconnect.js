@@ -183,6 +183,12 @@
     }
   }
 
+  function recoveryEligible(record) {
+    return document.visibilityState === "visible" &&
+      navigator.onLine !== false &&
+      currentChatId() === record.sessionId;
+  }
+
   function markForRecovery(token) {
     const record = loadRecord();
     if (!record || record.token !== token) return;
@@ -375,8 +381,7 @@
 
   function scheduleStatus(record, immediate, purpose) {
     if (pollTimer !== null || statusRequest !== null) return;
-    if (document.visibilityState !== "visible" || navigator.onLine === false) return;
-    if (currentChatId() !== record.sessionId) return;
+    if (!recoveryEligible(record)) return;
     const current = loadRecord();
     if (!current || current.token !== record.token) return;
     const index = Math.min(current.pollAttempt, POLL_DELAYS_MS.length - 1);
@@ -393,9 +398,9 @@
   }
 
   async function checkStatus(token, purpose) {
-    if (statusRequest !== null || document.visibilityState !== "visible" || navigator.onLine === false) return;
+    if (statusRequest !== null) return;
     const record = loadRecord();
-    if (!record || record.token !== token || currentChatId() !== record.sessionId) return;
+    if (!record || record.token !== token || !recoveryEligible(record)) return;
     const controller = new AbortController();
     const owner = { token, controller };
     statusRequest = owner;
@@ -423,6 +428,10 @@
     const current = loadRecord();
     if (!current || current.token !== token) return;
     if (outcome === "aborted") return;
+    // The selected chat, visibility, or connectivity can change while the
+    // status body is in flight. Never let that stale result mutate recovery
+    // state or reload a page that is no longer eligible for this token.
+    if (!recoveryEligible(current)) return;
     if (outcome === "missing" || (outcome === "status" && payload.incognito)) {
       clearMatching(token);
       return;
@@ -473,8 +482,7 @@
   function recover() {
     recoveryTimer = null;
     const record = loadRecord();
-    if (!record || document.visibilityState !== "visible" || navigator.onLine === false) return;
-    if (currentChatId() !== record.sessionId) return;
+    if (!record || !recoveryEligible(record)) return;
     if (record.pollPhase === "multi" && record.hiddenAt === null) {
       scheduleStatus(record, true, "settle");
       return;
@@ -554,10 +562,23 @@
   window.addEventListener("online", () => {
     const record = loadRecord();
     if (!record) return;
-    if (record.pollPhase !== "multi") record.hiddenAt = now();
+    // A new send has no persisted recovery phase, so restored connectivity is
+    // itself enough to reconcile an ambiguously accepted request. Persisted
+    // phases already describe their pending work. In particular, do not turn
+    // an online event into another suspension while the stock resume body is
+    // the active single-model completion owner.
+    if (record.pollPhase === null) record.hiddenAt = now();
     record.pollAttempt = 0;
-    if (saveRecord(record)) scheduleRecovery();
-    else showManualNotice();
+    if (!saveRecord(record)) {
+      showManualNotice();
+      return;
+    }
+    if (
+      record.pollPhase === "single" &&
+      record.hiddenAt === null &&
+      resumeOwnerToken === record.token
+    ) return;
+    scheduleRecovery();
   });
 
   const initialRecord = loadRecord();

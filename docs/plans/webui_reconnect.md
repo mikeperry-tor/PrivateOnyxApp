@@ -263,7 +263,9 @@ Register lifecycle listeners once:
   with stock incognito teardown.
 - `pageshow`: recover when returning from the back-forward cache or when a
   previous hidden marker exists.
-- `online`: retry a pending recovery check after connectivity returns.
+- `online`: retry pending recovery after connectivity returns, but do not
+  synthesize a new interruption, status check, or reload while a successful
+  stock single-model resume body owns completion.
 
 Wrap successful History API `pushState` and `replaceState` calls and observe
 `popstate` so a retained recovery is re-evaluated when client-side navigation
@@ -273,8 +275,11 @@ schedule no timer when no marker exists, and never redirect or select a chat.
 Debounce simultaneous events. At most one token-correlated status request,
 poll timer, or reload decision may be active. The request has its own
 `AbortController`; hiding cancels it, and its result can mutate only the token
-that created it. Temporary network, non-success HTTP, or malformed JSON
-responses retain state and retry with bounded backoff. Use a minimum recovery
+that created it. After the awaited response body, revalidate the token,
+selected `chatId`, visibility, and connectivity before any state mutation or
+reload; navigation, hiding, or loss of connectivity while the request is in
+flight must leave the marker retained and inert. Temporary network, non-success
+HTTP, or malformed JSON responses retain state and retry with bounded backoff. Use a minimum recovery
 interval and a persisted recovery phase to prevent reload loops. Script startup
 self-schedules any persisted phase, so correctness does not depend on whether
 the injected deferred script ran before a stock Next.js session request.
@@ -469,6 +474,9 @@ Cover at least:
 - reload state cannot loop on the next document's initial `pageshow`;
 - a second genuine suspension permits another bounded recovery for the token;
 - a different current `chatId` is never reloaded or redirected;
+- a status response resolved after navigation to another `chatId` cannot
+  mutate state or reload that chat, while returning to the marker chat resumes
+  the retained recovery;
 - `pushState`, `replaceState`, and `popstate` preserve native call behavior,
   schedule nothing without a marker, and resume a retained multi-model recovery
   after client-side navigation returns to the marked `chatId`;
@@ -485,6 +493,8 @@ Cover at least:
   owner even when status reports completion; without that owner, completion
   performs one hydration reload, and a later body failure starts only one
   recovery;
+- an `online` event while that successful resume body owns completion schedules
+  no status request or reload, and clean EOF remains the completion owner;
 - incognito is classified and cleared before any companion reload;
 - incognito teardown calls the original fetch/beacon exactly once, preserves
   its return/error behavior, and never schedules recovery; and
@@ -684,7 +694,8 @@ incognito, startup-bootstrap, retry, stale-token, and overlapping-request
 contracts. It also covers the two-model threshold, marker-free History API
 transparency, multi-model recovery after client-side route return, the
 single-model resume-owner handoff/no-owner fallback, and retryable status
-uncertainty. The pinned API
+uncertainty. In-flight status completion revalidates route eligibility, and an
+`online` event cannot displace an active stock resume owner. The pinned API
 bootstrap proves the authenticated recovery-status route is installed exactly
 once and ordinary session requests remain untouched. Native stream-buffer
 per-chunk TTL/cap/gap/incognito fixtures, nginx module/configuration/serving

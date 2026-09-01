@@ -538,6 +538,39 @@ async function main() {
   }
 
   {
+    let resumeController;
+    let statusCalls = 0;
+    const browser = createBrowser((url) => {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
+        statusCalls += 1;
+        return Promise.resolve(sessionResponse(true, false));
+      }
+      if (String(url).includes("/resume-stream")) {
+        return Promise.resolve(new Response(new ReadableStream({
+          start(controller) { resumeController = controller; },
+        }), { status: 200 }));
+      }
+      throw new Error("unexpected fetch");
+    }, { initialRecord: recoveryRecord({ pollPhase: "single" }) });
+    await browser.runTimers(2);
+    await settle();
+    const resumed = await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=0`);
+    const consumed = resumed.text();
+    await browser.runTimers(1);
+    await settle();
+    const settledStatusCalls = statusCalls;
+    assert(browser.pendingTimers().length === 0, "single-model owner left a settling poll active");
+    await browser.dispatch("window", "online");
+    await browser.runTimers(2);
+    await settle();
+    assert(statusCalls === settledStatusCalls && browser.reloads() === 0 && browser.pendingTimers().length === 0, "online event displaced an active stock resume owner");
+    resumeController.close();
+    await consumed;
+    await settle();
+    assert(!browser.storage.has(browser.key), "online-preserved resume owner did not clear on EOF");
+  }
+
+  {
     const browser = createBrowser((url) => {
       if (String(url).startsWith("/api/chat/reconnect-status/")) {
         return Promise.resolve(sessionResponse(true, false));
@@ -586,6 +619,32 @@ async function main() {
     await settle();
     assert(JSON.parse(browser.storage.get(browser.key)).token === newToken, "stale status response cleared a newer send");
     void send;
+  }
+
+  {
+    let resolveFirstStatus;
+    let statusCalls = 0;
+    const browser = createBrowser((url) => {
+      if (!String(url).startsWith("/api/chat/reconnect-status/")) throw new Error("unexpected fetch");
+      statusCalls += 1;
+      if (statusCalls === 1) {
+        return new Promise((resolve) => { resolveFirstStatus = resolve; });
+      }
+      return Promise.resolve(sessionResponse(true, false));
+    }, {
+      initialRecord: recoveryRecord({ hiddenAt: 1700000000000 }),
+      historyResult: "route-result",
+    });
+    await browser.runTimers(2);
+    assert(statusCalls === 1, "initial recovery status request did not start");
+    assert(browser.window.history.pushState({}, "", `/chat?chatId=${OTHER}`) === "route-result", "route change result changed during status request");
+    resolveFirstStatus(sessionResponse(true, false));
+    await settle();
+    assert(browser.reloads() === 0 && browser.storage.has(browser.key), "in-flight status response reloaded a newly selected chat");
+    browser.window.history.pushState({}, "", `/chat?chatId=${SESSION}`);
+    await browser.runTimers(2);
+    await settle();
+    assert(statusCalls === 2 && browser.reloads() === 1, "returning to the marked chat did not resume retained recovery");
   }
 
   {

@@ -635,7 +635,10 @@ failure, or a present fence without a usable run ID, returns `503` and remains
 retryable instead of being misclassified as completion. The route classifies
 `incognito` and missing sessions before any reload. The companion retries
 temporary HTTP, network, and JSON failures with bounded backoff and aborts the
-request when hidden. A recorded visible tab then
+request when hidden. After every asynchronous status response it revalidates
+the token, selected `chatId`, visibility, and connectivity before changing
+state or reloading, so navigation or suspension during the request cannot make
+a stale result act on another page. A recorded visible tab then
 reloads its selected marked chat once. Stock single-model hydration replays
 from cursor zero and tails the current run, or renders the saved answer when
 completion happened while hidden. A later genuine suspension may recover the
@@ -661,8 +664,11 @@ successful stock resume response; that body then owns completion even if a
 status snapshot says the run has completed. If the stock page never establishes
 that owner, checks continue while active and completion triggers one final
 hydration reload. A later body failure or genuine suspension can re-enter
-recovery. Persisted recovery phase self-starts in the new
-document and does not depend on intercepting or ordering a stock session GET.
+recovery. Restored connectivity schedules pending phase work but does not
+manufacture another interruption or displace an active stock resume owner; an
+actual resumed-body failure owns that transition. Persisted recovery phase
+self-starts in the new document and does not depend on intercepting or ordering
+a stock session GET.
 There is no idle poller. Explicit stock cancellation clears the marker. An
 incognito or missing status clears it without reload; an exact end-session
 fetch/beacon also clears it only after invoking the original operation. The

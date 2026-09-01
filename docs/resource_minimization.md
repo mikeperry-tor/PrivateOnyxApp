@@ -198,6 +198,10 @@ are not duplicate enforcement.
   is observed and that body owns completion. If no resume owner appears,
   bounded checks continue and completion causes one final hydration reload.
   Multi-model recovery also polls until its final reconciliation reload.
+  Every awaited status result rechecks visibility, connectivity, and the
+  selected chat before it can mutate state or reload. Restored connectivity
+  resumes pending work but adds no check or reload while a healthy stock
+  single-model resume body owns completion.
   Marker-gated History API calls only
   schedule the same bounded recovery check after client-side navigation and add
   no work when the tab has no marker. Checks back off from two seconds to at

@@ -353,7 +353,10 @@ one token-correlated, abortable request to the wrapper's authenticated
 same-origin recovery-status endpoint. That route retains the stock read-chat
 permission, reads no message contents, and reports cache uncertainty as a
 retryable failure rather than false completion. It classifies incognito or
-missing sessions before any reload. Marker-gated History
+missing sessions before any reload. A completed status request rechecks its
+token, selected chat, visibility, and connectivity before it may mutate state
+or reload, so an in-flight client-side route change cannot apply the result to
+another chat. Marker-gated History
 API observation notices client-side returns to the selected chat but creates no
 request or timer without recovery state and cannot select or redirect a chat.
 It adds no service, network, host port, socket, private mount, credential,

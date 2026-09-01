@@ -263,6 +263,11 @@ each recovery status request. Prove stale status responses cannot clear a newer
 send, hide/offline transitions cancel outstanding work, temporary HTTP/network/
 JSON failures retain state and back off, and a persisted single- or multi-model
 phase self-starts after reload without relying on a stock fetch being observed.
+Resolve a status request after client-side navigation and prove its stale
+result neither mutates recovery state nor reloads the newly selected chat;
+returning to the marked `chatId` must resume the retained recovery. Recheck
+visibility, connectivity, and selected-chat eligibility after every awaited
+status body, not only before starting it.
 The pre-reload status check must clear incognito and missing sessions without a
 reload; exact stock incognito fetch/beacon and cancellation behavior must remain
 unchanged. A visible send or resume stream failure must enter the same bounded
@@ -270,6 +275,9 @@ recovery path, while clean EOF clears only its own token. Prove single-model
 post-reload settling stops only after a successful stock resume response and
 leaves that body as the completion owner. Without an observed resume owner,
 active checks continue and completion performs a final hydration reload. Prove
+an `online` event does not restart status polling or reload while a successful
+stock single-model resume body owns completion; only that body's failure or a
+genuine suspension may re-enter recovery. Prove
 `pushState`, `replaceState`, and `popstate`
 preserve their native call behavior, schedule nothing without a marker, and
 restart a retained multi-model recovery when client-side navigation returns to
