@@ -46,6 +46,14 @@ boundary.
 
 ## End-To-End Flow
 
+The wrapper's RAG services do not use rpcbind or port 111. Documents use local
+bind mounts and HTTP; embeddings and data services use their configured
+application protocols. An operator-provided document directory or Docker
+storage backed by NFS can have separate host-side RPC dependencies, especially
+with NFSv3. Those mount dependencies do not require executor containers to
+reach host rpcbind. See the host-service residual in
+[Internal network security](internal_network_security.md#browser-containment-and-residuals).
+
 1. Files are placed under `ONYX_RAG_DOC_SOURCE_DIR`, defaulting to `./doc-drop`.
    Full-mode startup creates that default directory when it is absent. A
    configured custom path must already exist so a typo cannot silently create

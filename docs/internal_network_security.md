@@ -323,11 +323,51 @@ bridge. Single-homed Obscura and executor callers cannot select another bridge
 merely by choosing a proxy address; the dual-homed API and background
 processes can, as described above.
 
+Docker's ordinary `internal: true` bridge networks retain a host-side bridge
+address. Containers can reach host/VM services listening on that address or
+on all addresses, independently of HTTP proxy settings. The current wrapper
+does not set Docker's `isolated` gateway mode or install host-input firewall
+rules. In particular, Docker Desktop's VM rpcbind can answer TCP and UDP port
+111 requests, including subnet-directed UDP broadcasts, from an ordinary
+internal bridge. Internal-only topology therefore blocks routed external
+egress but does not establish a complete host-service boundary. This residual
+also applies to other services attached to ordinary internal bridges.
+
+With `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, both `run_python` and the
+ordinary-chat coding agent's execution sessions use the named internal
+executor network and inherit that residual. With the option unset or false,
+the pinned controller defaults executor children to `--network none`; those
+children have no bridge path to VM rpcbind. The controller and other stack
+services still have their own networks regardless of that option.
+
+Docker Engine 28 and later provide
+[`isolated` bridge gateway mode](https://docs.docker.com/engine/network/port-publishing/#gateway-modes)
+for internal networks, removing the host-side bridge address. This is a
+candidate hardening change, not an implemented wrapper guarantee. Adoption
+requires Docker-specific configuration, capability validation, network
+recreation, and checks covering TCP, UDP unicast/broadcast, IPv6, internal DNS,
+fixed proxy bridges, and full-mode RAG on the supported engines. Podman
+requires separate validation. Stack startup does not disable host/VM rpcbind:
+its service manager and RPC-dependent storage are engine/operator-owned.
+
 The Docker code-interpreter controller has a writable engine socket so it can
-create short-lived executor containers. Those children receive the fixed
-executor network and do not receive the socket, but compromise of the
-controller grants container-engine and therefore host-level authority. The
-Podman topology omits this socket-dependent service.
+create short-lived executor containers. Those children receive the selected
+executor network mode and do not receive the socket. The pinned controller's
+HTTP API has no caller authentication; access is bounded by `onyx-backend`.
+Besides the controller, that network contains `api_server`,
+`searxng-service-gateway`, and, in full mode, `background` and
+`local-embedding-shim`. Compromise of any such peer exposes the controller's
+execution, session, and file API. The SearXNG gateway's fixed forwarding does
+not give SearXNG itself general backend access.
+
+API reachability is not unrestricted Docker socket access: supported requests
+run code in children using controller-configured images, network mode, and
+launch arguments. Compromise of the controller itself, however, grants the
+authority of the mounted engine socket. With rootful Docker this includes
+daemon-host control (the Linux VM on Docker Desktop); rootless Docker instead
+grants the rootless daemon owner's authority. Isolated bridge gateways do not
+reduce socket authority or restrict communication between peers on the same
+network. The Podman topology omits this socket-dependent service.
 
 Myst, the final-hop policy processes, and `netns-holder` are trusted
 network-namespace peers when the selected routing mode co-locates them.
