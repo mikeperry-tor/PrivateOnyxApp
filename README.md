@@ -8,7 +8,7 @@ Search traffic starts at provider homepages and submits their search forms throu
 
 Web browsing uses Onyx's stock requests/Playwright crawler by default, and can be switched to the Obscura Browser by an env preference. Direct `open_url` browser state remains request-scoped and cleared for every request.
 
-Users can optionally enable [Tor](https://www.torproject.org/) for the Agent's internet access. Tor onion service access is supported in the Tor egress mode. Alternatively, [Mysterium VPN](https://github.com/mysteriumnetwork/node) can be used for this purpose, or an upstream proxy, or both. In every mode, Docker/Podman network-namespace isolation forces traffic through the selected final-hop route to prevent host/LAN access, proxy bypass, and DNS leaks.
+Users can optionally enable [Tor](https://www.torproject.org/) for the Agent's internet access. Tor onion service access is supported in the Tor egress mode. Alternatively, [Mysterium VPN](https://github.com/mysteriumnetwork/node) can be used for this purpose, or an upstream proxy, or both. Network network-namespace isolation prevents host/LAN access, proxy bypass, and DNS leaks. See [Privacy and Security](#privacy-and-security-of-this-stack) for more detail on these protections and their limitations.
 
 [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel) integration allows you to access the instance remotely from anywhere, without the need for your client device to use the Tailscale VPN. Tailscale funnel is used in userland networking mode for the reverse proxy HTTPS service only: it does not create a Tailnet or use the Tailscale VPN itself, either.
 
@@ -39,6 +39,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local files, making re-indexing substantially faster than stock Onyx.
+- Optional Slack and Discord bots support chat and search. Slack cannot run code; Discord can use the code tools you enable on Docker. Neither bot uses deep-research mode.
 - Onyx's idle background CPU workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled with `ONYX_AGENT_SLACK_BOT` or `ONYX_AGENT_DISCORD_BOT`.
 - Onyx Agent tool descriptions and prompts have been patched to describe an additional SymPy package, reinforce exact opaque links for Python-generated files, and describe network access in coding environments when it is enabled. Generated-file markdown is normalized to portable same-origin links.
 - The Onyx installation process and the wider stack lifecycle are adapted to additionally support rootless Podman, including selected-engine image preparation, Compose routing, startup-health handling, and shared-data safeguards when switching between Docker and Podman.
@@ -221,7 +222,6 @@ Other key variables you may want to change:
   - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let [Onyx MCP servers](#optional-external-mcp-servers) and [Onyx LLM inference](#onyx-llm-configuration) reach endpoints on your private LAN.
   - MCP access to either kind of private endpoint also requires the saved Onyx **Admin → Security Hardening** setting described in the [MCP instructions](#optional-external-mcp-servers).
   - **The agent's tools still cannot access your host or LAN**, regardless of any host or LAN configuration option value. This includes the code agent and code interpreter tool; even if you [grant network access to coding tools](#optional-network-access-for-the-code-interpreter). This is enforced through this stack's docker service network isolation, not Onyx code.
-    - Even if the Onyx application code itself becomes fully compromised, it can reach only explicitly configured or allowed host endpoints.
   - **Enabling LAN access additionally will allow a compromised Onyx service to access anything on your LAN.**
 
 ## Onyx Admin UI Configuration
@@ -377,18 +377,18 @@ Tailscale Funnel and Tor onion ingress can be enabled concurrently as separate e
 
 #### Optional: Network Access for the Code-Interpreter
 
-By default, Onyx's code-interpreter (the `onyxdotapp/code-interpreter` image from [onyx-dot-app/python-sandbox](https://github.com/onyx-dot-app/python-sandbox)) selects Docker's `none` network for every executor pod it spawns. Each pod is temporary and
-least-priv sandboxed.
+By default, Onyx's code-interpreter (the `onyxdotapp/code-interpreter` image from [onyx-dot-app/python-sandbox](https://github.com/onyx-dot-app/python-sandbox)) selects Docker's `none` network for every executor pod it spawns. Each pod is temporary and least-priv sandboxed.
 
-You can optionally give these executor pods public internet access by setting:
+To let Python and coding tools fetch public information and download files, set:
 
 ```bash
-# Give code-interpreter executor pods network access
-# Executors remain isolated from stack, host, LAN, and direct internet routes.
 ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true
 ```
 
-As noted previously, network access is still restricted to public internet endpoints and routed through the Myst VPN/Tor/Proxy. Tor onion access is allowed with `TOR_EGRESS_ENABLED=true`. This tool is still prevented from accessing the host or LAN, regardless of any configuration setting.
+Requests use your selected VPN, Tor, proxy, or no-VPN connection. Onion URLs
+are available with `TOR_EGRESS_ENABLED=true`. This setting does not grant access
+to your computer or LAN; the [platform limitations](#privacy-and-security-of-this-stack)
+still apply.
 
 ### Optional: Outbound Stack Proxy
 
@@ -721,8 +721,11 @@ git pull
 make up-lite     # or make up-full
 ```
 
-That is all an end user needs to do. Persistent application and user data is
-retained.
+Persistent application and user data is retained. After upgrading Docker to
+version 28 or newer, also use this stop/start workflow to apply the stronger
+host-access protection. Restarting Docker alone is insufficient.
+
+If shutdown or startup fails, see the [network recovery guidance](docs/internal_network_security.md#docker-gateway-and-controller-boundary).
 
 The start command prepares any images selected by the updated
 [`stack.versions.env`](stack.versions.env) or changed content-addressed build
@@ -774,6 +777,16 @@ web search, `open_url()`, browser requests, and optionally network-enabled
 generated code cannot reach host, LAN, metadata, or stack-managed service
 addresses. Unencrypted public HTTP url access is blocked by default; agents
 may only access HTTPS urls, and Tor Onion services (if `TOR_EGRESS_ENABLED=true`).
+
+These protections have platform limits. Docker 28+ provides the strongest
+network protection, by further isolating the agent and browser network from the
+Docker VM IP address and rpcbind port. Docker versions below 28 and Podman may
+leave services on your computer or its container VM accessible if the Onyx core
+API server is compromised, but agent generated code has no network path to this
+service unless it exploits Docker's rpcbind service (which is available to all
+docker containers when Docker 28+ network isolation is not in use). See the
+[network security documentation](docs/internal_network_security.md#docker-gateway-and-controller-boundary)
+for the tested protections and remaining risks.
 
 If the host OS routes container-engine traffic through its own VPN, that route
 acts as a first hop before connecting to Tor, the Myst VPN, or stack's proxy. By

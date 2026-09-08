@@ -67,6 +67,35 @@ def _expected(service: str = "api_server") -> dict[str, dict]:
 
 class PodmanStartupHealthTests(unittest.TestCase):
     @patch.object(startup_health, "_run")
+    def test_docker_gateway_selection_uses_server_and_warns_only_at_start(self, run):
+        for version, mode in (("26.1.5", "ordinary"), ("28.0.0", "isolated"), ("29.7.2", "isolated")):
+            run.return_value = subprocess.CompletedProcess([], 0, stdout=version)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(startup_health.docker_gateway_mode("docker"), mode)
+            self.assertEqual(stderr.getvalue(), "")
+            run.assert_called_with(["docker", "version", "--format", "{{.Server.Version}}"])
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(startup_health.docker_gateway_mode("docker", expected=mode), mode)
+            self.assertEqual(stderr.getvalue().count("WARNING:"), int(mode == "ordinary"))
+            with self.assertRaises(startup_health.ContractError):
+                startup_health.docker_gateway_mode("docker", expected="unknown")
+
+    @patch.object(startup_health, "_run")
+    def test_docker_gateway_selection_fails_closed(self, run):
+        for version in ("", "garbage 29.0.0", "28", "29.0.0\n26.0.0"):
+            run.return_value = subprocess.CompletedProcess([], 0, stdout=version)
+            with self.assertRaises(startup_health.ContractError):
+                startup_health.docker_gateway_mode("docker")
+        run.side_effect = subprocess.CalledProcessError(1, ["docker"])
+        with self.assertRaises(startup_health.ContractError):
+            startup_health.docker_gateway_mode("docker")
+        run.reset_mock()
+        with self.assertRaises(startup_health.ContractError):
+            startup_health.docker_gateway_mode("podman")
+        run.assert_not_called()
+
+    @patch.object(startup_health, "_run")
     def test_docker_engine_mode_detects_rootless_before_userns(self, run) -> None:
         run.return_value = subprocess.CompletedProcess(
             [],

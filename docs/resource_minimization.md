@@ -53,6 +53,8 @@ fallbacks, retries, migrations, or weaker ownership checks.
   so `web_server` has no separate periodic health check. Nginx still waits for
   the API independently because a frontend root response does not prove API
   health.
+- The document HTTP listener binds without reverse hostname resolution, avoiding
+  host-DNS work and readiness delays on both container and host paths.
 - Health checks perform local-only work. They do not run inference, public DNS,
   Internet requests, or storage migrations.
 - Docker requires Engine API 1.44+ for native `start_interval` support. The
@@ -161,6 +163,14 @@ hour. Do not copy fixed counts into documentation.
   Beat, workers, indexing children, the SearXNG parent, and request workers keep
   their strict patches.
 
+Background explicitly sets `CODE_INTERPRETER_BASE_URL: ""` on both engines.
+Native Python, Bash, and Coding Agent availability checks return false, even
+when these tools are attached to a persona. Slack retains local chat/search,
+persona and ACL handling, with `deep_research=False`. Discord retains its
+authenticated API chat path and false research default; configured API-side
+code tools remain available on Docker. Both bots remain independently opt-in.
+External MCP capabilities remain governed by their configured services.
+
 The supervisor transformation and schedule transformation are both retained:
 one controls consumers/processes and the other controls task production. They
 are not duplicate enforcement.
@@ -210,6 +220,18 @@ are not duplicate enforcement.
   no work when the tab has no marker. Checks back off from two seconds to at
   most one minute, retry temporary failures, abort when hidden, pause while
   offline, and expire with the four-hour tab marker.
+
+### Executor lifetime and cleanup
+
+The controller creates children outside Compose's service inventory. Interrupted
+cleanup can leave workspaces and resources alive and prevent old network removal.
+Controller 0.4.6 computes transient child sleep as `(timeout_ms * 1000) + 10`;
+sessions permit TTLs up to 24 hours. The daemon-wide session reaper uses generic
+labels and deletion accepts a generic prefix, neither of which establishes
+stack ownership. The wrapper does not sweep children, add a reaper, or require
+a drain protocol. Engine restart and matching down/up are recovery attempts,
+not guarantees; persistent leftovers need operator resolution. Network effects
+are owned by [internal network security](internal_network_security.md#docker-gateway-and-controller-boundary).
 
 ### Onyx Craft
 

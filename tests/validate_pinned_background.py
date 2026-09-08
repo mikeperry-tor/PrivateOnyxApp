@@ -175,6 +175,9 @@ def main() -> None:
     )
     _validate_schedules(background_patch, original_tick)
     _validate_supervisor()
+    from validate_native_bot_tools import validate_native_tools, validate_bot_requests
+    validate_native_tools(background=True)
+    validate_bot_requests()
 
     os.environ["WRAPPER_PATCH_STRICT"] = "true"
     os.environ["ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED"] = "true"

@@ -4,7 +4,6 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
-        rm -f /run/tor-egress/socks;
         chown ${PRIVATE_ONYX_DOCKER_TOR_UID}:${PRIVATE_ONYX_DOCKER_TOR_GID} /run/tor-egress;
         chmod 0755 /run/tor-egress
     user: "0:0"

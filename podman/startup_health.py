@@ -90,6 +90,34 @@ class ContractError(RuntimeError):
     pass
 
 
+def docker_gateway_mode(container_bin: str, *, expected: str | None = None) -> str:
+    """Select addressless bridges from the server version, never the client."""
+    if "podman" in os.path.basename(container_bin).lower():
+        raise ContractError("Docker gateway inspection refuses a Podman binary")
+    try:
+        version = _run(
+            [container_bin, "version", "--format", "{{.Server.Version}}"]
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ContractError("could not inspect the Docker server version") from exc
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+][A-Za-z0-9._-]+)?", version)
+    if match is None:
+        raise ContractError("Docker returned a malformed server version")
+    mode = "isolated" if int(match[1]) >= 28 else "ordinary"
+    if expected is not None and expected != mode:
+        raise ContractError("Docker gateway selection changed or failed; rerun make")
+    if expected is not None and mode == "ordinary":
+        print(
+            f"WARNING: Docker Engine {version} does not support isolated bridge "
+            "gateways. Starting with ordinary internal networks: containers may "
+            "reach host/VM services on bridge addresses. Controller separation "
+            "remains enabled. Upgrade to Docker 28+ and recreate the networks "
+            "with the matching down/up workflow.",
+            file=sys.stderr,
+        )
+    return mode
+
+
 def docker_engine_mode(container_bin: str) -> str:
     """Classify the selected Docker daemon's user-namespace mode."""
     if "podman" in os.path.basename(container_bin).lower():
@@ -993,6 +1021,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "check-docker",
             "configure",
             "docker-mode",
+            "docker-gateway-mode",
             "engine-socket-path",
             "initialize-opensearch",
             "initialize-postgres",
@@ -1002,6 +1031,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--container-bin", default="podman")
     parser.add_argument("--expected-docker-mode", choices=("rootful", "rootless"))
+    parser.add_argument("--expected-gateway-mode", choices=("isolated", "ordinary", "unknown"))
     parser.add_argument("--project", default="onyx")
     parser.add_argument("--env-file", action="append", default=[])
     parser.add_argument("--skip-capability-check", action="store_true")
@@ -1029,7 +1059,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             mode = check_docker_engine(
                 args.container_bin, expected_mode=args.expected_docker_mode
             )
+            docker_gateway_mode(args.container_bin, expected=args.expected_gateway_mode)
             print(f"Docker {mode} daemon mode is supported.")
+        elif args.action == "docker-gateway-mode":
+            print(docker_gateway_mode(args.container_bin))
         elif args.action == "docker-mode":
             print(docker_engine_mode(args.container_bin))
         elif args.action == "engine-socket-path":

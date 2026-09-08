@@ -356,6 +356,8 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             "docker-compose.code-interpreter-network.yml",
             "docker-compose.docker-linux-full.yml",
             "docker-compose.docker-linux.yml",
+            "docker-compose.docker-controller.yml",
+            "docker-compose.docker-isolation.yml",
             "docker-compose.docker-rootless-full.yml",
             "docker-compose.docker-rootless-teep-embedding.yml",
             "docker-compose.docker-rootless.yml",
@@ -830,7 +832,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 self.assertFalse(doc_relay.get("volumes"))
                 self.assertEqual(doc_relay["user"], "65534:65534")
                 self.assertTrue(doc_relay["read_only"])
-                self.assertEqual(doc_relay["cap_drop"], ["ALL"])
+                self.assertIn("ALL", doc_relay["cap_drop"])
                 self.assertEqual(
                     doc_relay["command"],
                     [

@@ -122,6 +122,7 @@ echo "Validating API patch contracts in $onyx_backend_image"
     -v "$repo_root/browser/obscura_client:/obscura-client:ro" \
     -v "$tokenizer_tmp/tokenizer.json:/offline-tokenizer/tokenizer.json:ro" \
     -v "$repo_root/tests/validate_pinned_api.py:/validation/validate_pinned_api.py:ro" \
+    -v "$repo_root/tests/validate_native_bot_tools.py:/validation/validate_native_bot_tools.py:ro" \
     "$onyx_backend_image" \
     /validation/validate_pinned_api.py
 
@@ -186,6 +187,7 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     -e AUTO_LLM_CONFIG_URL= \
     -e LICENSE_ENFORCEMENT_ENABLED=false \
     -e ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=false \
+    -e CODE_INTERPRETER_BASE_URL= \
     -e ONYX_AGENT_SLACK_BOT=false \
     -e ONYX_AGENT_DISCORD_BOT=false \
     -e ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED=false \
@@ -202,6 +204,7 @@ echo "Validating background PDF freshness contracts in $onyx_backend_image"
     -v "$repo_root/onyx/background_entrypoint.py:/wrapper-background-entrypoint.py:ro" \
     -v "$repo_root/onyx/beat_liveness_watchdog.py:/wrapper-beat-liveness-watchdog.py:ro" \
     -v "$repo_root/tests/validate_pinned_background.py:/validation/validate_pinned_background.py:ro" \
+    -v "$repo_root/tests/validate_native_bot_tools.py:/validation/validate_native_bot_tools.py:ro" \
     "$onyx_backend_image" \
     /validation/validate_pinned_background.py
 

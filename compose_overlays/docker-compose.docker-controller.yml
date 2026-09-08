@@ -1,0 +1,11 @@
+# Every supported Docker server: only the API calls the socket-bearing controller.
+services:
+  api_server:
+    networks:
+      onyx-code-interpreter-control: {}
+  code-interpreter:
+    networks: !override
+      onyx-code-interpreter-control: {}
+
+networks:
+  onyx-code-interpreter-control: {internal: true}
