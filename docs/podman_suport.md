@@ -60,6 +60,17 @@ overlays and `podman/startup_health.py` handle engine differences. Do not weaken
 privacy routing or add a Docker fallback to make a Podman incompatibility less
 visible.
 
+## Host-service boundary
+
+Podman selects neither Docker controller nor isolated-gateway overlay. Its
+internal bridges suppress ordinary forwarding/default routes; Netavark
+`isolate` controls inter-bridge traffic and is not Docker's addressless bridge
+contract. Host-service containment equivalent to Docker isolated gateways
+requires a separate design and qualification. A rootless namespace gateway is
+not necessarily the physical host gateway. Preserve the macOS document relay,
+engine-host aliases, and configured host embedding path. See the canonical
+[network boundary](internal_network_security.md#docker-gateway-and-controller-boundary).
+
 ## Selection and version authority
 
 Select Podman explicitly through `.env.wrapper` or the command environment:
@@ -349,6 +360,10 @@ On native Linux, full mode retains the ordinary read-only document-source bind
 and containerized Python server from `docker-compose.full.yml`.
 
 ### macOS full-mode override
+
+The host document listener performs no reverse hostname lookup while binding.
+Its readiness therefore remains local even when macOS hostname resolution is
+slow or unavailable.
 
 `compose_overlays/docker-compose.podman-macos-full.yml`:
 

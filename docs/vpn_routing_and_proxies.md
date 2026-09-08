@@ -417,3 +417,9 @@ no direct route. Also inspect the effective WebUI CSP and prove remote
 resources, inline event-handler attributes, and eval are blocked while login
 hydration, same-origin APIs, WebSockets, chat images, and local/blob previews
 still work.
+
+Docker controller separation and version-selected addressless internal gateways
+are defined in [internal network security](internal_network_security.md#docker-gateway-and-controller-boundary).
+They preserve every selected final-hop route and route-owner uplink. Ordinary
+internal bridges on older Docker and Podman retain direct host-service exposure;
+proxy policy alone does not prevent that compromised-process path.

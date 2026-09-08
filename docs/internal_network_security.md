@@ -51,7 +51,7 @@ apply in every selected mode.
 | `searxng-core` | SearX service gateway; direct Obscura CDP control | none except browser activity performed by Obscura |
 | `obscura-cdp-gateway` | API-side control network and Obscura control network | none |
 | `obscura` | CDP control networks and its fixed browser bridge | shared public final-hop policy through `obscura-egress-bridge` |
-| enabled executor | executor service/control networks and its fixed bridge | shared public final-hop policy through `executor-egress-bridge` |
+| enabled executor child | only the dedicated executor network and its fixed bridge; no controller network or engine socket | shared public final-hop policy through `executor-egress-bridge` |
 | doc-drop and embedding components | their documented full-mode local networks; the macOS Podman relay has a dedicated host uplink; rootless Docker's exact stack-owned Teep embedding selection has only `onyx-backend` plus `onyx-teep` | only their explicit fixed host/public route where configured; the rootless Teep exception has no host-egress network |
 | optional `tor` | `tor-ingress` only when onion ingress is enabled; private control tmpfs and optional SOCKS runtime volume are mounts, not networks | dedicated `tor-uplink`; applications never join it |
 | optional `tor-frontend-gateway` | spans only `tor-ingress` and `onyx-frontend`, with fixed nginx forwarding | none |
@@ -323,51 +323,90 @@ bridge. Single-homed Obscura and executor callers cannot select another bridge
 merely by choosing a proxy address; the dual-homed API and background
 processes can, as described above.
 
-Docker's ordinary `internal: true` bridge networks retain a host-side bridge
-address. Containers can reach host/VM services listening on that address or
-on all addresses, independently of HTTP proxy settings. The current wrapper
-does not set Docker's `isolated` gateway mode or install host-input firewall
-rules. In particular, Docker Desktop's VM rpcbind can answer TCP and UDP port
-111 requests, including subnet-directed UDP broadcasts, from an ordinary
-internal bridge. Internal-only topology therefore blocks routed external
-egress but does not establish a complete host-service boundary. This residual
-also applies to other services attached to ordinary internal bridges.
+### Docker gateway and controller boundary
 
-With `ONYX_CODE_INTERPRETER_ENABLE_NETWORK=true`, both `run_python` and the
-ordinary-chat coding agent's execution sessions use the named internal
-executor network and inherit that residual. With the option unset or false,
-the pinned controller defaults executor children to `--network none`; those
-children have no bridge path to VM rpcbind. The controller and other stack
-services still have their own networks regardless of that option.
+On every supported Docker server, `docker-compose.docker-controller.yml`
+puts the code-interpreter controller only on `onyx-code-interpreter-control`.
+Its sole application peer is `api_server`, which retains its other networks.
+Background, embedding shim, SearXNG gateway, browser, data services, and executor
+children have no direct controller route. The service name and API URL remain
+unchanged. Background explicitly sets an empty controller URL; native built-in
+Python, Bash, and Coding Agent tools are unavailable there. Discord's
+authenticated API chat remains an intentional indirect execution path. See
+[background bot behavior](resource_minimization.md#onyx-background-work).
 
-Docker Engine 28 and later provide
-[`isolated` bridge gateway mode](https://docs.docker.com/engine/network/port-publishing/#gateway-modes)
-for internal networks, removing the host-side bridge address. This is a
-candidate hardening change, not an implemented wrapper guarantee. Adoption
-requires Docker-specific configuration, capability validation, network
-recreation, and checks covering TCP, UDP unicast/broadcast, IPv6, internal DNS,
-fixed proxy bridges, and full-mode RAG on the supported engines. Podman
-requires separate validation. Stack startup does not disable host/VM rpcbind:
-its service manager and RPC-dependent storage are engine/operator-owned.
+The controller's HTTP API has no caller authentication. API compromise exposes
+its execution, session, upload/download, and file APIs. Those APIs launch
+children with controller-selected images, network mode, and arguments; they
+are not arbitrary Docker API access. Controller compromise exposes its writable
+Unix engine socket: rootful daemon-host authority (the Linux VM on Docker
+Desktop), or the rootless daemon owner's authority. Children receive no socket.
+Podman keeps this controller inactive behind `requires-docker-socket`.
 
-The Docker code-interpreter controller has a writable engine socket so it can
-create short-lived executor containers. Those children receive the selected
-executor network mode and do not receive the socket. The pinned controller's
-HTTP API has no caller authentication; access is bounded by `onyx-backend`.
-Besides the controller, that network contains `api_server`,
-`searxng-service-gateway`, and, in full mode, `background` and
-`local-embedding-shim`. Compromise of any such peer exposes the controller's
-execution, session, and file API. The SearXNG gateway's fixed forwarding does
-not give SearXNG itself general backend access.
+Make selects `docker-compose.docker-isolation.yml` last on Docker Engine 28+,
+using the server version rather than the client. Every selected internal
+bridge receives IPv4 and IPv6 `isolated` gateway options. These options remove
+ordinary host bridge addresses without enabling IPv6 or changing application
+IPAM, aliases, fixed addresses, or same-network communication. A failed or
+malformed version discovery blocks startup; a supported older Docker warns
+once and continues with controller separation and ordinary internal bridges.
+Existing Engine API 1.44+ and Compose capability requirements remain in force.
+Diagnostics and shutdown do not acquire a startup capability prerequisite.
 
-API reachability is not unrestricted Docker socket access: supported requests
-run code in children using controller-configured images, network mode, and
-launch arguments. Compromise of the controller itself, however, grants the
-authority of the mounted engine socket. With rootful Docker this includes
-daemon-host control (the Linux VM on Docker Desktop); rootless Docker instead
-grants the rootless daemon owner's authority. Isolated bridge gateways do not
-reduce socket authority or restrict communication between peers on the same
-network. The Podman topology omits this socket-dependent service.
+Ordinary internal bridges retain host addresses and can reach wildcard or
+bridge-bound host/VM services independently of HTTP proxies. Docker Desktop
+rpcbind may answer TCP/UDP port 111, including directed broadcasts. Older
+Docker and Podman retain their documented host-service residual. Docker's
+[addressless gateway contract](https://docs.docker.com/engine/network/port-publishing/#gateway-modes)
+removes that ordinary address path on recreated networks; it is not a general
+host-input firewall guarantee. Full packet and privilege qualification remains
+separate from successful Compose rendering and application startup.
+
+API, background, SearXNG, frontend, controller, document/embedding, and data
+services drop `NET_RAW` and `NET_ADMIN`. Existing all-capability drops remain.
+This removes those capabilities from the bounding set, including for
+container-root processes, while retaining initialization capabilities needed
+by image entrypoints. Legitimate VPN route-owner authority is unchanged.
+Qualification must inspect actual effective/bounding capabilities, normal and
+achievable root credentials, raw Ethernet feasibility, IPv4 TCP/UDP/broadcast,
+IPv6 unicast/link-local/multicast, literal host addresses and aliases, and
+receiver-side delivery. A timeout alone establishes no reply, not no delivery.
+Positive internal DNS and TCP/UDP checks are required, including enabled IPv6.
+Native Docker with firewalld needs independent validation because of the
+[isolated IPv6 connectivity issue](https://github.com/moby/moby/issues/49680).
+
+| Path | Remaining authority or limitation |
+| --- | --- |
+| Docker 28+ internal-only services and enabled children | Addressless bridges after recreation; packet/privilege qualification is recorded separately |
+| Supported older Docker | Ordinary bridge-host access remains; controller separation still applies |
+| Network-disabled children | `--network none`, including coding-agent sessions |
+| Podman | Existing internal-network boundary; no claimed Docker isolated-gateway parity |
+| Myst, netns-holder, co-resident policy processes | Trusted route-owner namespace and uplink remain |
+| Teep, Tor, Tailscale and fixed host publishers | Selected uplinks/publication networks retain possible host/VM listener access |
+| Host/LAN integration allowances | Final-hop grants remain; a permitted TCP port can authorize its listener, including port 111; no general UDP proxy |
+| Daemon administrator and host processes | Outside the application-network restriction |
+
+Isolated bridges do not prevent same-network lateral movement, access to
+mounted data/credentials, authorized exports, permitted public egress, or
+kernel/runtime exploitation. API and background can still select either of
+their public/host bridges after compromise; final-hop policies remain
+independent enforcement. The stock crawler runs inside the API and inherits
+its process authority. Obscura retains its separate process boundary.
+
+Use the ordinary matching `make down-*`, repository update, and `make up-*`
+workflow to recreate networks, also after crossing Docker 28. Warm startup or
+engine restart alone does not convert an old bridge. Executor children can
+outlive Compose shutdown and retain an old network; successful startup does
+not prove every old network disappeared. Restarting the engine and retrying
+down/up may help, but persistent endpoints may require manual resolution.
+There is no automatic engine restart, endpoint sweep, persistent-data deletion,
+stale-network scan, or additional reaper. See the
+[executor cleanup residual](resource_minimization.md#executor-lifetime-and-cleanup).
+
+RAG uses HTTP, bind mounts, and data-service protocols, not rpcbind. Host NFS
+storage can independently require RPC; stack startup never disables rpcbind
+or mutates host firewall policy. Configured host embeddings retain their
+existing final-hop route and rootless Docker's exact internal Teep exception.
 
 Myst, the final-hop policy processes, and `netns-holder` are trusted
 network-namespace peers when the selected routing mode co-locates them.
@@ -421,6 +460,27 @@ correlate users of a multi-user deployment. The supported private deployment
 accepts this only under its single-user trust assumption.
 
 ## Verification checklist
+
+Run `make check` and `make test-patch-images` after controller or network-contract
+changes. `tests/test_docker_gateway_isolation.py` renders through Make with
+public fixtures, covers both Docker gateway branches and Podman, and rejects
+new internal networks missing either option. It also tests repeated Tor
+runtime initialization against a live Unix socket.
+
+`make integration-network-isolation CONTAINER_BIN=docker` is an explicit live
+Docker 28+ fixture test using the selected local Python image. It creates only
+labelled disposable networks/containers and temporary host-namespace TCP/UDP
+listeners, retains receiver-side delivery evidence, verifies IPv4/IPv6 internal
+connectivity and raw-socket denial, and removes its resources on completion.
+It never pulls images or modifies host firewall/rpcbind configuration. The
+underlying `tests/validate_docker_host_isolation.py` accepts repeated `--service`
+arguments to execute additional probes inside running Python application
+containers under normal and container-root credentials. Its stated limitations
+remain part of the result; passing it alone does not qualify a platform.
+`tests/validate_controller_integration.py` runs inside the API with the
+controller's current IP as its argument and exercises the native client using
+only disposable files/sessions, with cleanup in `finally`.
+
 
 - CDP has no host port and `obscura-cdp-gateway` is not on `onyx-backend`.
 - Only API/gateway join `onyx-obscura-control`; SearXNG joins browser control.

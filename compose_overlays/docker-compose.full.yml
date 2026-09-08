@@ -3,6 +3,7 @@
 
 services:
   background:
+    cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: background
@@ -102,7 +103,7 @@ services:
       # This wrapper always deploys one OpenSearch data node. A configured
       # replica cannot be assigned and provides no additional data copy.
       OPENSEARCH_INDEX_NUM_REPLICAS: "0"
-      CODE_INTERPRETER_BASE_URL: "http://code-interpreter:8000"
+      CODE_INTERPRETER_BASE_URL: ""
       # Route connector downloads and other environment-aware background HTTP
       # clients through the fixed public-only application bridge.
       HTTP_PROXY: "http://onyx-public-egress-bridge:3128"
@@ -148,6 +149,7 @@ services:
 
   # Onyx internal/data services (full mode only)
   opensearch:
+    cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: opensearch
@@ -168,6 +170,7 @@ services:
     healthcheck: {disable: true}
 
   cache:
+    cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: cache
@@ -176,6 +179,7 @@ services:
 
   # Required by upstream Onyx service dependencies inherited via extends.
   minio:
+    cap_drop: [NET_RAW, NET_ADMIN]
     image: ${MINIO_IMAGE:?MINIO_IMAGE must be set}
     restart: unless-stopped
     networks: [onyx-data]
@@ -201,6 +205,7 @@ services:
   # Read-only internal crawl origin, reachable only through the fixed route
   # gateway or the separately published host view.
   doc-drop-web:
+    cap_drop: [NET_RAW, NET_ADMIN]
     image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
     restart: unless-stopped
     networks:
@@ -300,6 +305,7 @@ services:
       ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL: "${ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL:-http://host.docker.internal:3210/v1/embeddings}"
 
   local-embedding-shim:
+    cap_drop: [NET_RAW, NET_ADMIN]
     image: ${PYTHON_ALPINE_IMAGE:?PYTHON_ALPINE_IMAGE must be set}
     restart: unless-stopped
     networks: [onyx-backend, onyx-host-egress]

@@ -41,8 +41,8 @@ The Makefile selects narrowly scoped layers:
   selects UID/GID `0:0` for Docker Desktop and the invoking host UID/GID for
   native Docker.
 - `compose_overlays/docker-compose.tor-egress-docker.yml` replaces the Docker
-  named SOCKS volume with a host-owned, Docker-specific transient bind on both
-  supported host platforms.
+  named SOCKS volume with a host-owned, Docker-specific transient bind on native
+  Linux. Docker Desktop retains the named runtime volume for Unix-socket support.
 - `compose_overlays/docker-compose.tor-podman.yml` and
   `compose_overlays/docker-compose.tor-onion-podman.yml` contain only Podman
   ownership, sysctl, and tmpfs translations.
@@ -126,14 +126,16 @@ mode-0755 directory and clears a stale socket before launch. Docker Desktop
 uses the named volume because its host-bind transport does not support every
 Unix-socket unlink and mode operation Tor requires. Neither location contains
 persistent Tor identity.
-Before Docker starts Tor, a networkless one-shot initializer removes a stale
-socket and sets only this transient runtime root to Make's selected UID/GID.
+Before Docker starts Tor, a networkless one-shot initializer sets only this
+transient runtime root to Make's selected UID/GID. Repeated full-mode stages
+and warm starts may rerun it, so neither this initializer nor the Make
+preparation target removes an existing SOCKS socket.
 It has a read-only root filesystem, `no-new-privileges`, and only the
 `CHOWN`, `DAC_OVERRIDE`, and `FOWNER` capabilities needed to repair a reused
 runtime volume. It never mounts or rewrites persistent Tor state.
-The Docker Tor launch removes the same socket once more immediately before it
-executes the pinned Tor binary. This closes the restart race in which an older
-Tor process can recreate the socket while Compose is replacing the service.
+The Docker Tor entrypoint alone removes a stale SOCKS socket immediately before
+it executes the pinned Tor binary. This preserves live Tor connections during
+repeated dependency preparation while retaining restart cleanup.
 The control socket and authentication cookie exist only on Tor's ephemeral
 `/run/tor-control` tmpfs and are not shared with another container.
 

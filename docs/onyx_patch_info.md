@@ -1116,3 +1116,11 @@ Every pin or source-shape change must follow
 [the upgrade checklist](onyx_patches_upgrade.md). Prefer removing a patch when
 upstream exposes an equivalent strict configuration. Never retain a silent
 compatibility branch, direct fallback, or broad exception suppression.
+
+Controller caller separation and Docker gateway selection are native Compose
+configuration, not runtime patches; see [internal network security](internal_network_security.md#docker-gateway-and-controller-boundary).
+Selected-image validation must retain native background Python/Bash/Coding Agent
+unavailability with the explicitly empty URL, persona tool exclusion, API
+availability with a healthy controller fixture, and Slack/Discord request
+semantics. Keep the [executor cleanup residual](resource_minimization.md#executor-lifetime-and-cleanup)
+explicit without adding a mandatory lifetime probe or daemon-wide cleanup.

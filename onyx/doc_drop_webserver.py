@@ -12,6 +12,7 @@ from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler
 from http.server import ThreadingHTTPServer
+from socketserver import TCPServer
 
 
 ALWAYS_HIDDEN_NAMES = {
@@ -185,6 +186,13 @@ class DocDropRequestHandler(SimpleHTTPRequestHandler):
 
 class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def server_bind(self) -> None:
+        # Static document serving does not need HTTPServer's reverse hostname
+        # lookup. Keep local startup independent of host DNS availability.
+        TCPServer.server_bind(self)
+        self.server_name = self.server_address[0]
+        self.server_port = self.server_address[1]
 
     def __init__(
         self,

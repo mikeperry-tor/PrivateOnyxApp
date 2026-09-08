@@ -51,8 +51,8 @@ bind mounts and HTTP; embeddings and data services use their configured
 application protocols. An operator-provided document directory or Docker
 storage backed by NFS can have separate host-side RPC dependencies, especially
 with NFSv3. Those mount dependencies do not require executor containers to
-reach host rpcbind. See the host-service residual in
-[Internal network security](internal_network_security.md#browser-containment-and-residuals).
+reach host rpcbind. See the engine-specific host-service boundary in
+[Internal network security](internal_network_security.md#docker-gateway-and-controller-boundary).
 
 1. Files are placed under `ONYX_RAG_DOC_SOURCE_DIR`, defaulting to `./doc-drop`.
    Full-mode startup creates that default directory when it is absent. A
@@ -98,6 +98,10 @@ connectors saved with `http://localhost:8091/` must be recreated with
 `http://doc-drop-web:8091/` and reindexed; Compose cannot rewrite saved records.
 
 ## Web Connector Server
+
+The document HTTP listener binds without reverse hostname lookup. Local startup
+and health do not depend on host DNS; loopback-peer admission, read-only path
+checks, connection limits, and socket deadlines remain unchanged.
 
 Implementation:
 

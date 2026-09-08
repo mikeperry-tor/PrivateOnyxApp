@@ -1354,6 +1354,8 @@ def _validate_midstream_continuation_state_persistence() -> None:
 if __name__ == "__main__":
     _validate_durable_stream_buffer_policy()
     _validate_production_bootstrap()
+    from validate_native_bot_tools import validate_native_tools
+    validate_native_tools(background=False)
     _validate_native_ssrf_contract()
     _validate_new_network_surface_contract()
     _validate_python_tool_identity()

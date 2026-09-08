@@ -77,6 +77,7 @@ services:
         condition: service_started
 
   searxng-core:
+    cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./searxng/docker-compose.yml
       service: core
@@ -351,6 +352,7 @@ services:
   # Onyx application tier. Every attached network is internal; external and
   # host-local HTTP(S) access is available only through fixed policy bridges.
   api_server:
+    cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: api_server
@@ -524,6 +526,7 @@ services:
       - api_server_logs:/var/log/onyx
 
   web_server:
+    cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: web_server
@@ -555,6 +558,7 @@ services:
         condition: service_healthy
 
   nginx:
+    cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: nginx
@@ -599,6 +603,7 @@ services:
       nginx: {condition: service_healthy}
 
   code-interpreter:
+    cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: code-interpreter
@@ -606,7 +611,6 @@ services:
     networks: [onyx-backend]
     environment:
       PORT: "8000"
-      CODE_INTERPRETER_BASE_URL: "http://code-interpreter:8000"
       # Python runs in short-lived executor containers, not in this API image.
       # Makefile prebuilds this exact wrapper image so startup never falls back
       # to upstream's mutable python-executor-sci:latest reference.
@@ -655,6 +659,7 @@ services:
       start_period: 30s
 
   relational_db:
+    cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: relational_db

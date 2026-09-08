@@ -283,7 +283,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("docker-data/tor/docker-runtime", tor_ready)
         self.assertIn('chmod 0700 docker-data/tor/state', tor_ready)
         self.assertIn('chmod 0755 docker-data/tor/docker-runtime', tor_ready)
-        self.assertIn('rm -f docker-data/tor/docker-runtime/socks', tor_ready)
+        self.assertNotIn('rm -f docker-data/tor/docker-runtime/socks', tor_ready)
         self.assertNotIn("chown", tor_ready)
 
     def test_docker_tor_settings_match_platform_storage_model(self) -> None:

@@ -18,6 +18,16 @@ from onyx.doc_drop_webserver import (
 
 
 class DocDropWebserverTests(unittest.TestCase):
+    def test_binding_does_not_depend_on_reverse_dns(self) -> None:
+        server = BoundedThreadingHTTPServer.__new__(BoundedThreadingHTTPServer)
+        server.server_address = ("0.0.0.0", 18091)
+        with patch("socketserver.TCPServer.server_bind") as bind, patch(
+            "socket.getfqdn", side_effect=AssertionError("startup must not resolve host DNS")
+        ):
+            server.server_bind()
+        bind.assert_called_once_with(server)
+        self.assertEqual(server.server_port, 18091)
+
     def test_host_listener_has_a_bounded_thread_budget(self) -> None:
         self.assertEqual(MAX_ACTIVE_CONNECTIONS, 32)
         server = BoundedThreadingHTTPServer.__new__(BoundedThreadingHTTPServer)
