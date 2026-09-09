@@ -492,9 +492,13 @@ unconditional strict API patch changes generated-file links to relative
 same-origin `/api/chat/file/{id}` values, adds a ready-to-copy
 `response_markdown` ordinary link to each LLM-facing generated-file result, and
 requires every user-requested file in the Python function description, Python
-guidance, and post-execution reminder. An Agent that replaces the base system
-prompt still receives the Python guidance whenever `run_python` is available;
-the replacement suppresses general Onyx guidance, not this tool protocol.
+guidance, and the result itself. Dynamic generated-file reminders are removed
+from every main-chat branch, including replacement personas and forced/final
+cycles. The wrapper does not rewrite `FILE_REMINDER`. An Agent that replaces
+the base system prompt with the replace-base checkbox, or supplies a custom prompt with an
+empty default base, receives stable Python guidance whenever `run_python` is
+available. Each branch retains its custom text and citation/web policy; the
+helper adds only Python guidance, without general Onyx instructions.
 
 Prompting is not treated as enforcement. A streaming API patch recognizes
 Markdown links whose parsed path is exactly `/api/chat/file/{id}`, removes image
@@ -786,6 +790,70 @@ tool isolation, placement mapping, and all four forced-to-auto wrappers; strict
 installation is also tested against the pinned Onyx image. Remove individual
 rewrites when upstream preserves selected tools, mixed batches, bounded
 concurrency, placement, and compatible automatic tool choice natively.
+
+## Investigation prompt stability
+
+Ordinary stock/default main-chat tool cycles and default Deep Research
+investigation cycles retain a semantic prefix after Onyx history translation:
+existing messages, content blocks, reasoning, tool-call IDs, tool results, and
+ordering remain equal while new calls and results append. Ordered tool
+definitions and request options remain equal on these paths. Newly retrieved
+documents and generated-file results are ordinary appended history.
+
+On the default-base chat path, citation applicability is fixed from the first
+request using `include_citations`, the existing context-file predicate, and the
+supplied citeable tools. Stable task prompts and fixed selected tool subsets
+use the same policy. The existing history patch places citation/task reminders
+beside the latest user message, before tool history; reconstructing those
+unchanged reminders preserves prefix growth. Ordinary post-search reminders
+are disabled on this path. Capability-gated initial `open_url` guidance asks
+the model to open promising pages unless snippets completely answer the query,
+retaining user-URL guidance and the tool's ten-URL limit. Replacement-base
+personas, including the empty-default-base custom-prompt branch, retain their
+citation/web policy and receive the same capability-gated stable Python
+guidance. File-reminder removal applies across all these branches; exact result `response_markdown`, normalization,
+streaming, and persistence remain the file-delivery safeguards described above.
+Normalization cannot supply an artifact omitted by the model.
+
+Both Deep Research tool-sharing settings receive the prompt cleanup: the
+orchestrator and nested research prompts retain their configured maximum
+budgets without a changing current-cycle number. Redundant first-cycle and
+post-search reminders are removed. Both orchestration variants already require
+coverage of the question and plan and investigation of newly discovered
+directions. Nested research guidance names the installed `open_url` tool and
+retains the snippet-sufficiency exception, availability gating, and the
+non-reasoning variant's think-tool guidance. Internal-search tuning follows the
+tools actually selected. Both coding-agent investigation constants likewise
+retain the fixed budget without a changing cycle number; coding execution and
+final synthesis are unchanged.
+
+Exact-count transforms run after Python file-link enforcement, consuming the
+accumulated sources and configured constants. Source rebuilding retains both
+the accumulated text and its original execution globals, including when the
+function has a timing decorator. Final bootstrap validation checks installed
+functions, constants, active execution globals, reminder placement, and direct
+`process_message` caller bindings after crawler installation. Missing,
+duplicate, reordered, or stale bindings fail strict startup.
+
+The prefix guarantee requires unchanged model/deployment, tool choice,
+reasoning options, chat template/arguments, initial injected context, existing
+message content, multimodal inputs, and output-token policy. It excludes new
+user invocations; replacement-base prompts; tool selection/choice transitions;
+post-image and cycle-limit completion; truncation/summarization; Deep Research
+clarification, planning, report transitions and disabled chat-tool sharing;
+nested research reports; coding final synthesis; changes to persona, project,
+memory, configured tools or prompt inputs; date rollover; and provider retries
+that intentionally change request fields. Requests carrying the translator's
+trailing `IMAGE_DROP_REMINDER` are excluded even with unchanged attachments:
+new tool history is inserted before that notice. Exclusions do not relax
+history pairing, reasoning, citations, file delivery, or error handling.
+
+Onyx's explicit cache markers and `should_cache` policy are unchanged;
+`PROMPT_CACHE_CHAT_HISTORY` remains false by default. This does not promise
+cache hits, lower bills, or advancing the explicit breakpoint during a tool
+turn. Provider adaptation, routing, worker affinity, minimum cacheable length,
+retention, and eviction remain outside the guarantee. Tests compare structured
+translated requests and ordered tools, not provider token IDs or cache billing.
 
 ## Reasoning, tool history, and coding finalization
 

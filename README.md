@@ -41,6 +41,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local files, making re-indexing substantially faster than stock Onyx.
 - Optional Slack and Discord bots support chat and search. Slack cannot run code; Discord can use the code tools you enable on Docker. Neither bot uses deep-research mode.
 - Onyx's idle background CPU workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled with `ONYX_AGENT_SLACK_BOT` or `ONYX_AGENT_DISCORD_BOT`.
+- Ordinary stock/default chat and default Deep Research avoid common mid-investigation prompt mutations. See [scope and cache boundaries](docs/onyx_patch_info.md#investigation-prompt-stability).
 - Onyx Agent tool descriptions and prompts have been patched to describe an additional SymPy package, reinforce exact opaque links for Python-generated files, and describe network access in coding environments when it is enabled. Generated-file markdown is normalized to portable same-origin links.
 - The Onyx installation process and the wider stack lifecycle are adapted to additionally support rootless Podman, including selected-engine image preparation, Compose routing, startup-health handling, and shared-data safeguards when switching between Docker and Podman.
 

@@ -15,6 +15,8 @@ def _strict() -> bool:
 
 def _install() -> None:
     from wrapper_env_patches import apply_code_interpreter_network_description_patches
+    from wrapper_env_patches import apply_agent_prompt_stability_patches
+    from wrapper_env_patches import validate_agent_prompt_stability_patches
     from wrapper_env_patches import apply_chat_file_id_validation_patch
     from wrapper_env_patches import apply_coding_agent_final_answer_fallback_patch
     from wrapper_env_patches import apply_configured_inference_proxy_patch
@@ -69,6 +71,7 @@ def _install() -> None:
     apply_coding_agent_final_answer_fallback_patch()
     apply_preserve_tool_results_patch()
     apply_python_file_link_enforcement_patches()
+    apply_agent_prompt_stability_patches()
     apply_chat_file_id_validation_patch()
     apply_searxng_single_attempt_patch()
     install_webui_reconnect_status()
@@ -81,6 +84,7 @@ def _install() -> None:
         install_obscura_crawler()
     else:
         install_onyx_crawler()
+    validate_agent_prompt_stability_patches()
 
 
 try:

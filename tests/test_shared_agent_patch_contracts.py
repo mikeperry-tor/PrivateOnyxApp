@@ -389,7 +389,6 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         for prompt in (
             PythonTool.DESCRIPTION,
             tool_prompts.PYTHON_TOOL_GUIDANCE,
-            chat_prompts.FILE_REMINDER,
         ):
             self.assertIn("response_markdown", prompt)
             self.assertIn("every user-requested generated file", prompt)
@@ -400,7 +399,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             "do not substitute Markdown image syntax",
             tool_prompts.PYTHON_TOOL_GUIDANCE,
         )
-        self.assertIn("Do not omit a graph", chat_prompts.FILE_REMINDER)
+        self.assertNotIn("response_markdown", chat_prompts.FILE_REMINDER)
 
     def test_python_result_supplies_relative_ready_to_copy_markdown(self) -> None:
         wrapper = _load_wrapper()
@@ -673,7 +672,19 @@ def run_llm_loop(tools, persona):
                     else None
                 )
                 return system_prompt
-            return None
+            else:
+                if True:
+                    processed_custom_agent_prompt = "empty-base custom prompt"
+                    system_prompt = (
+                        ChatMessageSimple(
+                            message=processed_custom_agent_prompt,
+                            token_count=len(processed_custom_agent_prompt),
+                            message_type=MessageType.SYSTEM,
+                        )
+                        if processed_custom_agent_prompt
+                        else None
+                    )
+                    return system_prompt
         return None
     return None
 
@@ -788,6 +799,19 @@ def translate_assistant_message_to_packets(chat_message, db_session):
             )
             self.assertIn("## run_python", prompt.message)
             self.assertIn("response_markdown", prompt.message)
+            for replace_base in (True, False):
+                persona = SimpleNamespace(replace_base_system_prompt=replace_base)
+                text = "replacement prompt" if replace_base else "empty-base custom prompt"
+                with_python = llm_loop.run_llm_loop(
+                    [SimpleNamespace(name="run_python")], persona,
+                )
+                self.assertTrue(with_python.message.startswith(text))
+                self.assertEqual(with_python.message.count("## run_python"), 1)
+                self.assertIn("response_markdown", with_python.message)
+                without_python = llm_loop.run_llm_loop(
+                    [SimpleNamespace(name="open_url")], persona,
+                )
+                self.assertEqual(without_python.message, text)
             self.assertEqual(
                 llm_loop._wrapper_append_python_guidance(
                     "replacement prompt", [SimpleNamespace(name="open_url")]
@@ -931,17 +955,6 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         wrapper = _load_wrapper()
         modules, _, _, tool_prompts, _, _, _ = _code_description_modules()
         tool_prompts.PYTHON_TOOL_GUIDANCE = "Upstream changed this guidance."
-
-        with patch.dict(
-            os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
-        ), patch.dict(sys.modules, modules):
-            with self.assertRaisesRegex(RuntimeError, "did not match"):
-                wrapper.apply_python_file_link_prompt_patches()
-
-    def test_python_file_reminder_drift_fails_strict(self) -> None:
-        wrapper = _load_wrapper()
-        modules, _, _, _, chat_prompts, _, _ = _code_description_modules()
-        chat_prompts.FILE_REMINDER = "Upstream changed this reminder."
 
         with patch.dict(
             os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True

@@ -1035,7 +1035,11 @@ def _patch_function_source(
         # body and silently discards the first patch.
         source = getattr(function, "_wrapper_patched_source", None)
         if isinstance(source, str):
-            rebuild_globals = function.__globals__
+            # A rebuilt decorated function exposes the decorator's globals.
+            # Keep the execution namespace used to compile the actual body.
+            rebuild_globals = getattr(
+                function, "_wrapper_source_globals", function.__globals__
+            )
             source_function = function
         else:
             source_function = inspect.unwrap(function)
@@ -1062,6 +1066,7 @@ def _patch_function_source(
 
     wrapped_function = functools.wraps(function)(patched_function)
     wrapped_function._wrapper_patched_source = patched_source
+    wrapped_function._wrapper_source_globals = rebuild_globals
     setattr(module, function_name, wrapped_function)
     print(f"sitecustomize: patched {patch_name}", flush=True)
 
@@ -4306,6 +4311,17 @@ def apply_python_file_link_enforcement_patches() -> None:
                 "construction site"
             )
             return
+        empty_base_anchor = (
+            "                    system_prompt = (\n"
+            "                        ChatMessageSimple(\n"
+            "                            message=processed_custom_agent_prompt,\n"
+        )
+        if run_source.count(empty_base_anchor) != 1:
+            _warn_or_raise(
+                "empty-base Python guidance patch expected exactly one custom-prompt "
+                "construction site"
+            )
+            return
         llm_loop._wrapper_append_python_guidance = (
             _append_python_guidance_to_replacement_prompt
         )
@@ -4318,7 +4334,12 @@ def apply_python_file_link_enforcement_patches() -> None:
                     "                processed_system_prompt = "
                     "_wrapper_append_python_guidance(processed_system_prompt, tools)\n"
                     + replacement_anchor
-                )
+                ),
+                empty_base_anchor: (
+                    "                    processed_custom_agent_prompt = "
+                    "_wrapper_append_python_guidance(processed_custom_agent_prompt, tools)\n"
+                    + empty_base_anchor
+                ),
             },
         )
     except Exception as e:  # pragma: no cover
@@ -4466,8 +4487,8 @@ def apply_python_file_link_prompt_patches() -> None:
     also makes an accidental Markdown image work through any wrapper frontend
     without adding a remote CSP source.
 
-    The rule is repeated in the function description, Python guidance,
-    post-execution reminder, and the result itself. The result supplies a
+    The rule is present in the function description, stable Python guidance,
+    and the result itself. The result supplies a
     ready-to-copy ``response_markdown`` value so the model does not have to
     reconstruct either the label or URL.
     """
@@ -4522,26 +4543,6 @@ def apply_python_file_link_prompt_patches() -> None:
             f"sitecustomize: failed to patch PYTHON_TOOL_GUIDANCE file links: {e}",
             flush=True,
         )
-        _raise_if_strict()
-
-    try:
-        from onyx.prompts import chat_prompts
-
-        chat_prompts.FILE_REMINDER = _replace_or_warn(
-            owner_name="FILE_REMINDER file-link instruction",
-            current=chat_prompts.FILE_REMINDER,
-            old=(
-                "If you reference or share these files, use the exact markdown "
-                "format [filename](file_link) with the file_link from the "
-                "execution result."
-            ),
-            new=(
-                "Do not omit a graph or other file the user requested. "
-                + link_instruction
-            ),
-        )
-    except Exception as e:  # pragma: no cover
-        print(f"sitecustomize: failed to patch FILE_REMINDER: {e}", flush=True)
         _raise_if_strict()
 
     try:
@@ -4872,3 +4873,245 @@ def apply_code_interpreter_network_description_patches() -> None:
     except Exception as e:  # pragma: no cover
         print(f"sitecustomize: failed to patch coding-agent prompts: {e}", flush=True)
         _raise_if_strict()
+
+
+# Exact source contracts for the pinned investigation loops. These consume the
+# accumulated source after reasoning, tool-sharing and file-link patches.
+_PROMPT_STABILITY_CHAT_REPLACEMENTS = {
+    '        code_interpreter_file_generated: bool = False\n': '',
+    (
+        '                # Track if code interpreter generated files with download links\n'
+        '                if (\n'
+        '                    tool_call.tool_name == PythonTool.NAME\n'
+        '                    and not code_interpreter_file_generated\n'
+        '                ):\n'
+        '                    try:\n'
+        '                        parsed = json.loads(tool_response.llm_facing_response)\n'
+        '                        if parsed.get("generated_files"):\n'
+        '                            code_interpreter_file_generated = True\n'
+        '                    except (json.JSONDecodeError, AttributeError):\n'
+        '                        pass\n'
+        '\n'
+    ): '',
+    '        reasoning_cycles = 0\n': (
+        '        stable_default_prompt = bool(default_base_system_prompt) and not (\n'
+        '            persona and persona.replace_base_system_prompt\n'
+        '        )\n'
+        '        stable_citations = include_citations and (\n'
+        '            always_cite_documents or any(tool.name in CITEABLE_TOOLS_NAMES for tool in tools)\n'
+        '        )\n'
+        '        reasoning_cycles = 0\n'
+    ),
+    '            cite_documents = should_cite_documents or always_cite_documents\n': (
+        '            cite_documents = (\n'
+        '                stable_citations if stable_default_prompt\n'
+        '                else should_cite_documents or always_cite_documents\n'
+        '            )\n'
+    ),
+    '                just_ran_web_search=just_ran_web_search,\n': '                just_ran_web_search=just_ran_web_search and not stable_default_prompt,\n',
+    (
+        '                include_citation_reminder=should_cite_documents\n'
+        '                or always_cite_documents,\n'
+    ): '                include_citation_reminder=cite_documents,\n',
+    '                include_file_reminder=code_interpreter_file_generated,\n': '                include_file_reminder=False,\n',
+    '            if llm_step_result.tool_calls and any(\n': '            if not stable_default_prompt and llm_step_result.tool_calls and any(\n',
+}
+_PROMPT_STABILITY_DR_REPLACEMENTS = {
+    '        include_internal_search_tunings = SearchTool.NAME in allowed_tool_names\n': '        include_internal_search_tunings = any(tool.name == SearchTool.NAME for tool in allowed_tools)\n',
+    (
+        '                if cycle == 1:\n'
+        '                    first_cycle_reminder_message = ChatMessageSimple(\n'
+        '                        message=FIRST_CYCLE_REMINDER,\n'
+        '                        token_count=FIRST_CYCLE_REMINDER_TOKENS,\n'
+        '                        message_type=MessageType.USER_REMINDER,\n'
+        '                    )\n'
+        '                else:\n'
+        '                    first_cycle_reminder_message = None\n'
+        '\n'
+    ): (
+        '                first_cycle_reminder_message = None\n'
+        '\n'
+    ),
+}
+_PROMPT_STABILITY_RESEARCH_REPLACEMENTS = {
+    (
+        '                # Gate the open_url nudge on the tool actually being available.\n'
+        '                if just_ran_web_search and has_open_url_tool:\n'
+        '                    reminder_message = ChatMessageSimple(\n'
+        '                        message=OPEN_URL_REMINDER_RESEARCH_AGENT,\n'
+        '                        token_count=100,\n'
+        '                        message_type=MessageType.USER,\n'
+        '                    )\n'
+        '                else:\n'
+        '                    reminder_message = None\n'
+        '\n'
+    ): (
+        '                reminder_message = None\n'
+        '\n'
+    ),
+}
+
+_PROMPT_STABILITY_FUNCTIONS: list[tuple[ModuleType, str, object, str]] = []
+_PROMPT_STABILITY_CONSTANTS: list[tuple[ModuleType, ModuleType, str, str]] = []
+
+
+def _prompt_stability_replace(
+    value: str, old: str, new: str, label: str, count: int = 1,
+) -> str:
+    if value.count(old) != count:
+        raise RuntimeError(
+            f"{label}: expected exactly {count} source matches, got {value.count(old)}"
+        )
+    return value.replace(old, new)
+
+
+def _patch_investigation_source(
+    module: ModuleType, name: str, replacements: dict[str, str],
+) -> None:
+    function = getattr(module, name)
+    source = getattr(function, "_wrapper_patched_source", None)
+    if not isinstance(source, str):
+        raise RuntimeError(f"{name}: prompt stability must follow existing loop patches")
+    expected = source
+    for old, new in replacements.items():
+        expected = _prompt_stability_replace(expected, old, new, name)
+    _patch_function_source(
+        module=module, function_name=name, replacements=replacements,
+        patch_name=f"{name} prompt stability",
+    )
+    installed = getattr(module, name)
+    if installed._wrapper_patched_source != expected:
+        raise RuntimeError(f"{name}: accumulated source was not preserved")
+    _PROMPT_STABILITY_FUNCTIONS.append((module, name, installed, expected))
+
+
+def _patch_investigation_constant(
+    owner: ModuleType, consumer: ModuleType, name: str, old: str, new: str,
+    count: int = 1,
+) -> None:
+    current = getattr(owner, name)
+    if getattr(consumer, name) != current:
+        raise RuntimeError(f"{name}: stale prompt consumer before installation")
+    value = _prompt_stability_replace(current, old, new, name, count)
+    setattr(owner, name, value)
+    setattr(consumer, name, value)
+    _PROMPT_STABILITY_CONSTANTS.append((owner, consumer, name, value))
+
+
+def apply_agent_prompt_stability_patches() -> None:
+    """Keep ordinary investigation prefixes stable without changing tool policy."""
+    from onyx.chat import llm_loop, prompt_utils
+    from onyx.deep_research import dr_loop
+    from onyx.prompts import tool_prompts
+    from onyx.prompts.deep_research import dr_tool_prompts, orchestration_layer
+    from onyx.prompts.deep_research import research_agent as research_prompts
+    from onyx.prompts.coding_agent import coding_agent as coding_prompts
+    from onyx.tools.fake_tools import research_agent, coding_agent
+
+    _patch_investigation_source(llm_loop, "run_llm_loop", _PROMPT_STABILITY_CHAT_REPLACEMENTS)
+    _patch_investigation_source(
+        dr_loop, "run_deep_research_llm_loop", _PROMPT_STABILITY_DR_REPLACEMENTS,
+    )
+    _patch_investigation_source(
+        research_agent, "run_research_agent_call", _PROMPT_STABILITY_RESEARCH_REPLACEMENTS,
+    )
+    _patch_investigation_constant(
+        tool_prompts, prompt_utils, "OPEN_URLS_GUIDANCE",
+        "You should almost always use open_url after a web_search call.",
+        "After web_search, use open_url to open promising pages unless the snippets "
+        "completely answer the query.",
+    )
+    for name in ("ORCHESTRATOR_PROMPT", "ORCHESTRATOR_PROMPT_REASONING"):
+        _patch_investigation_constant(
+            orchestration_layer, dr_loop, name,
+            "You have currently used {current_cycle_count} of {max_cycles} max research cycles.",
+            "You have a maximum budget of {max_cycles} research cycles.",
+        )
+    for name in ("RESEARCH_AGENT_PROMPT", "RESEARCH_AGENT_PROMPT_REASONING"):
+        _patch_investigation_constant(
+            research_prompts, research_agent, name,
+            "You are on cycle {current_cycle_count} of ",
+            "Your maximum cycle budget is ",
+        )
+    for name in ("OPEN_URLS_TOOL_DESCRIPTION", "OPEN_URLS_TOOL_DESCRIPTION_REASONING"):
+        current = getattr(dr_tool_prompts, name)
+        current = _prompt_stability_replace(current, "open_urls", "open_url", name, 3)
+        if name.endswith("_REASONING"):
+            old = "You should almost always use open_url after a web_search call."
+            new = (
+                "After web_search, use open_url to open promising pages unless the snippets "
+                "completely answer the query."
+            )
+        else:
+            old = (
+                "You should almost always use open_url after a web_search call and "
+                "sometimes after reasoning with the think_tool tool."
+            )
+            new = (
+                "After web_search, use open_url to open promising pages unless the snippets "
+                "completely answer the query, and consider opening pages after reasoning "
+                "with the think_tool tool."
+            )
+        value = _prompt_stability_replace(current, old, new, name)
+        _patch_investigation_constant(
+            dr_tool_prompts, research_agent, name, getattr(dr_tool_prompts, name), value,
+        )
+    for name in ("CODING_AGENT_PROMPT", "CODING_AGENT_PROMPT_REASONING"):
+        _patch_investigation_constant(
+            coding_prompts, coding_agent, name,
+            " (you are on cycle {current_cycle_count})", "",
+        )
+
+
+def validate_agent_prompt_stability_patches() -> None:
+    """Fail bootstrap if a later installer restores source or stale imports."""
+    from onyx.chat import llm_loop, process_message, prompt_utils
+    from onyx.deep_research import dr_loop
+    from onyx.tools.fake_tools import research_agent, coding_agent
+
+    if len(_PROMPT_STABILITY_FUNCTIONS) != 3 or len(_PROMPT_STABILITY_CONSTANTS) != 9:
+        raise RuntimeError("prompt stability installation missing or duplicated")
+    for module, name, installed, source in _PROMPT_STABILITY_FUNCTIONS:
+        if (
+            getattr(module, name) is not installed
+            or installed._wrapper_patched_source != source
+        ):
+            raise RuntimeError(f"{name}: final prompt stability source/binding drift")
+    for owner, consumer, name, value in _PROMPT_STABILITY_CONSTANTS:
+        if getattr(owner, name) != value or getattr(consumer, name) != value:
+            raise RuntimeError(f"{name}: final prompt binding drift")
+    for name, module in (("run_llm_loop", llm_loop), ("run_deep_research_llm_loop", dr_loop)):
+        if getattr(process_message, name) is not getattr(module, name):
+            raise RuntimeError(f"process_message.{name}: stale application caller binding")
+    source = getattr(llm_loop.construct_message_history, "_wrapper_patched_source", "")
+    if (
+        "result.append(reminder_message)" not in source
+        or source.rfind("result.append(reminder_message)")
+        > source.rfind("result.extend(messages_after_last_user)")
+    ):
+        raise RuntimeError("prompt stability requires installed reminder placement")
+    for module, name, names in (
+        (prompt_utils, "build_system_prompt", ("OPEN_URLS_GUIDANCE",)),
+        (dr_loop, "run_deep_research_llm_loop", (
+            "ORCHESTRATOR_PROMPT", "ORCHESTRATOR_PROMPT_REASONING",
+        )),
+        (research_agent, "run_research_agent_call", (
+            "RESEARCH_AGENT_PROMPT", "RESEARCH_AGENT_PROMPT_REASONING",
+            "OPEN_URLS_TOOL_DESCRIPTION", "OPEN_URLS_TOOL_DESCRIPTION_REASONING",
+        )),
+        (coding_agent, "run_coding_agent_call", (
+            "CODING_AGENT_PROMPT", "CODING_AGENT_PROMPT_REASONING",
+        )),
+    ):
+        function = getattr(module, name)
+        # The pinned orchestrator retains its timing decorator. Inspect the
+        # executed closure, not functools.wraps' historical __wrapped__ link.
+        if module is dr_loop:
+            function = inspect.getclosurevars(function).nonlocals["func"]
+        for binding in names:
+            if (
+                binding not in function.__code__.co_names
+                or function.__globals__.get(binding) != getattr(module, binding)
+            ):
+                raise RuntimeError(f"{name}.{binding}: stale active function globals")
+    print("sitecustomize: validated investigation prompt stability", flush=True)

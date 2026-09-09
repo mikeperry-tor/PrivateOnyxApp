@@ -1373,6 +1373,22 @@ def _validate_midstream_continuation_state_persistence() -> None:
 
 
 if __name__ == "__main__":
+    from validate_prompt_stability import validate_prompt_stability, validate_constants
+    if sys.argv[1:] == ["--prompt-stability-disabled"]:
+        from onyx.deep_research import dr_loop
+        from onyx.tools.fake_tools import research_agent
+        validate_constants()
+        assert "allowed_tools = [tool for tool in tools if tool.name in allowed_tool_names]" in dr_loop.run_deep_research_llm_loop._wrapper_patched_source
+        assert "first_tool_type = tool_calls[0].tool_name" in research_agent.run_research_agent_call._wrapper_patched_source
+        assert research_agent.MAX_RESEARCH_CYCLES == 37
+        print("PINNED_DISABLED_SHARING_PROMPT_STABILITY_OK")
+        sys.exit(0)
+    import os
+    import subprocess
+    subprocess.run([sys.executable, __file__, "--prompt-stability-disabled"], check=True,
+                   env=dict(os.environ, ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS="false",
+                            MAX_RESEARCH_AGENT_CYCLES="37"))
+    validate_prompt_stability()
     _validate_durable_stream_buffer_policy()
     _validate_production_bootstrap()
     from validate_native_bot_tools import validate_native_tools

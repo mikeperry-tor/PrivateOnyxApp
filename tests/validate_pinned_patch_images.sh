@@ -123,6 +123,7 @@ echo "Validating API patch contracts in $onyx_backend_image"
     -v "$repo_root/browser/obscura_client:/obscura-client:ro" \
     -v "$tokenizer_tmp/tokenizer.json:/offline-tokenizer/tokenizer.json:ro" \
     -v "$repo_root/tests/validate_pinned_api.py:/validation/validate_pinned_api.py:ro" \
+    -v "$repo_root/tests/validate_prompt_stability.py:/validation/validate_prompt_stability.py:ro" \
     -v "$repo_root/tests/validate_native_bot_tools.py:/validation/validate_native_bot_tools.py:ro" \
     "$onyx_backend_image" \
     /validation/validate_pinned_api.py

@@ -1116,9 +1116,10 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
   `file_link` plus exact `[filename](file_link)` `response_markdown`, and that
   ordinary link must render from the relative endpoint through every frontend;
   confirm the strict patch still rejects drift in the function description,
-  broader guidance, post-execution reminder, imported URL helper, and
+  stable Python guidance, imported URL helper, and
   `PythonTool.run` signature; confirm replace-base Agents retain the Python
-  guidance; split Markdown image and ordinary links at every stream boundary
+  guidance and every main-chat branch omits the dynamic file reminder; split
+  Markdown image and ordinary links at every stream boundary
   and verify both emitted and saved answers normalize exact chat-file paths,
   legacy absolute origins become relative, unrelated/incomplete Markdown is
   lossless, extensionless model labels are replaced with the authoritative
@@ -1182,6 +1183,46 @@ wrappers.
   tools remain single-call-only, nested placements are unique, batch overflow
   executes nothing, worker concurrency remains bounded, and only the four
   audited forced-tool call sites become automatic.
+- **Investigation prompt stability:** re-audit `run_llm_loop` citation setup,
+  reminder selection, generated-file reminder-only parsing, and the stable
+  reminder placement in `construct_message_history`. Require the same policy
+  for default-base task prompts and fixed supplied tool subsets. Preserve the
+  replacement-base citation/web policy and capability-gated Python guidance
+  for both checkbox and empty-default-base custom prompts, forced tool
+  selection, image/cycle-limit completion, and all file metadata/persistence.
+  Re-audit orchestration internal-search tuning against actual `allowed_tools`,
+  its `cycle == 1` reminder branch, and the nested post-search reminder branch.
+  Both orchestration prompts must already cover the removed first-cycle
+  reminder's question/plan coverage and new-direction guidance. Both initial
+  web-guidance variants must retain the snippet-sufficiency exception, correct
+  `open_url` name, availability gating, and installed tool limits.
+  Require exact-count/drift tests for each changed constant and source fragment,
+  preserving configured nested budgets and both reasoning variants. Validate
+  owner/consumer constants, final execution globals (including the decorated
+  orchestrator), and `process_message.run_llm_loop` /
+  `process_message.run_deep_research_llm_loop` after the full bootstrap. A
+  second decorated source rebuild must retain the original execution globals.
+  Run the disabled-sharing full-bootstrap smoke test with a nondefault nested
+  budget; retain its upstream tool filters without repeating behavioral captures.
+  `validate_prompt_stability.py`, invoked by `validate_pinned_api.py`, captures
+  the real translated LLM boundary and serializes each request immediately with
+  Onyx's reasoning-preserving serializer. Require both adjacent pairs in the
+  three-request main-chat search → Python artifact → normal answer capture,
+  plus orchestrator cycles 0/1 and nested search/next-investigation captures.
+  Compare semantic message prefixes, reasoning and paired results, ordered tool
+  definitions, and request options. Coding validation remains constants,
+  source/bindings, and existing helper tests, without a coding-loop harness.
+  For live validation, run one combined stock-chat research/page-read/citation/
+  artifact scenario on the target model, a focused artifact check on a distinct
+  smallest supported configured model when available, and default Deep Research
+  through nested research and report generation. Require every requested file
+  exactly once with its returned `response_markdown`, normal streaming and
+  final output, reasoning/results, citations, and no startup errors. Watch for
+  obvious cycle-use/finalizer regressions; repeat a suspected regression against
+  the unchanged baseline before attributing it to this patch. Report omitted
+  live checks and their actual blockers. Cache telemetry is optional evidence,
+  never an acceptance gate. The canonical scope and deliberate boundaries are
+  in [Investigation prompt stability](onyx_patch_info.md#investigation-prompt-stability).
 - **Reasoning and saved history:** re-audit the structured-message builder,
   chat reconstruction, LiteLLM serialization, all rebuilt agent loops, native
   detector signature/model-map fallback, saved response helper, and complete

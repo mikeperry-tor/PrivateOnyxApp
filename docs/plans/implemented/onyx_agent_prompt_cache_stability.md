@@ -1,6 +1,35 @@
 # Onyx Agent Investigation Prompt Cache Stability Plan
 
-**Status:** Accepted design; implementation pending
+**Status:** Implemented; deterministic and pinned-image gates passed. Live
+main-chat validation passed; live Deep Research remains blocked by model
+behavior reproduced against the unchanged baseline.
+
+**Canonical behavior:** [Investigation prompt stability](../../onyx_patch_info.md#investigation-prompt-stability)
+and [upgrade validation](../../onyx_patches_upgrade.md#runtime-patch-contract-audit).
+
+**Validation evidence (2026-09-09):**
+
+- `make check`: deterministic Python tests, compilation, help validation, and
+  whitespace validation pass.
+- `make test-patch-images CONTAINER_BIN=docker`: passes against the local pinned
+  images, including the three translated loop captures, final bindings, both
+  custom-prompt branches, and disabled-sharing bootstrap with a 37-cycle budget.
+- Full-stack stock chat with the configured GLM-5.3 Flash model: successful web
+  search, useful official-page retrieval, citations, Python-generated four-row
+  CSV, and normal streaming completion. The requested artifact is downloadable
+  and appears once with the exact persisted `response_markdown`; all three
+  tool results and their reasoning remain saved.
+- Live default Deep Research: the model returns no research-agent call at the
+  first orchestration request. The same request and model fail identically
+  against the unchanged tracked patch baseline in a temporary loopback-only
+  API process. Live nested research and report generation therefore remain
+  unverified; the deterministic installed-loop captures pass. No prompt-change
+  regression is established by this comparison.
+- A distinct smaller-model artifact check is inapplicable: GLM-5.3 Flash is the
+  only visible configured model. Provider cached-token telemetry was not
+  collected and is not an acceptance gate.
+- The temporary account and baseline process are removed; the full Docker
+  stack is returned to its initial stopped state.
 
 **Scope:** Narrow Onyx runtime patches for the common stock/default main-chat
 tool loop and the default-enabled Deep Research investigation path, plus one
@@ -358,6 +387,12 @@ Retain generated-file response requirements in:
 - stable `PYTHON_TOOL_GUIDANCE`, including its use for replacement prompts;
 - each generated-file result's exact `response_markdown`; and
 - streaming, persistence, and replay normalization.
+
+Both the replace-base checkbox and empty-default-base custom-prompt branches
+must receive the same capability-gated stable Python guidance. Reuse the
+existing Python-only helper at the empty-base construction site, preserving
+the custom text and citation/web policy without injecting general stock
+guidance. Cover both branches with and without Python available.
 
 Stop locally rewriting the upstream `FILE_REMINDER` constant once no main-chat
 branch applies it, and remove tests and documentation that claim the
