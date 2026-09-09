@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
@@ -484,6 +485,38 @@ async def validate_patched_search_runtime() -> None:
             assert exc.stage == "cdp-command", exc.stage
         else:
             raise AssertionError("prototype tampering bypassed search form policy")
+
+        # Execute the actual wrapper function in V8: absence is pending, but
+        # ambiguity and policy changes must never turn into readiness retries.
+        await navigate("/search-get-home")
+        assert (await form_call("ready", "fixture"))["value"] is True
+        await evaluate("globalThis.savedForm = document.querySelector('form'); savedForm.remove(); true")
+        assert (await form_call("ready", "fixture"))["value"] is False
+        await evaluate("setTimeout(() => document.body.appendChild(savedForm), 300); true")
+        deadline = time.monotonic() + 5
+        while not (await form_call("ready", "fixture"))["value"]:
+            assert time.monotonic() < deadline, "delayed form never became ready"
+            await asyncio.sleep(0.1)
+        assert await evaluate("document.querySelector('textarea').value") == ""
+        await evaluate("savedForm.appendChild(document.querySelector('textarea').cloneNode(true)); true")
+        try:
+            result = await form_call_result("ready", "fixture")
+        except ObscuraClientError as exc:
+            assert exc.category is FetchFailure.PROTOCOL
+        else:
+            assert "exceptionDetails" in result, "duplicate controls became ready"
+        await navigate("/search-get-home")
+        assert (await form_call("ready", "fixture"))["value"] is True
+        await form_call("instant", "fixture")
+        await evaluate("document.querySelector('form').action = 'https://unsafe.invalid/search'; true")
+        for operation in ("ready", "submit"):
+            try:
+                result = await form_call_result(operation, "fixture")
+            except ObscuraClientError as exc:
+                assert exc.category is FetchFailure.PROTOCOL
+            else:
+                assert "exceptionDetails" in result, "changed form policy was accepted"
+        assert await evaluate("location.pathname") == "/search-get-home"
 
         observations = []
         observations.append(await navigate("/search-get-home"))

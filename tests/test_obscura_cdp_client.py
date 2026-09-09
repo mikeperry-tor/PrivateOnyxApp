@@ -6,6 +6,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "browser" / "obscura_client"))
@@ -21,6 +22,7 @@ from private_onyx_obscura import fetch_sync  # noqa: E402
 from private_onyx_obscura import is_text_like_content_type  # noqa: E402
 from private_onyx_obscura import normalize_public_url  # noqa: E402
 from private_onyx_obscura import validate_wait_until  # noqa: E402
+from private_onyx_obscura.client import _enter_search_query
 from private_onyx_obscura.client import _RawCdp  # noqa: E402
 from private_onyx_obscura.client import _SEARCH_RESULT_STATE_FUNCTION  # noqa: E402
 from private_onyx_obscura.client import _can_preserve_html_dom_without_body  # noqa: E402
@@ -365,6 +367,63 @@ class ObscuraClientTests(unittest.TestCase):
             [call[0] for call in session.calls], ["Runtime.callFunctionOn"]
         )
 
+    def test_homepage_readiness_waits_without_repeating_entry_or_navigation(self):
+        async def exercise(values, *, html="<html>loading</html>"):
+            operations = []
+            clock = [0.0]
+
+            class Session:
+                async def send(self, method, params=None, **kwargs):
+                    if method == "Runtime.callFunctionOn":
+                        operation = params["arguments"][0]["value"]
+                        operations.append(operation)
+                        value = values.pop(0) if operation == "ready" else True
+                        return {"result": {"value": value}}
+                    if method == "DOM.getDocument":
+                        return {"root": {"nodeId": 1}}
+                    if method == "DOM.getOuterHTML":
+                        return {"outerHTML": html}
+                    raise AssertionError(method)
+
+            def remaining(stage, category):
+                if clock[0] >= 0.25:
+                    raise ObscuraClientError(category, stage, "deadline exceeded")
+                return 0.25 - clock[0]
+
+            async def sleep(delay):
+                clock[0] += delay
+
+            with patch("private_onyx_obscura.client.asyncio.sleep", sleep):
+                try:
+                    await _enter_search_query(
+                        Session(), spec=self._search_spec(), fixed_fields=(),
+                        query="fixture", text_entry_mode="instant",
+                        remaining=remaining, dom_limit=4096,
+                    )
+                except ObscuraClientError as exc:
+                    return operations, clock[0], exc
+            return operations, clock[0], None
+
+        operations, elapsed, error = asyncio.run(exercise([False, False, True]))
+        self.assertEqual(operations, ["ready", "ready", "ready", "instant"])
+        self.assertEqual(elapsed, 0.2)
+        self.assertIsNone(error)
+        operations, elapsed, error = asyncio.run(exercise([False] * 4))
+        self.assertEqual(elapsed, 0.25)
+        self.assertNotIn("instant", operations)
+        self.assertEqual(error.category, FetchFailure.POST_NAVIGATION_TIMEOUT)
+        self.assertEqual(error.stage, "homepage-form-readiness")
+        for malformed in (None, "true", 1, {}):
+            with self.subTest(malformed=malformed):
+                operations, elapsed, error = asyncio.run(exercise([malformed]))
+                self.assertEqual(operations, ["ready"])
+                self.assertEqual(error.category, FetchFailure.PROTOCOL)
+        operations, elapsed, error = asyncio.run(exercise(
+            [False], html="<html><body>One last step. Solve the challenge below to continue</body></html>"
+        ))
+        self.assertEqual(operations, ["ready"])
+        self.assertEqual(error.category, FetchFailure.CAPTCHA)
+
     def test_search_form_data_is_passed_as_protocol_arguments(self):
         self.assertNotIn("private query", _SEARCH_FORM_FUNCTION)
         source = (
@@ -587,7 +646,7 @@ class ObscuraClientTests(unittest.TestCase):
                         self.document_events(
                             loader, "https://search.example/search"
                         )
-                    return {"result": {"type": "boolean"}}
+                    return {"result": {"type": "boolean", "value": True}}
                 if method == "Input.dispatchKeyEvent":
                     return {}
                 if method == "Target.closeTarget":
@@ -1086,6 +1145,7 @@ class ObscuraClientTests(unittest.TestCase):
             <html><head><title>Animal reaction times</title>
             <script src="https://captcha.example/api.js">
             const provider = "recaptcha";
+            const challenge = "One last step. Solve the challenge below to continue";
             </script></head>
             <body><p>Cats can react faster than humans.</p>
             <iframe src="https://captcha.example/recaptcha/widget"></iframe>

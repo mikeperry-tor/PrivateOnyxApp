@@ -215,14 +215,26 @@ Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `networkidle2`) so
 JavaScript result payloads have time to hydrate after the page load event.
 Built-in `open_url` uses `OBSCURA_BROWSER_WAIT_UNTIL_WEB` (default
 `domcontentloaded`). Accepted values are the finite Obscura lifecycle values
-validated by the shared client. These are event conditions, not sleeps;
-Obscura also has a finite navigation deadline. Lowering the search wait to
+validated by the shared client. Network-idle settling looks for 500 ms with
+at most two active requests (`networkidle2`) or none (`networkidle0`), but
+returns after five seconds even if that condition is unmet. These lifecycle
+boundaries do not guarantee application DOM readiness. Lowering the search wait to
 `load` or `domcontentloaded` can capture DuckDuckGo No-AI's shell before its
 organic rows exist; `networkidle0` waits more strictly and can add substantial
 latency without proving that application JavaScript has committed its result
 DOM.
 
-A search interaction may therefore declare paired pending and terminal DOM
+Before query entry, the shared client polls the declared homepage query control
+every 100 ms while it is absent, within the existing absolute transaction
+deadline. Each pending observation also captures bounded DOM to detect a
+challenge. Exactly one present control must immediately pass the full form
+policy; duplicate, unusable, or unsafe controls fail rather than being retried.
+Entry and submission each revalidate the form atomically. The same readiness
+check applies to restored Anubis homepage forms. No navigation or submission
+is retried, and a missing form exhausts the deadline as a homepage-form-readiness
+timeout.
+
+A search interaction may also declare paired pending and terminal DOM
 selectors. After the initial bounded result-DOM capture, the shared client
 waits only when the pending selector exists and no terminal selector exists.
 It polls on the provider's existing event-loop task until a terminal selector
@@ -599,12 +611,10 @@ Bing currently serves both `input[type=search]` and `textarea` query controls,
 so its exact selector admits either while still requiring exactly one enabled,
 visible `q` control owned by the declared HTTPS `/search` GET form. Some Bing
 homepages reach the selected lifecycle boundary before their search form is
-present; the form can appear later in the same document. The current homepage
-path has no form-hydration wait, so a missing query control fails the atomic
-form check as `control-count` and becomes an unresponsive CDP protocol failure,
-not a CAPTCHA suspension. Homepages whose form is ready use the ordinary
-submission path. Missing forms are never replaced with a constructed result
-URL or same-engine retry.
+present; the form can appear later in the same document. The shared homepage
+readiness check waits for that control before entry, retaining strict form
+validation and challenge detection. Missing forms are never replaced with a
+constructed result URL or same-engine retry.
 
 Bing can also return a coherent but unrelated set of ordinary `b_algo` cards
 while leaving the requested query in the page title and search box. This has no

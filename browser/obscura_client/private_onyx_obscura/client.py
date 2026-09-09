@@ -549,6 +549,9 @@ def _challenge_details(
         )
     ):
         return FetchFailure.CAPTCHA, "challenge-title"
+    if ("one last step" in visible
+            and "solve the challenge below to continue" in visible):
+        return FetchFailure.CAPTCHA, "visible-human-verification"
     if any(
         marker in visible
         for marker in (
@@ -1485,6 +1488,7 @@ function(operation, selector, fieldName, fixedFields, query, expectedPolicy) {
   }
   function inspect() {
     const controls = Array.from(document.querySelectorAll(selector));
+    if (operation === "ready" && controls.length === 0) return null;
     if (controls.length !== 1) throw new Error("control-count");
     const control = controls[0];
     const tag = String(control.tagName || "").toLowerCase();
@@ -1560,6 +1564,7 @@ function(operation, selector, fieldName, fixedFields, query, expectedPolicy) {
     }
   }
   let state = inspect();
+  if (operation === "ready") return state !== null;
   if (operation === "validate") return true;
   applyFixed(state.form);
   if (operation === "instant") {
@@ -1739,7 +1744,7 @@ async def _search_form_call(
     query: str,
     remaining: Callable[[str, FetchFailure], float],
     stage: str,
-) -> None:
+) -> bool:
     result = await session.send(
         "Runtime.callFunctionOn",
         {
@@ -1776,6 +1781,12 @@ async def _search_form_call(
         raise ObscuraClientError(
             FetchFailure.PROTOCOL, stage, "search form operation failed"
         )
+    value = remote.get("value")
+    if type(value) is not bool:
+        raise ObscuraClientError(
+            FetchFailure.PROTOCOL, stage, "invalid search form readiness response"
+        )
+    return value
 
 
 async def _search_form_present(
@@ -1994,18 +2005,36 @@ async def _enter_search_query(
     query: str,
     text_entry_mode: TextEntryMode,
     remaining: Callable[[str, FetchFailure], float],
+    dom_limit: int,
     timing_random=None,
     timing_sleep=asyncio.sleep,
 ) -> None:
-    await _search_form_call(
+    # Only absence is pending. All present controls must pass the same strict
+    # policy used again by entry and submission; those operations are never retried.
+    while not await _search_form_call(
         session,
-        operation="validate",
+        operation="ready",
         spec=spec,
         fixed_fields=fixed_fields,
         query=query,
         remaining=remaining,
-        stage="form-validate",
-    )
+        stage="homepage-form-readiness",
+    ):
+        html = await _search_dom(
+            session,
+            dom_limit=dom_limit,
+            remaining=remaining,
+            stage_prefix="homepage-form-readiness",
+        )
+        challenge, _signal = _challenge_details(200, spec.homepage_url, html)
+        if challenge is not None:
+            raise ObscuraClientError(
+                challenge, "homepage-form-readiness",
+                "provider presented a challenge while waiting for its search form",
+            )
+        await asyncio.sleep(min(0.1, remaining(
+            "homepage-form-readiness", FetchFailure.POST_NAVIGATION_TIMEOUT
+        )))
     if text_entry_mode == "instant":
         await _search_form_call(
             session,
@@ -2518,6 +2547,7 @@ async def submit_search(
             query=query,
             text_entry_mode=text_entry_mode,
             remaining=remaining,
+            dom_limit=dom_limit,
             timing_random=_timing_random,
             timing_sleep=_timing_sleep,
         )
@@ -2881,12 +2911,6 @@ async def resume_anubis_pow(
             selector=pending.spec.query_selector,
             remaining=remaining,
         )
-        if pending.boundary == "homepage" and not has_form:
-            raise ObscuraClientError(
-                FetchFailure.PROTOCOL,
-                "anubis-homepage-restore",
-                "Anubis homepage continuation did not restore the declared form",
-            )
         submission_seconds = pending.submission_navigation_seconds
         should_submit = pending.boundary == "homepage" or (
             pending.boundary == "result"
@@ -2901,6 +2925,7 @@ async def resume_anubis_pow(
                 query=pending.query,
                 text_entry_mode=pending.text_entry_mode,
                 remaining=remaining,
+                dom_limit=pending.dom_limit,
             )
             (
                 final_url,

@@ -196,24 +196,9 @@ class _ContinuationCdp:
                 if operation == "submit":
                     self.current_has_form = False
                     self._document("restored", self.restored_url, self.restored_html)
-                return {
-                    "result": {
-                        "value": {
-                            "currentScheme": "https:",
-                            "currentHost": self.form_policy_host,
-                            "currentPort": "",
-                            "scheme": "https:",
-                            "host": "www.startpage.com",
-                            "port": "",
-                            "username": "",
-                            "password": "",
-                            "path": "/sp/search",
-                            "method": "post",
-                            "target": "",
-                            "enctype": "application/x-www-form-urlencoded",
-                        }
-                    }
-                }
+                return {"result": {"value": (
+                    self.current_has_form if operation == "ready" else True
+                )}}
             if "document.querySelector(selector) !== null" in declaration:
                 return {"result": {"value": self.current_has_form}}
             raise AssertionError((declaration, values))
@@ -301,7 +286,7 @@ class AnubisContinuationTests(unittest.TestCase):
 
         self.assertEqual(result.final_url, RESULT_URL)
         self.assertEqual(result.rendered_html, RESULT_HTML)
-        self.assertEqual(cdp.form_operations, ["validate", "instant", "submit"])
+        self.assertEqual(cdp.form_operations, ["ready", "instant", "submit"])
         self.assertEqual(cdp.form_operations.count("submit"), 1)
         self.assertIsNone(owner._pending_anubis)
         self.assertTrue(owner.generation_active)
@@ -317,6 +302,31 @@ class AnubisContinuationTests(unittest.TestCase):
             methods.index("Runtime.callFunctionOn", 6),
             methods.index("Page.removeScriptToEvaluateOnNewDocument"),
         )
+
+    def test_homepage_continuation_waits_for_delayed_form_before_one_post(self):
+        class DelayedFormCdp(_ContinuationCdp):
+            async def send(self, method, params=None, **kwargs):
+                if (method == "Runtime.callFunctionOn"
+                        and params.get("functionDeclaration") == _SEARCH_FORM_FUNCTION
+                        and params["arguments"][0]["value"] == "ready"
+                        and not self.current_has_form):
+                    self.form_operations.append("ready")
+                    self.current_has_form = True
+                    return {"result": {"value": False}}
+                return await super().send(method, params, **kwargs)
+
+        cdp = DelayedFormCdp(
+            pass_url=HOMEPAGE_URL, pass_html="<html>loading form</html>",
+            pass_has_form=False,
+        )
+        owner, websocket, solution = _owner(cdp, boundary="homepage")
+        result = asyncio.run(resume_anubis_pow(
+            "continuation-token", solution, session_owner=owner
+        ))
+        self.assertEqual(result.final_url, RESULT_URL)
+        self.assertEqual(cdp.form_operations, ["ready", "ready", "instant", "submit"])
+        self.assertEqual(websocket.closed, 0)
+        self.assertTrue(owner.generation_active)
 
     def test_result_challenge_accepts_direct_result_with_omitted_pass_event(self):
         cdp = _ContinuationCdp(pass_method=None)
