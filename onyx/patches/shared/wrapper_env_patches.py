@@ -1141,6 +1141,74 @@ def _prepare_deep_research_tool_calls(
     ]
 
 
+_DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS = {
+    """# Even for the reasoning tool, this should be plenty
+                    # The generation here should never be very long as it's just the tool calls.
+                    # This prevents timeouts where the model gets into an endless loop of null or bad tokens.
+                    max_tokens=1024,""": """# Use the normal provider output allowance, including native reasoning.
+                    max_tokens=None,""",
+    """# In case the model is tripped up by the long context and gets into an endless loop of
+                    # things like null tokens, we set a max token limit here. The call will likely not be valid
+                    # in these situations but it at least allows a chance of recovery. None of the tool calls should
+                    # be this long.
+                    max_tokens=1000,""": """# Use the normal provider output allowance, including native reasoning.
+                    max_tokens=None,""",
+}
+
+
+def _research_report_output_limits() -> tuple[tuple[ModuleType, str, str, int], ...]:
+    from onyx.deep_research import dr_loop
+    from onyx.tools.fake_tools import research_agent
+
+    return (
+        (research_agent, "generate_intermediate_report", "MAX_INTERMEDIATE_REPORT_LENGTH_TOKENS", 10000),
+        (dr_loop, "generate_final_report", "MAX_FINAL_REPORT_TOKENS", 20000),
+    )
+
+
+def _validate_research_report_output_limit(
+    module: ModuleType, function_name: str, constant_name: str, expected: int | None,
+) -> None:
+    function = getattr(module, function_name)
+    source = inspect.getsource(function)
+    if (
+        source.count(f"max_tokens={constant_name},") != 1
+        or constant_name not in function.__code__.co_names
+        or function.__globals__ is not module.__dict__
+        or getattr(module, constant_name) != expected
+    ):
+        raise RuntimeError(f"{function_name}: report output-limit source/binding drift")
+
+
+def apply_deep_research_output_limit_patch() -> None:
+    """Delegate investigation and report output allowances to the provider."""
+    from onyx.deep_research import dr_loop
+    from onyx.tools.fake_tools import research_agent
+
+    for module, name, replacement in (
+        (dr_loop, "run_deep_research_llm_loop", 0),
+        (research_agent, "run_research_agent_call", 1),
+    ):
+        old, new = list(_DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS.items())[replacement]
+        function = getattr(module, name)
+        source = getattr(function, "_wrapper_patched_source", None)
+        if source is None:
+            source = inspect.getsource(function)
+        if source.count(old) != 1:
+            raise RuntimeError(f"{name}: expected exactly one upstream output-limit block")
+        _patch_function_source(
+            module=module, function_name=name, replacements={old: new},
+            patch_name=f"{name} provider output allowance",
+        )
+
+    # Report functions already read module constants at call time; no source
+    # rebuild or imported-function rebinding is needed for these two limits.
+    for module, function_name, constant_name, upstream_limit in _research_report_output_limits():
+        _validate_research_report_output_limit(module, function_name, constant_name, upstream_limit)
+        setattr(module, constant_name, None)
+    print("sitecustomize: removed Deep Research report output caps", flush=True)
+
+
 def apply_deep_research_chat_agent_tools_patch() -> None:
     """Provide selected chat-Agent tools to nested Deep Research agents.
 
@@ -5114,4 +5182,6 @@ def validate_agent_prompt_stability_patches() -> None:
                 or function.__globals__.get(binding) != getattr(module, binding)
             ):
                 raise RuntimeError(f"{name}.{binding}: stale active function globals")
+    for module, function_name, constant_name, _ in _research_report_output_limits():
+        _validate_research_report_output_limit(module, function_name, constant_name, None)
     print("sitecustomize: validated investigation prompt stability", flush=True)

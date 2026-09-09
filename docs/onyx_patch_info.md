@@ -791,6 +791,51 @@ installation is also tested against the pinned Onyx image. Remove individual
 rewrites when upstream preserves selected tools, mixed batches, bounded
 concurrency, placement, and compatible automatic tool choice natively.
 
+### Reasoning output limits
+
+The wrapper removes the pinned Onyx orchestrator's 1,024-token and nested
+research agent's 1,000-token per-request output caps, along with the 10,000-token
+intermediate-report and 20,000-token final-report caps. All four calls pass
+`max_tokens=None`, using the normal provider-controlled output allowance as
+ordinary chat does. Provider/model output and context limits still apply;
+this does not promise unlimited generation. Native reasoning shares that
+allowance with tool arguments or report text. `ONYX_AGENT_LLM_MAX_TOKENS` remains an input
+context-window override, not an output-token budget.
+
+Exact-count source transforms remove the caps and their obsolete comments
+before prompt-stability installation and final source/binding validation.
+Report functions already read their module constants at call time, so the
+wrapper validates their original values and single consumer sites and sets
+those constants to `None`, without rebuilding the functions. Final bootstrap
+validation checks their active globals and uncapped bindings. The change applies
+with chat-tool sharing enabled or disabled, to both
+reasoning modes, and with custom prompts. Investigation cycle limits,
+timeouts, report streaming/citations, and no-tool completion behavior are
+unchanged. Remove this patch when upstream delegates these calls' output
+allowance to the provider natively.
+
+Installed-loop captures assert `max_tokens=None` at all four LLM boundaries,
+including report text, citation packets, final citation state, and unchanged
+report timeout arguments. The disabled-sharing bootstrap also exercises both
+report generators. Provider-limited output can still truncate; longer reports
+can increase generation time and consume more orchestration context.
+A controlled GLM-5.3-Flash comparison demonstrated the failure mechanism:
+the same orchestration request produced reasoning without tools and finished
+with `length` at 1,024 tokens, while an 8,192-token allowance produced three
+valid research calls using 2,900 completion tokens. This establishes the
+small-cap failure, not successful end-to-end nested research or a universally
+sufficient provider default.
+
+Inspect terminal finish reason and completion usage before attributing absent
+calls to tool parsing or transport. An empty terminal status/usage chunk is
+normal even after successful streamed reasoning or tool deltas. The audited
+Teep request path preserves the output limit; vLLM's output-length stop includes
+reasoning tokens. NEAR inference-proxy is not on the Tinfoil route. Its checked
+ordinary chat proxy forwards the requested limit, but reference source alone
+does not establish which inference-proxy or vLLM revision a remote provider
+deploys. A separate NearDirect TLS-attestation mismatch blocks inference before
+HTTP request transmission and cannot explain the completed Tinfoil response.
+
 ## Investigation prompt stability
 
 Ordinary stock/default main-chat tool cycles and default Deep Research

@@ -1373,14 +1373,19 @@ def _validate_midstream_continuation_state_persistence() -> None:
 
 
 if __name__ == "__main__":
-    from validate_prompt_stability import validate_prompt_stability, validate_constants
+    from validate_prompt_stability import validate_prompt_stability, validate_constants, validate_report_output_limits
     if sys.argv[1:] == ["--prompt-stability-disabled"]:
         from onyx.deep_research import dr_loop
         from onyx.tools.fake_tools import research_agent
         validate_constants()
+        validate_report_output_limits()
         assert "allowed_tools = [tool for tool in tools if tool.name in allowed_tool_names]" in dr_loop.run_deep_research_llm_loop._wrapper_patched_source
         assert "first_tool_type = tool_calls[0].tool_name" in research_agent.run_research_agent_call._wrapper_patched_source
         assert research_agent.MAX_RESEARCH_CYCLES == 37
+        for function in (dr_loop.run_deep_research_llm_loop, research_agent.run_research_agent_call):
+            source = function._wrapper_patched_source
+            assert "max_tokens=None," in source
+            assert "max_tokens=1024," not in source and "max_tokens=1000," not in source
         print("PINNED_DISABLED_SHARING_PROMPT_STABILITY_OK")
         sys.exit(0)
     import os

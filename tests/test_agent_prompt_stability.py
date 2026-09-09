@@ -18,6 +18,57 @@ def _foreign_decorator(function):
 
 
 class PromptStabilityContracts(unittest.TestCase):
+    def test_research_output_caps_require_exact_upstream_blocks(self):
+        wrapper = _load_wrapper()
+        modules = {}
+        for path in ["onyx.deep_research.dr_loop", "onyx.tools.fake_tools.research_agent"]:
+            parts = path.split('.')
+            for n in range(1, len(parts) + 1):
+                name = '.'.join(parts[:n])
+                modules.setdefault(name, ModuleType(name))
+                if n > 1:
+                    setattr(modules['.'.join(parts[:n-1])], parts[n-1], modules[name])
+        targets = [("onyx.deep_research.dr_loop", "run_deep_research_llm_loop"),
+                   ("onyx.tools.fake_tools.research_agent", "run_research_agent_call")]
+        blocks = list(wrapper._DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS)
+        for failed_target in range(2):
+            for count in (0, 2):
+                for index, (path, name) in enumerate(targets):
+                    def function():
+                        pass
+                    function._wrapper_patched_source = blocks[index] * (
+                        count if index == failed_target else 1)
+                    setattr(modules[path], name, function)
+                with patch.dict(sys.modules, modules), patch.object(wrapper, '_patch_function_source'):
+                    with self.assertRaisesRegex(RuntimeError, 'exactly one upstream output-limit block'):
+                        wrapper.apply_deep_research_output_limit_patch()
+
+    def test_report_limits_validate_source_and_active_globals(self):
+        wrapper = _load_wrapper()
+        module = ModuleType('report_limit_fixture')
+        module.LIMIT = 10000
+        source = 'def report():\n    return dict(max_tokens=LIMIT,)\n'
+        filename = '<report-limit-fixture>'
+        linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+        exec(compile(source, filename, 'exec'), module.__dict__)
+        validate = wrapper._validate_research_report_output_limit
+        validate(module, 'report', 'LIMIT', 10000)
+        module.LIMIT = None
+        validate(module, 'report', 'LIMIT', None)
+        self.assertIsNone(module.report()['max_tokens'])
+        with self.assertRaisesRegex(RuntimeError, 'source/binding drift'):
+            validate(module, 'report', 'LIMIT', 10000)
+        for count in (0, 2):
+            with patch.object(wrapper.inspect, 'getsource', return_value='max_tokens=LIMIT,' * count):
+                with self.assertRaisesRegex(RuntimeError, 'source/binding drift'):
+                    validate(module, 'report', 'LIMIT', None)
+        foreign = ModuleType('foreign_report_fixture')
+        foreign.LIMIT = None
+        exec(compile(source, filename, 'exec'), foreign.__dict__)
+        module.report = foreign.report
+        with self.assertRaisesRegex(RuntimeError, 'source/binding drift'):
+            validate(module, 'report', 'LIMIT', None)
+
     def test_decorated_rebuilds_retain_execution_globals(self):
         wrapper = _load_wrapper()
         module = ModuleType('decorated_loop_fixture')

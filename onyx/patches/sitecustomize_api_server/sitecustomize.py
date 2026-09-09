@@ -23,6 +23,7 @@ def _install() -> None:
     from wrapper_env_patches import apply_deep_research_chat_agent_tools_patch
     from wrapper_env_patches import apply_embedding_tokenizer_alias_patch
     from wrapper_env_patches import apply_internal_search_context_patches
+    from wrapper_env_patches import apply_deep_research_output_limit_patch
     from wrapper_env_patches import apply_llm_max_tokens_override_patch
     from wrapper_env_patches import apply_mcp_egress_proxy_patch
     from wrapper_env_patches import apply_midstream_inference_continuation_patch
@@ -71,6 +72,7 @@ def _install() -> None:
     apply_coding_agent_final_answer_fallback_patch()
     apply_preserve_tool_results_patch()
     apply_python_file_link_enforcement_patches()
+    apply_deep_research_output_limit_patch()
     apply_agent_prompt_stability_patches()
     apply_chat_file_id_validation_patch()
     apply_searxng_single_attempt_patch()

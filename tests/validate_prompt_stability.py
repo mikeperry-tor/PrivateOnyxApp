@@ -247,6 +247,7 @@ def validate_research():
         )
     assert len(model.requests) == 3
     assert_prefix(model.requests[1], model.requests[2])
+    assert all(r['max_tokens'] is None for r in model.requests[1:])
     assert FIRST_CYCLE_REMINDER not in rendered(model.requests[2]['prompt'])
     assert dr_loop.INTERNAL_SEARCH_RESEARCH_TASK_GUIDANCE not in rendered(model.requests[1]['prompt'])
 
@@ -268,9 +269,51 @@ def validate_research():
     assert result is not None, packets
     assert len(model.requests) == 2
     assert_prefix(*model.requests)
+    assert all(r['max_tokens'] is None for r in model.requests)
     assert OPEN_URL_REMINDER_RESEARCH_AGENT not in rendered(model.requests[1]['prompt'])
     assert 'snippets completely answer the query' in rendered(model.requests[0]['prompt'])
     assert 'open_urls' not in rendered(model.requests[0]['prompt'])
+
+
+def validate_report_output_limits():
+    from onyx.chat.citation_processor import DynamicCitationProcessor
+    from onyx.tools.fake_tools import research_agent
+    from onyx.deep_research import dr_loop
+
+    doc = SearchDoc(document_id='https://example.org/evidence', chunk_ind=0,
+                    semantic_identifier='Evidence', link='https://example.org/evidence',
+                    blurb='Evidence', source_type=DocumentSource.WEB, boost=1,
+                    hidden=False, metadata={}, match_highlights=[], is_internet=True)
+    for final in (False, True):
+        model = ScriptedLLM(['Evidence [1].'])
+        state, packets = ChatStateContainer(), []
+        emitter = SimpleNamespace(emit=packets.append)
+        if final:
+            assert dr_loop.MAX_FINAL_REPORT_TOKENS is None
+            dr_loop.generate_final_report(history=user_history(), research_plan='Evidence',
+                llm=model, token_counter=lambda s: len(s)//4, state_container=state,
+                emitter=emitter, turn_index=1, citation_mapping={1: doc}, user_identity=None)
+            assert 'Evidence' in state.get_answer_tokens()
+            assert state.get_citation_to_doc()[1].document_id == doc.document_id
+        else:
+            assert research_agent.MAX_INTERMEDIATE_REPORT_LENGTH_TOKENS is None
+            citations = DynamicCitationProcessor()
+            citations.update_citation_mapping({1: doc})
+            report = research_agent.generate_intermediate_report(research_topic='Evidence',
+                history=user_history(), llm=model, token_counter=lambda s: len(s)//4,
+                citation_processor=citations, user_identity=None, emitter=emitter,
+                placement=Placement(turn_index=1, tab_index=0))
+            deltas = [p.obj.content for p in packets if type(p.obj).__name__ == 'IntermediateReportDelta']
+            assert report == ''.join(deltas) and 'Evidence' in report
+            cited = next(p.obj for p in packets if type(p.obj).__name__ == 'IntermediateReportCitedDocs')
+            assert len(cited.cited_docs) == 1
+            assert type(packets[-1].obj).__name__ == 'SectionEnd'
+        assert len(model.requests) == 1
+        request = model.requests[0]
+        assert request['max_tokens'] is None
+        assert request['tools'] == []
+        assert request['timeout_override'] == research_agent.DR_REPORT_LLM_TIMEOUT_S
+    print('PINNED_REPORT_OUTPUT_ALLOWANCE_OK')
 
 
 def validate_constants():
@@ -295,4 +338,5 @@ def validate_prompt_stability():
     validate_constants()
     validate_main_chat()
     validate_research()
+    validate_report_output_limits()
     print('PINNED_TRANSLATED_PROMPT_STABILITY_OK')

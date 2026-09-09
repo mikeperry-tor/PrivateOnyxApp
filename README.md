@@ -36,6 +36,7 @@ In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several li
 - Stock Onyx removes query strings (`?`) and fragments (`#`) from web URLs, which prevents the agent from reading Hacker News `item?id=...` posts, YouTube `watch?v=...` video and comments, signed links, and all other query-addressed pages. This stack preserves complete URL through search, crawling, citations, and document matching.
 - The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
 - The "Deep Research" mode now also supports much longer research runs, and has been patched to execute all accepted tool calls when a research agent requests several different tools at once, rather than silently dropping some of them like stock Onyx does.
+- Stock Onyx places 1,024-token caps on Deep Research and research sub-agents, which often exhaust the budget on reasoning before any tool calls are produced. We remove these limits, as well as remove the limits on overall report length.
 - The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
 - Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
 - RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local files, making re-indexing substantially faster than stock Onyx.

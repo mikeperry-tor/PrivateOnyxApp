@@ -1182,7 +1182,21 @@ wrappers.
   every exact replacement once; all accepted mixed tool calls execute, control
   tools remain single-call-only, nested placements are unique, batch overflow
   executes nothing, worker concurrency remains bounded, and only the four
-  audited forced-tool call sites become automatic.
+  audited forced-tool call sites become automatic. Require exactly one output-
+  limit block in each investigation loop and validate its removal before final
+  prompt/source checks. Capture `max_tokens=None` for orchestration and nested
+  research, including the disabled-sharing bootstrap. Validate the intermediate
+  and final report constants against their pinned 10,000/20,000 defaults and
+  single call sites before setting them to `None`; final bootstrap must check
+  their active globals. Capture both real report generators with and without
+  chat-tool sharing, requiring `max_tokens=None`, unchanged timeout arguments,
+  streamed report text, intermediate citation/completion packets, and final
+  citation state. Preserve the input-only context override. Check provider output allowance
+  with native reasoning enabled. For
+  missing calls, distinguish `finish_reason="length"` at the output allowance
+  from normal no-tool completion, malformed tool arguments, and transport
+  failure; an empty terminal delta alone does not diagnose missing output.
+  See [Reasoning output limits](onyx_patch_info.md#reasoning-output-limits).
 - **Investigation prompt stability:** re-audit `run_llm_loop` citation setup,
   reminder selection, generated-file reminder-only parsing, and the stable
   reminder placement in `construct_message_history`. Require the same policy
