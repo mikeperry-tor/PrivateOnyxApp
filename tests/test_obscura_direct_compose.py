@@ -123,6 +123,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
                 "0001-stealth-native-post.patch",
                 "0002-target-fingerprint-seed.patch",
                 "0003-search-runtime-compatibility.patch",
+                "0004-explicit-navigation-realm.patch",
             ],
         )
         self.assertIn(

@@ -208,7 +208,7 @@ validation separately proves Playwright's public page-session attachment path.
 The Obscura image is built from the digest-verified archive for exact commit
 `a1e09de68c7617b8079fbb1661b0548c501971c1`, using a digest-pinned Rust/Debian
 builder and the upstream locked dependency graph. The build applies exactly
-three ordered patches with `git apply --check` before compiling both runtime
+four ordered patches with `git apply --check` before compiling both runtime
 binaries with the no-render `stealth` feature set:
 
 - `0001-stealth-native-post.patch` routes native form POST through the
@@ -230,17 +230,22 @@ binaries with the no-render `stealth` feature set:
   parser-discovered and dynamic `nomodule` scripts in the module-capable runtime.
   Native v0.2.2 `Response.body` supplies the readable stream used by provider
   hydration; the wrapper carries only its `pipeThrough()` regression test.
+- `0004-explicit-navigation-realm.patch` passes the receiver's bootstrap frame
+  ID into form GET/POST and every document/window/global `location` operation.
+  Native v0.2.2 instead infers the entered caller realm, which incorrectly
+  navigates the parent when it calls a child's location method or submits the
+  child's form. The patch preserves top-level submission and binds cross-realm
+  navigation to the receiver. Selected-image tests cover location setters,
+  `assign`, `replace`, `reload`, and child GET/POST submission from the parent.
 
-Native v0.2.2 realm handling routes top-level `requestSubmit()` and
-`location.replace()` to page navigation while child-frame navigation remains
-frame-scoped. Pending child-frame `location` navigation does not load a new
-child document; see [request handling](request_handling.md). The compatibility
-patch retains POST-body and location-replacement regression tests without
-replacing the native navigation ops.
+Pending child-frame navigation does not load a new child document; see
+[request handling](request_handling.md). Receiver ownership and child-document
+loading are separate contracts. The existing top-level POST-body and
+location-replacement regression tests remain in the compatibility patch.
 
 The v0.2.2 release supplies no-render stealth archives as well as render-enabled
 archives; its container image builds with rendering and without stealth.
-The wrapper still needs a source build for the three patches above. This stack
+The wrapper still needs a source build for the four patches above. This stack
 does not expose screenshot, screencast, or PDF-export features. Its derived
 binary omits rendering so browser searches and direct `open_url` do not add
 renderer-only image, font, layout, or capture work. The no-render feature set

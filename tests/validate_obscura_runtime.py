@@ -790,6 +790,68 @@ async def validate_mixed_retained_and_request_scoped_capacity() -> None:
         )
 
 
+async def validate_cross_realm_navigation_ownership() -> None:
+    # Calling a child-owned method from the parent must select the receiver's
+    # frame, not the entered caller realm. A fresh document for every case
+    # prevents a previous virtual URL from masking a missing navigation op.
+    cases = (
+        ("child.location = '/static'", "/static"),
+        ("child.document.location = '/static'", "/static"),
+        ("child.location.href = '/static'", "/static"),
+        ("child.location.assign('/static')", "/static"),
+        ("child.location.replace('/static')", "/static"),
+        ("child.document.location.replace('/static')", "/static"),
+        ("child.location.reload()", "/cross-realm-child"),
+        ("child.document.querySelector('form').requestSubmit()", "/static"),
+        ("child.document.querySelector('form').method = 'get'; "
+         "child.document.querySelector('form').requestSubmit()",
+         "/static?q=child+fixture"),
+    )
+    websocket = await connect(CDP_URL, proxy=None)
+    cdp = _RawCdp(websocket)
+    target_id = ""
+    try:
+        target_id, session_id = await create_target(cdp)
+        for expression, child_path in cases:
+            cdp.events.clear()
+            await cdp.send(
+                "Page.navigate",
+                {"url": f"{BASE_URL}/cross-realm-navigation", "waitUntil": "load"},
+                session_id=session_id,
+                timeout_seconds=15,
+            )
+            result = await cdp.send(
+                "Runtime.evaluate",
+                {"expression": "(() => { const child = "
+                 "document.querySelector('iframe').contentWindow; "
+                 + expression + "; return child.location.href; })()",
+                 "returnByValue": True},
+                session_id=session_id,
+                timeout_seconds=5,
+            )
+            assert "exceptionDetails" not in result, (expression, result)
+            assert result["result"].get("value") == BASE_URL + child_path, (
+                expression, result,
+            )
+            # The command reply can precede navigation processing. A subsequent
+            # frame-tree command observes any incorrectly queued parent move.
+            tree = await cdp.send(
+                "Page.getFrameTree", session_id=session_id, timeout_seconds=5,
+            )
+            assert tree["frameTree"]["frame"]["url"] == (
+                f"{BASE_URL}/cross-realm-navigation"
+            ), (expression, tree)
+            assert len(tree["frameTree"].get("childFrames", [])) == 1, tree
+    finally:
+        try:
+            if target_id:
+                await cdp.send(
+                    "Target.closeTarget", {"targetId": target_id}, timeout_seconds=5,
+                )
+        finally:
+            await websocket.close()
+
+
 def validate_navigation_contracts() -> None:
     static = fetch("/static")
     assert static.status == 200
@@ -893,6 +955,7 @@ def main() -> None:
     asyncio.run(validate_connection_limit())
     asyncio.run(validate_reusable_provider_session())
     asyncio.run(validate_mixed_retained_and_request_scoped_capacity())
+    asyncio.run(validate_cross_realm_navigation_ownership())
     validate_navigation_contracts()
     print("PINNED_OBSCURA_RUNTIME_CONTRACTS_OK")
 

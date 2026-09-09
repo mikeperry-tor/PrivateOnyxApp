@@ -160,9 +160,11 @@ stack. Re-audit this upstream split before depending on either override.
 
 The selected no-render runtime executes same-origin child-frame scripts and
 page/frame `postMessage`; the tagged-image gate exercises that path because
-provider hydration can depend on frame messaging. Child-frame `location`
-operations record navigation on that frame without moving the parent, but the
-native runtime does not consume the child's pending navigation to load a new
+provider hydration can depend on frame messaging. The explicit navigation-realm
+patch binds form submission and `location` operations to the receiver's frame,
+including when the parent calls a child's method or setter. Native caller-realm
+inference would move the parent instead. Child navigation records the request
+on that frame without moving the parent, but the native runtime does not consume the child's pending navigation to load a new
 document. The search contract requires main-frame forms and results. Its
 stealth transport also
 applies the upstream DNS SSRF resolver guard and redirect validation, including
@@ -596,9 +598,13 @@ instead of being reported as a parser crash.
 Bing currently serves both `input[type=search]` and `textarea` query controls,
 so its exact selector admits either while still requiring exactly one enabled,
 visible `q` control owned by the declared HTTPS `/search` GET form. Some Bing
-homepage variants omit the search form entirely after rendering; those remain
-visible parser/protocol failures and are never replaced with a constructed
-result URL or same-engine retry.
+homepages reach the selected lifecycle boundary before their search form is
+present; the form can appear later in the same document. The current homepage
+path has no form-hydration wait, so a missing query control fails the atomic
+form check as `control-count` and becomes an unresponsive CDP protocol failure,
+not a CAPTCHA suspension. Homepages whose form is ready use the ordinary
+submission path. Missing forms are never replaced with a constructed result
+URL or same-engine retry.
 
 Bing can also return a coherent but unrelated set of ordinary `b_algo` cards
 while leaving the requested query in the page title and search box. This has no
@@ -894,7 +900,7 @@ engine name, provider-local query sequence, and whether the retained browser
 session was reused.
 The wrapper-selected image retains the digest-pinned upstream runtime but
 builds the exact SHA-256-verified upstream source revision with the explicit
-`--no-default-features --features stealth` no-render feature set and the three
+`--no-default-features --features stealth` no-render feature set and the four
 strict wrapper patch-series entries, then
 copies only the resulting server binaries into that runtime. This is required
 for wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
@@ -905,7 +911,7 @@ export, so it does not compile the v0.2.2 raster renderer or incur its image,
 font, layout, and capture resource work. JavaScript, DOM, module, charset, and
 compressed-stealth-response improvements remain present in the no-render
 build.
-Native navigation-realm handling covers form GET/POST plus document,
+The explicit navigation-realm patch covers form GET/POST plus document,
 window, and global `location` assignment, `href`, `assign()`, `reload()`, and
 `replace()`. Startpage's Anubis proof-pass navigation depends on
 `location.replace()` and is part of the selected-image and live-provider gates.

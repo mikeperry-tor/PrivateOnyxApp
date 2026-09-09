@@ -470,10 +470,14 @@ Audit these current Obscura areas:
   every document/window/global `location` navigation entry point. Require a
   top-level `location.replace()` regression because the Startpage Anubis pass
   uses it.
-  Native v0.2.2 implements this contract; retain the focused request-submission,
-  location-navigation, and child-frame isolation tests without replacing its
-  navigation ops. Re-audit the native pending-child-navigation limitation
-  documented in [request handling](request_handling.md);
+  Keep `0004-explicit-navigation-realm.patch` until upstream binds navigation to
+  the receiver's frame rather than inferring the entered caller realm. Require
+  parent-to-child location setters, `assign`, `replace`, `reload`, and child
+  GET/POST form submission in the selected-image gate, with a subsequent CDP
+  barrier proving the parent did not navigate. Ordinary top-level and
+  child-to-self tests alone do not establish equivalence. Re-audit the separate
+  native pending-child-navigation limitation documented in
+  [request handling](request_handling.md);
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;

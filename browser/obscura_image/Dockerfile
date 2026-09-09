@@ -29,15 +29,17 @@ RUN set -eu; \
         --ref "${OBSCURA_SOURCE_REF}" \
         --sha256 "${OBSCURA_SOURCE_SHA256}" \
         --output-dir /build \
-    && test "$(cat /wrapper/patches/series)" = "$(printf '%s\n%s\n%s' \
+    && test "$(cat /wrapper/patches/series)" = "$(printf '%s\n%s\n%s\n%s' \
         0001-stealth-native-post.patch \
         0002-target-fingerprint-seed.patch \
-        0003-search-runtime-compatibility.patch)" \
+        0003-search-runtime-compatibility.patch \
+        0004-explicit-navigation-realm.patch)" \
     && test "$(find /wrapper/patches -maxdepth 1 -type f -name '*.patch' \
-        -exec basename {} \; | LC_ALL=C sort)" = "$(printf '%s\n%s\n%s' \
+        -exec basename {} \; | LC_ALL=C sort)" = "$(printf '%s\n%s\n%s\n%s' \
         0001-stealth-native-post.patch \
         0002-target-fingerprint-seed.patch \
-        0003-search-runtime-compatibility.patch)" \
+        0003-search-runtime-compatibility.patch \
+        0004-explicit-navigation-realm.patch)" \
     && while IFS= read -r patch; do \
         git -C /build apply --check "/wrapper/patches/${patch}"; \
         git -C /build apply "/wrapper/patches/${patch}"; \

@@ -163,6 +163,20 @@ class Handler(BaseHTTPRequestHandler):
                 content_type="text/html; charset=utf-8",
             )
             return
+        if path == "/cross-realm-navigation":
+            self._send(
+                b"<html><body><main id='parent-state'>parent document</main>"
+                b"<iframe src='/cross-realm-child'></iframe></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/cross-realm-child":
+            self._send(
+                b"<html><body><form action='/static' method='post'>"
+                b"<input name='q' value='child fixture'></form></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
         if path == "/frame-navigation":
             self._send(
                 b"<html><body><main id='frame-state'>pending</main>"

@@ -1,0 +1,79 @@
+diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
+--- a/crates/obscura-js/js/bootstrap.js
++++ b/crates/obscura-js/js/bootstrap.js
+@@ -4506,10 +4506,10 @@
+ 
+     const encoded = pairs.join('&');
+     if (method === 'POST') {
+-      Deno.core.ops.op_navigate(targetUrl, 'POST', encoded);
++      Deno.core.ops.op_navigate(targetUrl, 'POST', encoded, _realmFrameId);
+     } else {
+       const sep = targetUrl.includes('?') ? '&' : '?';
+-      Deno.core.ops.op_navigate(targetUrl + (encoded ? sep + encoded : ''), 'GET', '');
++      Deno.core.ops.op_navigate(targetUrl + (encoded ? sep + encoded : ''), 'GET', '', _realmFrameId);
+     }
+   }
+   reset() {
+@@ -5288,7 +5288,7 @@
+   }
+   get referrer() { return _domParse("document_referrer") ?? ""; }
+   get location() { return globalThis.location; }
+-  set location(url) { Deno.core.ops.op_navigate(_resolveUrl(String(url)), 'GET', ''); }
++  set location(url) { Deno.core.ops.op_navigate(_resolveUrl(String(url)), 'GET', '', _realmFrameId); }
+   get defaultView() { return globalThis; }
+   get nodeType() { return 9; }
+   get nodeName() { return "#document"; }
+@@ -6534,7 +6534,7 @@
+ }
+ globalThis.location = {
+   get href() { return __currentUrl(); },
+-  set href(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
++  set href(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
+   get origin() { try { return new URL(this.href).origin; } catch { return ""; } },
+   get protocol() { try { return new URL(this.href).protocol; } catch { return ""; } },
+   get host() { try { return new URL(this.href).host; } catch { return ""; } },
+@@ -6544,14 +6544,14 @@
+   get hash() { try { return new URL(this.href).hash; } catch { return ""; } },
+   get port() { try { return new URL(this.href).port; } catch { return ""; } },
+   toString() { return this.href; },
+-  assign(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
+-  reload() { var r = _resolveUrl(this.href); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
+-  replace(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
++  assign(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
++  reload() { var r = _resolveUrl(this.href); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
++  replace(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
+ };
+ const _locationObj = globalThis.location;
+ Object.defineProperty(globalThis, 'location', {
+   get() { return _locationObj; },
+-  set(url) { var r = _resolveUrl(String(url)); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
++  set(url) { var r = _resolveUrl(String(url)); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
+   configurable: false,
+   enumerable: true,
+ });
+diff --git a/crates/obscura-js/src/ops.rs b/crates/obscura-js/src/ops.rs
+--- a/crates/obscura-js/src/ops.rs
++++ b/crates/obscura-js/src/ops.rs
+@@ -3923,17 +3923,18 @@
+     jar.set_cookie_from_js(cookie_str, &url);
+ }
+ 
+-// A frame that navigates itself must not move the top document. Recording the
+-// navigation against the calling realm keeps it inside that frame.
++// Bind navigation to the receiver's realm, including when a parent calls a
++// child's location method or submits its form. The entered caller context can
++// belong to a different frame and must not select the navigation owner.
+ #[op2(fast)]
+ fn op_navigate(
+-    scope: &mut v8::HandleScope,
+     state: &OpState,
+     #[string] url: &str,
+     #[string] method: &str,
+     #[string] body: &str,
++    frame_id: u32,
+ ) {
+-    let gs = realm_state(scope, state);
++    let gs = frame_state(state, frame_id);
+     let mut gs = gs.borrow_mut();
+     gs.url = url.to_string();
+     gs.pending_navigation = Some((url.to_string(), method.to_string(), body.to_string()));

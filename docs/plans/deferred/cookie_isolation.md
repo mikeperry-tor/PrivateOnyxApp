@@ -21,7 +21,7 @@
 > attribute as host-only, and still does not use a complete Public Suffix List.
 > Re-importing an exported host-only cookie can therefore widen it to
 > subdomains, while an exact-origin domain cookie cannot be represented
-> faithfully. None of the three current wrapper patches changes that path.
+> faithfully. None of the four current wrapper patches changes that path.
 > Implementation may proceed only after the separately reviewed wrapper-owned
 > Obscura cookie patch makes the capability gate below pass.
 
@@ -109,7 +109,7 @@ specified below.
 
 | Component | Consulted version | Why it matters for this plan |
 | --- | --- | --- |
-| Obscura | Derived v0.2.2 image; `reference_repos/obscura` at `v0.2.2`; three wrapper patches | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, context-scoped cookie clearing, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. The current patches preserve stealth GET/POST cookie-jar identity, target fingerprint state, and search-runtime compatibility; native navigation uses upstream realm handling. The patches do not change cookie serialization or CDP transfer. |
+| Obscura | Derived v0.2.2 image; `reference_repos/obscura` at `v0.2.2`; four wrapper patches | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, context-scoped cookie clearing, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. The current patches preserve stealth GET/POST cookie-jar identity, target fingerprint state, and search-runtime compatibility; navigation ownership uses explicit receiver frame IDs. The patches do not change cookie serialization or CDP transfer. |
 | Onyx application | `ONYX_IMAGE_TAG=v4.6.7`; matching `reference_repos/onyx` checkout | Owns `open_url()` orchestration, the stock Requests-first/Playwright-fallback flow, the five-worker stock crawler, the 120-second tool deadline, and the runtime symbols wrapped by both Onyx patches. |
 | Onyx crawler libraries | Requests `2.33.0`, Playwright `1.58.0`, and `publicsuffix2` `2.20191221` in the Onyx `uv.lock` | Determine Requests cookie-jar metadata, Chromium context cookie conversion, and the parser available to runtime patches. The old parser package's implicit PSL data is not accepted as the shared current snapshot proposed here. |
 | Egress identity components | `MYST_IMAGE=local/private-onyx-myst:74d144d4261a-20260812` and `TOR_BASE_IMAGE=docker.io/dockurr/tor:0.4.9.11@sha256:446881b3366cbc2cc5cf8d13a76e3104f60824b7c15343d14defe903ded18f0d` | Myst reconnects and Tor circuit/exit changes can separate a retained cookie from the public IP that established it. Neither currently supplies an authoritative route-generation signal to the cookie store, so this plan deliberately relies on the fixed one-hour ceiling instead of heuristic route coupling. |
@@ -167,9 +167,10 @@ CDP imports as deletion; omits expired entries from export; and implements
 context-scoped `Storage.clearCookies`. These contracts require coverage but
 do not make the export/import representation lossless.
 
-Of the three selected wrapper patches, patch 0001 keeps native stealth GET and
+Of the four selected wrapper patches, patch 0001 keeps native stealth GET and
 POST on the same target cookie jar during one navigation. Patches 0002 and 0003
-own fingerprint stability and search-page runtime compatibility. None changes
+own fingerprint stability and search-page runtime compatibility; patch 0004
+binds navigation to the receiver's frame. None changes
 `CookieInfo`, `Network.getCookies`, `Network.setCookies`, or domain validation.
 
 This plan requires one narrow Obscura cookie-transfer patch that preserves an
@@ -186,10 +187,12 @@ the gate, the feature remains deferred.
 
 The selected source is `a1e09de68c7617b8079fbb1661b0548c501971c1`.
 Its CDP execution contexts belong to their sessions, evaluation handles survive
-tab switches, and target closure detaches the actual attached sessions. Native
-form submission and location navigation supply the top-level navigation
-contract used by the wrapper. These capabilities support reliable isolated
-attempts; they do not supply a lossless cookie transfer representation.
+tab switches, and target closure detaches the actual attached sessions. The
+explicit navigation-realm patch preserves receiver ownership for form
+submission and location operations, including cross-realm calls. The current
+navigation contract is documented in [Request handling](../../request_handling.md).
+These capabilities support reliable isolated attempts; they do not supply a
+lossless cookie transfer representation.
 
 JavaScript XHR/fetch binary-body handling and native `Response.body` concern
 page content, not cookie metadata. They cannot recover host-only or partition
@@ -203,7 +206,7 @@ The source audit establishes the blockers below. The selected-image upgrade
 gate covers isolated connections, native cookie continuity within a target,
 context-scoped clearing, target reuse, and form navigation. It does not prove
 lossless cross-connection cookie transfer or complete PSL enforcement. Those
-remain required implementation gates, not completed validation. The three
+remain required implementation gates, not completed validation. The four
 current wrapper patches contain no cookie-transfer fix. Official no-render
 stealth release archives do not remove the need for the source build or the
 proposed cookie patch.
