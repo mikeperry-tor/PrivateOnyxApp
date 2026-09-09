@@ -125,6 +125,8 @@ class ValidationMakefileTests(unittest.TestCase):
         )
         self.assertNotIn("def _install_wrapper_patches", PINNED_API_VALIDATOR)
         self.assertIn("PINNED_WEBUI_STREAMING_CONTRACT_OK", IMAGE_SCRIPT)
+        self.assertIn("tests/validate_pinned_webui_settings.js", IMAGE_SCRIPT)
+        self.assertIn('require("/validate-settings.js")', IMAGE_SCRIPT)
         self.assertIn("tests/webui_reconnect_harness.js", IMAGE_SCRIPT)
         self.assertIn("tests/validate_nginx_reconnect_image.py", IMAGE_SCRIPT)
         self.assertIn("NGINX_IMAGE ?= $(call env_value,NGINX_IMAGE)", MAKEFILE)

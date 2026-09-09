@@ -43,44 +43,6 @@ part of the isolated-process protocol: Onyx reserves child stdout for the
 pickled return value, so even a successful startup message on stdout corrupts
 PDF extraction and other isolated results.
 
-## Community Edition login settings compatibility
-
-Pinned Onyx v4.6.5 contains a Community Edition login regression introduced by
-upstream commit `a1a60b5cf07969dc4b3cb2b23be0d5d378bf042e`. Its
-`web/src/lib/settings/hooks.ts` change makes every `/auth/*` page request
-`/api/enterprise-settings` for pre-login branding even when paid Enterprise
-Edition support is disabled. The same hook returns the resulting `FetchError`,
-`web/src/lib/fetcher.ts` classifies the expected Community Edition 404 as an
-error, and `web/src/providers/SettingsProvider.tsx` renders the fatal settings
-page for every status other than 401 or 403. The source comment says the 404
-should settle on default branding, but the implementation does not discard it.
-
-The API bootstrap therefore installs one exact unauthenticated
-`GET /enterprise-settings` compatibility route in Community Edition. Nginx
-exposes it through the ordinary `/api/enterprise-settings` prefix. It returns
-only a fixed neutral branding object: no application name or custom content,
-all logo and branding switches disabled, and an empty navigation list. It does
-not read the database, file store, request, user, tenant, license, or
-environment and does not expose an Enterprise mutation or asset route.
-
-The patch is valid only while both paid-EE and license enforcement are disabled
-and the selected application factory is the Community Edition factory. It
-registers the route on Onyx's existing pre-login state router before
-`get_application()` includes that router, adds the exact GET path to the same
-`PUBLIC_ENDPOINT_SPECS` list consumed by `check_router_auth()`, and validates
-that inclusion still precedes the auth audit. Startup fails if Onyx already
-supplies the route, selects an EE application, changes the factory/audit shape,
-or pre-registers a public specification for that path.
-
-This patch exists only for the named WebUI regression. On every Onyx upgrade,
-inspect `web/src/lib/settings/hooks.ts`, `web/src/lib/fetcher.ts`,
-`web/src/providers/SettingsProvider.tsx`, the Community Edition router assembly
-in `backend/onyx/main.py`, and the Enterprise implementation in
-`backend/ee/onyx/main.py`. Remove the compatibility route when the Community
-Edition login no longer probes the EE endpoint or when an absent optional
-branding endpoint is handled as neutral state without reaching
-`SettingsProvider`'s fatal branch.
-
 ## Selectable built-in crawler
 
 `ONYX_AGENT_USE_OBSCURA_BROWSER` accepts exactly `true` or `false` and defaults
@@ -455,7 +417,10 @@ Pinned backend defaults make third-party requests independently of
 
 Release-note refreshes remain enabled by design. They fetch the Onyx
 documentation changelog through the fixed public Onyx egress route and cache
-the result. Local administrative usage/query analytics also remain available:
+refresh metadata. Lite mode sets native `DEFAULT_REDIS_PREFIX=public`: its
+PostgreSQL cache interprets this shared namespace as a schema, so it must use
+the existing single-tenant schema. Full mode uses Redis's shared namespace.
+Local administrative usage/query analytics also remain available:
 they are stored and rendered by this deployment and are not the optional
 PostHog, Sentry, or custom-script integrations described above. Operator-added
 connectors, MCP servers, inference providers, web-search providers, OAuth
@@ -967,7 +932,7 @@ The configured LLM context override validates both upstream token-limit lookup
 functions before making `GEN_AI_MAX_TOKENS` authoritative. The internal-search
 patch validates the complete formatter signature and result/content JSON
 construction before applying optional per-result and aggregate character caps.
-With empty or zero settings it is inert; positive settings cap only the
+With both settings empty or zero it is not installed; positive settings cap only the
 model-facing serialization after retrieval and section selection. The
 `open_url`/web-search patch validates the positional defaults it changes.
 
@@ -1061,7 +1026,7 @@ additional egress and credential boundaries, and its own resource lifecycle.
 Those requirements are not implemented by this wrapper. The resource
 consequences of keeping Craft absent are documented in
 `docs/resource_minimization.md`.
-The strict background bootstrap materializes seven connector-discovery
+The strict background bootstrap materializes eight connector-discovery
 schedules at five minutes, retains incognito generated-file cleanup at ten
 minutes, removes their one-minute templates, removes the three Craft cleanup
 schedules, and removes the queue/process/memory monitoring and version-

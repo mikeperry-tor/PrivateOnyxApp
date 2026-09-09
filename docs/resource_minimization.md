@@ -199,6 +199,11 @@ are not duplicate enforcement.
   expiry, corruption, or truncation remains a replay gap and falls back to the
   persisted recorded message. Incognito completion deletes its buffer instead
   of retaining it for the completed TTL.
+- Lite shared-cache metadata uses the native `DEFAULT_REDIS_PREFIX=public`
+  setting so PostgreSQL addresses the existing single-tenant schema. This
+  permits release-note refresh timestamps and ETags to be cached instead of
+  producing missing-table errors and repeated fetches. Full mode retains its
+  Redis namespace. The live cache checks exercise both tenant and shared keys.
 - The WebUI reconnect companion adds no idle timer or poller. Its dedicated
   recovery-status endpoint uses the stock read-chat permission and a narrow
   session lookup; an unavailable cache or an in-flight fence without a usable

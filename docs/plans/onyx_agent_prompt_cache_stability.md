@@ -25,8 +25,8 @@ evidence. These requirements apply to every implementation, documentation, and
 completion section without repetition. Implementation Design supplies the
 specific edits within those boundaries.
 
-**Upstream baseline:** The inspected source is Onyx v4.6.5 at commit
-`6306d7d1d408eb71179459c3873514cbbaa31203`, matching the committed
+**Upstream baseline:** The inspected source is Onyx v4.6.7 at commit
+`a64b87a456a4a7dfa573553ed9b2df8e7b6c9dd3`, matching the committed
 `ONYX_IMAGE_TAG`. Reconfirm the tag, checkout commit, and installed image
 source before implementing any exact-source runtime patch.
 

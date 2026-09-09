@@ -11,6 +11,8 @@ services:
       DISABLE_VECTOR_DB: "true"
       FILE_STORE_BACKEND: "postgres"
       CACHE_BACKEND: "postgres"
+      # Native shared-cache namespacing is a PostgreSQL schema in lite mode.
+      DEFAULT_REDIS_PREFIX: "public"
       AUTH_BACKEND: "postgres"
       USER_AUTH_SECRET: "${USER_AUTH_SECRET:?USER_AUTH_SECRET must be set}"
       WRAPPER_PATCH_STRICT: "true"

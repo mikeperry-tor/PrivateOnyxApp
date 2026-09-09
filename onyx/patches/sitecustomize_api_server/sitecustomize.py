@@ -40,9 +40,6 @@ def _install() -> None:
         install as install_open_url_failure_reporting,
     )
     from open_url_limit_patch import install as install_open_url_limit
-    from enterprise_settings_compat_patch import (
-        install as install_enterprise_settings_compat,
-    )
     from onyx_crawler_egress_patch import install as install_onyx_crawler
     from onyx_crawler_egress_patch import use_obscura_browser
     from url_identity_preservation_patch import (
@@ -74,7 +71,6 @@ def _install() -> None:
     apply_python_file_link_enforcement_patches()
     apply_chat_file_id_validation_patch()
     apply_searxng_single_attempt_patch()
-    install_enterprise_settings_compat()
     install_webui_reconnect_status()
     install_url_identity_preservation()
     install_open_url_failure_reporting()

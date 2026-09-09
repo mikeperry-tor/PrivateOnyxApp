@@ -218,6 +218,14 @@ it would add login-time bearer-authenticated requests to an OIDC userinfo URL
 or Microsoft Graph and retain the returned claims snapshot in Redis. This
 wrapper does not expose that feature as an operator option.
 
+Same-provider OAuth subject relinking is a native, default-off security
+setting controlled by a full administrator. When enabled, an eligible
+email-matched account can replace its stale link for that same provider;
+prior-email and cross-provider protections still apply. The setting is stored
+in the existing key-value store, introduces no schema migration or new outbound
+client, and does not enable IdP profile enrichment. Relink diagnostics contain
+user and provider subject identifiers and must be treated as private logs.
+
 Paid enterprise hooks are inactive because paid-EE and license enforcement are
 explicitly disabled. Their delivery path is not a supported route: it validates
 an HTTPS endpoint when the hook is configured, then uses a direct HTTP client
@@ -225,13 +233,11 @@ without connection-time DNS pinning. Enabling paid-EE therefore requires a new
 network adapter and SSRF/DNS-rebinding audit before query, ingestion, or
 document hooks can be supported.
 
-The API exposes one wrapper-owned unauthenticated compatibility read at exact
-`GET /api/enterprise-settings` so the pinned Community Edition WebUI can load
-its login page. The response is a fixed neutral branding object and performs
-no database, file-store, tenant, user, request-derived, or outbound work. No
-other Enterprise settings, logo, administration, hook, billing, or license
-route is enabled. The route participates in Onyx's normal public-route startup
-audit and is rejected at patch installation if either paid-EE mode is active.
+Community Edition registers no Enterprise settings, logo, administration,
+hook, billing, or license route. Its WebUI may probe
+`GET /api/enterprise-settings` before login; the native settings hook treats
+that endpoint's 404 as absent branding without retrying it. Core-settings
+errors and non-404 Enterprise failures remain visible.
 
 Environment-configured Braintrust and Langfuse tracing is also blank, but a
 full administrator can configure and enable tracing in the database. An
@@ -506,9 +512,9 @@ only disposable files/sessions, with cleanup in `finally`.
 - OpenAPI/docs remain unregistered, and tracing, provider, voice, Craft,
   mobile/SSO, and other expanded routes retain their intended authentication
   and feature gates.
-- Unauthenticated `GET /api/enterprise-settings` returns only the wrapper's
-  fixed neutral Community Edition branding schema; no sibling Enterprise route
-  is registered, and non-GET methods are rejected.
+- Unauthenticated `GET /api/enterprise-settings` returns 404, no Enterprise
+  sibling route is registered, and the stock WebUI hydrates the login page
+  with neutral branding while preserving genuine settings failures.
 - Docker executor children receive neither the engine socket nor an alternate
   route; the socket-bearing controller is absent from the Podman topology.
 - Exact Docker-host allow/deny tests cover the default, numeric, `all`, and

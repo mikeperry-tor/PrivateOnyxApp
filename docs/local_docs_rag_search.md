@@ -243,8 +243,8 @@ ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT=0
 ONYX_RAG_INTERNAL_SEARCH_MAX_TOTAL_CONTENT_CHARS=0
 ```
 
-Empty or `0` disables the corresponding cap; in that state the patch is
-installed but makes no change. A positive first value limits each result's
+Empty or `0` disables the corresponding cap; when both caps are disabled,
+the formatter patch is not installed. A positive first value limits each result's
 `content`, while a positive second value limits combined `content` across all
 results. Both apply after Onyx retrieval, section selection, context expansion,
 and merging, without limiting ingestion or retrieval itself.

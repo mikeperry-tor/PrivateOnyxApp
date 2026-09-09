@@ -7,7 +7,7 @@ import time
 import zlib
 from uuid import uuid4
 
-from onyx.cache.factory import get_cache_backend
+from onyx.cache.factory import get_cache_backend, get_shared_cache_backend
 from onyx.chat import stream_buffer
 
 
@@ -27,6 +27,17 @@ def main() -> None:
         "redis": "RedisCacheBackend",
     }[expected_backend]
     assert actual_backend == expected_type, (actual_backend, expected_type)
+
+    shared_cache = get_shared_cache_backend()
+    shared_key = f"wrapper-validation-shared-cache:{uuid4()}"
+    try:
+        shared_cache.set(shared_key, "shared metadata", ex=2)
+        assert shared_cache.get(shared_key) == b"shared metadata"
+        assert 0 < shared_cache.ttl(shared_key) <= 2
+        time.sleep(2.1)
+        assert shared_cache.get(shared_key) is None
+    finally:
+        shared_cache.delete(shared_key)
 
     session_id = uuid4()
     run_id = 91001

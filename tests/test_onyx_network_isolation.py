@@ -1279,6 +1279,11 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 environment = model["services"]["api_server"]["environment"]
                 for option_name, value in expected.items():
                     self.assertEqual(environment[option_name], value)
+                if model_name.endswith("lite"):
+                    self.assertEqual(environment["CACHE_BACKEND"], "postgres")
+                    self.assertEqual(environment["DEFAULT_REDIS_PREFIX"], "public")
+                else:
+                    self.assertNotIn("DEFAULT_REDIS_PREFIX", environment)
 
     def test_document_push_export_is_disabled_in_effective_models(self) -> None:
         for mode in ("lite", "full"):

@@ -623,18 +623,13 @@ their data retention and outbound transports are deliberately supported. An
 enterprise hook delivery client without connection-time DNS pinning requires a
 new adapter before it may be enabled.
 
-Re-audit the Community Edition login compatibility route introduced for the
-WebUI regression in upstream commit
-`a1a60b5cf07969dc4b3cb2b23be0d5d378bf042e`. Inspect
-`web/src/lib/settings/hooks.ts`, `web/src/lib/fetcher.ts`,
-`web/src/providers/SettingsProvider.tsx`, `backend/onyx/main.py`, and
-`backend/ee/onyx/main.py`. Remove the wrapper route if auth pages no longer
-probe `/api/enterprise-settings` in Community Edition or if the WebUI treats
-the optional endpoint's 404 as neutral branding. If it remains necessary,
-confirm the endpoint is exact GET-only, returns only the fixed neutral schema,
-is installed only with paid-EE and license enforcement disabled, remains in
-the normal `PUBLIC_ENDPOINT_SPECS` audit, and fails startup when upstream adds
-the route or changes application/router construction.
+Verify Community Edition login against `web/src/lib/settings/hooks.ts`,
+`web/src/lib/fetcher.ts`, `web/src/providers/SettingsProvider.tsx`, and both
+application factories. The CE API must not register `/enterprise-settings` or
+an Enterprise sibling route. The stock settings hook must treat only that
+optional endpoint's 404 as absent branding, suppress its retry, and preserve
+core-settings errors and non-404 Enterprise failures. Validate the exact
+shipped WebUI and real login through nginx.
 
 The stock crawler is the current reliability-oriented default. Every Obscura
 pin upgrade must repeat comparable parallel URL batches, recording blocked,
@@ -1267,12 +1262,9 @@ wrappers.
   phrase. Then exercise a real `run_python` tool call.
 - **Lite `open_url`, helper routes, embedding tokenizer/shim, privacy settings,
   and CSP:** retain their dedicated audits elsewhere in this checklist.
-- **Community Edition login settings compatibility:** validate the neutral
-  `GET /enterprise-settings` response through the pinned API application and
-  the external `/api/enterprise-settings` nginx path without authentication.
-  Confirm no other Enterprise route appears, then repeat the source/removal
-  audit for upstream commit
-  `a1a60b5cf07969dc4b3cb2b23be0d5d378bf042e` described in the Onyx API audit.
+- **Community Edition login:** require the native absent-route contract and
+  optional-branding 404 handling described in the Onyx API audit, plus real
+  login/hydration through nginx.
 
 For local-document, tokenizer, model-name compatibility, embedding shim,
 freshness, content-cap, and re-index avoidance changes, also complete the
@@ -1308,7 +1300,7 @@ the Onyx and SearXNG contracts remain required.
 Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
 background services unless the wrapper deliberately adds and documents a
 Craft backend. Re-audit the exact schedule names, tasks, and original cadences:
-seven discovery schedules must be rewritten to five minutes; incognito file
+eight discovery schedules must be rewritten to five minutes; incognito file
 cleanup must remain at ten minutes; the three Craft cleanup schedules and
 queue/process/memory monitoring plus version-telemetry schedules must be
 removed; conditional schedules must remain absent; and Beat reload must remain
@@ -1552,6 +1544,9 @@ Onyx upgrade, explicitly cover canonical CORS, disabled document push,
 LiteLLM's local cost map, API database/thread limits, API/background
 `LOG_TO_FILE=false`, the port-attempt limit, dual-homed API/background and
 data-network reachability, and positive aggregate internal-search cap behavior.
+Validate native shared-cache writes, reads, and expiry as well as chat buffers:
+lite PostgreSQL uses `DEFAULT_REDIS_PREFIX=public` to select its existing
+schema, while full mode retains the Redis shared namespace.
 
 For an Obscura-only pin change, update the tagged upstream image's
 multi-architecture manifest digest, release version, exact source revision,

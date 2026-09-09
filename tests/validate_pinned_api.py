@@ -106,7 +106,6 @@ def _validate_durable_stream_buffer_policy() -> None:
 
 def _validate_production_bootstrap() -> None:
     """Prove this process was patched by the same bootstrap as api_server."""
-    from enterprise_settings_compat_patch import REGRESSION_INTRODUCING_COMMIT
     import sitecustomize
 
     from onyx.prompts import tool_prompts
@@ -123,9 +122,6 @@ def _validate_production_bootstrap() -> None:
     from onyx.utils import url as url_utils
 
     assert sitecustomize.__file__ == "/api-patches/sitecustomize.py"
-    assert REGRESSION_INTRODUCING_COMMIT == (
-        "a1a60b5cf07969dc4b3cb2b23be0d5d378bf042e"
-    )
     assert sys.modules["sitecustomize"] is sitecustomize
     assert getattr(playwright_fetch, "_wrapper_helper_proxy_patched", False)
     assert mcp_ssrf.mcp_ssrf_httpx_client_factory.__module__ == (
@@ -140,8 +136,7 @@ def _validate_production_bootstrap() -> None:
     assert getattr(url_utils, "_wrapper_url_identity_preservation_patch", False)
     assert getattr(OpenURLTool, "_wrapper_failure_reporting_patch", False)
     assert getattr(OpenURLTool, "_wrapper_explicit_url_limit_patch", False)
-    assert getattr(state_router, "_wrapper_enterprise_settings_compat_patch", False)
-    assert ("/enterprise-settings", {"GET"}) in PUBLIC_ENDPOINT_SPECS
+    assert not any(path == "/enterprise-settings" for path, _ in PUBLIC_ENDPOINT_SPECS)
     assert getattr(chat_router, "_wrapper_webui_reconnect_status_patch", False)
 
     reconnect_routes = [
@@ -158,13 +153,7 @@ def _validate_production_bootstrap() -> None:
         for route in state_router.routes
         if getattr(route, "path", None) == "/enterprise-settings"
     ]
-    assert len(enterprise_routes) == 1
-    assert enterprise_routes[0].methods == {"GET"}
-    neutral_settings = enterprise_routes[0].endpoint()
-    assert neutral_settings["application_name"] is None
-    assert neutral_settings["use_custom_logo"] is False
-    assert neutral_settings["use_custom_logotype"] is False
-    assert neutral_settings["custom_nav_items"] == []
+    assert not enterprise_routes
 
     from onyx.main import get_application
 
@@ -174,8 +163,7 @@ def _validate_production_bootstrap() -> None:
         for route in application.routes
         if getattr(route, "path", None) == "/enterprise-settings"
     ]
-    assert len(application_routes) == 1
-    assert application_routes[0].methods == {"GET"}
+    assert not application_routes
     assert not any(
         getattr(route, "path", "").startswith("/admin/enterprise-settings")
         or getattr(route, "path", "").startswith("/enterprise-settings/")
@@ -314,6 +302,39 @@ def _validate_new_network_surface_contract() -> None:
     assert IDP_PROFILE_ENRICHMENT_ENABLED is False
     assert ENTERPRISE_EDITION_ENABLED is False
     assert _LICENSE_ENFORCEMENT_ENABLED is False
+
+    # The native admin-only relink window is opt-in and uses the existing KV
+    # store. Malformed stored values must not enable it or password lockdown.
+    from onyx.key_value_store.interface import KvKeyNotFoundError
+    from onyx.server.security import store as security_store
+    from onyx.server.security.models import SecuritySettingsOverrides
+
+    assert security_store._build_env_defaults().allow_same_provider_subject_relink is False
+    assert security_store.merge_with_env(
+        SecuritySettingsOverrides(allow_same_provider_subject_relink=True)
+    ).allow_same_provider_subject_relink is True
+    assert security_store.merge_with_env(
+        SecuritySettingsOverrides(allow_same_provider_subject_relink=None)
+    ).allow_same_provider_subject_relink is False
+    for key in security_store.KV_BACKED_OVERRIDE_KEYS.values():
+        for stored in (True, False, None, "true", "false", 0, 1, {}, []):
+            result = security_store._load_kv_bool_override(
+                SimpleNamespace(load=lambda _key: stored), key
+            )
+            assert result is (stored if isinstance(stored, bool) else None)
+
+        def missing(_key):
+            raise KvKeyNotFoundError(_key)
+
+        assert security_store._load_kv_bool_override(
+            SimpleNamespace(load=missing), key
+        ) is None
+
+    from onyx.indexing import document_push
+
+    assert document_push.DOCUMENT_PUSH_ENDPOINT_URL is None
+    assert document_push.DOCUMENT_PUSH_API_KEY is None
+    assert document_push.get_document_push_config() is None
 
     metadata = build_mcp_oauth_client_metadata().model_dump(mode="json")
     assert set(metadata) == {
@@ -886,7 +907,7 @@ def _validate_incognito_gateway_contract() -> None:
         ValueError("context length exceeded"), {"reasoning_effort", "temperature"}
     )
 
-    # Exercise the installed v4.6.5 completion method rather than relying on
+    # Exercise the installed completion method rather than relying on
     # source markers alone. Incognito policy fields must survive both provider
     # fallback attempts while reasoning and then temperature are removed.
     from onyx.llm.interfaces import ReasoningEffort

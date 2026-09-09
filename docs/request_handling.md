@@ -87,9 +87,8 @@ omits `open_url` in this state. The stock and direct-Obscura crawler patches
 are not invoked on either disabled-web path.
 
 Lite mode has no usable document index. While Web Search is enabled, its
-availability patch leaves the crawler sibling operational while the indexed
-sibling fails into an empty result; it does not restore ingestion, RAG, or
-indexed retrieval. When Web Search is explicitly excluded, Agent construction
+native crawl-only branch runs the configured crawler and skips indexed and
+link-based retrieval; it does not restore ingestion or RAG. When Web Search is explicitly excluded, Agent construction
 omits `open_url` rather than exposing a tool that could only return the
 disabled-web failure.
 
