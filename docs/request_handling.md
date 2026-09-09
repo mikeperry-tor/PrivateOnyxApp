@@ -123,7 +123,7 @@ implementation from `browser/obscura_client`. SearXNG connects on
 connect only through `obscura-cdp-gateway` on `onyx-obscura-control`. CDP is
 not published on the host or attached to an Onyx data/backend network.
 
-Obscura v0.2.1 gives every WebSocket connection its own browser context, HTTP
+Obscura v0.2.2 gives every WebSocket connection its own browser context, HTTP
 client, cookie jar, targets, headers, User-Agent state, OS thread, and V8
 isolates. Direct `open_url` uses one fresh connection and target per navigation.
 SearXNG instead gives each of its five providers one lazy connection and one
@@ -150,7 +150,7 @@ receive HTTP 503 instead of entering a server queue as a fail-closed guard
 against a changed worker/process model or another unexpected CDP caller; normal
 Onyx tool execution is expected to remain within the 15-slot composition.
 
-In the stealth-feature build, upstream v0.2.1 accepts
+In the stealth-feature build, upstream v0.2.2 accepts
 `Network.setExtraHTTPHeaders` and `Network.setUserAgentOverride` but applies
 them to the ordinary context HTTP client while navigation uses its separate
 wreq client, so those overrides do not reach the wire. The wrapper does not
@@ -160,8 +160,15 @@ stack. Re-audit this upstream split before depending on either override.
 
 The selected no-render runtime executes same-origin child-frame scripts and
 page/frame `postMessage`; the tagged-image gate exercises that path because
-provider hydration can depend on frame messaging. Its stealth transport also
-applies the upstream DNS SSRF resolver guard and redirect validation. These are
+provider hydration can depend on frame messaging. Child-frame `location`
+operations record navigation on that frame without moving the parent, but the
+native runtime does not consume the child's pending navigation to load a new
+document. The search contract requires main-frame forms and results. Its
+stealth transport also
+applies the upstream DNS SSRF resolver guard and redirect validation, including
+embedded-IPv4 IPv6, CGNAT, and special-purpose address denial. The
+`--allow-private-network` setting reaches both URL validation and the stealth
+DNS resolver; the production browser leaves it disabled. These are
 defense-in-depth beneath the stack's fixed final-hop destination policy; they
 do not authorize a direct route or weaken fail-closed bridge/proxy handling.
 
@@ -171,7 +178,10 @@ and cleanup directly. Obscura assigns distinct identifiers to explicit target
 attachments, and the tagged-image gate exercises Playwright 1.58's public
 `new_cdp_session(page)` path. The raw transport remains the smaller exact
 implementation of the wrapper's request contracts; it is not a workaround for
-session-identifier reuse. Direct `open_url` preserves the exact
+session-identifier reuse. The client drains and clears setup events before
+`Page.navigate`, so the initial `about:blank` stop event emitted by `Page.enable`
+cannot satisfy the requested navigation's completion barrier. Direct `open_url`
+preserves the exact
 one-`Page.navigate` contract; SearXNG uses the separate two-document
 transaction below.
 
@@ -391,7 +401,10 @@ otherwise apply. The wrapper makes `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB`
 authoritative for both the requests-fetched PDF/HTML byte checks and the UTF-8
 byte size of local Chromium's rendered HTML. `OBSCURA_BROWSER_WAIT_UNTIL_WEB`
 does not configure this mode. Wrapper character budgets and mixed-result
-failure reporting remain installed.
+failure reporting remain installed. Non-PDF responses use the stock HTML
+decoder/parser without the direct browser's MIME allowlist; an unsupported
+binary response can yield unreadable parsed text and still count as a
+successful stock scrape.
 
 The stock size checks occur after materialization: requests has already loaded
 the final response body, and Playwright has already constructed
@@ -682,7 +695,11 @@ standard `application/x-www-form-urlencoded` default; any explicit different
 encoding remains a policy failure.
 
 Instant query entry is the default. It uses the control prototype's native
-value setter followed by one bubbling `input` and `change` event.
+value setter followed by one bubbling `input` and `change` event. Obscura v0.2.2
+also supports native `Input.insertText` and Playwright label-based `fill()`.
+The wrapper retains its atomic instant-entry form validation and explicit
+change event; the CDP command alone neither enforces that policy nor emits
+that change event. Timed key events use upstream JSON-safe key/text handling.
 `SEARXNG_TIMED_TYPING_PROVIDERS` accepts exact provider names, `none`, or `all`
 and selects timed CDP key events without changing any navigation or submission
 path. Timed entry adds 45–135 ms after each code point except the last and can
@@ -877,18 +894,18 @@ engine name, provider-local query sequence, and whether the retained browser
 session was reused.
 The wrapper-selected image retains the digest-pinned upstream runtime but
 builds the exact SHA-256-verified upstream source revision with the explicit
-`--no-default-features --features stealth` no-render feature set and the four
+`--no-default-features --features stealth` no-render feature set and the three
 strict wrapper patch-series entries, then
 copies only the resulting server binaries into that runtime. This is required
 for wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
 fingerprint seed, stealth-native form POST, and focused provider JavaScript
-runtime-compatibility and explicit navigation-realm contracts. The stack
+runtime-compatibility contracts. The stack
 consumes DOM and response-body CDP surfaces, not screenshots, screencasts, or PDF
-export, so it does not compile the v0.2.1 raster renderer or incur its image,
+export, so it does not compile the v0.2.2 raster renderer or incur its image,
 font, layout, and capture resource work. JavaScript, DOM, module, charset, and
 compressed-stealth-response improvements remain present in the no-render
 build.
-The navigation-realm contract covers native form GET/POST plus document,
+Native navigation-realm handling covers form GET/POST plus document,
 window, and global `location` assignment, `href`, `assign()`, `reload()`, and
 `replace()`. Startpage's Anubis proof-pass navigation depends on
 `location.replace()` and is part of the selected-image and live-provider gates.

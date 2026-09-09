@@ -895,6 +895,77 @@ class ObscuraClientTests(unittest.TestCase):
         self.assertNotIn('"Network.setCookies"', source)
         self.assertIn('"Target.createTarget"', source)
 
+    def test_initial_blank_load_cannot_complete_requested_navigation(self):
+        from private_onyx_obscura import fetch, ObscuraSession
+
+        class WebSocket:
+            def __init__(self):
+                self.pending = []
+                self.navigations = 0
+
+            def event(self, method, params):
+                self.pending.append(json.dumps({"method": method, "params": params}))
+
+            async def send(self, message):
+                command = json.loads(message)
+                method = command["method"]
+                result = {}
+                if method == "Target.createTarget":
+                    self.event("Target.attachedToTarget", {
+                        "sessionId": "session", "targetInfo": {"targetId": "target"},
+                    })
+                    result = {"targetId": "target"}
+                elif method == "Page.enable":
+                    self.event("Page.frameNavigated", {
+                        "frame": {"id": "frame", "url": "about:blank"},
+                    })
+                    self.event("Page.frameStoppedLoading", {"frameId": "frame"})
+                elif method == "Page.getFrameTree":
+                    result = {"frameTree": {"frame": {"id": "frame"}}}
+                elif method == "Page.navigate":
+                    self.navigations += 1
+                    result = {"loaderId": "navigation"}
+                elif method == "DOM.getDocument":
+                    result = {"root": {"nodeId": 1}}
+                elif method == "DOM.getOuterHTML":
+                    result = {"outerHTML": "<html>requested document</html>"}
+                elif method == "Target.closeTarget":
+                    result = {"success": True}
+                self.pending.append(json.dumps({"id": command["id"], "result": result}))
+                if method == "Page.navigate":
+                    # The navigation reply precedes its completion events.
+                    self.event("Network.responseReceived", {
+                        "type": "Document", "frameId": "frame", "requestId": "request",
+                        "response": {"status": 200, "headers": {"content-type": "text/html"}},
+                    })
+                    self.event("Page.frameNavigated", {
+                        "frame": {"id": "frame", "url": "https://example.com/"},
+                    })
+                    self.event("Network.loadingFinished", {
+                        "requestId": "request", "encodedDataLength": 29,
+                    })
+                    self.event("Page.frameStoppedLoading", {"frameId": "frame"})
+
+            async def recv(self):
+                return self.pending.pop(0)
+
+            async def close(self):
+                pass
+
+        websocket = WebSocket()
+        owner = ObscuraSession()
+        owner.websocket = websocket
+        owner.cdp = _RawCdp(websocket)
+        owner.cdp_url = "ws://obscura.invalid/devtools/browser"
+        owner.max_size = 1 << 30
+        result = asyncio.run(fetch(
+            "https://example.com/", cdp_url=owner.cdp_url, wait_until="load",
+            allow_http=False, body_limit=1024, dom_limit=1024,
+            want="dom", session_owner=owner,
+        ))
+        self.assertEqual(result.rendered_html, "<html>requested document</html>")
+        self.assertEqual(websocket.navigations, 1)
+
     def test_reusable_session_is_explicit_and_disables_idle_pings(self):
         from private_onyx_obscura import fetch
         from private_onyx_obscura import ObscuraSession

@@ -279,13 +279,17 @@ are owned by [internal network security](internal_network_security.md#docker-gat
   One shared lazy SearXNG event-loop thread owns all five generations and their
   one idle-deadline callback per live provider session. This changes target
   lifetime, not the maximum target, connection, thread, or callback counts.
-- The derived Obscura v0.2.1 binary selects the upstream release variant's
+- The derived Obscura v0.2.2 binary selects the upstream release variant's
   explicit `--no-default-features --features stealth` no-render feature set.
   Search and direct `open_url` consume DOM and response-body CDP surfaces, so
   screenshot, screencast, PDF-export, raster layout, image/font capture, and
   renderer-only resource warmup remain absent. JavaScript, DOM, module,
   charset, compressed-response, and automation compatibility fixes remain
   available in that feature set.
+- The native v0.2.2 runtime clamps deeply nested timers, caps the fetched-URL
+  bookkeeping list at 16,384 entries, and cancels V8 watchdog threads when
+  their owner is dropped. These controls supplement request deadlines and
+  idle parking; they do not impose an aggregate browser memory bound.
 - Homepage-first search adds one provider main document and its subresources,
   one independently bounded homepage DOM serialization, form execution, and
   optional timed-entry delay/autocomplete traffic. Homepage DOM text is

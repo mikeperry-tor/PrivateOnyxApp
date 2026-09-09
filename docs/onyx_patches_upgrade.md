@@ -419,6 +419,8 @@ Audit these current Obscura areas:
   target creation/closure, per-WebSocket context ownership, connection-thread
   cleanup, and the atomic live-connection cap;
 - `Page.navigate` command-response/event ordering and lifecycle wait values;
+  discard the initial `Page.enable` about:blank lifecycle only after the setup
+  command barrier, so it cannot complete a later navigation wait;
 - Network request/response/loading events, redirect collapse, main-frame
   Document selection, JavaScript navigation, request-id/loader-id aliases,
   challenges, and terminal frame URL;
@@ -457,20 +459,21 @@ Audit these current Obscura areas:
 - writable shadowing of legacy Window named-element properties, the
   `PerformanceEntry`/`PerformanceResourceTiming`/`PerformanceNavigationTiming`
   constructor hierarchy, the `SVGAElement` constructor and SVG-anchor wrapper,
-  a readable `Response.body` stream that supports `pipeThrough()`, and
-  module-capable `nomodule` suppression for parser-discovered and dynamic
+  and module-capable `nomodule` suppression for parser-discovered and dynamic
   scripts. Remove
   `0003-search-runtime-compatibility.patch` only when the tagged upstream runtime
-  provides all five contracts and the focused
-  provider fixtures pass without it;
+  provides all four contracts and the focused
+  provider fixtures pass without it. Native v0.2.2 `Response.body` must continue
+  to pass the retained `pipeThrough()` regression without a wrapper implementation;
 - explicit main- versus child-frame ownership for script-triggered navigation,
   including a top-level `requestSubmit()` POST with its encoded form body and
   every document/window/global `location` navigation entry point. Require a
   top-level `location.replace()` regression because the Startpage Anubis pass
   uses it.
-  Remove `0004-explicit-navigation-realm.patch` only when upstream passes the
-  focused request-submission, location-navigation, and child-frame contracts
-  without inferring navigation state from the active V8 context;
+  Native v0.2.2 implements this contract; retain the focused request-submission,
+  location-navigation, and child-frame isolation tests without replacing its
+  navigation ops. Re-audit the native pending-child-navigation limitation
+  documented in [request handling](request_handling.md);
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;
@@ -558,9 +561,10 @@ passes:
 Playwright Python remains pinned to the version supplied by Onyx (1.58.0) for
 compatibility auditing and derived-image validation. The tagged-image gate
 must connect over CDP, create a page, open a public page CDP session, execute a
-command through it, detach, and close cleanly. The wrapper's raw transport may
-be removed only if a replacement preserves one-navigation behavior, event
-ordering, actual-body access, deadlines, redaction, and cleanup.
+command through it, and exercise native `Input.insertText`, label-based Playwright
+`fill()`, and escaped/non-ASCII timed key events before detaching and closing.
+The wrapper's raw transport may be removed only if a replacement preserves
+one-navigation behavior, event ordering, actual-body access, deadlines, redaction, and cleanup.
 
 ## Onyx API patch audit
 

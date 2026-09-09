@@ -147,6 +147,29 @@ async def validate_playwright_session_attachment() -> None:
                         {"expression": "6 * 7", "returnByValue": True},
                     )
                     assert result["result"]["value"] == 42
+                    await page.goto(f"{BASE_URL}/search-get-home", timeout=15000)
+                    query = "quotes '\" \\ café 🦉"
+                    control = page.get_by_label("Search query")
+                    await control.fill("replace me", timeout=5000)
+                    await control.fill(query, timeout=5000)
+                    assert await control.input_value() == query
+                    await session.send(
+                        "Runtime.evaluate",
+                        {"expression": "document.getElementById('query').select()"},
+                    )
+                    await session.send("Input.insertText", {"text": "native café 🦉"})
+                    assert await control.input_value() == "native café 🦉"
+                    await control.fill("", timeout=5000)
+                    for character in query:
+                        await session.send(
+                            "Input.dispatchKeyEvent",
+                            {"type": "keyDown", "key": character, "text": character},
+                        )
+                        await session.send(
+                            "Input.dispatchKeyEvent",
+                            {"type": "keyUp", "key": character},
+                        )
+                    assert await control.input_value() == query
                 finally:
                     await session.detach()
             finally:
@@ -783,6 +806,12 @@ def validate_navigation_contracts() -> None:
     post_message = fetch("/post-message", want="dom")
     assert "id=\"message-state\">frame-ready<" in (
         post_message.rendered_html or ""
+    )
+
+    child_navigation = fetch("/frame-navigation", want="dom")
+    assert child_navigation.final_url == f"{BASE_URL}/frame-navigation"
+    assert 'id="frame-state">child-navigation-scoped<' in (
+        child_navigation.rendered_html or ""
     )
 
     modern_javascript = fetch("/modern-javascript", want="dom")

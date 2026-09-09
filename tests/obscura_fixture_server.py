@@ -62,9 +62,10 @@ class Handler(BaseHTTPRequestHandler):
             "<html><body>"
             f"<main data-connection='{connection_id}'>homepage</main>"
             f"<form action='{result_path}' method='{method}'>"
-            "<textarea name='q'></textarea>"
+            "<label for='query'>Search query</label>"
+            "<textarea id='query' name='q'></textarea>"
             "<input type='hidden' name='lang' value='en'>"
-            "</form></body></html>"
+            "</form><iframe src='/static'></iframe></body></html>"
         ).encode()
         self._send(body, content_type="text/html; charset=utf-8")
 
@@ -159,6 +160,29 @@ class Handler(BaseHTTPRequestHandler):
                 b"event.data.fingerprint === fingerprint() ? "
                 b"'frame-ready' : 'fingerprint-mismatch';"
                 b"});</script></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/frame-navigation":
+            self._send(
+                b"<html><body><main id='frame-state'>pending</main>"
+                b"<script>addEventListener('message',event=>{"
+                b"if(event.origin===location.origin && event.data==='child-navigation-scoped')"
+                b"document.getElementById('frame-state').textContent=event.data;});</script>"
+                b"<iframe src='/frame-navigation-child'></iframe></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/frame-navigation-child":
+            self._send(
+                b"<html><body><script>location.replace('/frame-navigation-done');"
+                b"parent.postMessage('child-navigation-scoped',location.origin);</script></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/frame-navigation-done":
+            self._send(
+                b"<html><body><script>parent.postMessage('child-navigation-scoped',location.origin);</script></body></html>",
                 content_type="text/html; charset=utf-8",
             )
             return

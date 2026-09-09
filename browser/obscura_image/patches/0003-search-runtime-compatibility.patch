@@ -1,8 +1,8 @@
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index c9ffd8d910a020d744fa61bb4062e87c5ea866f0..d4daa4b740e3cd5d6f4b66dc8ead792d6996b128 100644
+index 7b50aaf0f8e0f756917a30fdc553d3fd3f0a76a2..5c51fa8f6320ee87452806b6d73a21e9ea5ad59f 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -1912,6 +1912,15 @@ impl Page {
+@@ -2313,6 +2313,15 @@ impl Page {
                                  }
                                  _ => continue,
                              };
@@ -18,7 +18,7 @@ index c9ffd8d910a020d744fa61bb4062e87c5ea866f0..d4daa4b740e3cd5d6f4b66dc8ead792d
 
                              let inline_code = if src.is_none() {
                                  dom.text_content(sid)
-@@ -5187,6 +5196,32 @@ mod tests {
+@@ -6301,6 +6310,32 @@ mod tests {
          page
      }
 
@@ -52,10 +52,10 @@ index c9ffd8d910a020d744fa61bb4062e87c5ea866f0..d4daa4b740e3cd5d6f4b66dc8ead792d
      async fn module_graph_and_evaluation_share_one_active_budget() {
          use std::io::{Read as _, Write as _};
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index faf922e1e552be9218238088880f87608c5ce166..d72dcace5bbf3dc6001628fe8d44046cc4f0ac85 100644
+index 0056cc16033d9ac588961a9d939af791fe99192e..b079e77181c1ab306bb606a25da5c7e25c43c8d1 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -1747,6 +1747,9 @@ function __prepareInsertedScript(script) {
+@@ -1887,6 +1887,9 @@ function __prepareInsertedScript(script) {
    const scriptType = (script.getAttribute('type') || '').trim().toLowerCase();
    const isModule = scriptType === 'module';
    const isImportMap = scriptType === 'importmap';
@@ -65,7 +65,7 @@ index faf922e1e552be9218238088880f87608c5ce166..d72dcace5bbf3dc6001628fe8d44046c
    if (isImportMap) {
      const src = script.getAttribute('src');
      let error = '';
-@@ -6050,6 +6053,7 @@ function _elementClassFor(nid) {
+@@ -6453,6 +6456,7 @@ function _elementClassFor(nid) {
        && _domParse("namespace_uri", nid) === "http://www.w3.org/2000/svg") {
      if (tag === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
      if (tag === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
@@ -73,7 +73,7 @@ index faf922e1e552be9218238088880f87608c5ce166..d72dcace5bbf3dc6001628fe8d44046c
      if (globalThis.SVGElement) return globalThis.SVGElement;
    }
    if (tag === "FORM" && globalThis.HTMLFormElement) return globalThis.HTMLFormElement;
-@@ -6068,6 +6072,7 @@ function _elementClassForKnownName(namespace, qualifiedName) {
+@@ -6471,6 +6475,7 @@ function _elementClassForKnownName(namespace, qualifiedName) {
    if (namespace === "http://www.w3.org/2000/svg") {
      if (localName === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
      if (localName === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
@@ -81,34 +81,7 @@ index faf922e1e552be9218238088880f87608c5ce166..d72dcace5bbf3dc6001628fe8d44046c
      if (globalThis.SVGElement) return globalThis.SVGElement;
    }
    if (namespace === "http://www.w3.org/1999/xhtml") {
-@@ -7211,6 +7216,7 @@ if (typeof Response === 'undefined') {
-   globalThis.Response = class Response {
-     constructor(body, init = {}) {
-       this._bodyBytes = _bodyToUint8Array(body); this.status = init.status || 200; this.statusText = init.statusText || '';
-+      this._bodyStream = null;
-       this.ok = this.status >= 200 && this.status < 300;
-       this.headers = new Headers(init.headers);
-       this.type = init.type || 'basic'; this.url = init.url || ''; this.redirected = !!init.redirected;
-@@ -7219,6 +7225,18 @@ if (typeof Response === 'undefined') {
-     async json() { return JSON.parse(await this.text()); }
-     async arrayBuffer() { return _arrayBufferFromBytes(this._bodyBytes); }
-     async blob() { return new Blob([this._bodyBytes]); }
-+    get body() {
-+      if (!this._bodyStream) {
-+        const bytes = this._bodyBytes.slice();
-+        this._bodyStream = new ReadableStream({
-+          start(controller) {
-+            if (bytes.length) controller.enqueue(bytes);
-+            controller.close();
-+          },
-+        });
-+      }
-+      return this._bodyStream;
-+    }
-     clone() { return new Response(this._bodyBytes, { status: this.status, statusText: this.statusText, headers: this.headers, type: this.type, url: this.url, redirected: this.redirected }); }
-     static error() { return new Response(null, { status: 0 }); }
-     static redirect(url, status) { return new Response(null, { status: status || 302, headers: { Location: url } }); }
-@@ -9977,6 +9995,33 @@ globalThis.XMLSerializer = class XMLSerializer {
+@@ -10581,6 +10586,33 @@ globalThis.XMLSerializer = class XMLSerializer {
      return "";
    }
  };
@@ -142,7 +115,7 @@ index faf922e1e552be9218238088880f87608c5ce166..d72dcace5bbf3dc6001628fe8d44046c
  globalThis.performance = globalThis.performance || {
    now: (function() {
      // Monotonically non-decreasing: return the wall-clock offset, but never a
-@@ -11093,11 +11138,13 @@ class SVGGraphicsElement extends SVGElement {}
+@@ -11697,11 +11729,13 @@ class SVGGraphicsElement extends SVGElement {}
  class SVGGeometryElement extends SVGGraphicsElement {}
  class SVGPathElement extends SVGGeometryElement {}
  class SVGSVGElement extends SVGGraphicsElement {}
@@ -156,7 +129,7 @@ index faf922e1e552be9218238088880f87608c5ce166..d72dcace5bbf3dc6001628fe8d44046c
  globalThis.CharacterData = CharacterData;
  globalThis.Text = Text;
  globalThis.Comment = Comment;
-@@ -11279,6 +11326,15 @@ function _ensureWindowNamedProperty(name) {
+@@ -11883,6 +11917,15 @@ function _ensureWindowNamedProperty(name) {
    try {
      Object.defineProperty(globalThis, name, {
        get() { return _windowNamedValue(name); },
@@ -173,10 +146,10 @@ index faf922e1e552be9218238088880f87608c5ce166..d72dcace5bbf3dc6001628fe8d44046c
        enumerable: true,
      });
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index d0c44a6ea5170472b0f6682f1c3033c1574a3297..f0b0e1adaf3ffd8e9726815b5231f3205ea947b4 100644
+index 6a668b15c002bf63d5093b3bbafc72c863edfe1a..e383a650fab7a95b35fa6d83dcf69c27ba31ce81 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -4891,6 +4891,71 @@ mod tests {
+@@ -5541,6 +5541,71 @@ mod tests {
          );
      }
 
@@ -248,7 +221,47 @@ index d0c44a6ea5170472b0f6682f1c3033c1574a3297..f0b0e1adaf3ffd8e9726815b5231f320
      #[test]
      fn window_named_access_tracks_dynamic_ids_and_fragment_parsing() {
          let mut rt = setup_runtime("<html><body><div id='host'></div></body></html>");
-@@ -14355,6 +14420,56 @@ mod tests {
+@@ -14279,6 +14344,39 @@ mod tests {
+         );
+     }
+
++    #[test]
++    fn private_onyx_request_submit_queues_top_level_post_navigation() {
++        let mut rt = setup_runtime(
++            r#"<html><body><form id="f" action="/submitted" method="post">
++                <input name="q" value="fixture">
++            </form></body></html>"#,
++        );
++        rt.evaluate("(document.getElementById('f').requestSubmit(), true)")
++            .unwrap();
++        assert_eq!(
++            rt.take_pending_navigation(),
++            Some((
++                "http://example.com/submitted".to_string(),
++                "POST".to_string(),
++                "q=fixture".to_string(),
++            )),
++        );
++    }
++
++    #[test]
++    fn private_onyx_location_replace_queues_top_level_navigation() {
++        let mut rt = setup_runtime("<html><body></body></html>");
++        rt.evaluate("(location.replace('/passed'), true)").unwrap();
++        assert_eq!(
++            rt.take_pending_navigation(),
++            Some((
++                "http://example.com/passed".to_string(),
++                "GET".to_string(),
++                "".to_string(),
++            )),
++        );
++    }
++
+     #[test]
+     fn test_location_navigation_coerces_url_objects() {
+         let mut rt = setup_runtime("<html><body></body></html>");
+@@ -16541,6 +16639,56 @@ mod tests {
          );
      }
 
@@ -305,7 +318,7 @@ index d0c44a6ea5170472b0f6682f1c3033c1574a3297..f0b0e1adaf3ffd8e9726815b5231f320
      #[tokio::test(flavor = "current_thread")]
      async fn dynamic_classic_scripts_are_async_by_default_but_honor_async_false_order() {
          let mut rt = setup_runtime("<html><head></head><body></body></html>");
-@@ -14437,6 +14552,26 @@ mod tests {
+@@ -16623,6 +16771,26 @@ mod tests {
          );
      }
 

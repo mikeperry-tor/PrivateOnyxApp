@@ -98,8 +98,8 @@ residual risks, and validation requirements.
 - Routing and component implementations:
   - `browser/obscura_client/` - shared direct-CDP client used by Onyx and
     SearXNG.
-  - `browser/obscura_image/` - verified multi-architecture wrapper that replaces
-    the upstream lean binaries with the matching official stealth release.
+  - `browser/obscura_image/` - verified source build with strict patches and a no-render
+    stealth feature set, installed into the pinned upstream runtime image.
   - `egress/` - shared final-hop policy-proxy implementation.
   - `searxng/` - derived image, custom direct-Obscura offline engines, and
     SearXNG overlay.

@@ -1178,6 +1178,10 @@ async def fetch(
             raise ObscuraClientError(
                 FetchFailure.FINALIZED, "pre-navigation", "request invocation is finalized"
             )
+        # Page.enable emits the initial about:blank lifecycle. Its stop event
+        # must not satisfy the requested navigation's completion barrier.
+        # The preceding frame-tree reply drains the ordered setup events.
+        cdp.events.clear()
         stage = "navigate"
         LOGGER.info(
             "obscura pre-navigation completed request_id=%s elapsed_seconds=%.3f",

@@ -1,8 +1,8 @@
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index e1aa4ae62762c354f46acb7db600e8017d22c713..d1bc82e94f7f716c7cffd249e1086ec4e68a64dc 100644
+index abc9819adf00a56fca0a9f378b2023c0452e45a7..1bd562720b4011d2e11d72c45082613950170a06 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -1384,6 +1384,23 @@ impl Page {
+@@ -1773,6 +1773,23 @@ impl Page {
              .fetch_with_callbacks(url, Some(&self.callbacks))
              .await
      }
@@ -26,7 +26,7 @@ index e1aa4ae62762c354f46acb7db600e8017d22c713..d1bc82e94f7f716c7cffd249e1086ec4
      fn init_js(&mut self) {
          // init_js is also the new-document path.  Only resume_js explicitly
          // takes these IDs out before entering here and restores them after the
-@@ -2758,10 +2775,8 @@ impl Page {
+@@ -3164,10 +3181,8 @@ impl Page {
                      break;
                  }
                  tracing::info!(
@@ -38,7 +38,7 @@ index e1aa4ae62762c354f46acb7db600e8017d22c713..d1bc82e94f7f716c7cffd249e1086ec4
                  );
                  document_referrer = self
                      .url
-@@ -2857,6 +2872,7 @@ impl Page {
+@@ -3263,6 +3278,7 @@ impl Page {
              return Ok(());
          }
 
@@ -46,7 +46,7 @@ index e1aa4ae62762c354f46acb7db600e8017d22c713..d1bc82e94f7f716c7cffd249e1086ec4
          let response = if url.scheme() == "data" {
              let content_type = url_str
                  .strip_prefix("data:")
-@@ -2877,9 +2893,10 @@ impl Page {
+@@ -3283,9 +3299,10 @@ impl Page {
                  redirected_from: Vec::new(),
              })
          } else if method == "POST" {
@@ -60,7 +60,7 @@ index e1aa4ae62762c354f46acb7db600e8017d22c713..d1bc82e94f7f716c7cffd249e1086ec4
          } else {
              self.do_fetch(&url).await
          }
-@@ -2893,8 +2910,8 @@ impl Page {
+@@ -3299,8 +3316,8 @@ impl Page {
          // corrupts them (issue #340). Text-like types stay as text.
          let main_is_binary = !is_text_like_content_type(response.content_type());
          self.record_network_event_with_body(
@@ -72,10 +72,10 @@ index e1aa4ae62762c354f46acb7db600e8017d22c713..d1bc82e94f7f716c7cffd249e1086ec4
              response.status,
              &response.headers,
 diff --git a/crates/obscura-cdp/src/server.rs b/crates/obscura-cdp/src/server.rs
-index 3b4b5f25f3d4ad8539ee45c5ec9bc6691eca3be9..e7bb8ec8c957aebee777fea5381e833f0909fe02 100644
+index d59176340e7217ded7723225e46712f9974d1d4f..8b17e01ed0bfd54800fe0846b923f2ad9e99a1a6 100644
 --- a/crates/obscura-cdp/src/server.rs
 +++ b/crates/obscura-cdp/src/server.rs
-@@ -1443,7 +1443,11 @@ async fn process_cdp_message(
+@@ -1560,7 +1560,11 @@ async fn process_cdp_message(
      }
 
      if let Some((nav_url, nav_method, nav_body)) = check_pending_navigation(ctx, &req.session_id) {
@@ -89,7 +89,7 @@ index 3b4b5f25f3d4ad8539ee45c5ec9bc6691eca3be9..e7bb8ec8c957aebee777fea5381e833f
              id: 0,
              method: "Page.navigate".to_string(),
 diff --git a/crates/obscura-cli/src/main.rs b/crates/obscura-cli/src/main.rs
-index 0e6a36c13fafbe6d658ca692f77790bd38eccdac..dec27ffe0458b4b3a0f11a028638c709c99b73db 100644
+index 94a24afbf2617b1e6d9f011fcb9f30764c6dd049..f7269c4fe3c66e57e5aa4166c96ce33ecaf8bc40 100644
 --- a/crates/obscura-cli/src/main.rs
 +++ b/crates/obscura-cli/src/main.rs
 @@ -389,9 +389,12 @@ async fn main() -> anyhow::Result<()> {
@@ -109,7 +109,7 @@ index 0e6a36c13fafbe6d658ca692f77790bd38eccdac..dec27ffe0458b4b3a0f11a028638c709
                  tracing::info!("Stealth mode enabled (tracker blocking)");
              }
 diff --git a/crates/obscura-net/src/wreq_client.rs b/crates/obscura-net/src/wreq_client.rs
-index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be315288f353 100644
+index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921e01fd3a8 100644
 --- a/crates/obscura-net/src/wreq_client.rs
 +++ b/crates/obscura-net/src/wreq_client.rs
 @@ -72,6 +72,19 @@ pub const STEALTH_UA_PLATFORM: &str = "Windows";
@@ -132,7 +132,7 @@ index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be31
  #[cfg(feature = "stealth")]
  fn wreq_response_header_value<'a>(
      headers: &'a wreq::header::HeaderMap,
-@@ -258,8 +271,32 @@ impl StealthHttpClient {
+@@ -265,8 +278,32 @@ impl StealthHttpClient {
          url: &Url,
          callbacks: Option<&CallbackRegistry>,
      ) -> Result<Response, ObscuraNetError> {
@@ -167,7 +167,7 @@ index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be31
      }
 
      pub async fn fetch_resource_with_callbacks(
-@@ -268,33 +305,41 @@ impl StealthHttpClient {
+@@ -275,33 +312,41 @@ impl StealthHttpClient {
          request: ResourceRequest,
          callbacks: Option<&CallbackRegistry>,
      ) -> Result<Response, ObscuraNetError> {
@@ -187,7 +187,7 @@ index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be31
          callbacks: Option<&CallbackRegistry>,
 -    ) -> Result<Response, ObscuraNetError> {
 +    ) -> Result<(Response, wreq::Method), ObscuraNetError> {
-         validate_url(url, false)?;
+         validate_url(url, self.allow_private_network)?;
          validate_request_mode(&request, url)?;
          if url.scheme() == "file" {
 -            return fetch_file_url(url, request.max_response_bytes).await;
@@ -215,16 +215,16 @@ index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be31
              }
          }
 
-@@ -304,7 +349,7 @@ impl StealthHttpClient {
-
-         for _ in 0..20 {
+@@ -313,7 +358,7 @@ impl StealthHttpClient {
+         // 21 requests, so the 20th hop is followed and only the 21st fails.
+         for _ in 0..=20 {
              validate_request_mode(&request, &current_url)?;
 -            let mut req = self.client.get(current_url.as_str());
 +            let mut req = self.client.request(method.clone(), current_url.as_str());
 
              req = req
                  .header("accept", request.accept())
-@@ -339,10 +384,19 @@ impl StealthHttpClient {
+@@ -348,10 +393,19 @@ impl StealthHttpClient {
              if cors_required(&request, &current_url) {
                  req = req.header("origin", &request_origin);
              }
@@ -245,7 +245,7 @@ index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be31
                  headers: self.extra_headers.read().await.clone(),
                  resource_type: request.resource_type,
              };
-@@ -401,6 +455,11 @@ impl StealthHttpClient {
+@@ -410,6 +464,11 @@ impl StealthHttpClient {
                          redirect_taints_origin(&request, &current_url, &next_url);
                      redirects.push(current_url.clone());
                      current_url = next_url;
@@ -257,7 +257,7 @@ index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be31
                      continue;
                  }
              }
-@@ -419,7 +478,7 @@ impl StealthHttpClient {
+@@ -428,7 +487,7 @@ impl StealthHttpClient {
              if let Some(callbacks) = callbacks {
                  callbacks.fire_response(&request_info, &response).await;
              }
@@ -266,7 +266,7 @@ index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be31
          }
 
          Err(ObscuraNetError::TooManyRedirects(url.to_string()))
-@@ -523,7 +582,10 @@ mod tests {
+@@ -532,7 +591,10 @@ mod tests {
      use tokio::io::{AsyncReadExt, AsyncWriteExt};
      use url::Url;
 
@@ -278,9 +278,9 @@ index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be31
      use crate::client::{ObscuraNetError, SsrfGuardResolver};
      use crate::cookies::CookieJar;
      use wreq::dns::{Name, Resolve};
-@@ -678,4 +740,35 @@ mod tests {
+@@ -707,4 +769,36 @@ mod tests {
+             .expect("loopback hostname must be reachable with the opt-in");
          assert_eq!(resp.status, 200);
-         assert_eq!(resp.text(), PLAIN_BODY, "gzip body must be decompressed");
      }
 +
 +    #[test]
@@ -312,5 +312,6 @@ index 3d4e83059fff868c947a38dc44e773fd11aa3dac..006132cb62d09da7de701eddb186be31
 +        let client = StealthHttpClient::new(jar.clone());
 +        assert!(Arc::ptr_eq(&client.cookie_jar, &jar));
 +        assert_eq!(client.active_requests(), 0);
++
 +    }
  }
