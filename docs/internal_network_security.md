@@ -271,10 +271,13 @@ or add a retention guarantee for OpenAI-compatible providers that ignore those
 controls. Treat incognito as a chat-persistence policy, not as a separate
 network-isolation boundary.
 
-Authenticated skill preview/import accepts GitHub repository syntax and fetches
-only fixed `api.github.com` and `codeload.github.com` authorities through the
-public route. Redirects receive the normal SSRF-safe validation, archive
-credentials are not forwarded, and archive member/count/size bounds apply.
+Coding-agent repository setup and authenticated skill preview/import accept
+GitHub repository syntax and construct requests to `api.github.com` and
+`codeload.github.com`. Their shared GitHub HTTP helper forces the public bridge
+with environment and netrc inheritance disabled. It performs no local DNS/SSRF
+preflight; initial requests and redirects are subject to the existing final-hop
+destination policy. Requests strips cross-host redirect authorization; archive
+fetches receive no API credentials, and upstream archive limits remain intact.
 Imported instructions and code subsequently inherit the existing code
 interpreter boundary; Craft remains disabled. The unauthenticated MCP OAuth
 client-metadata endpoint publishes only the canonical client identifier, name,

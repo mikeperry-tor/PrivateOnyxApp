@@ -13,6 +13,100 @@ from uuid import UUID
 import wrapper_env_patches as patches
 
 
+def _validate_github_egress() -> None:
+    import io
+    import os
+    from unittest.mock import patch
+
+    import requests
+    import github_egress_patch
+    from onyx.utils import github
+    from onyx.utils import url as onyx_url
+
+    assert github.ssrf_safe_get is github_egress_patch._public_get
+    assert onyx_url.ssrf_safe_get is not github.ssrf_safe_get
+    github_egress_patch.install()  # Idempotent with the real API bootstrap.
+    source = github.parse_github_source("octocat/Hello-World")
+    archive_url = "https://codeload.github.com/octocat/Hello-World/tar.gz/HEAD"
+    api_url = "https://api.github.com/repos/octocat/Hello-World/tarball/HEAD"
+    calls = []
+    replies = []
+
+    def send(adapter, request, **kwargs):
+        del adapter
+        assert kwargs["proxies"] == {
+            "http": github_egress_patch.PUBLIC_PROXY_URL,
+            "https": github_egress_patch.PUBLIC_PROXY_URL,
+        }
+        calls.append((request.url, request.headers.get("Authorization"), kwargs))
+        status, headers, body = replies.pop(0)
+        response = requests.Response()
+        response.status_code = status
+        response.headers.update(headers)
+        response.url = request.url
+        response.request = request
+        response.raw = io.BytesIO(body)
+        return response
+
+    with patch.dict(os.environ, {
+        "HTTPS_PROXY": "http://wrong:1234", "NO_PROXY": "*", "no_proxy": "*",
+    }), patch("socket.getaddrinfo", side_effect=AssertionError("local target DNS")), \
+            patch.object(requests.adapters.HTTPAdapter, "send", send):
+        # Exercise the real downloader, Requests redirect handling and streaming.
+        replies[:] = [(302, {"Location": "/archive"}, b""), (200, {}, b"archive")]
+        assert github.download_github_archive(
+            source, "HEAD", max_size_bytes=1024, timeout=(30, 300)
+        ) == b"archive"
+        assert [call[0] for call in calls] == [
+            archive_url, "https://codeload.github.com/archive",
+        ]
+        assert all(call[2]["timeout"] == (30, 300) for call in calls)
+
+        # Upstream private-repo flow sends the token only to the API, then
+        # follows its archive location with a separate unauthenticated request.
+        calls.clear()
+        replies[:] = [
+            (404, {}, b""),
+            (302, {"Location": "https://codeload.github.com/private-archive"}, b""),
+            (200, {}, b"private archive"),
+        ]
+        assert github.download_github_archive(
+            source, "HEAD", "Bearer fixture", max_size_bytes=1024
+        ) == b"private archive"
+        assert [(url, auth) for url, auth, _ in calls] == [
+            (archive_url, None), (api_url, "Bearer fixture"),
+            ("https://codeload.github.com/private-archive", None),
+        ]
+
+        calls.clear()
+        replies[:] = [
+            (302, {"Location": "https://codeload.github.com/redirect"}, b""),
+            (200, {}, b"ok"),
+        ]
+        with github._github_get(api_url, authorization="Bearer fixture") as response:
+            assert response.content == b"ok"
+        assert [call[1] for call in calls] == ["Bearer fixture", None]
+
+        replies[:] = [(200, {}, b"too large")]
+        try:
+            github.download_github_archive(source, "HEAD", max_size_bytes=1)
+        except Exception as exc:
+            from onyx.error_handling.exceptions import OnyxError
+            assert isinstance(exc, OnyxError) and "exceeds" in str(exc)
+        else:
+            raise AssertionError("GitHub archive size bound was lost")
+
+        replies[:] = [(302, {"Location": archive_url}, b"")] * 11
+        try:
+            github._github_get(archive_url)
+        except Exception as exc:
+            assert isinstance(exc.__cause__, requests.TooManyRedirects)
+        else:
+            raise AssertionError("GitHub redirect limit was lost")
+
+    print("PINNED_GITHUB_PUBLIC_EGRESS_OK")
+
+
 def _validate_durable_stream_buffer_policy() -> None:
     from onyx.chat import stream_buffer
     from onyx.configs.chat_configs import (
@@ -1406,6 +1500,7 @@ if __name__ == "__main__":
     validate_native_tools(background=False)
     _validate_native_ssrf_contract()
     _validate_new_network_surface_contract()
+    _validate_github_egress()
     _validate_python_tool_identity()
     _validate_python_tool_generated_id_identity()
     _validate_python_file_link_enforcement()

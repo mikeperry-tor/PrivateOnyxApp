@@ -43,6 +43,7 @@ def _install() -> None:
         install as install_open_url_failure_reporting,
     )
     from open_url_limit_patch import install as install_open_url_limit
+    from github_egress_patch import install as install_github_egress
     from onyx_crawler_egress_patch import install as install_onyx_crawler
     from onyx_crawler_egress_patch import use_obscura_browser
     from url_identity_preservation_patch import (
@@ -58,6 +59,7 @@ def _install() -> None:
     apply_configured_inference_proxy_patch()
     apply_mcp_egress_proxy_patch()
     apply_playwright_helper_proxy_patch()
+    install_github_egress()
     apply_internal_search_context_patches()
     apply_native_reasoning_detection_override_patch()
     apply_python_file_link_prompt_patches()

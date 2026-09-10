@@ -160,6 +160,25 @@ no-render build uses the upstream release variant's explicit
 re-audit those Cargo defaults and flag semantics and confirm that render-only
 capture remains unavailable.
 
+## GitHub repository downloads
+
+`sitecustomize_api_server/github_egress_patch.py` replaces only the HTTP helper
+imported by `onyx.utils.github`. Coding-agent repository setup and skill
+preview/import use ordinary Requests GETs through the fixed public bridge,
+without Onyx's local DNS/SSRF preflight. The pinned GitHub helper has no native
+setting to disable that preflight; Admin SSRF levels do not control it.
+
+The session disables environment and netrc inheritance and explicitly sets
+both HTTP and HTTPS proxies, so redirects and `NO_PROXY` cannot bypass public
+egress. Destination resolution and enforcement remain entirely with the
+existing final-hop policy. Requests follows at most ten redirects and strips
+authorization on cross-host redirects. Upstream GitHub parsing, private-repo
+API token handling, unauthenticated archive downloads, streaming byte bounds,
+timeouts, and error mapping remain intact. Proxy failures have no direct
+fallback. The patch validates the imported helper, caller signature/source,
+and redirect limit at startup; it does not change the shared SSRF validator or
+executor networking.
+
 ## Lite-mode `open_url` availability
 
 Onyx makes `OpenURLTool` available in both modes while Web Search is enabled.

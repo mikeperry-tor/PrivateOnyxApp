@@ -652,6 +652,20 @@ public redirect, private/loopback initial URL and redirect, NXDOMAIN, broken
 bridge, and remote-DNS upstream mode. SearXNG must remain direct Obscura under
 both preference values.
 
+Revalidate `github_egress_patch.py` against `onyx.utils.github._github_get` and
+its imported `ssrf_safe_get`. The API bootstrap must install it independently
+of crawler mode. Check for a native proxy-only GitHub transport that can
+replace this patch. Until then, the shared GitHub helper must make ordinary
+GETs through the fixed public bridge without local DNS/SSRF preflight or
+environment/netrc inheritance. Exercise real Requests redirects, cross-host
+authorization stripping, private-repository API-to-archive credential
+separation, streaming byte limits, retained timeouts, redirect limits, and
+proxy failures without direct fallback. Run `make check` and
+`make test-patch-images`, then a live public `octocat/Hello-World` coding-session
+setup on the selected route; public DNS in the API need not work. Verify the
+public final hop still denies internal destinations. Keep the shared Onyx
+SSRF validator and executor network contract unchanged.
+
 Exercise HTTP onion initial URLs and redirects in both crawler modes. The API
 capability must be present only in the native-Tor egress Compose model, the
 shared validator must accept any normalized host ending in `.onion` without
