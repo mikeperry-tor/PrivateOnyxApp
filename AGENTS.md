@@ -144,6 +144,9 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   change; do not invoke the Tor or OpenSearch image gates. It does not pull or
   build missing images or permit validation-container networking; use the
   reported build target first.
+- `make test-security-images` - validate the selected OS-refreshed Tailscale,
+  controller, and executor images offline, including both executor OpenSSL
+  copies and encrypted PDF handling. Podman validates Tailscale only.
 - `make test-tor-image` - validate the selected local Tor base/derived image
   contract, hardened runtime, Unix sockets, volume ownership, and authenticated
   control path. Use it only for Tor image, config, mount, ownership, health, or
@@ -151,8 +154,8 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
 - `make test-opensearch-image` - validate the pinned OpenSearch image in an
   isolated disposable environment. Use it only for the OpenSearch pin,
   configuration, audit policy, or image-validation workload.
-- `make test-all-images` - run `make test-patch-images`,
-  `make test-tor-image`, and `make test-opensearch-image`. Reserve it for
+- `make test-all-images` - run `make test-patch-images`, `make test-obscura-image`,
+  `make test-tor-image`, `make test-opensearch-image`, and `make test-security-images`. Reserve it for
   changes spanning multiple image families or broad release validation; do not
   use it for unrelated focused work.
 - `make check-upgrade` - run `make check` followed by
@@ -180,11 +183,13 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   deployment files for the selected ref and synchronize the generated local
   Onyx environment tags; it does not pull images.
 - `make upgrade-python-deps` - upgrade hashed Python lock files from the committed `requirements.in` inputs.
-- `make onyx-build`, `make executor-build`, `make searxng-build`,
+- `make onyx-build`, `make executor-build`, `make code-interpreter-build`,
+  `make tailscale-build`, `make searxng-build`,
   `make obscura-build`,
   `make myst-build`, and `make teep-build` - image builds. The Docker-only
   executor image is derived from its pinned upstream release plus the hashed
-  `executor/requirements.txt` lock.
+  `executor/requirements.txt` lock. Executor, controller, and Tailscale builds
+  refresh OS packages; publish refreshes by bumping `OS_SECURITY_UPDATE_REVISION`.
 
 ## Repository Rules
 

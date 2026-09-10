@@ -46,7 +46,7 @@ class EmbedservEnvironmentSyncTests(unittest.TestCase):
         )
         self.assertEqual(
             (ROOT / "executor/requirements.in").read_text(encoding="utf-8"),
-            "sympy==1.14.0\n",
+            "sympy==1.14.0\ncryptography==50.0.1\n",
         )
 
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

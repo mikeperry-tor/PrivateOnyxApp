@@ -735,6 +735,11 @@ inputs, refreshes an existing bundled MLX environment when its committed
 dependency/runtime fingerprint changes, reuses artifacts that already match,
 and recreates affected services.
 
+Published security refreshes also rebuild the affected executor,
+code-interpreter, and Tailscale images. Their OS packages are updated during
+the build; service startup does not install packages. Reload open browser tabs
+after upgrading to pick up WebUI changes.
+
 This works with either container engine selected by `CONTAINER_BIN`: Podman
 mode compares and prepares images using Podman's image store, and Docker mode
 compares and prepares images in Docker's image store.

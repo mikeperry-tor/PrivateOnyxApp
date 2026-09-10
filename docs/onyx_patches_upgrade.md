@@ -37,6 +37,43 @@ contains read-only audit checkouts when present.
 
 ## Upgrade procedure
 
+### OS security refreshes
+
+The executor, code-interpreter controller, and Tailscale receive build-time OS
+updates through `executor/Dockerfile`, `onyx/code-interpreter/Dockerfile`, and
+`tailscale/Dockerfile`. The two Debian code-interpreter images share
+`onyx/code-interpreter/upgrade-os.sh`; Tailscale updates Alpine packages directly.
+Pin the upstream images by digest and bump
+`OS_SECURITY_UPDATE_REVISION` in `stack.versions.env` for every published package
+refresh, including refreshes with unchanged upstream pins. The revision, base
+digest, and build inputs determine the local image tag. Explicit
+`make executor-build`, `make code-interpreter-build`, and `make tailscale-build`
+disable Docker/Podman layer-cache reuse; normal startup reuses matching images.
+Rebuilding a tag locally without a committed revision/input change does not
+deliver that refresh to other installations. Package versions resolve from the
+base image's configured repositories at build time, not a snapshot repository.
+
+Run `make check`, `make test-patch-images`, and `make test-security-images` for
+this focused refresh. The security image gate requires existing selected images
+and never pulls, builds, or enables networking. It checks the revision label,
+Debian OpenSSL package floor `3.5.7-1~deb13u2`, Alpine OpenSSL floor `3.5.8-r0`,
+Tailscale 1.102.3 and its static TLS binary, plus cryptography 50.0.1/OpenSSL 4.0.2,
+dependency consistency, AES round-tripping, and encrypted PDF extraction.
+Update those assertions deliberately with later pins/advisories. Inspect any
+other upgraded packages, including the controller's Docker CLI, and run the
+existing executor command/network contracts. Tailscale's Go TLS implementation
+is independent of Alpine OpenSSL; a package refresh does not update Go.
+
+Render Docker/Podman lite/full models with Tailscale both enabled and disabled.
+Require the derived controller on Docker, its omission on Podman, the selected
+derived Tailscale image, and unchanged routing/mounts/entrypoints. Run lite
+startup and the enabled ingress checks when credentials are available. Do not
+enable Funnel or read its private credentials merely to validate an image.
+Podman's security gate validates only Tailscale; the controller/executor remain
+Docker-only. `make test-all-images` includes the security gate.
+
+### General component upgrade
+
 1. Record the old/new image tags, source refs, Python versions, and moving-tag
    support-image versions.
 2. Read the upstream implementations named below. Do not infer compatibility
@@ -119,8 +156,10 @@ Transformers 5.13 upper bound is obsolete.
 For SearXNG, upgrade its exact WebSockets pin only after the direct Obscura
 client suite and a live restricted-route fetch pass. Upgrade its exact
 Playwright pin only with the pinned Onyx browser release and repeat the full
-browser compatibility matrix. For the executor, retain exact SymPy selection
-and run the executor image contract whenever that pin changes.
+browser compatibility matrix. For the executor, retain exact SymPy and
+cryptography selections. Cryptography wheels carry their own OpenSSL,
+independently of Debian's `libssl3t64`; verify both. Run the executor image
+contract whenever either pin changes.
 
 End-user upgrades retain the README contract:
 `make down-* && git pull && make up-*`. The derived SearXNG and executor image
@@ -1444,7 +1483,7 @@ OpenSearch, Redis, PostgreSQL, and other data images use
 [storage and indexing policy](resource_minimization.md#storage-and-indexing)
 plus the documented reachability boundary.
 
-Require an immutable Tailscale digest, exact Myst and Teep Git revisions in
+Require immutable Tailscale and code-interpreter upstream digests, exact Myst and Teep Git revisions in
 both image labels and build arguments, and the MinIO source revision associated
 with its release image. Run
 `make health-inventory`, inspect effective startup/steady intervals, and verify

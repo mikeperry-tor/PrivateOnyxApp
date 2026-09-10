@@ -46,7 +46,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
         self.assertEqual(fallback.group(1), self.value("TEEP_REF"))
 
     def test_mutable_support_tags_are_not_allowed(self) -> None:
-        for name in ("TAILSCALE_IMAGE", "TOR_BASE_IMAGE"):
+        for name in ("TAILSCALE_UPSTREAM_IMAGE", "CODE_INTERPRETER_UPSTREAM_IMAGE", "TOR_BASE_IMAGE"):
             image = self.value(name)
             self.assertRegex(image, r"@sha256:[0-9a-f]{64}$")
             self.assertNotIn(":latest", image)
@@ -91,7 +91,8 @@ class ImmutableComponentPinTests(unittest.TestCase):
             "PYTHON_SLIM_IMAGE",
             "PYTHON_ALPINE_IMAGE",
             "SOCAT_IMAGE",
-            "TAILSCALE_IMAGE",
+            "TAILSCALE_UPSTREAM_IMAGE",
+            "CODE_INTERPRETER_UPSTREAM_IMAGE",
             "MINIO_IMAGE",
         ):
             self.assertTrue(

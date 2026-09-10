@@ -84,6 +84,11 @@ The Makefile detects a Podman binary by its basename, exports
 `CONTAINER_BIN`, and appends the Podman overlays to the effective
 `COMPOSE_FILE`.
 
+Enabled Tailscale uses the same OS-refreshed Dockerfile and content-derived tag
+under both engines; image preparation builds in the selected engine's store.
+Podman startup and `make test-security-images` omit the Docker-only controller
+and executor. See [OS security refreshes](onyx_patches_upgrade.md#os-security-refreshes).
+
 For rootless Docker on native Linux, leave `CONTAINER_BIN=docker` and select the
 local rootless Docker context (or set its local `DOCKER_HOST`). Make classifies
 the selected daemon from Docker's security options, resolves its Unix socket

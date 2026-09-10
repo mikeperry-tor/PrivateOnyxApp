@@ -63,6 +63,10 @@ def validate_model(model: dict, *, engine: str, gateway: str) -> None:
 
 def make_model(mode: str, *, engine="docker", gateway="isolated", down=False, **settings):
     env = {**_wrapper_neutral_environment(), **SECRET_ENV}
+    # Let Make select the security-refreshed images; direct Compose fixtures
+    # use placeholder values because they do not run the image-selection code.
+    env.pop("CODE_INTERPRETER_IMAGE", None)
+    env.pop("TAILSCALE_IMAGE", None)
     variable = mode.upper() + ("_DOWN_FILES" if down else "_FILES")
     command = [
         "make", "--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "isolation-model-files",
@@ -158,8 +162,15 @@ class DockerGatewayIsolationTests(unittest.TestCase):
                 for feature in features:
                     with self.subTest(engine=engine, gateway=gateway, mode=mode, feature=feature):
                         model = make_model(mode, engine=engine, gateway=gateway, **feature)
+                        if "tailscale-funnel" in model["services"]:
+                            self.assertTrue(model["services"]["tailscale-funnel"]["image"].startswith(
+                                "local/private-onyx-tailscale:"
+                            ))
                         if engine == "docker":
                             controller = model["services"]["code-interpreter"]
+                            self.assertTrue(controller["image"].startswith(
+                                "local/private-onyx-code-interpreter:"
+                            ))
                             sockets = [v for v in controller["volumes"] if v["target"] == "/var/run/docker.sock"]
                             self.assertEqual(len(sockets), 1)
                             self.assertEqual(sockets[0]["source"], "/tmp/isolation-fixture.sock")

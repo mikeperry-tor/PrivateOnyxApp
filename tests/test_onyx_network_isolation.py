@@ -17,6 +17,8 @@ SECRET_ENV = {
     # Compose interpolation. Direct Compose-model tests supply an inert value.
     "SEARXNG_WRAPPER_IMAGE": "local/private-onyx-searxng:test-model",
     "PYTHON_EXECUTOR_IMAGE": "local/private-onyx-python-executor:test-model",
+    "CODE_INTERPRETER_IMAGE": "local/private-onyx-code-interpreter:test-model",
+    "TAILSCALE_IMAGE": "local/private-onyx-tailscale:test-model",
     "TOR_IMAGE": "local/private-onyx-tor:test-model",
     "OBSCURA_IMAGE": "local/private-onyx-obscura:test-model",
     "SEARXNG_SECRET": "test",

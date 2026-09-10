@@ -54,10 +54,22 @@ ifeq ($(strip $(TEEP_IMAGE)),)
 TEEP_IMAGE := docker.io/13rac1/teep:$(TEEP_REF)
 endif
 TEEP_IMAGE := $(TEEP_IMAGE)
-TAILSCALE_IMAGE ?= $(call env_value,TAILSCALE_IMAGE)
-ifeq ($(strip $(TAILSCALE_IMAGE)),)
-$(error TAILSCALE_IMAGE is not set in $(VERSION_FILE))
+OS_SECURITY_UPDATE_REVISION ?= $(call env_value,OS_SECURITY_UPDATE_REVISION)
+ifeq ($(strip $(OS_SECURITY_UPDATE_REVISION)),)
+$(error OS_SECURITY_UPDATE_REVISION is not set in $(VERSION_FILE))
 endif
+# Both committed refresh revision and build inputs determine the selected tag.
+os_image_hash = $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(); [h.update(v.encode()+b"\0") for v in sys.argv[1:3]]; [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[3:]]; print(h.hexdigest()[:12])' '$(1)' '$(OS_SECURITY_UPDATE_REVISION)' $(2))
+TAILSCALE_UPSTREAM_IMAGE ?= $(call env_value,TAILSCALE_UPSTREAM_IMAGE)
+ifeq ($(strip $(TAILSCALE_UPSTREAM_IMAGE)),)
+$(error TAILSCALE_UPSTREAM_IMAGE is not set in $(VERSION_FILE))
+endif
+TAILSCALE_SOURCE_HASH := $(call os_image_hash,$(TAILSCALE_UPSTREAM_IMAGE),tailscale/Dockerfile)
+ifeq ($(strip $(TAILSCALE_SOURCE_HASH)),)
+$(error could not compute Tailscale security image hash)
+endif
+TAILSCALE_IMAGE ?= local/private-onyx-tailscale:$(TAILSCALE_SOURCE_HASH)
+export TAILSCALE_IMAGE
 PYTHON_SLIM_IMAGE ?= $(call env_value,PYTHON_SLIM_IMAGE)
 PYTHON_ALPINE_IMAGE ?= $(call env_value,PYTHON_ALPINE_IMAGE)
 OBSCURA_RELEASE_VERSION ?= $(call env_value,OBSCURA_RELEASE_VERSION)
@@ -448,7 +460,16 @@ ifeq ($(strip $(CODE_INTERPRETER_IMAGE_TAG)),)
 $(error CODE_INTERPRETER_IMAGE_TAG is not set. Add CODE_INTERPRETER_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass CODE_INTERPRETER_IMAGE_TAG=... on the make command line)
 endif
 CODE_INTERPRETER_IMAGE_TAG := $(CODE_INTERPRETER_IMAGE_TAG)
-CODE_INTERPRETER_IMAGE ?= docker.io/onyxdotapp/code-interpreter:$(CODE_INTERPRETER_IMAGE_TAG)
+CODE_INTERPRETER_UPSTREAM_IMAGE ?= $(call env_value,CODE_INTERPRETER_UPSTREAM_IMAGE)
+ifeq ($(strip $(CODE_INTERPRETER_UPSTREAM_IMAGE)),)
+$(error CODE_INTERPRETER_UPSTREAM_IMAGE is not set in $(VERSION_FILE))
+endif
+CODE_INTERPRETER_SOURCE_HASH := $(call os_image_hash,$(CODE_INTERPRETER_UPSTREAM_IMAGE),onyx/code-interpreter/Dockerfile onyx/code-interpreter/upgrade-os.sh)
+ifeq ($(strip $(CODE_INTERPRETER_SOURCE_HASH)),)
+$(error could not compute code-interpreter security image hash)
+endif
+CODE_INTERPRETER_IMAGE ?= local/private-onyx-code-interpreter:$(CODE_INTERPRETER_IMAGE_TAG)-$(CODE_INTERPRETER_SOURCE_HASH)
+export CODE_INTERPRETER_IMAGE
 export CODE_INTERPRETER_IMAGE_TAG
 PYTHON_EXECUTOR_IMAGE_TAG ?= $(call env_value,PYTHON_EXECUTOR_IMAGE_TAG)
 ifeq ($(strip $(PYTHON_EXECUTOR_IMAGE_TAG)),)
@@ -468,8 +489,9 @@ $(error PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY is not set. Add it to $(VERSION
 endif
 PYTHON_EXECUTOR_WRAPPER_BUILD_INPUTS := \
 	$(PYTHON_EXECUTOR_DOCKERFILE) \
-	$(PYTHON_EXECUTOR_REQUIREMENTS)
-PYTHON_EXECUTOR_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(sys.argv[1].encode()+b"\0"); [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[2:]]; print(h.hexdigest()[:12])' '$(PYTHON_EXECUTOR_UPSTREAM_IMAGE)' $(PYTHON_EXECUTOR_WRAPPER_BUILD_INPUTS))
+	$(PYTHON_EXECUTOR_REQUIREMENTS) \
+	onyx/code-interpreter/upgrade-os.sh
+PYTHON_EXECUTOR_WRAPPER_SOURCE_HASH := $(call os_image_hash,$(PYTHON_EXECUTOR_UPSTREAM_IMAGE),$(PYTHON_EXECUTOR_WRAPPER_BUILD_INPUTS))
 ifeq ($(strip $(PYTHON_EXECUTOR_WRAPPER_SOURCE_HASH)),)
 $(error could not compute the Python executor wrapper source hash)
 endif
@@ -480,8 +502,8 @@ ifeq ($(PODMAN_SELECTED),true)
 ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
 CODE_INTERPRETER_EXECUTOR_TARGETS :=
 else
-ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE) $(CODE_INTERPRETER_IMAGE)
-CODE_INTERPRETER_EXECUTOR_TARGETS := executor-image-ready
+ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
+CODE_INTERPRETER_EXECUTOR_TARGETS := code-interpreter-image-ready executor-image-ready
 endif
 ONYX_INSTALL_SCRIPT ?= ./install.sh
 ONYX_INSTALL_WRAPPER ?= ./install-with-container-bin.sh
@@ -563,7 +585,7 @@ FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-stop-if-started
 endif
 endif
 
-.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-chat-stream-cache-lite integration-chat-stream-cache-full integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine release-myst-data-ownership prepare-lite-host-data prepare-full-host-data prepare-onyx-tokenizer up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-sync-environment embedserv-sync-if-installed embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded
+.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-chat-stream-cache-lite integration-chat-stream-cache-full integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine release-myst-data-ownership prepare-lite-host-data prepare-full-host-data prepare-onyx-tokenizer up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-sync-environment embedserv-sync-if-installed embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded tailscale-build code-interpreter-build code-interpreter-image-ready test-security-images
 
 .NOTPARALLEL: up-lite up-full
 
@@ -758,11 +780,18 @@ test-opensearch-image:
 		--memlock "$(OPENSEARCH_VALIDATION_MEMLOCK)" \
 		--expected-version "$(OPENSEARCH_EXPECTED_VERSION)"
 
+test-security-images:
+	@python3 tests/validate_security_images.py \
+		--container-bin "$(CONTAINER_BIN)" --tailscale "$(TAILSCALE_IMAGE)" \
+		--controller "$(CODE_INTERPRETER_IMAGE)" --executor "$(PYTHON_EXECUTOR_IMAGE)" \
+		--revision "$(OS_SECURITY_UPDATE_REVISION)"
+
 test-all-images:
 	@$(MAKE) --no-print-directory test-patch-images
 	@$(MAKE) --no-print-directory test-obscura-image
 	@$(MAKE) --no-print-directory test-tor-image
 	@$(MAKE) --no-print-directory test-opensearch-image
+	@$(MAKE) --no-print-directory test-security-images
 
 integration-chat-stream-cache-lite:
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) exec -T api_server \
@@ -802,7 +831,7 @@ check-upgrade:
 	@$(MAKE) --no-print-directory check
 	@$(MAKE) --no-print-directory test-all-images
 
-upgrade: upgrade-python-deps myst-build teep-build searxng-build executor-build tor-build tailscale-image-ready obscura-image-ready upgrade-onyx
+upgrade: upgrade-python-deps myst-build teep-build searxng-build executor-build code-interpreter-build tor-build tailscale-build obscura-image-ready upgrade-onyx
 	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."
 
 upgrade-python-deps:
@@ -815,9 +844,36 @@ upgrade-python-deps:
 	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(SEARXNG_PYTHON_VERSION)" --python-platform linux --upgrade --generate-hashes "$(SEARXNG_REQUIREMENTS_IN)" -o "$(SEARXNG_REQUIREMENTS)"; \
 	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(PYTHON_EXECUTOR_PYTHON_VERSION)" --python-platform linux --upgrade --generate-hashes "$(PYTHON_EXECUTOR_REQUIREMENTS_IN)" -o "$(PYTHON_EXECUTOR_REQUIREMENTS)"
 
-tailscale-image-ready:
-	@echo "Pulling Tailscale image: $(TAILSCALE_IMAGE)"; \
-	"$(CONTAINER_BIN)" pull "$(TAILSCALE_IMAGE)"
+tailscale-image-ready: SECURITY_IMAGE=$(TAILSCALE_IMAGE)
+tailscale-image-ready: SECURITY_BUILD_TARGET=tailscale-build
+code-interpreter-image-ready: SECURITY_IMAGE=$(CODE_INTERPRETER_IMAGE)
+code-interpreter-image-ready: SECURITY_BUILD_TARGET=code-interpreter-build
+tailscale-image-ready code-interpreter-image-ready:
+	@if "$(CONTAINER_BIN)" image inspect "$(SECURITY_IMAGE)" >/dev/null 2>&1; then \
+		echo "Security image already present: $(SECURITY_IMAGE)"; \
+	else \
+		$(MAKE) $(SECURITY_BUILD_TARGET); \
+	fi
+
+tailscale-build: SECURITY_DOCKERFILE=tailscale/Dockerfile
+tailscale-build: SECURITY_IMAGE=$(TAILSCALE_IMAGE)
+tailscale-build: SECURITY_UPSTREAM_IMAGE=$(TAILSCALE_UPSTREAM_IMAGE)
+code-interpreter-build: SECURITY_DOCKERFILE=onyx/code-interpreter/Dockerfile
+code-interpreter-build: SECURITY_IMAGE=$(CODE_INTERPRETER_IMAGE)
+code-interpreter-build: SECURITY_UPSTREAM_IMAGE=$(CODE_INTERPRETER_UPSTREAM_IMAGE)
+tailscale-build code-interpreter-build:
+	@set -eu; set --; \
+	[ -z "$${HTTP_PROXY:-}" ] || set -- "$$@" --build-arg HTTP_PROXY; \
+	[ -z "$${HTTPS_PROXY:-}" ] || set -- "$$@" --build-arg HTTPS_PROXY; \
+	[ -z "$${NO_PROXY:-}" ] || set -- "$$@" --build-arg NO_PROXY; \
+	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
+	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
+	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
+	"$(CONTAINER_BIN)" build --no-cache "$$@" \
+		--file "$(SECURITY_DOCKERFILE)" \
+		--build-arg UPSTREAM_IMAGE="$(SECURITY_UPSTREAM_IMAGE)" \
+		--build-arg OS_SECURITY_UPDATE_REVISION="$(OS_SECURITY_UPDATE_REVISION)" \
+		--tag "$(SECURITY_IMAGE)" .
 
 obscura-image-ready:
 	@if "$(CONTAINER_BIN)" image inspect "$(OBSCURA_IMAGE)" >/dev/null 2>&1; then \
@@ -917,9 +973,10 @@ executor-build:
 	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
 	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
 	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
-	"$(CONTAINER_BIN)" build "$$@" \
+	"$(CONTAINER_BIN)" build --no-cache "$$@" \
 		--file "$(PYTHON_EXECUTOR_DOCKERFILE)" \
 		--build-arg PYTHON_EXECUTOR_UPSTREAM_IMAGE="$(PYTHON_EXECUTOR_UPSTREAM_IMAGE)" \
+		--build-arg OS_SECURITY_UPDATE_REVISION="$(OS_SECURITY_UPDATE_REVISION)" \
 		--tag "$(PYTHON_EXECUTOR_IMAGE)" \
 		.
 
@@ -999,7 +1056,7 @@ ifeq ($(PODMAN_SELECTED),true)
 		$(ONYX_COMPOSE_ENV_FILES)
 endif
 
-up-lite: wrapper-config-preflight check-container-health-capability claim-shared-data-engine prepare-lite-host-data ensure-onyx-config sync-onyx-env onyx-image-ready prepare-podman-postgres-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready
+up-lite: wrapper-config-preflight check-container-health-capability claim-shared-data-engine prepare-lite-host-data ensure-onyx-config sync-onyx-env onyx-image-ready prepare-podman-postgres-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(if $(filter true,$(TAILSCALE_FUNNEL_ENABLED)),tailscale-image-ready)
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
@@ -1019,7 +1076,7 @@ endif
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
 up-full: PODMAN_START_FILES=$(FULL_FILES)
-up-full: wrapper-config-preflight check-container-health-capability claim-shared-data-engine prepare-full-host-data ensure-onyx-config sync-onyx-env onyx-image-ready prepare-onyx-tokenizer prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS)
+up-full: wrapper-config-preflight check-container-health-capability claim-shared-data-engine prepare-full-host-data ensure-onyx-config sync-onyx-env onyx-image-ready prepare-onyx-tokenizer prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS) $(if $(filter true,$(TAILSCALE_FUNNEL_ENABLED)),tailscale-image-ready)
 ifeq ($(PODMAN_SELECTED),true)
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
 	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps opensearch

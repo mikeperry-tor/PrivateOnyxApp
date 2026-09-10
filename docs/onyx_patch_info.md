@@ -1086,13 +1086,34 @@ format boundaries.
 
 Python execution uses a wrapper-derived executor image rather than the
 code-interpreter API image. Its local tag is coupled to the pinned upstream
-`python-executor-sci` release, `executor/Dockerfile`, and the generated hashed
+`python-executor-sci` release, `executor/Dockerfile`, the shared OS-update script,
+`OS_SECURITY_UPDATE_REVISION`, and the generated hashed
 `executor/requirements.txt` lock. The upstream executor supplies ReportLab and
 svglib for PDF/SVG generation, and the derived image adds SymPy 1.14.0 plus its
-locked `mpmath` dependency to the scientific environment. Docker-mode
+locked `mpmath` dependency to the scientific environment. It also replaces the
+inherited cryptography package with hash-locked 50.0.1, whose Linux wheel bundles
+OpenSSL 4.0.2; OS package updates alone cannot update that bundled library.
+Docker-mode
 startup builds the exact selected image before the API starts, and Compose sets
 `PYTHON_EXECUTOR_DOCKER_IMAGE` explicitly; the upstream bare reference cannot
 resolve to or pull mutable `latest` during API startup.
+
+The code-interpreter controller and Tailscale also use locally derived images
+from immutable upstream digests. `onyx/code-interpreter/Dockerfile`
+and `tailscale/Dockerfile` apply package upgrades during builds, preserving
+inherited entrypoints and commands. The controller and executor share the Debian
+update script `onyx/code-interpreter/upgrade-os.sh`; the executor runs it before
+its Python dependency installation. Tailscale uses Alpine’s package manager
+directly in its Dockerfile. Debian updates use strict index-refresh failure
+handling and Alpine uses uncached repository metadata. Explicit build targets
+disable layer-cache reuse. Normal startup reuses an already-present selected
+image; maintainers bump `OS_SECURITY_UPDATE_REVISION` when publishing refreshed
+OS packages without an upstream change. That revision participates in all three
+image tags, so the README stop/pull/start workflow builds and selects the refresh.
+The revision identifies a maintenance refresh, not a frozen package repository
+snapshot: builds fetch the configured repositories' available package updates.
+No service entrypoint runs package upgrades. Tailscale is prepared on startup
+only when enabled; Podman continues to omit the Docker controller and executor.
 
 Unconditional strict API patches advertise the wrapper-maintained package set,
 including SymPy, in both `PythonTool.DESCRIPTION` and

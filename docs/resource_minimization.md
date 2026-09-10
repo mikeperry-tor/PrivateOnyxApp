@@ -43,6 +43,12 @@ fallbacks, retries, migrations, or weaker ownership checks.
 
 ### Container health and startup
 
+- Executor, controller, and enabled Tailscale image preparation reuses matching
+  content-derived tags. OS security refreshes happen only during builds, with a
+  committed refresh revision selecting new tags for normal repository upgrades.
+  There is no runtime package updater or periodic rebuild. See the
+  [OS security refresh procedure](onyx_patches_upgrade.md#os-security-refreshes).
+
 - Retained local health checks poll every five seconds during startup and every
   ten minutes in steady state. Myst remains once per minute because its same
   local result also triggers qualified post-readiness recovery.

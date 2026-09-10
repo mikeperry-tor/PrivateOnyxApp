@@ -34,7 +34,7 @@ if [ "$validate_code_interpreter" = true ]; then
         echo "ERROR: CODE_INTERPRETER_IMAGE is required for Docker validation" >&2
         exit 1
     }
-    require_image "$code_interpreter_image" "Run 'make onyx-build' before 'make test-patch-images'."
+    require_image "$code_interpreter_image" "Run 'make code-interpreter-build' before 'make test-patch-images'."
     [ -n "$python_executor_image" ] || {
         echo "ERROR: PYTHON_EXECUTOR_IMAGE is required for Docker validation" >&2
         exit 1

@@ -28,6 +28,7 @@ class ValidationMakefileTests(unittest.TestCase):
             "test",
             "check",
             "test-patch-images",
+            "test-security-images",
             "test-obscura-image",
             "test-tor-image",
             "test-opensearch-image",
@@ -56,7 +57,8 @@ class ValidationMakefileTests(unittest.TestCase):
             r"\t@\$\(MAKE\) --no-print-directory test-patch-images\n"
             r"\t@\$\(MAKE\) --no-print-directory test-obscura-image\n"
             r"\t@\$\(MAKE\) --no-print-directory test-tor-image\n"
-            r"\t@\$\(MAKE\) --no-print-directory test-opensearch-image$",
+            r"\t@\$\(MAKE\) --no-print-directory test-opensearch-image\n"
+            r"\t@\$\(MAKE\) --no-print-directory test-security-images$",
         )
         self.assertRegex(
             MAKEFILE,

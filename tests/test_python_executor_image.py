@@ -52,9 +52,9 @@ class PythonExecutorImageTests(unittest.TestCase):
         )
         self.assertIn("PYTHON_EXECUTOR_WRAPPER_BUILD_INPUTS :=", self.makefile)
         self.assertIn("executor/requirements.txt", self.makefile)
-        self.assertIn("'$(PYTHON_EXECUTOR_UPSTREAM_IMAGE)'", self.makefile)
+        self.assertIn("$(call os_image_hash,$(PYTHON_EXECUTOR_UPSTREAM_IMAGE)", self.makefile)
         self.assertIn(
-            "CODE_INTERPRETER_EXECUTOR_TARGETS := executor-image-ready", self.makefile
+            "CODE_INTERPRETER_EXECUTOR_TARGETS := code-interpreter-image-ready executor-image-ready", self.makefile
         )
         self.assertIn("--build-arg PYTHON_EXECUTOR_UPSTREAM_IMAGE=", self.makefile)
 
