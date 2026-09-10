@@ -43,7 +43,7 @@ MYST_IMAGE := local/private-onyx-myst:$(shell printf '%s' '$(MYST_NODE_REF)' | c
 endif
 
 TEEP_REPO ?= https://github.com/13rac1/teep.git
-TEEP_DEFAULT_REF := 16650b860ab88e2fa138a11f776a1679b6fe28a8
+TEEP_DEFAULT_REF := d9f59d839eb887b50f5afd234e192eac5ec45a2d
 TEEP_REF ?= $(call env_value,TEEP_REF)
 ifeq ($(strip $(TEEP_REF)),)
 TEEP_REF := $(TEEP_DEFAULT_REF)
