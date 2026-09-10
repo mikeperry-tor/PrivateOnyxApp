@@ -1,0 +1,26 @@
+## Key Patches to Stock Onyx
+
+In this stack, I [patched Onyx](./docs/onyx_patch_info.md) to improve several limitations and poorly performing edge cases:
+
+- Onyx telemetry, third-party analytics and error reporting, cloud billing, CAPTCHA, and remote configuration are explicitly disabled.
+- A more restrictive browser Content Security Policy now blocks third-party scripts, connections, frames, media, fonts, workers, and remote images from bypassing the stack's selected Tor/VPN/proxy via the user's browser. Additionally, this policy blocks Onyx WebUI queries to a Google favicon service for all sourced URLs in chat and research reports; generic icons are used instead.
+- Stock Onyx strips agent reasoning between tool calls for most open-weight LLMs. This causes needless repeated re-thinking and degrades final answer quality. This has been patched.
+- Stock Onyx strips tool call results upon user follow-up questions, which often makes LLMs think that they hallucinated the previous turn tool results. This has been patched.
+- Stock Onyx discards an entire in-progress chat response when its connection to the inference provider closes or times out. This stack retries from the point of interruption. Each additional continuation requires the model to have produced new answer or reasoning text; two continuation failures cannot run back to back. If recovery fails without progress, the partial response remains visible with a warning instead of the whole chat being lost. (Retry is not attempted during tool calls, because doing so could execute corrupted arguments or produce invalid structured data.)
+- Stock Onyx displays error messages on chats if the browser is backgrounded or loses internet connectivity. We patch it so that recorded chats automatically reload and reattach when a suspended or mobile browser loses the response stream, without resending the prompt. Multi-model chats reconcile after every model finishes. Incognito chats remain non-recoverable and are classified without a recovery reload so their stock teardown behavior is preserved.
+- Stock Onyx can treat JSON/XML-looking assistant text as a tool call and execute it as a fallback. This stack executes only provider-native structured tool calls and leaves JSON/XML-looking assistant text visible. If that payload appears in chat, the selected model or provider emitted a malformed or non-native tool call; verify that its serving path supports native tool calling.
+- Stock Onyx removes query strings (`?`) and fragments (`#`) from web URLs, which prevents the agent from reading Hacker News `item?id=...` posts, YouTube `watch?v=...` video and comments, signed links, and all other query-addressed pages. This stack preserves complete URL through search, crawling, citations, and document matching.
+- The "Deep Research" mode has been patched to provide the research sub-agents with RAG access and all configured tools, rather than the Onyx default of only web search and url retrieval.
+- The "Deep Research" mode now also supports much longer research runs, and has been patched to execute all accepted tool calls when a research agent requests several different tools at once, rather than silently dropping some of them like stock Onyx does.
+- Stock Onyx places 1,024-token caps on Deep Research and research sub-agents, which often exhaust the budget on reasoning before any tool calls are produced. We remove these limits, as well as remove the limits on overall report length.
+- The code sub-agent investigation summarization has been enhanced to summarize reasoning steps as well as output.
+- Sub-agents are patched to choose whether to call another tool or finish, avoiding a forced-tool compatibility problem with vLLM for open weight models.
+- RAG document re-indexing is patched to skip re-downloading and re-parsing unchanged local files, making re-indexing substantially faster than stock Onyx.
+- Optional Slack and Discord bots support chat and search. Slack cannot run code; Discord can use the code tools you enable on Docker. Neither bot uses deep-research mode.
+- Onyx's idle background CPU workload is reduced by running discovery and housekeeping less often, removing unused monitoring and disabled-feature work, keeping lightweight control processes out of application bootstraps, and keeping optional Slack/Discord bot processes off unless enabled with `ONYX_AGENT_SLACK_BOT` or `ONYX_AGENT_DISCORD_BOT`.
+- Ordinary stock/default chat and default Deep Research avoid common mid-investigation prompt mutations. See [scope and cache boundaries](docs/onyx_patch_info.md#investigation-prompt-stability).
+- Onyx Agent tool descriptions and prompts have been patched to describe an additional SymPy package, reinforce exact opaque links for Python-generated files, and describe network access in coding environments when it is enabled. Generated-file markdown is normalized to portable same-origin links.
+- The Onyx installation process and the wider stack lifecycle are adapted to additionally support rootless Podman, including selected-engine image preparation, Compose routing, startup-health handling, and shared-data safeguards when switching between Docker and Podman.
+
+I intend to merge these upstream at some point, once I stop finding new edge cases and the dust settles a bit.
+
