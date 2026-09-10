@@ -216,12 +216,19 @@ def _code_description_modules(
     prompts = _package("onyx.prompts")
     tool_prompts = ModuleType("onyx.prompts.tool_prompts")
     tool_prompts.PYTHON_TOOL_GUIDANCE = (
-        "## run_python\nFiles written to the current directory will be returned with a `file_link`. "
+        "## run_python\nThe current directory in the file system can be used to save and persist user files. "
+        "Files written to the current directory will be returned with a `file_link`. "
         "Use this to give the user a way to download the file OR to display "
         "generated images. Internet access for this session is disabled. Do not "
         "make external web requests or API calls as they will fail. Use `openpyxl` "
         "to read and write Excel files. You have access to libraries like numpy, "
-        "pandas, scipy, matplotlib, and PIL."
+        "pandas, scipy, matplotlib, and PIL.\n"
+        "IMPORTANT: each call to this tool runs in a fresh, stateless sandbox. "
+        "Variables, imports, and in-memory state from previous calls will NOT be available, "
+        "and files written by a previous call will NOT be available in later calls. "
+        "Therefore batch multi-step work into a single script per call: e.g. load a "
+        "workbook once, read all needed sheets, apply all edits, and save the result "
+        "in one execution — not one small step per call."
     )
     tool_prompts.TOOL_SECTION_HEADER = "\n# Tools\n\n"
     prompts.tool_prompts = tool_prompts
@@ -395,11 +402,31 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             self.assertIn("Never construct or hard-code a file URL", prompt)
             self.assertIn("opaque per-execution file ID", prompt)
             self.assertIn("do not retype, rename, shorten, describe", prompt)
+            self.assertEqual(prompt.count(wrapper._PYTHON_EXECUTION_GUIDANCE), 1)
+        self.assertNotIn("save and persist user files", tool_prompts.PYTHON_TOOL_GUIDANCE)
         self.assertIn(
             "do not substitute Markdown image syntax",
             tool_prompts.PYTHON_TOOL_GUIDANCE,
         )
         self.assertNotIn("response_markdown", chat_prompts.FILE_REMINDER)
+
+    def test_python_execution_guidance_drift_fails_strict(self) -> None:
+        wrapper = _load_wrapper()
+        for anchor in (
+            "The current directory in the file system can be used to save and persist user files.",
+            wrapper._UPSTREAM_PYTHON_STATELESS_GUIDANCE,
+        ):
+            for replacement in ("Changed upstream guidance.", anchor + anchor):
+                with self.subTest(anchor=anchor, replacement=replacement):
+                    modules, _, _, tool_prompts, *_ = _code_description_modules()
+                    tool_prompts.PYTHON_TOOL_GUIDANCE = (
+                        tool_prompts.PYTHON_TOOL_GUIDANCE.replace(anchor, replacement)
+                    )
+                    with patch.dict(
+                        os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True
+                    ), patch.dict(sys.modules, modules):
+                        with self.assertRaises(RuntimeError):
+                            wrapper.apply_python_file_link_prompt_patches()
 
     def test_python_result_supplies_relative_ready_to_copy_markdown(self) -> None:
         wrapper = _load_wrapper()
@@ -954,7 +981,10 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
     def test_python_file_link_prompt_drift_fails_strict(self) -> None:
         wrapper = _load_wrapper()
         modules, _, _, tool_prompts, _, _, _ = _code_description_modules()
-        tool_prompts.PYTHON_TOOL_GUIDANCE = "Upstream changed this guidance."
+        tool_prompts.PYTHON_TOOL_GUIDANCE = tool_prompts.PYTHON_TOOL_GUIDANCE.replace(
+            "Use this to give the user a way to download the file OR to display generated images.",
+            "Upstream changed this guidance.",
+        )
 
         with patch.dict(
             os.environ, {"WRAPPER_PATCH_STRICT": "true"}, clear=True

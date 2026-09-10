@@ -113,6 +113,13 @@ def rendered(messages):
     return '\n'.join(m.get('content') or '' for m in messages)
 
 
+def assert_python_execution_guidance(request):
+    descriptions = [t['function']['description'] for t in request['tools']
+                    if t['function']['name'] == PythonTool.NAME]
+    assert len(descriptions) == 1
+    assert patches._PYTHON_EXECUTION_GUIDANCE in descriptions[0]
+
+
 def assert_prefix(first, second):
     assert first['prompt'] == second['prompt'][:len(first['prompt'])], 'translated message prefix changed'
     assert len(second['prompt']) > len(first['prompt'])
@@ -190,6 +197,8 @@ def validate_main_chat():
     for request in requests:
         system = request['prompt'][0]['content']
         assert 'Replacement system' in system and 'response_markdown' in system
+        assert patches._PYTHON_EXECUTION_GUIDANCE in system
+        assert_python_execution_guidance(request)
         assert 'snippets completely answer the query' not in system
         assert REQUIRE_CITATION_GUIDANCE.strip() not in system
         assert FILE_REMINDER not in rendered(request['prompt'])
@@ -198,6 +207,8 @@ def validate_main_chat():
     for request in requests:
         system = request['prompt'][0]['content']
         assert 'Custom empty-base system' in system and 'response_markdown' in system
+        assert patches._PYTHON_EXECUTION_GUIDANCE in system
+        assert_python_execution_guidance(request)
         assert 'response_markdown' in request['tools'][2]['function']['description']
         assert 'snippets completely answer the query' not in system
         assert FILE_REMINDER not in rendered(request['prompt'])
@@ -268,6 +279,8 @@ def validate_research():
         )
     assert result is not None, packets
     assert len(model.requests) == 2
+    for request in model.requests:
+        assert_python_execution_guidance(request)
     assert_prefix(*model.requests)
     assert all(r['max_tokens'] is None for r in model.requests)
     assert OPEN_URL_REMINDER_RESEARCH_AGENT not in rendered(model.requests[1]['prompt'])

@@ -4545,8 +4545,29 @@ def _is_uuid(value: Any) -> bool:
     return True
 
 
+_PYTHON_EXECUTION_GUIDANCE = (
+    "Each call runs in a fresh, stateless sandbox. Variables, imports, files "
+    "(including /tmp and /workspace), and background processes do not survive "
+    "between calls. Keep dependent downloads, parsing, computation, and saving "
+    "in one script; recreate required inputs in each call unless they are "
+    "explicitly supplied as staged chat files. Saving a downloadable artifact "
+    "does not preserve the execution environment. Before using version-specific "
+    "APIs, check the runtime version and required feature availability in the "
+    "same script; do not assume the runtime matches the version being researched."
+)
+
+_UPSTREAM_PYTHON_STATELESS_GUIDANCE = (
+    "IMPORTANT: each call to this tool runs in a fresh, stateless sandbox. "
+    "Variables, imports, and in-memory state from previous calls will NOT be available, "
+    "and files written by a previous call will NOT be available in later calls. "
+    "Therefore batch multi-step work into a single script per call: e.g. load a "
+    "workbook once, read all needed sheets, apply all edits, and save the result "
+    "in one execution — not one small step per call."
+)
+
+
 def apply_python_file_link_prompt_patches() -> None:
-    """Make generated-file response links explicit, portable, and prominent.
+    """Clarify per-call execution state and make artifact links explicit.
 
     Upstream constructs absolute ``file_link`` values from one canonical
     ``WEB_DOMAIN``. The WebUI recognizes an ordinary Markdown link whose label
@@ -4559,6 +4580,9 @@ def apply_python_file_link_prompt_patches() -> None:
     and the result itself. The result supplies a
     ready-to-copy ``response_markdown`` value so the model does not have to
     reconstruct either the label or URL.
+
+    Shared execution guidance distinguishes downloadable artifacts from sandbox
+    persistence and reaches research agents through the function description.
     """
     link_instruction = (
         "In the final answer, include every user-requested generated file by "
@@ -4578,6 +4602,8 @@ def apply_python_file_link_prompt_patches() -> None:
             old="Execute Python code in an isolated sandbox environment.",
             new=(
                 "Execute Python code in an isolated sandbox environment. "
+                + _PYTHON_EXECUTION_GUIDANCE
+                + " "
                 + link_instruction
             ),
         )
@@ -4591,6 +4617,18 @@ def apply_python_file_link_prompt_patches() -> None:
     try:
         from onyx.prompts import tool_prompts
 
+        tool_prompts.PYTHON_TOOL_GUIDANCE = _prompt_stability_replace(
+            label="PYTHON_TOOL_GUIDANCE artifact persistence",
+            value=tool_prompts.PYTHON_TOOL_GUIDANCE,
+            old="The current directory in the file system can be used to save and persist user files.",
+            new="Save user-requested downloadable artifacts in the current directory.",
+        )
+        tool_prompts.PYTHON_TOOL_GUIDANCE = _prompt_stability_replace(
+            label="PYTHON_TOOL_GUIDANCE execution environment",
+            value=tool_prompts.PYTHON_TOOL_GUIDANCE,
+            old=_UPSTREAM_PYTHON_STATELESS_GUIDANCE,
+            new=_PYTHON_EXECUTION_GUIDANCE,
+        )
         tool_prompts.PYTHON_TOOL_GUIDANCE = _replace_or_warn(
             owner_name="PYTHON_TOOL_GUIDANCE file-link instruction",
             current=tool_prompts.PYTHON_TOOL_GUIDANCE,

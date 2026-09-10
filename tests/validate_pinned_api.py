@@ -402,6 +402,12 @@ def _validate_python_tool_identity() -> None:
     assert "response_markdown" in PYTHON_TOOL_GUIDANCE
     assert "opaque per-execution file ID" in PythonTool.DESCRIPTION
     assert "opaque per-execution file ID" in PYTHON_TOOL_GUIDANCE
+    for prompt in (PythonTool.DESCRIPTION, PYTHON_TOOL_GUIDANCE):
+        assert "fresh, stateless sandbox" in prompt
+        assert "background processes do not survive" in prompt
+        assert "check the runtime version and required feature availability" in prompt
+        assert "does not preserve the execution environment" in prompt
+    assert "save and persist user files" not in PYTHON_TOOL_GUIDANCE
     assert "an sandbox" not in PythonTool.DESCRIPTION
     assert getattr(PythonTool.run, "_wrapper_python_file_link_patch", False)
     assert python_tool.build_full_frontend_file_url is build_frontend_file_url
