@@ -1118,7 +1118,12 @@ Test through both the localhost publisher and every enabled Tailscale frontend:
   confirm the strict patch still rejects drift in the function description,
   stable Python guidance, imported URL helper, and
   `PythonTool.run` signature; confirm replace-base Agents retain the Python
-  guidance and every main-chat branch omits the dynamic file reminder; split
+  execution guidance in both checkbox and empty-default-base branches, and
+  translated research-agent tool definitions retain the fresh-sandbox and
+  runtime-feature checks. Reject missing or duplicated upstream persistence
+  and stateless-guidance anchors; saving an artifact must not imply that files
+  or background processes survive subsequent Python calls. Confirm every
+  main-chat branch omits the dynamic file reminder; split
   Markdown image and ordinary links at every stream boundary
   and verify both emitted and saved answers normalize exact chat-file paths,
   legacy absolute origins become relative, unrelated/incomplete Markdown is

@@ -469,13 +469,10 @@ and `data:` is limited to images so embedded DOCX preview images work without
 permitting a general data-document source.
 
 The official image's dynamic Next.js HTML contains inline bootstrap and React
-stream scripts, so a static `script-src 'self'` policy breaks hydration. A
-runtime nginx response-filter prototype successfully added nonces to the HTML
-but broke the current Next chunk/preload path with `strict-dynamic`. Passing a
-CSP nonce into the pinned Next 16.2.6 renderer also failed because the compiled
-Onyx Proxy does not preserve that request header through to rendering. Browser
-testing produced a complete response but a blank, unhydrated DOM in both strict
-variants.
+stream scripts, so a static `script-src 'self'` policy breaks hydration. The
+compiled Onyx Proxy does not preserve a CSP nonce request header through to the
+pinned Next renderer. A stricter nonce policy requires source-level integration
+that covers rendering, streaming, and chunk/preload loading together.
 
 The compatible no-rebuild policy consequently allows inline script blocks but
 not inline event-handler attributes or `eval`, and permits external scripts
@@ -819,22 +816,13 @@ including report text, citation packets, final citation state, and unchanged
 report timeout arguments. The disabled-sharing bootstrap also exercises both
 report generators. Provider-limited output can still truncate; longer reports
 can increase generation time and consume more orchestration context.
-A controlled GLM-5.3-Flash comparison demonstrated the failure mechanism:
-the same orchestration request produced reasoning without tools and finished
-with `length` at 1,024 tokens, while an 8,192-token allowance produced three
-valid research calls using 2,900 completion tokens. This establishes the
-small-cap failure, not successful end-to-end nested research or a universally
-sufficient provider default.
 
 Inspect terminal finish reason and completion usage before attributing absent
 calls to tool parsing or transport. An empty terminal status/usage chunk is
-normal even after successful streamed reasoning or tool deltas. The audited
-Teep request path preserves the output limit; vLLM's output-length stop includes
-reasoning tokens. NEAR inference-proxy is not on the Tinfoil route. Its checked
-ordinary chat proxy forwards the requested limit, but reference source alone
-does not establish which inference-proxy or vLLM revision a remote provider
-deploys. A separate NearDirect TLS-attestation mismatch blocks inference before
-HTTP request transmission and cannot explain the completed Tinfoil response.
+normal even after successful streamed reasoning or tool deltas. Native
+reasoning can consume the output allowance before a tool call is emitted.
+A TLS-attestation mismatch blocks inference before HTTP request transmission
+and must be distinguished from a completed, truncated response.
 
 ## Investigation prompt stability
 
@@ -908,7 +896,7 @@ boundaries. Exact source checks protect every rebuilt loop and serializer.
 Source rewrites of the same function retain and compose the previously rebuilt
 body; the pinned-image contract checks the final compiled chat loop so a later
 runtime patch cannot silently restore the upstream reasoning-stripping path. The
-native-reasoning override now additionally validates the pinned detector's
+native-reasoning override validates the pinned detector's
 two-argument signature and its model-map/LiteLLM fallback source before
 replacing it. The saved-tool-result patch validates both the upstream response
 helper and complete `convert_chat_history()` signature before retaining stored
@@ -933,11 +921,10 @@ prefill.
 
 Continuation requests preserve the original tools, `tool_choice`, reasoning
 effort, timeout, token limit, and user identity without adding a forced tool
-policy. In particular, they do not send `tool_choice="none"`; that unnecessary
-request constraint has caused compatibility problems for GLM models behind
-vLLM. The fixed continuation instruction asks the model to follow the original
-request and tool policy. Structured-output streams remain excluded from
-continuation because concatenating two independently schema-constrained outputs
+policy. In particular, they do not send `tool_choice="none"`, which some GLM
+serving paths behind vLLM reject. The fixed continuation instruction asks the
+model to follow the original request and tool policy. Structured-output streams
+remain excluded from continuation because concatenating two independently schema-constrained outputs
 cannot generically reconstruct one valid value; their original setting is never
 replaced with an unconstrained request.
 
@@ -1098,6 +1085,18 @@ results fail visibly at execution. The LLM-facing tool name is `run_python`;
 accept another LLM-facing name. Pinned-image validation confirms the class,
 constant, built-in map, saved-row remapping, prompt, relative-link helper, and
 run wrapper after every patch is installed.
+
+Both the Python function description and stable Python guidance explain that
+each call has a fresh sandbox: files, variables, imports, and background
+processes do not survive between calls. Dependent downloads and processing
+belong in one script; later calls must recreate inputs or use explicitly staged
+chat files. Downloadable artifacts do not preserve the execution environment.
+The guidance also requires checking runtime versions and feature availability
+before using version-specific APIs, without assuming that the installed runtime
+matches the version under research. The function description reaches research
+agents, and the stable guidance remains capability-gated in custom replacement
+prompts. These instructions add no changing per-call reminders. Exact upstream
+persistence and stateless-guidance anchors must each occur once or startup fails.
 
 When optional executor networking is enabled, Compose uses upstream's native
 `PYTHON_EXECUTOR_DOCKER_NETWORK` and `PYTHON_EXECUTOR_DOCKER_RUN_ARGS` settings.
