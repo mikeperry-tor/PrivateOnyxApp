@@ -217,7 +217,9 @@ are not duplicate enforcement.
   bounded checks continue and completion causes one final hydration reload.
   Multi-model recovery also polls until its final reconciliation reload.
   Every awaited status result rechecks visibility, connectivity, and the
-  selected chat before it can mutate state or reload. Restored connectivity
+  selected chat and cancellation before it can mutate state or reload. EOF
+  during a pending suspension retains its existing reconciliation work; it
+  does not start an idle poller. Restored connectivity
   resumes pending work but adds no check or reload while a healthy stock
   single-model resume body owns completion.
   Marker-gated History API calls only

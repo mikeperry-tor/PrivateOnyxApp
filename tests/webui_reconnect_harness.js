@@ -216,6 +216,77 @@ function streamResponse(chunks, failure = null) {
 }
 
 async function main() {
+  // A suspended stream can finish as the tab wakes, before recovery timers
+  // run. EOF must not erase the suspension that still requires hydration.
+  for (const kind of ["send", "resume"]) {
+    for (const closeWhileHidden of [false, true]) {
+      for (const currentRun of [false, true]) {
+        let streamController;
+        let sends = 0;
+        const browser = createBrowser((url) => {
+          if (String(url).startsWith("/api/chat/reconnect-status/")) {
+            return Promise.resolve(sessionResponse(currentRun, false));
+          }
+          if (String(url).includes("send-chat-message")) {
+            sends += 1;
+            if (sends === 1) return Promise.resolve(streamResponse(["first answer"]));
+          }
+          return Promise.resolve(new Response(new ReadableStream({
+            start(controller) { streamController = controller; },
+          })));
+        });
+        const first = await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+        await first.text();
+        const sent = await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+        const response = kind === "send" ? sent : await browser.window.fetch(
+          `/api/chat/chat-session/${SESSION}/resume-stream?cursor=0`
+        );
+        const consumed = response.text();
+        browser.document.visibilityState = "hidden";
+        await browser.dispatch("document", "visibilitychange");
+        if (!closeWhileHidden) {
+          browser.document.visibilityState = "visible";
+          await browser.dispatch("document", "visibilitychange");
+        }
+        streamController.close();
+        await consumed;
+        await settle();
+        assert(browser.storage.has(browser.key), `${kind} EOF erased pending suspension recovery`);
+        if (closeWhileHidden) {
+          await browser.runTimers(4);
+          assert(browser.reloads() === 0, "hidden EOF reloaded the tab");
+          browser.document.visibilityState = "visible";
+          await browser.dispatch("document", "visibilitychange");
+        }
+        await browser.runTimers(4);
+        await settle();
+        assert(browser.reloads() === 1, `${kind} EOF bypassed suspended-chat hydration`);
+        assert(browser.storage.has(browser.key) === currentRun, "EOF lost the run's recovery phase");
+        assert(sends === 2, "suspended EOF retried the user message");
+      }
+    }
+  }
+
+  // Aborting a status request cannot undo a response already queued for JS.
+  // A same-token hide/show must still reject that obsolete response.
+  {
+    let resolveStatus;
+    const browser = createBrowser(() => new Promise((resolve) => { resolveStatus = resolve; }), {
+      initialRecord: recoveryRecord({ pollPhase: "single" }),
+    });
+    const pending = browser.window.__privateOnyxReconnectTest.checkStatus(
+      recoveryRecord().token, "resume-eof"
+    );
+    browser.document.visibilityState = "hidden";
+    await browser.dispatch("document", "visibilitychange");
+    browser.document.visibilityState = "visible";
+    await browser.dispatch("document", "visibilitychange");
+    resolveStatus(sessionResponse(false, false));
+    await pending;
+    assert(browser.storage.has(browser.key), "aborted status erased a later suspension");
+    assert(browser.reloads() === 0, "aborted status acted on the restored tab");
+  }
+
   {
     const sentinel = Promise.resolve(new Response("unrelated"));
     let calls = 0;

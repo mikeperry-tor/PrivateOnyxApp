@@ -243,7 +243,10 @@
     // The resume endpoint can end cleanly on a replay gap as well as actual
     // completion. Keep the marker until the authoritative status route says
     // the recorded run is no longer active.
-    scheduleStatus(record, true, "resume-eof");
+    // A suspended tab still needs reconciliation even if the run completed
+    // before it woke. Do not let EOF downgrade that work to a marker cleanup.
+    if (record.hiddenAt !== null) scheduleRecovery();
+    else scheduleStatus(record, true, "resume-eof");
   }
 
   function canWrapStreamResponse(response) {
@@ -262,7 +265,13 @@
       },
       flush() {
         if (streamKind === "resume") finishResumeCleanly(token);
-        else clearMatching(token);
+        else {
+          const record = loadRecord();
+          // EOF can arrive during suspension or before the wake-up recovery
+          // timer. It must not discard a pending reconciliation of that tab.
+          if (record && record.token === token && record.hiddenAt !== null) scheduleRecovery();
+          else clearMatching(token);
+        }
       },
     });
     response.body.pipeTo(transparent.writable).catch(() => {
@@ -471,7 +480,7 @@
 
     const current = loadRecord();
     if (!current || current.token !== token) return;
-    if (outcome === "aborted") return;
+    if (controller.signal.aborted || outcome === "aborted") return;
     // The selected chat, visibility, or connectivity can change while the
     // status body is in flight. Never let that stale result mutate recovery
     // state or reload a page that is no longer eligible for this token.

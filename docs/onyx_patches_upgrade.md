@@ -303,11 +303,17 @@ marker. A pre-aborted send clears its new marker, while an abort after invocatio
 remains ambiguous and retains it. In particular, a resumed-body failure must
 enter recovery before `resumeInFlightRun()` aborts its controller in `finally`,
 and that cleanup abort must not erase recovery. A visible send or resume stream
-failure must enter the same bounded recovery path. Send clean EOF clears only
+failure must enter the same bounded recovery path. Unsuspended send clean EOF clears only
 its own token; resume clean EOF must release ownership and use a fresh status
 check because the backend endpoint also returns cleanly on a replay gap. Prove
 confirmed completion clears without a reload and an active run enters another
-bounded reconciliation. Prove single-model post-reload settling stops only
+bounded reconciliation. For both send and resume on a second user turn, deliver
+EOF while hidden and just after visibility returns but before recovery timers
+run. Require the marker to survive and exactly one reconciliation reload for
+both active and completed runs, with no resend or hidden-tab reload. Resolve an
+aborted status request after a same-token hide/show cycle and require its stale
+result to leave the new recovery untouched.
+Prove single-model post-reload settling stops only
 after a successful stock resume response and leaves that open body as the
 completion owner. Without an observed resume owner,
 active checks continue and completion performs a final hydration reload. Prove

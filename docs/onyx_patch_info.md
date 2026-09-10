@@ -602,13 +602,19 @@ does not preserve a normally resumable in-flight generation. Completed chats
 and later turns use Onyx database state and are unaffected; invalid or
 mismatched markers are simply discarded.
 It forwards successful exact send and resume bodies through one transparent
-`TransformStream`. Send-body clean completion, non-success, or a send that was
-already aborted before invocation clears only the matching token. Resume-body
+`TransformStream`. Send-body clean completion clears its matching token only
+when no suspension awaits recovery. A non-success response or a send that was
+already aborted before invocation also clears only its matching token. Resume-body
 clean EOF is not authoritative because the backend replay endpoint also returns
 cleanly on a buffer gap: it releases live ownership and asks the recovery-status
 route to confirm completion. An absent `current_run` clears the marker without
-another reload; an active run starts another bounded reconciliation. The marker
-is retained whenever a browser transport failure may have happened after server
+another reload; an active run starts another bounded reconciliation. Pending
+suspension takes precedence over both send and resume EOF: the marker survives
+EOF during hiding or before the wake-up timer runs, and recovery still performs
+a hydration reload even if the run has since completed. An aborted status
+request cannot act on a later suspension of the same token, even if its response
+was already queued and the tab is visible again. The marker is also retained
+whenever a browser transport failure may have happened after server
 acceptance. An abort after invocation is not authoritative: stock route cleanup
 and `resumeInFlightRun()`'s `finally` both abort stream controllers. The exact
 same-origin stop-session POST is the explicit user-cancellation owner; the
