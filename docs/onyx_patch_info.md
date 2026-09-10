@@ -887,6 +887,10 @@ cache hits, lower bills, or advancing the explicit breakpoint during a tool
 turn. Provider adaptation, routing, worker affinity, minimum cacheable length,
 retention, and eviction remain outside the guarantee. Tests compare structured
 translated requests and ordered tools, not provider token IDs or cache billing.
+Pinned captures also exercise concurrent chat and nested-research invocations
+through the installed tool merger and thread pools, checking repeated and mixed
+search/page batches, citation isolation, and worker-limit context cleanup with
+synthetic individual tool results.
 
 ## Reasoning, tool history, and coding finalization
 

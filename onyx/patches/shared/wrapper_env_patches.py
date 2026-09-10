@@ -1142,17 +1142,23 @@ def _prepare_deep_research_tool_calls(
 
 
 _DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS = {
-    """# Even for the reasoning tool, this should be plenty
+    "run_deep_research_llm_loop": (
+        """# Even for the reasoning tool, this should be plenty
                     # The generation here should never be very long as it's just the tool calls.
                     # This prevents timeouts where the model gets into an endless loop of null or bad tokens.
-                    max_tokens=1024,""": """# Use the normal provider output allowance, including native reasoning.
+                    max_tokens=1024,""",
+        """# Use the normal provider output allowance, including native reasoning.
                     max_tokens=None,""",
-    """# In case the model is tripped up by the long context and gets into an endless loop of
+    ),
+    "run_research_agent_call": (
+        """# In case the model is tripped up by the long context and gets into an endless loop of
                     # things like null tokens, we set a max token limit here. The call will likely not be valid
                     # in these situations but it at least allows a chance of recovery. None of the tool calls should
                     # be this long.
-                    max_tokens=1000,""": """# Use the normal provider output allowance, including native reasoning.
+                    max_tokens=1000,""",
+        """# Use the normal provider output allowance, including native reasoning.
                     max_tokens=None,""",
+    ),
 }
 
 
@@ -1185,11 +1191,11 @@ def apply_deep_research_output_limit_patch() -> None:
     from onyx.deep_research import dr_loop
     from onyx.tools.fake_tools import research_agent
 
-    for module, name, replacement in (
-        (dr_loop, "run_deep_research_llm_loop", 0),
-        (research_agent, "run_research_agent_call", 1),
+    for module, name in (
+        (dr_loop, "run_deep_research_llm_loop"),
+        (research_agent, "run_research_agent_call"),
     ):
-        old, new = list(_DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS.items())[replacement]
+        old, new = _DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS[name]
         function = getattr(module, name)
         source = getattr(function, "_wrapper_patched_source", None)
         if source is None:

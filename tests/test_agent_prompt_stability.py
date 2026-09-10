@@ -30,18 +30,36 @@ class PromptStabilityContracts(unittest.TestCase):
                     setattr(modules['.'.join(parts[:n-1])], parts[n-1], modules[name])
         targets = [("onyx.deep_research.dr_loop", "run_deep_research_llm_loop"),
                    ("onyx.tools.fake_tools.research_agent", "run_research_agent_call")]
-        blocks = list(wrapper._DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS)
+        # Target association must not depend on dictionary insertion order.
+        wrapper._DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS = dict(
+            reversed(list(wrapper._DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS.items()))
+        )
         for failed_target in range(2):
             for count in (0, 2):
                 for index, (path, name) in enumerate(targets):
                     def function():
                         pass
-                    function._wrapper_patched_source = blocks[index] * (
+                    block, _ = wrapper._DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS[name]
+                    function._wrapper_patched_source = block * (
                         count if index == failed_target else 1)
                     setattr(modules[path], name, function)
                 with patch.dict(sys.modules, modules), patch.object(wrapper, '_patch_function_source'):
                     with self.assertRaisesRegex(RuntimeError, 'exactly one upstream output-limit block'):
                         wrapper.apply_deep_research_output_limit_patch()
+
+        for path, name in targets:
+            getattr(modules[path], name)._wrapper_patched_source = (
+                wrapper._DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS[name][0]
+            )
+        with patch.dict(sys.modules, modules), patch.object(wrapper, '_patch_function_source') as rebuild, \
+             patch.object(wrapper, '_research_report_output_limits', return_value=()):
+            wrapper.apply_deep_research_output_limit_patch()
+        self.assertEqual(rebuild.call_count, 2)
+        for call, (path, name) in zip(rebuild.call_args_list, targets):
+            old, new = wrapper._DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS[name]
+            self.assertIs(call.kwargs['module'], modules[path])
+            self.assertEqual(call.kwargs['function_name'], name)
+            self.assertEqual(call.kwargs['replacements'], {old: new})
 
     def test_report_limits_validate_source_and_active_globals(self):
         wrapper = _load_wrapper()

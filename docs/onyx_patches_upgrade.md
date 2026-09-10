@@ -1228,6 +1228,13 @@ wrappers.
   Onyx's reasoning-preserving serializer. Require both adjacent pairs in the
   three-request main-chat search → Python artifact → normal answer capture,
   plus orchestrator cycles 0/1 and nested search/next-investigation captures.
+  Exercise concurrent main-chat and nested-research invocations through the
+  installed merger and thread pools with synthetic individual tool results:
+  duplicate searches must merge without losing queries, mixed search/page
+  batches and subsequent searches must retain their results, citations must
+  stay distinct and invocation-local, and the worker-limit context must reset
+  before a thread serves another invocation. Synchronize inside tool execution
+  to prove overlap, and install shared test substitutions before starting threads.
   Compare semantic message prefixes, reasoning and paired results, ordered tool
   definitions, and request options. Coding validation remains constants,
   source/bindings, and existing helper tests, without a coding-loop harness.

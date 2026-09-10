@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from threading import Barrier, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -50,13 +52,15 @@ class ScriptedLLM:
         serialized = dict(kwargs, prompt=_prompt_to_dicts(kwargs['prompt']))
         self.requests.append(json.loads(json.dumps(serialized, default=structured)))
         step = next(self.steps)
-        if isinstance(step, tuple):
-            name, args = step
+        if isinstance(step, (tuple, list)):
+            batch = step if isinstance(step, list) else [step]
             call_id = f'call-{len(self.requests)}'
             yield ModelResponseStream(id=call_id, created='now', choice=StreamingChoice(
                 delta=Delta(reasoning_content=f'evidence reasoning {call_id}')))
             delta = Delta(tool_calls=[ChatCompletionDeltaToolCall(
-                id=call_id, function=FunctionCall(name=name, arguments=json.dumps(args)))])
+                id=call_id if len(batch) == 1 else f'{call_id}-{index}', index=index,
+                function=FunctionCall(name=name, arguments=json.dumps(args)))
+                for index, (name, args) in enumerate(batch)])
             finish = 'tool_calls'
         else:
             delta, finish = Delta(content=step), 'stop'
@@ -288,6 +292,101 @@ def validate_research():
     assert 'open_urls' not in rendered(model.requests[0]['prompt'])
 
 
+def validate_concurrent_batches():
+    """Keep the installed merger and pools; stub only individual tool execution."""
+    from onyx.tools import tool_runner
+    from onyx.tools.fake_tools import research_agent
+    from onyx.deep_research import dr_loop
+    from onyx.prompts.deep_research.dr_tool_prompts import GENERATE_REPORT_TOOL_NAME
+
+    def run_phase(nested):
+        # Four invocations rendezvous inside the real tool pool. A global lock
+        # around whole invocations would fail this bounded wait instead of
+        # accidentally passing a sleep-based concurrency check.
+        rendezvous = Barrier(4, timeout=30)
+        lock = Lock()
+        executed = {}
+
+        def tool_result(tool, call, overrides):
+            field = 'queries' if call.tool_name == WebSearchTool.NAME else 'urls'
+            values = call.tool_args[field]
+            label = values[0].split('/')[3]
+            with lock:
+                executed.setdefault(label, []).append((call.tool_name, list(values)))
+            if call.tool_name == WebSearchTool.NAME and values[0].endswith('/first'):
+                rendezvous.wait()
+            number = overrides.starting_citation_num
+            doc = SearchDoc(document_id=values[0], chunk_ind=0,
+                            semantic_identifier=label, link=values[0], blurb=label,
+                            source_type=DocumentSource.WEB, boost=1, hidden=False,
+                            metadata={}, match_highlights=[], is_internet=True)
+            return ToolResponse(tool_call=call,
+                rich_response=SearchDocsResponse(search_docs=[doc], citation_mapping={number: values[0]}),
+                llm_facing_response=json.dumps({'document': number, 'contents': values[0]}))
+
+        def invoke(index):
+            label = f'invocation-{index}'
+            base = f'https://example.org/{label}'
+            model = ScriptedLLM([
+                [(WebSearchTool.NAME, {'queries': [base + '/first']}),
+                 (WebSearchTool.NAME, {'queries': [base + '/second']}),
+                 (OpenURLTool.NAME, {'urls': [base + '/page']})],
+                (WebSearchTool.NAME, {'queries': [base + '/third']}),
+                (GENERATE_REPORT_TOOL_NAME, {}) if nested else 'Done',
+            ])
+            state, packets = ChatStateContainer(), []
+            emitter = SimpleNamespace(emit=packets.append)
+            if nested:
+                result = research_agent.run_research_agent_call(
+                    research_agent_call=ToolCallKickoff(tool_name=dr_loop.RESEARCH_AGENT_TOOL_NAME,
+                        tool_call_id=label, tool_args={research_agent.RESEARCH_AGENT_TASK_KEY: label},
+                        placement=Placement(turn_index=1, tab_index=index)),
+                    parent_tool_call_id=label, tools=selected_tools(), emitter=emitter,
+                    state_container=state, llm=model, is_reasoning_model=True,
+                    token_counter=lambda s: len(s)//4, user_identity=None)
+                assert result is not None, packets
+            else:
+                llm_loop.run_llm_loop(emitter=emitter, state_container=state,
+                    simple_chat_history=user_history(), tools=selected_tools(),
+                    custom_agent_prompt=None, context_files=context_files(), persona=None,
+                    user_memory_context=None, llm=model, token_counter=lambda s: len(s)//4)
+                assert len(state.get_tool_calls()) == 3
+            assert patches._DEEP_RESEARCH_WORKER_LIMIT.get() is None
+            assert len(model.requests) == 3
+            for first, second in zip(model.requests, model.requests[1:]):
+                assert_prefix(first, second)
+            calls = [m for m in model.requests[1]['prompt'] if m.get('tool_calls')][0]['tool_calls']
+            assert len(calls) == 2, calls
+            search = next(c for c in calls if c['function']['name'] == WebSearchTool.NAME)
+            assert json.loads(search['function']['arguments'])['queries'] == [base + '/first', base + '/second']
+            responses = [json.loads(m['content']) for m in model.requests[2]['prompt'] if m.get('tool_call_id')]
+            assert len(responses) == 3
+            assert all(r['contents'].startswith(base + '/') for r in responses), responses
+            assert len({r['document'] for r in responses}) == 3, responses
+            assert sorted(executed[label]) == sorted([
+                (WebSearchTool.NAME, [base + '/first', base + '/second']),
+                (OpenURLTool.NAME, [base + '/page']),
+                (WebSearchTool.NAME, [base + '/third']),
+            ])
+
+        # Install shared substitutions once, before launching threads. Using
+        # main_chat() here would race its process-global mock restoration.
+        with patch.object(llm_loop, 'get_session_with_current_tenant', lambda: nullcontext(None)), \
+             patch.object(llm_loop, 'get_default_base_system_prompt', lambda _: DEFAULT_SYSTEM_PROMPT), \
+             patch.object(research_agent, 'generate_intermediate_report', return_value='Report'), \
+             patch.object(tool_runner, '_safe_run_single_tool', tool_result), \
+             patch.object(WebSearchTool, 'emit_start', lambda *a, **k: None), \
+             patch.object(OpenURLTool, 'emit_start', lambda *a, **k: None):
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                # Reuse invocation threads across waves to catch leaked context.
+                list(pool.map(invoke, range(8)))
+        assert len(executed) == 8
+
+    run_phase(nested=False)
+    run_phase(nested=True)
+    print('PINNED_CONCURRENT_BATCH_PROMPT_STABILITY_OK')
+
+
 def validate_report_output_limits():
     from onyx.chat.citation_processor import DynamicCitationProcessor
     from onyx.tools.fake_tools import research_agent
@@ -351,5 +450,6 @@ def validate_prompt_stability():
     validate_constants()
     validate_main_chat()
     validate_research()
+    validate_concurrent_batches()
     validate_report_output_limits()
     print('PINNED_TRANSLATED_PROMPT_STABILITY_OK')
