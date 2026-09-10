@@ -1203,7 +1203,13 @@ wrappers.
   failure; an empty terminal delta alone does not diagnose missing output.
   See [Reasoning output limits](onyx_patch_info.md#reasoning-output-limits).
 - **Investigation prompt stability:** re-audit `run_llm_loop` citation setup,
-  reminder selection, generated-file reminder-only parsing, and the stable
+  including fresh per-user-turn mappings and retained historical numbers. Keep
+  the citation guidance and reminder consistent: prior-turn sources use known
+  URLs with descriptive link labels, or retrieval for current numeric citations.
+  Validate follow-up answers with and without new searches: old descriptive
+  links must survive streaming and a reused current number must resolve only
+  to the current source. Preserve the existing citation-policy gates.
+  Re-audit reminder selection, generated-file reminder-only parsing, and the stable
   reminder placement in `construct_message_history`. Require the same policy
   for default-base task prompts and fixed supplied tool subsets. Preserve the
   replacement-base citation/web policy and capability-gated Python guidance

@@ -5114,13 +5114,42 @@ def apply_agent_prompt_stability_patches() -> None:
     """Keep ordinary investigation prefixes stable without changing tool policy."""
     from onyx.chat import llm_loop, prompt_utils
     from onyx.deep_research import dr_loop
-    from onyx.prompts import tool_prompts
+    from onyx.prompts import chat_prompts, tool_prompts
+    from onyx.prompts import prompt_utils as placeholder_prompts
     from onyx.prompts.deep_research import dr_tool_prompts, orchestration_layer
     from onyx.prompts.deep_research import research_agent as research_prompts
     from onyx.prompts.coding_agent import coding_agent as coding_prompts
     from onyx.tools.fake_tools import research_agent, coding_agent
 
     _patch_investigation_source(llm_loop, "run_llm_loop", _PROMPT_STABILITY_CHAT_REPLACEMENTS)
+    if placeholder_prompts.REQUIRE_CITATION_GUIDANCE != chat_prompts.REQUIRE_CITATION_GUIDANCE:
+        raise RuntimeError("stale citation guidance in prompt placeholder consumer")
+    _patch_investigation_constant(
+        chat_prompts, prompt_utils, "REQUIRE_CITATION_GUIDANCE",
+        "DO NOT provide any links following the citations.",
+        "Do not append URLs to numeric citations. Citation numbers belong to the "
+        "current user turn: use numbers from the current context documents or tool "
+        "results obtained after the latest user message. Earlier assistant responses "
+        "and earlier-turn tool results may use the same numbers for different sources. "
+        "When citing a source from an earlier turn, use an inline descriptive Markdown "
+        "link to its known source URL, such as [Source title](URL), instead of copying "
+        "its old number or numbered link. You may reuse evidence still present in "
+        "the conversation without fetching it again; retrieve the source again if "
+        "you need a current numbered citation or missing or updated evidence. If its "
+        "URL is unavailable, retrieve it with an available tool or state the source "
+        "limitation; never invent a URL or citation number.",
+    )
+    placeholder_prompts.REQUIRE_CITATION_GUIDANCE = chat_prompts.REQUIRE_CITATION_GUIDANCE
+    _PROMPT_STABILITY_CONSTANTS.append((
+        chat_prompts, placeholder_prompts, "REQUIRE_CITATION_GUIDANCE",
+        chat_prompts.REQUIRE_CITATION_GUIDANCE,
+    ))
+    _patch_investigation_constant(
+        chat_prompts, prompt_utils, "CITATION_REMINDER",
+        'based on the "document" field of the documents.',
+        'based on the "document" field of the current turn\'s documents. For earlier-turn '
+        'sources, use descriptive links to known source URLs, not their old citation numbers.',
+    )
     _patch_investigation_source(
         dr_loop, "run_deep_research_llm_loop", _PROMPT_STABILITY_DR_REPLACEMENTS,
     )
@@ -5181,7 +5210,7 @@ def validate_agent_prompt_stability_patches() -> None:
     from onyx.deep_research import dr_loop
     from onyx.tools.fake_tools import research_agent, coding_agent
 
-    if len(_PROMPT_STABILITY_FUNCTIONS) != 3 or len(_PROMPT_STABILITY_CONSTANTS) != 9:
+    if len(_PROMPT_STABILITY_FUNCTIONS) != 3 or len(_PROMPT_STABILITY_CONSTANTS) != 12:
         raise RuntimeError("prompt stability installation missing or duplicated")
     for module, name, installed, source in _PROMPT_STABILITY_FUNCTIONS:
         if (

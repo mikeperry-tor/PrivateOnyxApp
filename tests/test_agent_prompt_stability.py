@@ -159,7 +159,7 @@ class PromptStabilityContracts(unittest.TestCase):
             wrapper._PROMPT_STABILITY_FUNCTIONS.append((module, name, function, 'retained'))
         owner = ModuleType('owner')
         owner.PROMPT = 'stable'
-        wrapper._PROMPT_STABILITY_CONSTANTS = [(owner, owner, 'PROMPT', 'stable')]*9
+        wrapper._PROMPT_STABILITY_CONSTANTS = [(owner, owner, 'PROMPT', 'stable')]*12
         with patch.dict(sys.modules, modules):
             for name in ['run_llm_loop', 'run_deep_research_llm_loop']:
                 with patch.object(caller, name, lambda: None):
@@ -192,6 +192,8 @@ class PromptStabilityContracts(unittest.TestCase):
             'onyx.prompts.deep_research.research_agent', 'onyx.prompts.deep_research.dr_tool_prompts',
             'onyx.prompts.coding_agent.coding_agent', 'onyx.tools.fake_tools.research_agent',
             'onyx.tools.fake_tools.coding_agent',
+            'onyx.prompts.chat_prompts',
+            'onyx.prompts.prompt_utils',
         ]
         for path in paths:
             parts = path.split('.')
@@ -207,6 +209,12 @@ class PromptStabilityContracts(unittest.TestCase):
             setattr(modules[consumer], name, value)
         bind(paths[3], paths[1], 'OPEN_URLS_GUIDANCE',
              'You should almost always use open_url after a web_search call. User URLs.')
+        bind(paths[10], paths[1], 'REQUIRE_CITATION_GUIDANCE',
+             'DO NOT provide any links following the citations.')
+        bind(paths[10], paths[11], 'REQUIRE_CITATION_GUIDANCE',
+             'DO NOT provide any links following the citations.')
+        bind(paths[10], paths[1], 'CITATION_REMINDER',
+             'based on the "document" field of the documents.')
         for suffix in ['', '_REASONING']:
             bind(paths[4], paths[2], 'ORCHESTRATOR_PROMPT'+suffix,
                  'You have currently used {current_cycle_count} of {max_cycles} max research cycles.')
@@ -218,8 +226,12 @@ class PromptStabilityContracts(unittest.TestCase):
             bind(paths[6], paths[8], 'OPEN_URLS_TOOL_DESCRIPTION'+suffix,
                  '## open_urls\nUse `open_urls`. You should almost always use open_urls after a web_search call'+tail+'.')
         with patch.dict(sys.modules, modules), patch.object(wrapper, '_patch_investigation_source'):
+            modules[paths[11]].REQUIRE_CITATION_GUIDANCE = 'stale'
+            with self.assertRaisesRegex(RuntimeError, 'stale citation guidance'):
+                wrapper.apply_agent_prompt_stability_patches()
+            modules[paths[11]].REQUIRE_CITATION_GUIDANCE = modules[paths[10]].REQUIRE_CITATION_GUIDANCE
             wrapper.apply_agent_prompt_stability_patches()
-        self.assertEqual(len(wrapper._PROMPT_STABILITY_CONSTANTS), 9)
+        self.assertEqual(len(wrapper._PROMPT_STABILITY_CONSTANTS), 12)
         for owner, consumer, name, value in wrapper._PROMPT_STABILITY_CONSTANTS:
             self.assertEqual(getattr(owner, name), getattr(consumer, name))
             self.assertEqual(value.format(current_cycle_count=0, max_cycles=19),

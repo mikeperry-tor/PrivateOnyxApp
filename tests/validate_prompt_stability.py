@@ -11,7 +11,7 @@ from unittest.mock import patch
 import wrapper_env_patches as patches
 from onyx.chat import llm_loop
 from onyx.chat.chat_state import ChatStateContainer
-from onyx.chat.models import ChatMessageSimple, ExtractedContextFiles
+from onyx.chat.models import ChatMessageSimple, ExtractedContextFiles, ToolCallSimple
 from onyx.configs.constants import MessageType, DocumentSource
 from onyx.context.search.models import SearchDoc, SearchDocsResponse
 from onyx.llm.model_response import (
@@ -156,6 +156,43 @@ def main_chat(steps=None, base_prompt=DEFAULT_SYSTEM_PROMPT, **overrides):
     return model.requests, state, packets
 
 
+def validate_prior_turn_citations():
+    old_url = 'https://example.org/earlier'
+    old_result = json.dumps({'documents': [
+        {'document': 1, 'link': old_url, 'contents': 'Earlier evidence'},
+    ]})
+    history = user_history() + [
+        ChatMessageSimple(message='', token_count=1, message_type=MessageType.ASSISTANT,
+            tool_calls=[ToolCallSimple(tool_call_id='prior-search',
+                tool_name=WebSearchTool.NAME, tool_arguments={'queries': ['earlier']})]),
+        ChatMessageSimple(message=old_result, token_count=30,
+            message_type=MessageType.TOOL_CALL_RESPONSE, tool_call_id='prior-search'),
+        ChatMessageSimple(message=f'Earlier evidence [[1]]({old_url}).', token_count=15,
+            message_type=MessageType.ASSISTANT),
+        ChatMessageSimple(message='Explain that evidence and compare if needed.',
+            token_count=12, message_type=MessageType.USER),
+    ]
+    link = f'[Earlier source]({old_url})'
+    for search in (False, True):
+        steps = ([(WebSearchTool.NAME, {'queries': ['current']})] if search else [])
+        steps.append(f'Earlier evidence {link}.' + (' Current evidence [1].' if search else ''))
+        requests, state, _ = main_chat(steps, simple_chat_history=history)
+        initial = rendered(requests[0]['prompt'])
+        assert REQUIRE_CITATION_GUIDANCE.strip() in initial
+        assert CITATION_REMINDER in initial
+        assert old_result in initial
+        answer = state.get_answer_tokens()
+        assert link in answer
+        assert f'[[1]]({old_url})' not in answer
+        if search:
+            assert '[[1]](https://example.org/evidence)' in answer
+            assert state.get_citation_to_doc()[1].document_id == 'https://example.org/evidence'
+            assert requests[0]['prompt'] == requests[1]['prompt'][:len(requests[0]['prompt'])]
+        else:
+            assert not state.get_citation_to_doc()
+    print('PINNED_PRIOR_TURN_CITATIONS_OK')
+
+
 def validate_main_chat():
     requests, state, packets = main_chat()
     assert len(requests) == 3
@@ -164,6 +201,8 @@ def validate_main_chat():
     initial = rendered(requests[0]['prompt'])
     assert CITATION_REMINDER in initial
     assert REQUIRE_CITATION_GUIDANCE.strip() in initial
+    fallback, _, _ = main_chat(['Done'], base_prompt='Answer using the available evidence.')
+    assert REQUIRE_CITATION_GUIDANCE.strip() in rendered(fallback[0]['prompt'])
     assert 'snippets completely answer the query' in initial
     open_def = requests[0]['tools'][1]['function']
     assert open_def['parameters']['properties']['urls']['maxItems'] == 10
@@ -449,6 +488,7 @@ def validate_constants():
 def validate_prompt_stability():
     validate_constants()
     validate_main_chat()
+    validate_prior_turn_citations()
     validate_research()
     validate_concurrent_batches()
     validate_report_output_limits()

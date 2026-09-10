@@ -848,6 +848,18 @@ guidance. File-reminder removal applies across all these branches; exact result 
 streaming, and persistence remain the file-delivery safeguards described above.
 Normalization cannot supply an artifact omitted by the model.
 
+Main-chat citation guidance distinguishes user turns. Upstream creates a fresh
+numeric citation mapping for each user turn, while preserved earlier tool results
+and assistant answers retain their old numbers. Those numbers can be absent or
+refer to a different source in the new turn. Numeric citations therefore use the
+current context documents or current-turn tool results. Earlier-turn evidence
+can be reused with descriptive Markdown links to known source URLs; copying old
+numbers or numbered links is unsafe. Retrieval is needed for a fresh numbered
+citation or missing/updated evidence, not merely because evidence is from an
+earlier turn. Descriptive links remain ordinary links, without numeric citation
+metadata. Both the citation guidance and reminder carry this distinction through
+the existing citation-policy gates; no history or citation mapping is rewritten.
+
 Both Deep Research tool-sharing settings receive the prompt cleanup: the
 orchestrator and nested research prompts retain their configured maximum
 budgets without a changing current-cycle number. Redundant first-cycle and
