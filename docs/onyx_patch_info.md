@@ -608,7 +608,8 @@ already aborted before invocation also clears only its matching token. Resume-bo
 clean EOF is not authoritative because the backend replay endpoint also returns
 cleanly on a buffer gap: it releases live ownership and asks the recovery-status
 route to confirm completion. An absent `current_run` clears the marker without
-another reload; an active run starts another bounded reconciliation. Pending
+another reload; an active run starts bounded recovery. If this was already a
+recovery replay, the companion waits for completion instead of restarting it. Pending
 suspension takes precedence over both send and resume EOF: the marker survives
 EOF during hiding or before the wake-up timer runs, and recovery still performs
 a hydration reload even if the run has since completed. An aborted status
@@ -665,7 +666,9 @@ to reload. The companion keeps the reconnecting notice visible and polls
 without reloading until the buffer is ready. A non-success stock resume response
 is returned unchanged to Onyx while immediately re-entering bounded
 reconciliation, covering a readiness race between the status probe and resume
-GET. Startup audits the native readiness-probe signature.
+GET. A failed resume after the reconciliation reload switches to completion
+waiting instead of repeating that reload. Startup audits the native
+readiness-probe signature.
 
 A retained marker is also re-evaluated after successful History API
 `pushState`/`replaceState` calls and `popstate`. The wrappers preserve the
@@ -694,8 +697,16 @@ response; that body owns completion while open even if a status snapshot says
 the run has completed. Clean EOF releases ownership and requires a fresh status
 confirmation, distinguishing actual completion from the resume endpoint's clean
 buffer-gap exit. If the stock page never establishes an owner, checks continue
-while active and completion triggers one final hydration reload. A later body
-failure, premature EOF, or genuine suspension can re-enter recovery. Restored
+while active and completion triggers one final hydration reload. A genuine suspension can re-enter recovery while replay remains healthy.
+If that recovery replay fails (HTTP, fetch, or body failure) or ends cleanly
+while the server still reports an active run, the persisted `single-wait` phase
+uses the same bounded completion polling as multi-model recovery. It shows a
+waiting notice, never automatically restarts that run from cursor zero again,
+and reloads once after completion to hydrate the saved result. This trades live
+updates after a failed replay for avoiding an endless replay/reload loop on
+large responses. The wait survives navigation, suspension, and replacement
+documents; explicit cancellation clears it and a new send starts fresh. Healthy
+replay has no added time limit, byte limit, or rendering-progress heuristic. Restored
 connectivity schedules pending phase work but does not
 manufacture another interruption or displace an active stock resume owner; an
 actual resumed-body failure owns that transition. Persisted recovery phase

@@ -1071,7 +1071,104 @@ async function main() {
     assert(response.status === 404, "failed stock resume response was changed");
     await browser.runTimers(2);
     await settle();
-    assert(statusCalls === 1 && browser.reloads() === 1, "failed stock resume did not immediately return to reconciliation");
+    assert(statusCalls === 1 && browser.reloads() === 0 && browser.pendingTimers().length === 1, "failed recovery resume did not wait for completion");
+  }
+
+  // A failed recovery replay must not repeatedly reload the same large run
+  // from cursor zero. Exercise each transport outcome across fresh documents.
+  for (const failureKind of ["body", "eof", "fetch", "http"]) {
+    let active = true;
+    let resumeController;
+    const failure = new Error("fixture replay failure");
+    const fetchImpl = (url) => {
+      if (String(url).startsWith("/api/chat/reconnect-status/")) {
+        return Promise.resolve(sessionResponse(active));
+      }
+      if (String(url).includes("/resume-stream")) {
+        if (failureKind === "fetch") return Promise.reject(failure);
+        if (failureKind === "http") return Promise.resolve(new Response("unavailable", { status: 503 }));
+        return Promise.resolve(new Response(new ReadableStream({
+          start(controller) { resumeController = controller; },
+        })));
+      }
+      throw new Error("recovery must never resend the chat");
+    };
+    const browser = createBrowser(fetchImpl, {
+      initialRecord: recoveryRecord({ pollPhase: "single", lastRecoveryAt: 1700000000000 }),
+    });
+    const response = await browser.window.fetch(`/api/chat/chat-session/${SESSION}/resume-stream?cursor=0`).catch(() => null);
+    if (resumeController) {
+      const reader = response.body.getReader();
+      // Slow consumption and a long quiet interval must not trigger recovery.
+      resumeController.enqueue(new TextEncoder().encode("fixture reasoning and tool packets\n"));
+      await reader.read();
+      browser.advance(5 * 60 * 1000);
+      await browser.dispatch("window", "online");
+      await browser.runTimers(2);
+      await settle();
+      assert(browser.reloads() === 0 && browser.pendingTimers().length === 0, "healthy slow replay was interrupted");
+      if (failureKind === "body") resumeController.error(failure);
+      else resumeController.close();
+      await reader.read().catch(() => null);
+    }
+    await settle();
+    for (let index = 0; index < 5; index += 1) {
+      await browser.runTimers(2);
+      await settle();
+    }
+    assert(browser.reloads() === 0, `${failureKind} recovery replay restarted from zero`);
+    const retained = JSON.parse(browser.storage.get(browser.key));
+    assert(retained.pollPhase === "single-wait", "failed replay did not persist completion waiting");
+    assert(browser.notices.length === 1, "completion waiting lacked visible feedback");
+    const restored = createBrowser(fetchImpl, { initialRecord: retained });
+    await restored.runTimers(2);
+    await settle();
+    assert(restored.reloads() === 0, "new document restarted a known failing replay");
+    restored.document.visibilityState = "hidden";
+    await restored.dispatch("document", "visibilitychange");
+    assert(restored.pendingTimers().length === 0, "hidden completion wait kept polling");
+    restored.document.visibilityState = "visible";
+    await restored.dispatch("document", "visibilitychange");
+    await restored.runTimers(2);
+    await settle();
+    assert(restored.reloads() === 0, "wake restarted a known failing replay");
+    restored.navigator.onLine = false;
+    await restored.dispatch("window", "offline");
+    assert(restored.pendingTimers().length === 0, "offline completion wait kept polling");
+    restored.navigator.onLine = true;
+    await restored.dispatch("window", "online");
+    await restored.runTimers(2);
+    await settle();
+    restored.window.history.pushState({}, "", `?chatId=${OTHER}`);
+    await restored.runTimers(2);
+    await settle();
+    assert(restored.reloads() === 0 && restored.pendingTimers().length === 0, "completion wait acted on another chat");
+    restored.window.history.pushState({}, "", `?chatId=${SESSION}`);
+    await restored.runTimers(2);
+    await settle();
+    assert(restored.reloads() === 0, "returning to the chat restarted failing replay");
+    active = false;
+    await restored.runTimers(2);
+    await settle();
+    assert(restored.reloads() === 1 && !restored.storage.has(restored.key), "completion did not hydrate the saved answer exactly once");
+    await restored.runTimers(3);
+    assert(restored.reloads() === 1, "final hydration looped");
+  }
+
+  for (const terminal of ["stop", "send"]) {
+    let calls = 0;
+    const browser = createBrowser(() => {
+      calls += 1;
+      return Promise.resolve(new Response(new ReadableStream({ start() {} })));
+    }, { initialRecord: recoveryRecord({ pollPhase: "single-wait" }) });
+    if (terminal === "stop") {
+      await browser.window.fetch(`/api/chat/stop-chat-session/${SESSION}`, { method: "POST" });
+      assert(!browser.storage.has(browser.key), "stop did not clear completion waiting");
+    } else {
+      await browser.window.fetch("/api/chat/send-chat-message", sendInit());
+      assert(JSON.parse(browser.storage.get(browser.key)).pollPhase === null, "new send inherited completion waiting");
+    }
+    assert(calls === 1 && browser.pendingTimers().length === 0, "terminal action duplicated work or kept old polling");
   }
 
   {

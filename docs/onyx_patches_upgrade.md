@@ -328,7 +328,9 @@ notice, and poll without reload. Once buffer metadata exists, require exactly
 one reconciliation reload. A non-success stock resume response must remain
 byte/status transparent to Onyx while immediately returning the marker to
 bounded reconciliation; it must not leave the reserved failure placeholder as
-the apparent terminal state.
+the apparent terminal state. After a reconciliation reload, a failed resume
+must enter persisted completion waiting with visible feedback, not another
+cursor-zero reload.
 Once an intentional companion reload is committed, verify every ordering of
 outgoing stream EOF/abort/failure, `visibilitychange`, and `pagehide` leaves the
 persisted phase unchanged. A same-realm `pageshow` must release that in-memory
@@ -345,8 +347,9 @@ and that cleanup abort must not erase recovery. A visible send or resume stream
 failure must enter the same bounded recovery path. Unsuspended send clean EOF clears only
 its own token; resume clean EOF must release ownership and use a fresh status
 check because the backend endpoint also returns cleanly on a replay gap. Prove
-confirmed completion clears without a reload and an active run enters another
-bounded reconciliation. For both send and resume on a second user turn, deliver
+confirmed completion clears without a reload and an active run enters bounded
+recovery. A prematurely ended recovery replay must wait for completion rather
+than repeat its cursor-zero reload. For both send and resume on a second user turn, deliver
 EOF while hidden and just after visibility returns but before recovery timers
 run. Require the marker to survive and exactly one reconciliation reload for
 both active and completed runs, with no resend or hidden-tab reload. Resolve an
@@ -364,6 +367,14 @@ recovery. Prove
 preserve their native call behavior, schedule nothing without a marker, and
 restart a retained multi-model recovery when client-side navigation returns to
 its `chatId`.
+
+Exercise HTTP, fetch, body-error, and clean-but-premature EOF outcomes after a
+single-model recovery reload. For each, require no further active-run reloads,
+bounded status polling with visible feedback, persistence across replacement
+documents and hide/show, and exactly one final reload after completion. A slow,
+healthy replay must remain its own completion owner without a new deadline.
+Verify navigation/offline pauses, cancellation, and a new send still release or
+supersede the waiting phase. The companion never resends the original prompt.
 
 Audit the stock HTML compression behavior, exact generated `server`, WebUI
 `location /`, and runner-start markers, both CSP policies, companion same-origin

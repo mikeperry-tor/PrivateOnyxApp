@@ -61,7 +61,7 @@
     if (value.hiddenAt !== null && !validTimestamp(value.hiddenAt, value.startedAt)) return false;
     if (value.lastRecoveryAt !== null && !validTimestamp(value.lastRecoveryAt, value.startedAt)) return false;
     if (value.pendingSince !== null && !validTimestamp(value.pendingSince, value.startedAt)) return false;
-    if (![null, "single", "multi"].includes(value.pollPhase)) return false;
+    if (![null, "single", "single-wait", "multi"].includes(value.pollPhase)) return false;
     if (!Number.isInteger(value.pollAttempt) || value.pollAttempt < 0 || value.pollAttempt > POLL_DELAYS_MS.length) return false;
     return true;
   }
@@ -186,13 +186,21 @@
     (document.body || document.documentElement).appendChild(notice);
   }
 
-  function showRecoveryNotice() {
-    if (!document || document.getElementById("private-onyx-recovery-notice")) return;
+  function showRecoveryNotice(waitingForCompletion = false) {
+    if (!document) return;
+    const message = waitingForCompletion
+      ? "Live reconnection failed. Waiting for the response to finish before reloading…"
+      : "Reconnecting to this response…";
+    const existing = document.getElementById("private-onyx-recovery-notice");
+    if (existing) {
+      existing.textContent = message;
+      return;
+    }
     const notice = document.createElement("div");
     notice.id = "private-onyx-recovery-notice";
     notice.setAttribute("role", "status");
     notice.setAttribute("aria-live", "polite");
-    notice.textContent = "Reconnecting to this response…";
+    notice.textContent = message;
     notice.style.cssText = "position:fixed;right:1rem;bottom:1rem;z-index:2147483647;max-width:24rem;padding:.75rem 1rem;border-radius:.5rem;background:#202124;color:#fff;font:14px/1.4 system-ui,sans-serif;box-shadow:0 2px 12px #0006";
     (document.body || document.documentElement).appendChild(notice);
   }
@@ -216,11 +224,15 @@
       currentChatId() === record.sessionId;
   }
 
-  function markForRecovery(token) {
+  function markForRecovery(token, failedReplay = false) {
     if (reloadingToken === token) return;
     const record = loadRecord();
     if (!record || record.token !== token) return;
     cancelRecoveryWork(token);
+    // A recovery replay has already restarted at cursor zero. Repeating that
+    // reload after another failure can loop forever on a large response.
+    // Persist completion waiting instead; a later suspension must not reset it.
+    if (failedReplay && record.pollPhase === "single") record.pollPhase = "single-wait";
     record.hiddenAt = now();
     record.pollAttempt = 0;
     if (!saveRecord(record)) {
@@ -280,7 +292,7 @@
       if (streamKind === "resume" && resumeOwnerToken === token) {
         resumeOwnerToken = null;
       }
-      markForRecovery(token);
+      markForRecovery(token, streamKind === "resume");
     });
     return new Response(transparent.readable, {
       status: response.status,
@@ -385,7 +397,7 @@
       if (!record || record.sessionId !== resumedSession) return result;
       return Promise.resolve(result).then((response) => {
         if (!response.ok) {
-          markForRecovery(record.token);
+          markForRecovery(record.token, true);
           return response;
         }
         const current = loadRecord();
@@ -397,7 +409,7 @@
         return wrapStreamResponse(response, record.token, "resume");
       }, (error) => {
         const current = loadRecord();
-        if (current && current.token === record.token) markForRecovery(record.token);
+        if (current && current.token === record.token) markForRecovery(record.token, true);
         throw error;
       });
     }
@@ -510,6 +522,11 @@
         return;
       }
     }
+    if (current.pollPhase === "single-wait" && payload.current_run != null) {
+      showRecoveryNotice(true);
+      scheduleStatus(current, false, "settle");
+      return;
+    }
     // The processing fence is published before the durable buffer writes its
     // first metadata. Reloading in that gap makes stock resume fail once and
     // leaves its persisted placeholder onscreen until another reconciliation.
@@ -548,13 +565,7 @@
         clearMatching(token);
         return;
       }
-      current.hiddenAt = now();
-      current.pollAttempt = 0;
-      if (!saveRecord(current)) {
-        showManualNotice();
-        return;
-      }
-      scheduleRecovery();
+      markForRecovery(token, true);
       return;
     }
 
@@ -582,7 +593,7 @@
     recoveryTimer = null;
     const record = loadRecord();
     if (!record || !recoveryEligible(record)) return;
-    if (record.pollPhase === "multi" && record.hiddenAt === null) {
+    if ((record.pollPhase === "multi" || record.pollPhase === "single-wait") && record.hiddenAt === null) {
       scheduleStatus(record, true, "settle");
       return;
     }
@@ -590,7 +601,7 @@
       scheduleStatus(record, true, "single-settle");
       return;
     }
-    if (record.pollPhase === "multi") {
+    if (record.pollPhase === "multi" || record.pollPhase === "single-wait") {
       record.hiddenAt = null;
       record.pollAttempt = 0;
       if (saveRecord(record)) scheduleStatus(record, true, "settle");

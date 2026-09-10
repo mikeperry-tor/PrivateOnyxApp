@@ -221,7 +221,10 @@ are not duplicate enforcement.
   single-model reload, settling stops once a successful stock resume response
   is observed and that body owns completion. If no resume owner appears,
   bounded checks continue and completion causes one final hydration reload.
-  Multi-model recovery also polls until its final reconciliation reload.
+  A failed recovery replay waits for completion using that same bounded polling
+  instead of repeatedly reloading from cursor zero. Multi-model recovery also
+  polls until its final reconciliation reload. Healthy slow replay has no added
+  deadline.
   Every awaited status result rechecks visibility, connectivity, and the
   selected chat and cancellation before it can mutate state or reload. EOF
   during a pending suspension retains its existing reconciliation work; it
