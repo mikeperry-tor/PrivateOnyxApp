@@ -160,47 +160,15 @@ make help
 
 ## First-run configuration
 
-Before the first start, copy `.env.wrapper.example` to `.env.wrapper`.
+Before the first start, copy [`.env.wrapper.example`](./.env.wrapper.example) to `.env.wrapper`.
 
-Edit `.env.wrapper` as needed, based on the `.env.wrapper.example` template.
+**Mandatory configuration**:
 
-Mandatory configuration:
+- Set at least one real teep key to use teep in `.env.wrapper`. [NearAI](https://cloud.near.ai/) is currently the only recommended provider, until Tinfoil resolves [security issues](https://github.com/tinfoilsh/cvmimage/pull/336#issuecomment-5331607827) that are [related to billing enforcement](https://github.com/tinfoilsh/cvmimage/issues/337).
+- You can [configure Onyx](#onyx-admin-ui-configuration) to use another inference provider other than teep, but one of these teep API keys must have a non-empty value for the stack to start. This value can be a placeholder (which is the default).
+- Set `CONTAINER_BIN=podman` to use Podman instead of Docker, but note that podman does not support the code agent sandboxing required by this stack. Rootless Docker 28+ is actually your most secure option.
 
-- **Teep LLM Provider/API config**:
-  - Set at least one real teep key to use teep in `.env.wrapper`. [NearAI](https://cloud.near.ai/) is currently the only recommended provider, until Tinfoil resolves [security issues](https://github.com/tinfoilsh/cvmimage/pull/336#issuecomment-5331607827) that are [related to billing enforcement](https://github.com/tinfoilsh/cvmimage/issues/337).
-  - You can [configure Onyx](#onyx-admin-ui-configuration) to use another inference provider other than teep, but one of these teep API keys must have a non-empty value for the stack to start. This value can be a placeholder (which is the default).
-
-Other key variables you may want to change:
-
-- **Container engine selection**:
-  - Set `CONTAINER_BIN=podman` to use Podman instead of Docker.
-  - On Linux, select a local rootless Docker context and leave
-    `CONTAINER_BIN=docker`; Make detects the daemon mode and its Unix socket.
-    Both lite and full mode support this path, including the Docker-socket code interpreter.
-    - You must perform a clean `make down-*` when switching engines; this is enforced
-    in the stack's startup code to prevent shared database corruption in the
-    bind-mounted `docker-data` directory. Otherwise, switching between engines is safe
-    to do at a later point.
-  - A Docker daemon configured with `userns-remap` exits during the startup
-    capability check, before the shared-data claim or Compose mutation. This
-    mode is intentionally unsupported because it is less secure than pure
-    rootless mode.
-  - On rootless Podman, the code interpreter tool and the code subagent are unavailable,
-    due to docker-from-docker launch compatibility issues.
-- **Tor, VPN, and Proxy Use**:
-  - Set `TOR_EGRESS_ENABLED=true` to route public agent Internet traffic through native Tor, and/or set `TOR_ONION_SERVICE_ENABLED=true` to publish the WebUI as a v3 onion service. `TOR_EXIT_COUNTRY` or `TOR_EXIT_NODE_FINGERPRINTS` may optionally constrain clearnet exits.
-  - Set `MYST_VPN_ENABLED=true` to enable the optional Myst VPN, then complete the [Myst VPN Setup](./README_OPTIONAL.md#optional-myst-vpn-setup) below before starting the stack.
-  - Set `EGRESS_UPSTREAM_PROXY_URL` to use an upstream proxy with or without the Mysterium VPN enabled. You can use your host Tor Browser SOCKS port here instead of launching the built-in Tor container.
-  - Native `TOR_EGRESS_ENABLED=true` Tor egress [cannot currently](./docs/plans/deferred/https_proxy_after_tor.md) be combined with `EGRESS_UPSTREAM_PROXY_URL`, but it can run alongside Myst.
-  - Use `TEEP_ROUTE_THROUGH_MYST_VPN=true` and/or `TAILSCALE_FUNNEL_ROUTE_THROUGH_MYST_VPN=true` to route teep or tailscale through Myst.
-    - Tor egress does not currently support routing Teep provider traffic or Tailscale traffic through Tor. Both tools currently lack comprehensive proxy support.
-- **Docker-host integration ports and optional LAN access**:
-  - `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` selects which TCP ports configured integrations may reach at exact `host.docker.internal`.
-    - Ollama, LM Studio, MCP servers, and other custom host services require their actual port in the list when used for anything other than `ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL`.
-  - Set `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` to let [Onyx MCP servers](./README_OPTIONAL.md#optional-external-mcp-servers) and [Onyx LLM inference](#onyx-llm-configuration) reach endpoints on your private LAN.
-  - MCP access to either kind of private endpoint also requires the saved Onyx **Admin → Security Hardening** setting described in the [MCP instructions](./README_OPTIONAL.md#optional-external-mcp-servers).
-  - **The agent's tools still cannot access your host or LAN**, regardless of any host or LAN configuration option value. This includes the code agent and code interpreter tool; even if you [grant network access to coding tools](./README_OPTIONAL.md#optional-network-access-for-the-code-interpreter). This is enforced through this stack's docker service network isolation, not Onyx code.
-  - **Enabling LAN access additionally will allow a compromised Onyx service to access anything on your LAN.**
+You can read [`.env.wrapper.example`](./.env.wrapper.example) and [README\_OPTIONAL.md](./README_OPTIONAL.md) for additional options, but you likely want to get the basic stack running first.
 
 ## Onyx Admin UI Configuration
 
@@ -232,9 +200,10 @@ For local inference, in `.env.wrapper` set `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS
 
 Verifiable private inference is only currently possible with Open Weight models. While it is [technically possible](https://www.anthropic.com/research/confidential-inference-trusted-vms) for closed weight models to support attestation-based verification, proprietary LLM labs [do not seem to be interested](https://www.anthropic.com/news/activating-asl3-protections) in offering privacy to end users.
 
-Among Open Weight models currently supported by NearAI and Tinfoil, `GLM-5.3-Flash` currently is the best option by far. It is very fast, supports both text and images, and has the lowest hallucination rate in its capability class (even lower than `GLM-5.3`).
+Among Open Weight models currently supported by NearAI and Tinfoil, [GLM-5.3-Flash](https://artificialanalysis.ai/models/glm-5-3-flash) currently is the best option by far. It is very fast, supports both text and images, and has the lowest hallucination rate in its capability class (even lower than [GLM-5.3](https://artificialanalysis.ai/models/glm-5-3)).
 
-For low-RAM local inference, your best bet is `Qwen3.8-27B`. With slighly more RAM, `Qwen3.8-Flash-Next` is a better choice. If you are interested in an uncensored version of either of these, [abliterlitics.dev provides a comprehensive comparison](https://abliterlitics.dev/models/qwen38-27b/#the-optimal-tradeoff).
+For low-RAM local inference, your best bet is [Qwen3.8-27B](https://artificialanalysis.ai/models/releases/qwen3-8-27b). With slighly more RAM, [Qwen3.8-Flash-Next](https://artificialanalysis.ai/models/qwen3-8-flash-next)
+is a better choice. If you are interested in an uncensored version of either of these, [abliterlitics.dev provides a comprehensive comparison](https://abliterlitics.dev/models/qwen38-27b/#the-optimal-tradeoff).
 
 Set `ONYX_AGENT_LLM_MAX_TOKENS` in `.env.wrapper` to the limit you want the stack to use (the default 900000 is good for GLM-5.3-Flash; 250000 is good for Qwen3.8 series).
 
