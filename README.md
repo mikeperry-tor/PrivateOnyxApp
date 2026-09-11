@@ -167,7 +167,7 @@ Edit `.env.wrapper` as needed, based on the `.env.wrapper.example` template.
 Mandatory configuration:
 
 - **Teep LLM Provider/API config**:
-  - Set at least one real teep key to use teep in `.env.wrapper`. [Tinfoil](https://tinfoil.sh/) and/or [NearAI](https://cloud.near.ai/) are recommended. Both have excellent TEE attestation coverage.
+  - Set at least one real teep key to use teep in `.env.wrapper`. [NearAI](https://cloud.near.ai/) is currently the only recommended provider, until Tinfoil resolves [security issues](https://github.com/tinfoilsh/cvmimage/pull/336#issuecomment-5331607827) that are [related to billing enforcement](https://github.com/tinfoilsh/cvmimage/issues/337).
   - You can [configure Onyx](#onyx-admin-ui-configuration) to use another inference provider other than teep, but one of these teep API keys must have a non-empty value for the stack to start. This value can be a placeholder (which is the default).
 
 Other key variables you may want to change:
@@ -220,19 +220,23 @@ The models supported by your API key from `.env.wrapper` should then be listed i
 
 The best privacy preserving provider aliases in teep are currently `neardirect` and `tinfoil_v3_direct`, which are the direct-connection versions of [NearAI](https://cloud.near.ai) and [Tinfoil.sh](https://tinfoil.sh), respectively.
 
-This stack can also use a local OpenAI-compatible, LM Studio, or Ollama chat endpoint through `host.docker.internal` or an explicitly enabled RFC1918 IP address. For local inference: in `.env.wrapper` set `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` for host inference ports; set`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` for LAN inference. RFC1918 names must end in `.local`, `.internal`, or `.home.arpa`; otherwise use
-literal IP addresses. An endpoint on `host.docker.internal` does not require the
-LAN setting, but its port must be selected.
+> Unfortunately, Tinfoil has recently blocked usage of the direct provider connections due to a [billing issue](https://github.com/tinfoilsh/cvmimage/issues/337), and the `tinfoil_v3_cloud` router is [not safe to use](https://github.com/tinfoilsh/cvmimage/pull/336#issuecomment-5331607827) with the sandboxed code agents in Onyx.
+
+This stack can also use a local OpenAI-compatible, LM Studio, or oMLX chat endpoint through `host.docker.internal` or an explicitly enabled RFC1918 IP address.
+
+For local inference, in `.env.wrapper` set `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` to the host inference API port. For LAN inference, set`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Local network hostnames must end in `.local`, `.internal`, or `.home.arpa`; otherwise use literal RFC1918 IP addresses.
 
 ### LLM recommendations
 
-Verifiable private inference is only currently possible with Open Weight models. While it is [technically possible](https://www.anthropic.com/research/confidential-inference-trusted-vms) for closed weight models to support attestation-based verification, proprietary LLM labs [do not seem to be interested](https://www.anthropic.com/news/activating-asl3-protections) in offering privacy to end users.
-
-Among Open Weight models currently supported by NearAI and Tinfoil, GLM-5.2 is the best option for text, and Kimi-K2.6 is the best option for text+images.
-
 > For a research agent like Onyx, the primary desirable property is a low hallucination rate. The [Artificial Analysis Omniscience Index](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) provides a [Hallucination Rate benchmark](https://artificialanalysis.ai/evaluations/omniscience#aa-omniscience-hallucination-rate) that is worth tracking for this purpose.
 
-Set `ONYX_AGENT_LLM_MAX_TOKENS` in `.env.wrapper` to the limit you want the stack to use (the default 900000 is good for GLM-5.2; 250000 is good for Kimi K2.6).
+Verifiable private inference is only currently possible with Open Weight models. While it is [technically possible](https://www.anthropic.com/research/confidential-inference-trusted-vms) for closed weight models to support attestation-based verification, proprietary LLM labs [do not seem to be interested](https://www.anthropic.com/news/activating-asl3-protections) in offering privacy to end users.
+
+Among Open Weight models currently supported by NearAI and Tinfoil, `GLM-5.3-Flash` currently is the best option by far. It is very fast, supports both text and images, and has the lowest hallucination rate in its capability class (even lower than `GLM-5.3`).
+
+For low-RAM local inference, your best bet is `Qwen3.8-27B`. With slighly more RAM, `Qwen3.8-Flash-Next` is a better choice. If you are interested in an uncensored version of either of these, [abliterlitics.dev provides a comprehensive comparison](https://abliterlitics.dev/models/qwen38-27b/#the-optimal-tradeoff).
+
+Set `ONYX_AGENT_LLM_MAX_TOKENS` in `.env.wrapper` to the limit you want the stack to use (the default 900000 is good for GLM-5.3-Flash; 250000 is good for Qwen3.8 series).
 
 ### Onyx Search and Web Crawler Provider Configuration
 
