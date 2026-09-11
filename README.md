@@ -46,20 +46,20 @@ The Docker Compose files in this stack relies on the following components:
 
 ## Prerequisites
 
-- Docker Engine API 1.44+ (Engine 25.0+), including native-Linux rootless
-  Docker, or rootless Podman. Podman 5.4.2 is the currently validated baseline;
-  older versions may work when the startup checks pass. Docker's daemon-wide
-  `userns-remap` mode is detected and rejected; use ordinary or rootless Docker
-  instead.
-- Docker Compose 2.35.0 or later. This is required with both Docker and Podman.
-- `make` and `python`
+- Docker Compose 2.35.0 or later is required with both Docker and Podman.
+- Docker Engine 25 is the minimum supported Docker Engine.
+  - Docker Engine 28+ enables additional network isolation security.
+- Podman 5.4.2+ is the minimum tested Podman version;
+  older versions may work when the startup checks pass.
 - `uv` when using the optional local MLX embedding server on macOS.
+- `make` and `python`
 
-The Docker Compose version is most important. Many Linux distributions ship
-with a docker-compose that is too old, and podman's podman-compose lacks key
-features required by this stack.
+### Ensuring Docker Compose Compatibility
 
-Podman-only host does not need all of Docker installed, but it does
+The Docker Compose version is most likely requirement to fail. Many Linux
+distributions ship with a docker-compose that is too old, and podman's
+`podman-compose` version lacks key features required by this stack.
+A podman-only host does not need all of Docker installed, but it does
 need an official Docker docker-compose binary v2.35.0 or later.
 
 Check the version selected for your container engine:
@@ -78,18 +78,14 @@ The manual per-user installation places the binary at
 `~/.docker/cli-plugins/docker-compose`, where it can be used by either Docker
 or Podman.
 
-If you use podman on Linux, ensure that you enable Podman's rootless API
-socket before starting the stack:
+### Rootless Docker on Linux
 
-```bash
-systemctl --user enable --now podman.socket
-```
+Rootless Docker with Docker Engine v28+ is the most secure option for running
+this stack, since the docker socket has no special priviledges and newer Docker
+Engine 28+ network isolation features can be enabled to further isolate the code agent
+sandbox from the VM network.
 
-For rootless Docker on Debian or Ubuntu, first try
-`docker --context rootless info --format '{{json .SecurityOptions}}'`. If it
-includes `name=rootless`, select that context and skip installation. Otherwise,
-install RootlessKit, then install and enable the per-user Docker service
-(Docker Engine must already be installed):
+For rootless Docker on Debian or Ubuntu:
 
 ```bash
 sudo apt-get update
@@ -102,15 +98,33 @@ docker info --format '{{json .SecurityOptions}}'
 
 The final output must include `name=rootless`. Debian's `docker.io` package may
 place the setup tool in `/usr/share/docker.io/contrib`; add that directory to
-`PATH` if the command is not found. If installation stops only because a
+`PATH` if the command is not found. If installation stops because a
 rootful daemon is already running and you intentionally want both daemons,
-rerun the setup command with `--force`. The setup tool normally creates the
-`rootless` context; if it does not, create it once with
-`docker context create rootless --docker
-"host=unix:///run/user/$(id -u)/docker.sock"`. Switch between the daemons with
-`docker context use rootless` and `docker context use default`. To keep the
-per-user daemon running across logout and start it at boot, also run
+rerun the setup command with `--force`.
+
+The setup tool normally creates the `rootless` context; if it does not, create it once with
+`docker context create rootless --docker "host=unix:///run/user/$(id -u)/docker.sock"`.
+
+Switch between the daemons with `docker context use rootless` and `docker context use default`.
+
+To keep the per-user daemon running across logout and start it at boot, also run
 `sudo loginctl enable-linger "$USER"`.
+
+### Rootless Podman
+
+While Podman has gained a reputation for improved security over Docker due to being the first with rootless support, this is not the case with respect to the security features used by this stack.
+
+In particular, podman does not support the code agent sandboxing required by
+this stack, so the python tool and code subagents will be completely disabled.
+Additionally, podman does not support stronger network isolation present in
+Docker Engine 28+.
+
+However, if you insist on podman on Linux, ensure that you enable Podman's rootless API
+socket before starting the stack:
+
+```bash
+systemctl --user enable --now podman.socket
+```
 
 ## Running the Stack
 
@@ -166,9 +180,6 @@ Before the first start, copy [`.env.wrapper.example`](./.env.wrapper.example) to
 
 - Set at least one real teep key to use teep in `.env.wrapper`. [NearAI](https://cloud.near.ai/) is currently the only recommended provider, until Tinfoil resolves [security issues](https://github.com/tinfoilsh/cvmimage/pull/336#issuecomment-5331607827) that are [related to billing enforcement](https://github.com/tinfoilsh/cvmimage/issues/337).
 - You can [configure Onyx](#onyx-admin-ui-configuration) to use another inference provider other than teep, but one of these teep API keys must have a non-empty value for the stack to start. This value can be a placeholder (which is the default).
-- Set `CONTAINER_BIN=podman` to use Podman instead of Docker, but note that podman does not support the code agent sandboxing required by this stack. Rootless Docker 28+ is actually your most secure option.
-
-You can read [`.env.wrapper.example`](./.env.wrapper.example) and [README\_OPTIONAL.md](./README_OPTIONAL.md) for additional options, but you likely want to get the basic stack running first.
 
 ## Onyx Admin UI Configuration
 
@@ -230,9 +241,10 @@ Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Sear
 
 ## Additional Optional Configuration
 
-See [README\_OPTIONAL.md](./README_OPTIONAL.md) for instructions on configuring
-native Tor support, remote access via Tailscale Funnel, an outbound proxy,
-Myst VPN, and RAG document search.
+Read [`.env.wrapper.example`](./.env.wrapper.example) and
+[README\_OPTIONAL.md](./README_OPTIONAL.md) for additional options, including
+native Tor support, VPN support, proxy support, MCP support, local inference,
+remote access via Tailscale Funnel, and RAG document search.
 
 ## Upgrading the Stack
 
