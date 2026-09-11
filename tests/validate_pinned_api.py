@@ -13,6 +13,49 @@ from uuid import UUID
 import wrapper_env_patches as patches
 
 
+def _validate_model_display_names() -> None:
+    from unittest.mock import patch
+
+    import model_display_name_patch
+    from onyx.llm.constants import LlmProviderNames
+    from onyx.server.manage.llm import api, models
+
+    model_display_name_patch.install()
+    assert api._get_openai_compatible_server_response._wrapper_model_display_names
+    payload = {"data": [
+        {"id": "mlx-community/Example-4bit", "name": "Example"},
+        {"id": "id-only"},
+        {"id": "done", "name": "Done (done)"},
+    ]}
+    with patch.object(api, "_get_openai_compatible_models_response", return_value=payload) as fetch, \
+            patch.object(api, "_resolve_api_key", return_value=None):
+        discovered = api.get_openai_compatible_server_available_models(
+            models.OpenAICompatibleModelsRequest(api_base="http://fixture/v1"),
+            None, None,
+        )
+    fetch.assert_called_once_with(
+        url="http://fixture/v1/models", source_name="OpenAI-Compatible", api_key=None,
+    )
+    assert {m.name: m.display_name for m in discovered} == {
+        "mlx-community/Example-4bit": "Example (mlx-community/Example-4bit)",
+        "id-only": "id-only", "done": "Done (done)",
+    }
+    for provider in (LlmProviderNames.OPENAI_COMPATIBLE, LlmProviderNames.OPENROUTER):
+        row = SimpleNamespace(
+            id=1, name="mlx-community/Example-4bit", display_name="Example",
+            custom_display_name="Admin label", is_visible=True,
+            max_input_tokens=8192, llm_model_flow_types=[],
+        )
+        view = models.ModelConfigurationView.from_model(row, provider)
+        assert view.display_name == (
+            "Example (mlx-community/Example-4bit)"
+            if provider == LlmProviderNames.OPENAI_COMPATIBLE else "Example"
+        )
+        assert view.name == row.name
+        assert view.custom_display_name == "Admin label"
+        assert row.display_name == "Example"
+
+
 def _validate_github_egress() -> None:
     import io
     import os
@@ -1500,6 +1543,7 @@ if __name__ == "__main__":
     validate_native_tools(background=False)
     _validate_native_ssrf_contract()
     _validate_new_network_surface_contract()
+    _validate_model_display_names()
     _validate_github_egress()
     _validate_python_tool_identity()
     _validate_python_tool_generated_id_identity()

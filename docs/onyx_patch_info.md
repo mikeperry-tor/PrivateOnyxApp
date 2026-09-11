@@ -412,6 +412,21 @@ implicit loopback bypass disabled. In direct Obscura mode this does not create
 a crawler fallback; in the default stock mode it carries the intentionally
 retained crawler fallback through the public bridge.
 
+## OpenAI-compatible model labels
+
+`sitecustomize_api_server/model_display_name_patch.py` formats discovered and
+saved OpenAI-Compatible model display names as `Description (api-id)`, including
+oMLX endpoints configured with that provider type. ID-only labels and labels
+already ending in the same parenthesized ID are not duplicated. Explicit admin
+display-name overrides retain native precedence. API IDs, model capabilities,
+inference routing, and other provider types retain upstream behavior.
+
+The patch wraps the provider-specific discovery response helper and
+`ModelConfigurationView.from_model`; saved labels are formatted on read without
+a database migration or WebUI patch. Existing providers therefore need only an
+API restart and model-list reload. Startup validates both callable signatures
+and the discovery consumer's source mapping before installing either wrapper.
+
 ## Telemetry, automatic fetches, and WebUI egress
 
 The wrapper explicitly overrides the pinned images' optional reporting and

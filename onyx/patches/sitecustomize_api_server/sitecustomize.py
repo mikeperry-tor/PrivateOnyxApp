@@ -44,6 +44,7 @@ def _install() -> None:
     )
     from open_url_limit_patch import install as install_open_url_limit
     from github_egress_patch import install as install_github_egress
+    from model_display_name_patch import install as install_model_display_names
     from onyx_crawler_egress_patch import install as install_onyx_crawler
     from onyx_crawler_egress_patch import use_obscura_browser
     from url_identity_preservation_patch import (
@@ -57,6 +58,7 @@ def _install() -> None:
     apply_llm_max_tokens_override_patch()
     apply_open_url_char_limit_patches()
     apply_configured_inference_proxy_patch()
+    install_model_display_names()
     apply_mcp_egress_proxy_patch()
     apply_playwright_helper_proxy_patch()
     install_github_egress()

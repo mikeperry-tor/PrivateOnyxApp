@@ -790,6 +790,14 @@ host-port and LAN opt-ins remain the destination authority; model discovery
 must not select the public bridge, add a direct LAN exception, or weaken mixed
 and non-private DNS-answer rejection.
 
+Re-audit the [OpenAI-compatible model-label patch](onyx_patch_info.md#openai-compatible-model-labels):
+the provider-specific discovery helper must still map `/v1/models` `name` to
+`display_name` and `id` to the inference model name. Validate discovery and saved
+`ModelConfigurationView.from_model` labels against the selected image, including
+oMLX-style IDs, ID-only names, duplicate suffix prevention, admin overrides, and
+unaffected other providers. Run `make check` and `make test-patch-images`. Remove
+the patch when native configuration can provide the same automatic labels.
+
 Verify `sitecustomize_api_server` is the only API bootstrap in both modes,
 neutral shared helpers are imported rather than executed, and patch drift is
 startup-fatal. Confirm `OpenURLToolOverrideKwargs.max_urls` remains ten and
