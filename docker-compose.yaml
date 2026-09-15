@@ -640,7 +640,6 @@ services:
       - ${TEEP_HOST:+${TEEP_HOST}:}${HOST_PORT_TEEP:-8337}:8337
     environment:
       TEEP_LISTEN_ADDR: "${TEEP_LISTEN_ADDR:-0.0.0.0:8337}"
-      TEEP_MAX_CONNS: "${TEEP_MAX_CONNS:-6}"
       TEEP_SERVE_ARGS: "${TEEP_SERVE_ARGS:---offline}"
       VENICE_API_KEY: "${TEEP_VENICE_API_KEY:-}"
       # Teep requires at least one nonempty provider key to start. Inert
