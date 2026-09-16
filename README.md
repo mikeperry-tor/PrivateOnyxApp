@@ -176,10 +176,9 @@ make help
 
 Before the first start, copy [`.env.wrapper.example`](./.env.wrapper.example) to `.env.wrapper`.
 
-**Mandatory configuration**:
+Set at least one real teep key to use teep in `.env.wrapper`. [NearAI](https://cloud.near.ai/) is currently the only recommended provider, until Tinfoil resolves [security issues](https://github.com/tinfoilsh/cvmimage/pull/336#issuecomment-5331607827) that are [related to billing enforcement](https://github.com/tinfoilsh/cvmimage/issues/337).
 
-- Set at least one real teep key to use teep in `.env.wrapper`. [NearAI](https://cloud.near.ai/) is currently the only recommended provider, until Tinfoil resolves [security issues](https://github.com/tinfoilsh/cvmimage/pull/336#issuecomment-5331607827) that are [related to billing enforcement](https://github.com/tinfoilsh/cvmimage/issues/337).
-- You can [configure Onyx](#onyx-admin-ui-configuration) to use another inference provider other than teep, but one of these teep API keys must have a non-empty value for the stack to start. This value can be a placeholder (which is the default).
+Alternatively, you can [configure Onyx](#onyx-llm-configuration) to use another inference provider other than teep, including [local inference](#local-inference).
 
 ## Onyx Admin UI Configuration
 
@@ -201,9 +200,16 @@ The best privacy preserving provider aliases in teep are currently `neardirect` 
 
 > Unfortunately, Tinfoil has recently blocked usage of the direct provider connections due to a [billing issue](https://github.com/tinfoilsh/cvmimage/issues/337), and the `tinfoil_v3_cloud` router is [not safe to use](https://github.com/tinfoilsh/cvmimage/pull/336#issuecomment-5331607827) with the sandboxed code agents in Onyx.
 
+### Local Inference
+
 This stack can also use a local OpenAI-compatible, LM Studio, or oMLX chat endpoint through `host.docker.internal` or an explicitly enabled RFC1918 IP address.
 
-For local inference, in `.env.wrapper` set `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` to the host inference API port. For LAN inference, set`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Local network hostnames must end in `.local`, `.internal`, or `.home.arpa`; otherwise use literal RFC1918 IP addresses.
+For local inference on the Onyx host machine, in `.env.wrapper` set `ONYX_INTEGRATIONS_ALLOWED_HOST_PORTS` to the host inference API port.
+
+For LAN inference (or inference across a VM boundary),
+set`ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true`. Local network hostnames must
+end in `.local`, `.internal`, or `.home.arpa`; otherwise use literal RFC1918 IP
+addresses.
 
 ### LLM recommendations
 
