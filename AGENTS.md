@@ -19,7 +19,7 @@ implementation. If the implementation and docs disagree, treat that as a bug
 to resolve or report. Do not paper over drift with vague wording; do not allow
 unrelated drift to persist without reporting it to the user.
 
-- `README.md` - user-facing setup instructions, privacy properties, and option consequences. Keep deep implementation details out of this document.
+- `README*.md` - user-facing setup instructions, privacy properties, and optional configuration, and lists of key patches. Keep deep implementation details out of these documents.
 - `docs/request_handling.md` - `web_search`, the built-in crawler and
   `open_url`, selectable browser transport, lifecycle waits, body/DOM limits,
   cookies, and anti-bot behavior.
@@ -232,7 +232,7 @@ This stack protects private research, document contents, browsing behavior, infe
   - Update AGENTS.md only when repository-wide invariants, documentation
     routing, supported workflows, or key locations change. Put subsystem
     behavior and required validation in the owning document.
-  - README.md is for user-facing deployment properties, not implementation details.
+  - README\*.md files are for user-facing deployment properties, not implementation details.
   - Documentation describes the current system and its standing requirements.
     Before updating it, ask what lasting behavior, configuration, constraint,
     rationale, or validation requirement changes. If none, leave it unchanged.
