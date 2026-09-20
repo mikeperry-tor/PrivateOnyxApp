@@ -10,10 +10,31 @@ from opensearch_runtime_validation import (
     _bulk_documents,
     _heap_usage_summary,
     _vector,
+    _validate_disk_settings,
 )
 
 
 class OpenSearchRuntimeValidationTests(unittest.TestCase):
+    def test_disk_policy_detects_overrides_and_disabled_protection(self) -> None:
+        configured = {
+            "cluster.routing.allocation.disk." + key: value
+            for key, value in {
+                "threshold_enabled": "true", "watermark.low": "50gb",
+                "watermark.high": "25gb", "watermark.flood_stage": "10gb",
+            }.items()
+        }
+        self.assertEqual(
+            _validate_disk_settings(configured, {"defaults": configured})["watermark.high"],
+            "25gb",
+        )
+        key = "cluster.routing.allocation.disk.watermark.high"
+        for layer in ("persistent", "transient"):
+            with self.subTest(layer=layer), self.assertRaisesRegex(ValidationError, "overridden"):
+                _validate_disk_settings(configured, {"defaults": configured, layer: {key: "90%"}})
+        disabled = {**configured, "cluster.routing.allocation.disk.threshold_enabled": "false"}
+        with self.assertRaisesRegex(ValidationError, "must remain enabled"):
+            _validate_disk_settings(disabled, {"defaults": disabled})
+
     def test_vectors_are_normalized_and_nonzero(self) -> None:
         for number in (0, 1, 17, 999):
             vector = _vector(number)

@@ -99,6 +99,13 @@ connectors saved with `http://localhost:8091/` must be recreated with
 
 ## Web Connector Server
 
+Full-mode indexing requires sufficient free disk space. The default OpenSearch
+reserves are 50/25/10 GiB (low/high/flood stage), independent of disk capacity.
+See [storage policy](resource_minimization.md#storage-and-indexing) for the fixed internal policy
+and existing cluster-setting precedence. A flood-stage block clears when free
+space rises above the high reserve; deleting index data is not required merely
+to change the configured reserves.
+
 The document HTTP listener binds without reverse hostname lookup. Local startup
 and health do not depend on host DNS; loopback-peer admission, read-only path
 checks, connection limits, and socket deadlines remain unchanged.

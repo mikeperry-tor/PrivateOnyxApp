@@ -213,6 +213,32 @@ def _assert_no_failure_counter_increase(
             )
 
 
+def _validate_disk_settings(
+    configured: dict[str, str], cluster: dict[str, Any]
+) -> dict[str, str]:
+    prefix = "cluster.routing.allocation.disk."
+    effective = {
+        **cluster.get("defaults", {}),
+        **cluster.get("persistent", {}),
+        **cluster.get("transient", {}),
+    }
+    result = {}
+    for suffix in (
+        "threshold_enabled", "watermark.low", "watermark.high", "watermark.flood_stage"
+    ):
+        key = prefix + suffix
+        value = configured.get(key)
+        if not value or effective.get(key) != value:
+            raise ValidationError(
+                f"disk setting {key} is missing or overridden: "
+                f"configured={value!r}, effective={effective.get(key)!r}"
+            )
+        result[suffix] = value
+    if result["threshold_enabled"] != "true":
+        raise ValidationError("OpenSearch disk protection must remain enabled")
+    return result
+
+
 def _validate_static_runtime(client: OpenSearchClient, expected_version: str | None) -> dict[str, Any]:
     root = client.request("GET", "/")
     if not isinstance(root, dict):
@@ -225,6 +251,9 @@ def _validate_static_runtime(client: OpenSearchClient, expected_version: str | N
     if not isinstance(nodes, dict):
         raise ValidationError("nodes response is malformed")
     node = _only_node(nodes)
+    flat_nodes = client.request("GET", "/_nodes/settings?flat_settings=true")
+    cluster = client.request("GET", "/_cluster/settings?flat_settings=true&include_defaults=true")
+    disk_settings = _validate_disk_settings(_only_node(flat_nodes)["settings"], cluster)
     heap = node.get("jvm", {}).get("mem", {}).get("heap_max_in_bytes")
     allocated = node.get("os", {}).get("allocated_processors")
     configured = node.get("settings", {}).get("node", {}).get("processors")
@@ -287,6 +316,7 @@ def _validate_static_runtime(client: OpenSearchClient, expected_version: str | N
         "heap_max_bytes": heap,
         "allocated_processors": allocated,
         "plugin_count": len(plugins),
+        "disk_settings": disk_settings,
         "performance_analyzer_agent_disabled": True,
     }
 

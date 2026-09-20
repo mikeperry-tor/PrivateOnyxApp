@@ -334,8 +334,19 @@ are owned by [internal network security](internal_network_security.md#docker-gat
   Performance Analyzer, disabled Query Insights top-N collection, monthly
   body-free audit initialization, and zero replicas for newly created Onyx
   indices.
+- Full-mode OpenSearch uses free-space disk watermarks: 50 GiB low, 25 GiB
+  high, and 10 GiB flood stage. These reserves do not grow with disk capacity.
+  Disk protection remains enabled: low/high constrain shard allocation and
+  flood stage makes affected indices read-only; writes recover once free space
+  rises above the high reserve. These are fixed internal Compose settings,
+  not user-facing wrapper options.
 - These are static startup/current-volume settings. There is no administrative
   sidecar, runtime cluster mutation, or automatic existing-volume migration.
+  Existing persistent/transient cluster settings take precedence over Compose;
+  operators must explicitly reset conflicting disk settings through the native
+  cluster settings API to use the Compose policy. The live and image gates
+  verify effective watermarks against startup settings and require disk
+  protection to remain enabled.
 - MinIO uses the `slowest` scanner profile.
 - API and background file logging is disabled. Their application logs use
   container stdout/stderr and the existing bounded engine log policy instead

@@ -1248,7 +1248,8 @@ Other retained behavior has its own focused tests and upgrade checks:
   single-attempt shim forwarding, and accepted-request shutdown draining;
 - static single-node OpenSearch policy: 512 MiB fixed heap,
   `node.processors=4`, disabled Performance Analyzer and Query Insights top-N
-  collection, monthly body-free audit initialization, and zero replicas for
+  collection, fixed 50/25/10 GiB free-space disk watermarks with disk
+  protection enabled, monthly body-free audit initialization, and zero replicas for
   newly created Onyx indices, without a runtime migration service;
 - host publisher, Tailscale, MinIO, authentication, and Teep integration.
 

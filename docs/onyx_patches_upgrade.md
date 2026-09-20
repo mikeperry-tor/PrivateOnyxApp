@@ -102,6 +102,9 @@ Docker-only. `make test-all-images` includes the security gate.
    not silently pull or build a substitute. Patch-validation containers and the
    disposable OpenSearch container have no external network; OpenSearch uses
    only its own loopback TLS endpoint.
+   OpenSearch validation must also verify that disk protection is enabled and
+   effective low/high/flood-stage watermarks match the Compose startup policy,
+   including detection of conflicting persistent or transient cluster overrides.
 5. Inspect effective Compose models and complete every practical live-matrix
    row available in the environment. Record rows blocked by credentials,
    funding, provider stability, private documents, or long runtimes.

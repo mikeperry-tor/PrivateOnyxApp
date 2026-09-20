@@ -1178,6 +1178,18 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         for forbidden in ("example.com", "--check-ready", "/ready"):
             self.assertNotIn(forbidden, commands)
 
+    def test_full_storage_watermarks_match_across_engines(self) -> None:
+        for overlays in ((), (
+            "docker-compose.podman.yml",
+            "docker-compose.podman-full.yml",
+        )):
+            with self.subTest(overlays=overlays):
+                model = _compose_model("full", *overlays)
+                env = model["services"]["opensearch"]["environment"]
+                for level, value in (("low", "50gb"), ("high", "25gb"), ("flood_stage", "10gb")):
+                    self.assertEqual(env[f"cluster.routing.allocation.disk.watermark.{level}"], value)
+                self.assertEqual(env["cluster.routing.allocation.disk.threshold_enabled"], "true")
+
     def test_full_storage_and_background_power_defaults(self) -> None:
         services = _compose_model("full")["services"]
         opensearch = services["opensearch"]
@@ -1186,6 +1198,15 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             "-Xms512m -Xmx512m",
         )
         self.assertEqual(opensearch["environment"]["node.processors"], "4")
+        self.assertEqual(
+            opensearch["environment"]["cluster.routing.allocation.disk.threshold_enabled"],
+            "true",
+        )
+        for level, value in (("low", "50gb"), ("high", "25gb"), ("flood_stage", "10gb")):
+            self.assertEqual(
+                opensearch["environment"][f"cluster.routing.allocation.disk.watermark.{level}"],
+                value,
+            )
         self.assertEqual(
             opensearch["environment"]["DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI"],
             "true",
