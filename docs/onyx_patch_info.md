@@ -1300,8 +1300,11 @@ direct public network.
 
 Lite and full overlays mount the same named API bootstrap. Full mode adds local
 RAG services; lite mode does not install an anonymous substitute bootstrap.
-The optional code-interpreter network overlay adds only the executor network
-and bridge selected by the strict runtime patch.
+The optional code-interpreter network overlay adds the executor network and
+bridge and configures the controller through native
+`PYTHON_EXECUTOR_DOCKER_NETWORK` and `PYTHON_EXECUTOR_DOCKER_RUN_ARGS` settings.
+The separate API capability patch describes that restricted access to the model;
+it does not configure executor networking.
 
 The nginx service additionally mounts the tracked restrictive CSP fragment,
 WebUI reconnect HTTP/server fragments and asset, and strict startup wrapper.
