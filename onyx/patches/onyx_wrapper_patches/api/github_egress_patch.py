@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
+from onyx_wrapper_patches.common.config import _validated_fixed_proxy_url
+
 import inspect
 import os
 
 PUBLIC_PROXY_URL = "http://onyx-public-egress-bridge:3128"
 
 
-def _validate_proxy() -> None:
-    if os.environ.get("ONYX_HELPER_HTTP_PROXY_URL") != PUBLIC_PROXY_URL:
-        raise RuntimeError(
-            "GitHub egress requires ONYX_HELPER_HTTP_PROXY_URL=" + PUBLIC_PROXY_URL
-        )
 
 
 def _public_get(url, headers=None, timeout=15, follow_redirects=True, *, stream=False):
@@ -70,3 +67,7 @@ def install() -> None:
     _validate_target(github, onyx_url)
     github.ssrf_safe_get = _public_get
     print("sitecustomize_api_server: routed GitHub downloads through public egress without local DNS validation")
+
+
+def _validate_proxy() -> None:
+    _validated_fixed_proxy_url("ONYX_HELPER_HTTP_PROXY_URL", "onyx-public-egress-bridge")

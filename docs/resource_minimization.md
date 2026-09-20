@@ -156,10 +156,15 @@ hour. Do not copy fixed counts into documentation.
   usage rows; disabling it avoids one idle recorder thread and its bounded
   queue in every worker process. API-side usage and cost reporting remains
   enabled for user-attributed generations.
+- Only the materialized self-hosted schedule is transformed; imported templates
+  remain untouched. Validation rejects duplicate names, wrong retained task
+  identifiers/cadences, unknown producers, and monitoring-queue destinations.
 - Beat reloads the materialized schedule every five minutes. The upstream
   `DynamicTenantScheduler.tick()` implementation is not replaced: its local
   marker represents event-loop liveness, while schedule-refresh failures remain
-  logged application errors.
+  logged application errors. Native reload compares names when the multiplier
+  is unchanged and can retain stale same-name task/cadence/options; pinned
+  validation checks installed entries separately without changing persistence.
 - A stdlib-only watchdog checks Beat's marker every five minutes and restarts
   only Beat after the 20-minute startup grace and two missing observations or a
   stale marker. It does not enqueue Redis heartbeat work or import the Onyx
@@ -406,7 +411,7 @@ are owned by [internal network security](internal_network_security.md#docker-gat
   their focused tests.
 - Background schedules, workers, and Beat liveness:
   `onyx/background_entrypoint.py`, `onyx/beat_liveness_watchdog.py`,
-  `onyx/patches/sitecustomize_background/`, and
+  `onyx/patches/onyx_wrapper_patches/background/resource_policy.py`, and
   `tests/validate_pinned_background.py`.
 - API database/thread pools and API/background file-log suppression:
   `docker-compose.yaml`, `compose_overlays/docker-compose.full.yml`, and the

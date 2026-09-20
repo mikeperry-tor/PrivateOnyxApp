@@ -63,6 +63,17 @@ with `MYST_VPN_ENABLED=true`; an upstream proxy can be used in either mode.
 
 ## Route classes
 
+Stack-owned Onyx fixed-proxy values are stripped and then compared exactly
+with their canonical `http://onyx-public-egress-bridge:3128` or
+`http://onyx-host-egress-bridge:3128` URL. Empty values, trailing slashes,
+credentials, and alternate scheme/host/port spellings are rejected. This
+applies to inference, MCP, Web Connector, stock crawler, GitHub, and the shared
+Playwright helper at their existing failure boundaries. Playwright's context
+selector accepts only the two exact URLs or `None` for the helper default;
+there is no empty-string direct mode. Doc-drop retains host-proxy selection.
+These constants introduce no user-facing proxy controls and do not replace
+the independent final-hop destination policy.
+
 | Class | Callers | Fixed bridge | Policy |
 | --- | --- | --- | --- |
 | Public Onyx | generic helpers, saved public MCP/Web Connector traffic (including MCP OAuth discovery/token exchange), optional stock `open_url` requests/local Chromium | `onyx-public-egress-bridge` | public destinations only |

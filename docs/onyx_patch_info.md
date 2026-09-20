@@ -13,20 +13,64 @@ also requires installation against the pinned images.
 
 ## Bootstrap ownership
 
-`sitecustomize_api_server` is the only API bootstrap in both lite and full
-modes, and `sitecustomize_background` owns full-mode background patches. The
-code-interpreter service uses native configuration without a runtime patch. The
-neutral `onyx/patches/shared/wrapper_env_patches.py` contains reusable helpers
-but is not executable bootstrap code. Compose imports it explicitly through
-`PYTHONPATH`.
+`sitecustomize_api_server` owns API startup in lite and full modes;
+`sitecustomize_background` owns full-mode background startup. Both import the
+canonical `onyx_wrapper_patches` package mounted read-only at
+`/app/onyx_wrapper_patches`. The API Python path is explicitly
+`/app/wrapper-patches-api:/app/obscura-client:/app`; background uses `/app`.
+Neither depends on the host's Python path or working directory.
 
-The pinned background image's supervisor configuration resets worker
-`PYTHONPATH` to `/app`, overriding the container-level Compose value. Full mode
-therefore also mounts the background bootstrap as `/app/sitecustomize.py` and
-the shared helper as `/app/wrapper_env_patches.py`. This makes the same strict
-bootstrap visible to the real Celery workers and their spawn-based indexing
-children; relying only on the wrapper directories in the container environment
-would patch the supervisor process but leave document fetching unpatched.
+Background has one bootstrap mount at `/app/sitecustomize.py`, matching the
+pinned supervisor's worker `PYTHONPATH=/app` reset and native spawn/isolated
+children. Its implementation modules are `background/resource_policy.py`,
+`background/web_connector_egress.py`, and `background/document_freshness.py`.
+The embedding shim, document server, background entrypoint/watchdog, Obscura
+client, nginx companion, and SearXNG retain independent ownership. The
+code-interpreter service uses native configuration without a runtime patch.
+
+## Package organization
+
+Ownership follows the installing service. API-only behavior belongs in `api/`,
+background-only behavior in `background/`, and installers with identified
+consumers in both services in `shared/`. Neutral configuration, callable, and
+source utilities belong in `common/`. Shared modules cannot import service
+modules; service modules cannot import another service's private helpers.
+Keep coherent behavior, guards, contracts, and mutable state together.
+
+Package initializers are inert. Implementation imports never install patches,
+start services, access networks, or import heavy upstream application targets.
+Use package-qualified imports and one canonical module identity, preserving
+ContextVars, locks, diagnostic state, and injected execution globals.
+Do not add compatibility aliases, import-path fallbacks, dynamic registries,
+automatic discovery, or a second installer sequence.
+
+Bootstraps retain explicit ordered calls, final validators, exact control
+exclusions, stderr redirection, and package-independent fatal handling.
+Record imports that capture callables/constants as dependency edges beside
+installation calls and in composition tests. Install foundational adapters
+before dependent consumers; test already-loaded and later-imported references.
+Preserve caller-specific signature, default, parameter-kind, and source checks.
+
+Source rewrites use the common composition helper, which retains generated
+source and execution globals. Source decorators can be reconstructed during
+recompilation. External behavioral wrappers can be lost by unwrapping and
+recompiling; `functools.wraps` does not preserve their execution. Prefer source
+rewrites before wrappers, test observable decorator/wrapper effects after the
+complete bootstrap, and reject unsupported ordering at the affected boundary.
+Do not introduce generic wrapper reconstruction or alias repair.
+The existing reasoning-only `_update_bound_module_attr` scan remains a bounded
+exception: it snapshots loaded modules and replaces matching names only when
+object identity matches, retaining its existing tolerated inspection failures.
+It cannot repair defaults, closures, decorators, or registries.
+
+Automatic-startup validation must inspect preexisting bootstrap/module origins
+before importing implementations. Missing or wrong-origin discovery fails the
+validation harness; it is not a runtime enforcement guarantee. A discovered
+strict bootstrap exits 78 on required failure. Native isolated-process failures
+remain recoverable by the parent: Onyx discards child stderr and may fall back
+from PDFium to pypdf. Positive child evidence must distinguish PDFium execution
+from successful fallback, and preserve stdout's pickle protocol and native
+timeouts. See the [upgrade checks](onyx_patches_upgrade.md#runtime-patch-contract-audit).
 
 The wrapper entrypoint and local Beat watchdog start with `python -S`, and the
 background bootstrap also recognizes the exact `/usr/bin/supervisord` argv.
@@ -57,7 +101,7 @@ behavior also meets the required reliability.
 
 ### Direct Obscura mode
 
-`sitecustomize_api_server/obscura_crawler_patch.py` strictly replaces the
+`onyx_wrapper_patches/api/obscura_crawler_patch.py` strictly replaces the
 built-in `OnyxWebCrawler` URL-fetch path. It imports the single client in
 `browser/obscura_client` and provides:
 
@@ -87,7 +131,7 @@ provider data-policy guarantees for them.
 ### Default stock Onyx mode
 
 When the preference is `false`,
-`sitecustomize_api_server/onyx_crawler_egress_patch.py` retains the pinned
+`onyx_wrapper_patches/api/onyx_crawler_egress_patch.py` retains the pinned
 upstream crawler's requests fetch and Playwright Chromium fallback. It replaces
 only the crawler's imported HTTP helper and scopes a structural validator to
 its browser fallback. Both stages are public-only, perform no API-side target
@@ -116,7 +160,7 @@ post-materialization and are not complete download or peak-memory bounds.
 Wrapper character limits and mixed-success failure presentation remain
 separate retained patches.
 
-`sitecustomize_api_server/open_url_failure_reporting_patch.py` is installed
+`onyx_wrapper_patches/api/open_url.py` is installed
 before either transport is selected. It records the final post-fallback
 per-URL failures and appends the pinned upstream sanitized failure message when
 a batch also has rich successful results. It leaves all-success, all-failure,
@@ -162,7 +206,7 @@ capture remains unavailable.
 
 ## GitHub repository downloads
 
-`sitecustomize_api_server/github_egress_patch.py` replaces only the HTTP helper
+`onyx_wrapper_patches/api/github_egress_patch.py` replaces only the HTTP helper
 imported by `onyx.utils.github`. Coding-agent repository setup and skill
 preview/import use ordinary Requests GETs through the fixed public bridge,
 without Onyx's local DNS/SSRF preflight. The pinned GitHub helper has no native
@@ -412,9 +456,17 @@ implicit loopback bypass disabled. In direct Obscura mode this does not create
 a crawler fallback; in the default stock mode it carries the intentionally
 retained crawler fallback through the public bridge.
 
+The three helper consumers (stock crawler, GitHub, and Playwright) accept only
+the stripped canonical public-proxy URL. Other fixed-proxy adapters use the
+same equality utility with their corresponding canonical bridge. Playwright
+reports and skips installation for invalid values in non-strict mode and
+raises in strict mode, including missing/empty values. Its ContextVar accepts
+only exact public/host URLs and `None` for the default helper proxy; empty
+selection fails before state mutation. See [routing](vpn_routing_and_proxies.md#route-classes).
+
 ## OpenAI-compatible model labels
 
-`sitecustomize_api_server/model_display_name_patch.py` formats discovered and
+`onyx_wrapper_patches/api/model_display_name_patch.py` formats discovered and
 saved OpenAI-Compatible model display names as `Description (api-id)`, including
 oMLX endpoints configured with that provider type. ID-only labels and labels
 already ending in the same parenthesized ID are not duplicated. Explicit admin
@@ -661,7 +713,7 @@ cancels recovery work owned by the earlier token.
 After a genuine hidden/pagehide, restored-page, offline transition, or visible
 stream failure, the companion owns one token-correlated abortable request to
 `/api/chat/reconnect-status/{session_id}`.
-`sitecustomize_api_server/webui_reconnect_status_patch.py` gives this route the
+`onyx_wrapper_patches/api/webui_reconnect_status_patch.py` gives this route the
 stock read-chat permission and a narrow session lookup without loading message
 history. It checks the processing fence without the stock
 session endpoint's broad cache-error suppression: a transient Redis/PostgreSQL
@@ -780,11 +832,13 @@ multi-model, cancellation, and incognito reconnect semantics.
 
 Full mode narrows Onyx's Web connector PDF freshness behavior for trusted
 local document origins. For allowlisted local hosts, the background patch uses
-stable HTTP metadata such as `Last-Modified` and `Content-Length` to skip a full
-download and PDF parse when a document has not changed. It stores the wrapper
+stable HTTP metadata such as `Last-Modified` and `Content-Length` to skip the
+scrape-stage PDF GET and parse when a document has not changed. Native connector
+connectivity GETs can still download the first URL's body before the scrape
+boundary, and Playwright is initialized before that boundary. It stores the wrapper
 freshness metadata on the Onyx document record for later syncs.
 
-This is a pre-download optimization. Onyx's indexing pipeline independently
+This is a scrape-stage pre-download optimization. Onyx's indexing pipeline independently
 hashes parsed indexable content and skips chunking, embedding, and vector writes
 when that content is unchanged. The wrapper fast path avoids the work required
 to reach that native hash gate. Its HTTP validator cannot detect a same-size
@@ -1262,9 +1316,14 @@ consequences of keeping Craft absent are documented in
 `docs/resource_minimization.md`.
 The strict background bootstrap materializes eight connector-discovery
 schedules at five minutes, retains incognito generated-file cleanup at ten
-minutes, removes their one-minute templates, removes the three Craft cleanup
+minutes, transforms only the materialized self-hosted schedule list, removes the three Craft cleanup
 schedules, and removes the queue/process/memory monitoring and version-
-telemetry producers. It also raises Beat's schedule reload interval to five
+telemetry producers. It rejects duplicate names, unknown producers, wrong
+retained task identifiers/cadences, and monitoring-queue destinations. Templates
+remain untouched; self-hosted schedule generation reads the materialized list.
+The native scheduler can retain stale same-name installed entries when its
+multiplier is unchanged; validation checks installed fields separately from
+generated output and does not repair or clear the scheduler store. It also raises Beat's schedule reload interval to five
 minutes and removes worker liveness bootsteps. It deliberately leaves the upstream Beat
 `tick()` method intact: that method publishes local process liveness when the
 reload tick runs and logs schedule-update failures independently. The wrapper

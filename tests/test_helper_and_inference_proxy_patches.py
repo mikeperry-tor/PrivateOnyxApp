@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import os
 import sys
@@ -9,27 +11,12 @@ from types import ModuleType
 from unittest.mock import patch
 
 
-MODULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "onyx"
-    / "patches"
-    / "shared"
-    / "wrapper_env_patches.py"
-)
 
 
-def _load_wrapper_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "wrapper_env_patches_proxy_under_test",
-        MODULE_PATH,
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
-class PlaywrightHelperProxyTests(unittest.TestCase):
+
+class PlaywrightHelperProxyTests(FreshPatchTestCase):
     @staticmethod
     def _fake_modules():
         onyx_module = ModuleType("onyx")
@@ -79,7 +66,7 @@ class PlaywrightHelperProxyTests(unittest.TestCase):
     def test_playwright_launch_receives_helper_proxy_with_loopback_forced_to_proxy(
         self,
     ) -> None:
-        wrapper = _load_wrapper_module()
+        wrapper = load_patch("shared.playwright_proxy")
         fake_modules, playwright_module, launch_calls = self._fake_modules()
         env = {
             "WRAPPER_PATCH_STRICT": "true",
@@ -107,7 +94,7 @@ class PlaywrightHelperProxyTests(unittest.TestCase):
         )
 
     def test_playwright_existing_proxy_fails_in_strict_mode(self) -> None:
-        wrapper = _load_wrapper_module()
+        wrapper = load_patch("shared.playwright_proxy")
         fake_modules, playwright_module, _ = self._fake_modules()
         env = {
             "WRAPPER_PATCH_STRICT": "true",
@@ -126,7 +113,7 @@ class PlaywrightHelperProxyTests(unittest.TestCase):
                 )
 
 
-class ConfiguredInferenceProxyTests(unittest.TestCase):
+class ConfiguredInferenceProxyTests(FreshPatchTestCase):
     @staticmethod
     def _fake_modules():
         onyx_module = ModuleType("onyx")
@@ -285,7 +272,7 @@ class ConfiguredInferenceProxyTests(unittest.TestCase):
         )
 
     def _apply_patch(self):
-        wrapper = _load_wrapper_module()
+        wrapper = load_patch("shared.inference_proxy")
         (
             fake_modules,
             multi_llm_module,

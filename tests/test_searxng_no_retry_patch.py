@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import functools
 import importlib.util
 import inspect
@@ -11,17 +13,11 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH_PATH = ROOT / "onyx/patches/shared/wrapper_env_patches.py"
+PATCH_PATH = ROOT / "onyx/patches/onyx_wrapper_patches/api/searxng_retry.py"
 
 
 def _load_wrapper():
-    spec = importlib.util.spec_from_file_location(
-        "wrapper_env_patches_searxng_retry_under_test", PATCH_PATH
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_patch("api.searxng_retry")
 
 
 def _single_attempt(self, query: str) -> list:
@@ -43,13 +39,13 @@ def _retry_builder_stub(function):
     return wrapped
 
 
-class SearxngNoRetryPatchTests(unittest.TestCase):
+class SearxngNoRetryPatchTests(FreshPatchTestCase):
     def test_api_bootstrap_installs_patch(self):
         bootstrap = (
             ROOT / "onyx/patches/sitecustomize_api_server/sitecustomize.py"
         ).read_text()
         self.assertIn(
-            "from wrapper_env_patches import apply_searxng_single_attempt_patch",
+            "from onyx_wrapper_patches.api.searxng_retry import apply_searxng_single_attempt_patch",
             bootstrap,
         )
         self.assertIn("apply_searxng_single_attempt_patch()", bootstrap)

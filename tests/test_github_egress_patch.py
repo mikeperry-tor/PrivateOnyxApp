@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import os
 from pathlib import Path
@@ -10,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 PATCH_PATH = (
     Path(__file__).resolve().parents[1]
-    / "onyx/patches/sitecustomize_api_server/github_egress_patch.py"
+    / "onyx/patches/onyx_wrapper_patches/api/github_egress_patch.py"
 )
 
 
@@ -29,12 +31,9 @@ def _github_get(url, *, authorization=None, stream=False, follow_redirects=True,
         raise
 
 
-class GitHubEgressTests(unittest.TestCase):
+class GitHubEgressTests(FreshPatchTestCase):
     def setUp(self):
-        spec = importlib.util.spec_from_file_location("github_egress_patch", PATCH_PATH)
-        self.assertIsNotNone(spec)
-        self.module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.module)
+        self.module = load_patch("api.github_egress_patch")
         self.env = {"ONYX_HELPER_HTTP_PROXY_URL": self.module.PUBLIC_PROXY_URL}
 
     def test_public_route_preserves_stream_timeout_and_redirect_selection(self):
@@ -76,7 +75,7 @@ class GitHubEgressTests(unittest.TestCase):
         for value in ("", "http://onyx-host-egress-bridge:3128", "http://other:3128"):
             with self.subTest(value=value), patch.dict(
                 os.environ, {"ONYX_HELPER_HTTP_PROXY_URL": value}, clear=True
-            ), self.assertRaisesRegex(RuntimeError, "GitHub egress requires"):
+            ), self.assertRaisesRegex(RuntimeError, "ONYX_HELPER_HTTP_PROXY_URL must be exactly"):
                 self.module._validate_proxy()
 
     def test_target_drift_fails_closed(self):

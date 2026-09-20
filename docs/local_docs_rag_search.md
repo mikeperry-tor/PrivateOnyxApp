@@ -28,9 +28,10 @@ Onyx fork:
   the server remains internal-only. The connector crawls
   `http://doc-drop-web:8091/`; returned source
   links are rewritten to `http://localhost:8091/` by default.
-- `onyx/patches/sitecustomize_background/sitecustomize.py` adds internal-origin
-  PDF freshness, exact crawl routing, saved-level external routing, and
-  display-only source-link rewriting.
+- `onyx/patches/onyx_wrapper_patches/background/document_freshness.py` adds internal-origin
+  PDF freshness and display-only source-link rewriting.
+- `onyx/patches/onyx_wrapper_patches/background/web_connector_egress.py` owns
+  exact crawl routing and saved-level external routing.
 - The API `sitecustomize` bootstrap invokes the shared optional internal-search
   content-cap patch so configured limits bound selected model-facing chunks.
 - `local-embedding-shim` implements the subset of Onyx's model-server HTTP API
@@ -178,7 +179,7 @@ stack-internal access-control boundary.
 
 Implementation:
 
-- `onyx/patches/sitecustomize_background/sitecustomize.py`
+- `onyx/patches/onyx_wrapper_patches/background/document_freshness.py`
 - Internal environment:
   `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED=true` and
   `ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS=doc-drop-web`
@@ -197,11 +198,13 @@ metadata is trusted and stable.
 
 The background patch changes that only for the allowlisted internal
 `doc-drop-web` origin. It uses HTTP `HEAD` metadata such as `Last-Modified` and
-`Content-Length` to skip full download and PDF parsing when the source has not
-changed. It stores wrapper metadata on the Onyx document record so later syncs
+`Content-Length` to skip the scrape-stage PDF GET and parsing when the source
+has not changed. Native connectivity checks in validation and at connector
+entry can still download the first URL's body, and browser initialization
+precedes the scrape boundary. This does not promise a zero-download recrawl. It stores wrapper metadata on the Onyx document record so later syncs
 can make the same decision.
 
-This is a pre-download and pre-parse optimization. Onyx independently computes
+This is a scrape-stage pre-download and pre-parse optimization. Onyx independently computes
 a content hash after parsing and skips chunking, embedding, and vector writes
 when indexed content is unchanged. Removing this wrapper patch would therefore
 restore repeated PDF download and parsing, not repeated embedding of every
@@ -231,7 +234,7 @@ patch.
 Implementation:
 
 - Compose env: `compose_overlays/docker-compose.full.yml`
-- Runtime patch: `onyx/patches/shared/wrapper_env_patches.py`, installed by the
+- Runtime patch: `onyx/patches/onyx_wrapper_patches/api/retrieval_limits.py`, installed by the
   API bootstrap
 - User-facing env:
   `ONYX_RAG_INTERNAL_SEARCH_MAX_CONTENT_CHARS_PER_RESULT` and
@@ -795,7 +798,9 @@ these assumptions:
 - Reranking and query-analysis are still optional for this local path, or the
   shim has been extended to support them.
 - The Web connector scrape path and document model fields used by the PDF
-  freshness patch still exist.
+  freshness patch still exist. Count all synthetic fixture traffic, including
+  connectivity GETs, and distinguish it from scrape-stage downloads. Successful
+  completion alone does not prove that PDF parsing or embedding was skipped.
 - The Security Hardening env-to-UI mapping matches the posture documented in
   [Internal network security](internal_network_security.md).
 - The recommended Admin model type and embedding dimension still match the

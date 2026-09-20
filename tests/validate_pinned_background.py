@@ -10,7 +10,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
-from types import SimpleNamespace
+from types import CodeType, SimpleNamespace
 
 
 def _load(name: str, path: str):
@@ -23,8 +23,28 @@ def _load(name: str, path: str):
     return module
 
 
-def _validate_schedules(background_patch, original_tick) -> None:
+def _validate_scheduler_tick(beat) -> None:
+    # Startup has already run, so another reference to the installed method is
+    # not an independent baseline. Compile the image's upstream source without
+    # executing it and compare the actual callable, without inspect.unwrap.
+    source_path = Path(beat.__file__)
+    upstream = compile(source_path.read_bytes(), str(source_path), "exec", dont_inherit=True)
+    (scheduler_code,) = (
+        code for code in upstream.co_consts
+        if isinstance(code, CodeType) and code.co_name == "DynamicTenantScheduler"
+    )
+    (tick_code,) = (
+        code for code in scheduler_code.co_consts
+        if isinstance(code, CodeType) and code.co_name == "tick"
+    )
+    installed = beat.DynamicTenantScheduler.tick
+    assert installed.__code__ == tick_code, "DynamicTenantScheduler.tick was replaced"
+    assert installed.__globals__ is vars(beat), "scheduler tick has foreign globals"
+
+
+def _validate_schedules(background_patch) -> None:
     from onyx.background.celery.apps import app_base
+    from onyx.background.celery.apps import beat
     from onyx.background.celery.apps.beat import DynamicTenantScheduler
     from onyx.background.celery.tasks import beat_schedule
 
@@ -57,14 +77,75 @@ def _validate_schedules(background_patch, original_tick) -> None:
         minutes=10
     )
     assert DynamicTenantScheduler.RELOAD_INTERVAL == 300
-    assert DynamicTenantScheduler.tick is original_tick
+    _validate_scheduler_tick(beat)
     assert app_base.get_bootsteps() == []
     assert not any(
         name.startswith("onyx.background.celery.apps.monitoring")
         or name.startswith("onyx.background.celery.tasks.monitoring")
         for name in sys.modules
     )
-    assert background_patch._INDEXING_SKIP_PATCHED is False
+    assert background_patch._INDEXING_SKIP_PATCHED is (os.environ.get("ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED") == "true")
+
+
+def _validate_scheduler_reload() -> None:
+    """Use native entries and reload; never open the user's scheduler store."""
+    from copy import deepcopy
+    from unittest.mock import patch
+    from celery import Celery
+    from onyx.background.celery.apps import beat
+    from onyx.background.celery.tasks import beat_schedule
+    from onyx.configs.constants import OnyxCeleryTask, OnyxCeleryQueues
+    from onyx_wrapper_patches.background.resource_policy import validate_materialized_schedule
+
+    templates = deepcopy(beat_schedule.beat_task_templates)
+    template_by_name = {task["name"]: task for task in templates}
+    assert template_by_name["check-for-indexing"]["schedule"] == timedelta(seconds=15)
+    assert "cleanup-idle-sandboxes" in template_by_name
+    validate_materialized_schedule(
+        beat_schedule.get_tasks_to_schedule(), OnyxCeleryTask, OnyxCeleryQueues.MONITORING
+    )
+    scheduler = object.__new__(beat.DynamicTenantScheduler)
+    scheduler.app = Celery("patch-schedule-fixture", broker="memory://")
+    scheduler._store = {"entries": {}}
+    scheduler.last_beat_multiplier = beat.CLOUD_BEAT_MULTIPLIER_DEFAULT
+    scheduler.sync = lambda: None
+    expected = scheduler._generate_schedule(["public"], scheduler.last_beat_multiplier)
+
+    def assert_installed():
+        assert set(scheduler.schedule) == set(expected)
+        for name, generated in expected.items():
+            installed = scheduler.schedule[name]
+            assert installed.task == generated["task"], name
+            assert installed.schedule.run_every == generated["schedule"], name
+            assert installed.options == generated.get("options", {}), name
+            assert installed.kwargs == generated["kwargs"], name
+
+    with patch.object(beat, "get_all_tenant_ids", return_value=["public"]), patch.object(
+        beat.OnyxRuntime, "get_beat_multiplier", return_value=scheduler.last_beat_multiplier
+    ):
+        scheduler._try_updating_schedule()
+        assert_installed()
+        scheduler._try_updating_schedule()
+        assert_installed()
+        assert beat_schedule.beat_task_templates == templates
+        # Native comparison checks names, not the contents of same-name entries.
+        name = next(iter(expected))
+        for field, stale in (("task", "stale-task"), ("schedule", timedelta(seconds=1)), ("options", {"queue": "monitoring"})):
+            entry = deepcopy(expected[name])
+            entry[field] = stale
+            scheduler.schedule[name] = scheduler.Entry(name=name, app=scheduler.app, **entry)
+            scheduler._try_updating_schedule()
+            try:
+                assert_installed()
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f"stale same-name {field} escaped installed-state assertion")
+            # A changed-name controlled fixture forces native replacement.
+            scheduler.schedule["obsolete-fixture"] = scheduler.schedule[name]
+            scheduler._try_updating_schedule()
+            assert_installed()
+    print("PINNED_MATERIALIZED_SCHEDULE_RELOAD_AND_STALE_DETECTION_OK")
 
 
 def _validate_supervisor() -> None:
@@ -166,14 +247,75 @@ def _validate_freshness_and_native_hash_gates(background_patch) -> None:
         raise AssertionError("stale PDF freshness sentinel reached indexing")
 
 
-def main() -> None:
-    from onyx.background.celery.apps.beat import DynamicTenantScheduler
+def _validate_native_connector_entry(background_patch) -> None:
+    """Account for connectivity bodies before the real patched scrape boundary."""
+    import io
+    import requests
+    from unittest.mock import patch
+    from onyx.connectors.web import connector
 
-    original_tick = DynamicTenantScheduler.tick
-    background_patch = _load(
-        "background_patch_validation", "/background/sitecustomize.py"
+    enabled = background_patch._INDEXING_SKIP_PATCHED
+    url = "http://doc-drop-web:8091/onyx-reorg-controlled/fixture.pdf"
+    body = b"controlled synthetic PDF bytes"
+    modified = "Sat, 29 Aug 2026 12:00:00 GMT"
+    record = SimpleNamespace(
+        id=url, doc_updated_at=datetime(2026, 8, 29, 12, tzinfo=timezone.utc),
+        content_hash="synthetic-hash", chunk_count=1,
+        doc_metadata=background_patch._freshness_metadata(
+            {}, last_modified_raw=modified, content_length=str(len(body))
+        ),
     )
-    _validate_schedules(background_patch, original_tick)
+    events = []
+
+    def send(adapter, request, **kwargs):
+        del adapter
+        assert request.url == url
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        response.request = request
+        response.headers.update({"content-type": "application/pdf", "last-modified": modified, "content-length": str(len(body))})
+        response.raw = io.BytesIO(body if request.method == "GET" else b"")
+        assert not kwargs.get("stream"), "native connectivity/scrape requests changed streaming behavior"
+        events.append(request.method)
+        return response
+
+    def browser():
+        events.append("browser")
+        return SimpleNamespace(stop=lambda: None), SimpleNamespace(close=lambda: None, add_cookies=lambda cookies: None)
+
+    def parse(data):
+        assert data == body
+        events.append("parse")
+        return "synthetic parsed content", {}
+
+    with patch.object(requests.adapters.HTTPAdapter, "send", send), patch.object(
+        connector, "start_playwright", browser
+    ), patch.object(connector, "extract_pdf_text", parse), patch.object(
+        background_patch, "_get_db_document", return_value=record
+    ):
+        instance = connector.WebConnector(url, web_connector_type="single")
+        instance.validate_connector_settings()
+        assert events == ["GET"], events
+        documents = [doc for batch in instance.load_from_state() for doc in batch]
+    assert len(documents) == 1
+    assert documents[0].id == url
+    if enabled:
+        assert events == ["GET", "GET", "browser", "HEAD"], events
+        assert documents[0].doc_metadata[background_patch.FRESHNESS_UNCHANGED_KEY]
+        assert not documents[0].sections
+    else:
+        assert events == ["GET", "GET", "browser", "HEAD", "GET", "parse"], events
+    print(f"PINNED_NATIVE_CONNECTOR_TRAFFIC_OK freshness={enabled} connectivity_GETs=2 scrape_GETs={0 if enabled else 1}")
+
+
+def main() -> None:
+    from patch_activation_probe import assert_activation
+    assert_activation()
+    from onyx_wrapper_patches.background import document_freshness as background_patch
+    _validate_schedules(background_patch)
+    _validate_scheduler_reload()
+    _validate_native_connector_entry(background_patch)
     _validate_supervisor()
     from validate_native_bot_tools import validate_native_tools, validate_bot_requests
     validate_native_tools(background=True)
@@ -181,7 +323,8 @@ def main() -> None:
 
     os.environ["WRAPPER_PATCH_STRICT"] = "true"
     os.environ["ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED"] = "true"
-    background_patch._apply_web_connector_http_freshness_patch()
+    if not background_patch._INDEXING_SKIP_PATCHED:
+        background_patch._apply_web_connector_http_freshness_patch()
     assert background_patch._INDEXING_SKIP_PATCHED
     _validate_freshness_and_native_hash_gates(background_patch)
     assert Path("/wrapper-beat-liveness-watchdog.py").is_file()

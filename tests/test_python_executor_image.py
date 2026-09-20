@@ -19,7 +19,7 @@ class PythonExecutorImageTests(unittest.TestCase):
         )
         cls.makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         cls.wrapper = (
-            ROOT / "onyx" / "patches" / "shared" / "wrapper_env_patches.py"
+            ROOT / "onyx/patches/onyx_wrapper_patches/api/python_capabilities.py"
         ).read_text(encoding="utf-8")
         cls.bootstrap = (
             ROOT

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import functools
 import json
@@ -13,13 +15,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 
-MODULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "onyx"
-    / "patches"
-    / "shared"
-    / "wrapper_env_patches.py"
-)
 
 
 class _SourcePatchAnnotation:
@@ -32,15 +27,6 @@ def _source_patch_annotated_fixture(
     return value
 
 
-def _load_wrapper(env: dict[str, str] | None = None) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "wrapper_env_patches_agent_contracts_under_test", MODULE_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    with patch.dict(os.environ, env or {}, clear=True):
-        spec.loader.exec_module(module)
-    return module
 
 
 def _package(name: str) -> ModuleType:
@@ -289,9 +275,9 @@ def _code_description_modules(
     )
 
 
-class SharedAgentPatchContractTests(unittest.TestCase):
+class SharedAgentPatchContractTests(FreshPatchTestCase):
     def test_source_patch_uses_unwrapped_function_globals(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("common.source", )
         decorator_module = ModuleType("source_patch_decorator_fixture")
         decorator_module.functools = functools
         exec(
@@ -319,7 +305,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         self.assertIs(module._source_patch_annotated_fixture(value), value)
 
     def test_source_patches_compose_on_the_same_function(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("common.source", )
         module = SimpleNamespace(
             _source_patch_composition_fixture=_source_patch_composition_fixture
         )
@@ -347,7 +333,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         )
 
     def test_python_package_capabilities_are_unconditional(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_capabilities", )
         modules, PythonTool, _, tool_prompts, _, _, _ = _code_description_modules()
 
         with patch.dict(
@@ -362,7 +348,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             self.assertIn("Pillow", description)
 
     def test_python_package_description_drift_fails_strict(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_capabilities", )
         modules, *_ = _code_description_modules("Upstream changed this description")
 
         with patch.dict(
@@ -372,7 +358,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
                 wrapper.apply_python_package_capability_patches()
 
     def test_python_package_guidance_drift_fails_strict(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_capabilities", )
         modules, _, _, tool_prompts, _, _, _ = _code_description_modules()
         tool_prompts.PYTHON_TOOL_GUIDANCE = "Upstream changed this guidance."
 
@@ -383,7 +369,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
                 wrapper.apply_python_package_capability_patches()
 
     def test_python_file_link_prompts_are_patched_without_network(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         modules, PythonTool, _, tool_prompts, chat_prompts, _, _ = (
             _code_description_modules()
         )
@@ -411,7 +397,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         self.assertNotIn("response_markdown", chat_prompts.FILE_REMINDER)
 
     def test_python_execution_guidance_drift_fails_strict(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         for anchor in (
             "The current directory in the file system can be used to save and persist user files.",
             wrapper._UPSTREAM_PYTHON_STATELESS_GUIDANCE,
@@ -429,7 +415,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
                             wrapper.apply_python_file_link_prompt_patches()
 
     def test_python_result_supplies_relative_ready_to_copy_markdown(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         modules, PythonTool, *_ = _code_description_modules()
         response = SimpleNamespace(
             llm_facing_response=json.dumps(
@@ -479,7 +465,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         )
 
     def test_chat_file_markdown_normalization_is_origin_independent(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         normalize = wrapper._normalize_chat_file_markdown
 
         self.assertEqual(
@@ -540,7 +526,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         )
 
     def test_fabricated_python_file_ids_remain_visible_for_diagnostics(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         filenames = {
             "11111111-1111-4111-8111-111111111111": "graph_x_squared.png",
             "22222222-2222-4222-8222-222222222222": "graph_sin_x.png",
@@ -572,7 +558,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             self.assertEqual(stream.flush(), "", f"second flush split={split}")
 
     def test_generated_chat_file_filenames_support_live_and_saved_tool_calls(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         expected = {"live-id": "live.png", "saved-id": "saved chart.png"}
         tool_calls = [
             SimpleNamespace(
@@ -601,7 +587,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         self.assertEqual(wrapper._generated_chat_file_filenames(tool_calls), expected)
 
     def test_chat_file_markdown_normalization_is_narrow(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         normalize = wrapper._normalize_chat_file_markdown
         unchanged = (
             "![remote](https://images.example/graph.png) "
@@ -631,7 +617,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
             self.assertEqual(actual, literal_examples, f"code split={split}")
 
     def test_chat_file_markdown_stream_handles_every_chunk_boundary(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         raw = (
             "before ![math_functions_graph.png](https://tail.example/api/chat/file/"
             "6a8c8c24-7d45-4f55-bcf5-85f9b1a62b4e) after"
@@ -652,7 +638,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
         self.assertEqual(actual, expected)
 
     def test_chat_file_markdown_stream_flushes_incomplete_text_losslessly(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         raw = "ordinary [unfinished and ![also unfinished"
         stream = wrapper._ChatFileMarkdownStream()
         self.assertEqual(stream.feed(raw), "ordinary ")
@@ -661,7 +647,7 @@ class SharedAgentPatchContractTests(unittest.TestCase):
     def test_python_file_link_enforcement_covers_prompt_stream_state_and_history(
         self,
     ) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         modules, *_ = _code_description_modules()
         onyx = modules["onyx"]
         chat = _package("onyx.chat")
@@ -889,7 +875,7 @@ def translate_assistant_message_to_packets(chat_message, db_session):
             )
 
     def test_python_file_link_description_drift_fails_strict(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         modules, *_ = _code_description_modules("Upstream changed this description")
 
         with patch.dict(
@@ -899,7 +885,7 @@ def translate_assistant_message_to_packets(chat_message, db_session):
                 wrapper.apply_python_file_link_prompt_patches()
 
     def test_chat_file_user_file_lookup_skips_non_uuid_ids(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         onyx = _package("onyx")
         db = _package("onyx.db")
         user_file = ModuleType("onyx.db.user_file")
@@ -979,7 +965,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
             )
 
     def test_python_file_link_prompt_drift_fails_strict(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_artifacts", )
         modules, _, _, tool_prompts, _, _, _ = _code_description_modules()
         tool_prompts.PYTHON_TOOL_GUIDANCE = tool_prompts.PYTHON_TOOL_GUIDANCE.replace(
             "Use this to give the user a way to download the file OR to display generated images.",
@@ -993,7 +979,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
                 wrapper.apply_python_file_link_prompt_patches()
 
     def test_agent_forced_tool_choices_are_narrowly_changed_to_auto(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.tool_calls", )
         onyx = _package("onyx")
         chat = _package("onyx.chat")
         llm_loop = ModuleType("onyx.chat.llm_loop")
@@ -1044,7 +1030,8 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         self.assertEqual(llm_loop.run_llm_step(tool_choice="required"), "auto")
 
     def test_code_interpreter_descriptions_match_restricted_network(self) -> None:
-        wrapper = _load_wrapper()
+        python_artifacts = load_patch("api.python_artifacts")
+        wrapper = load_patch("api.python_capabilities", )
         modules, PythonTool, BashTool, tool_prompts, _, mock_tools, ca_prompts = (
             _code_description_modules()
         )
@@ -1054,7 +1041,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         }
 
         with patch.dict(os.environ, env, clear=True), patch.dict(sys.modules, modules):
-            wrapper.apply_python_file_link_prompt_patches()
+            python_artifacts.apply_python_file_link_prompt_patches()
             wrapper.apply_python_package_capability_patches()
             wrapper.apply_code_interpreter_network_description_patches()
 
@@ -1083,7 +1070,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         self.assertIn("svglib", tool_prompts.PYTHON_TOOL_GUIDANCE)
 
     def test_code_interpreter_description_drift_fails_strict(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.python_capabilities", )
         modules, *_ = _code_description_modules("Upstream changed this description")
         env = {
             "WRAPPER_PATCH_STRICT": "true",
@@ -1094,7 +1081,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
                 wrapper.apply_code_interpreter_network_description_patches()
 
     def test_deep_research_batch_limits_controls_and_placements(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.deep_research", )
         runner = SimpleNamespace(_merge_tool_calls=lambda calls: list(calls))
         calls = [_ToolCall("open_url", 7), _ToolCall("search", 7)]
 
@@ -1119,7 +1106,8 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
             )
 
     def test_reasoning_fields_and_final_answer_fallback_are_preserved(self) -> None:
-        wrapper = _load_wrapper()
+        coding_final_answer = load_patch("api.coding_final_answer")
+        wrapper = load_patch("api.reasoning", )
 
         class Message:
             role = "assistant"
@@ -1151,7 +1139,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
                 tool_call_id="call-1",
             )
         ]
-        fallback = wrapper._coding_agent_final_answer_fallback(
+        fallback = coding_final_answer._coding_agent_final_answer_fallback(
             history, RuntimeError("provider unavailable")
         )
         self.assertIn("command output", fallback)
@@ -1159,7 +1147,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         self.assertNotIn("provider unavailable", fallback)
 
     def test_native_reasoning_override_validates_and_patches_target(self) -> None:
-        wrapper = _load_wrapper(
+        wrapper = load_patch("api.reasoning",
             {"WRAPPER_PATCH_STRICT": "true", "ONYX_AGENT_USE_NATIVE_REASONING": "true"}
         )
         onyx = _package("onyx")
@@ -1191,7 +1179,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
                 wrapper.apply_native_reasoning_detection_override_patch()
 
     def test_reasoning_trace_wraps_model_capabilities_detector(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.reasoning", )
         wrapper._REASONING_MODE_TRACE = True
         traces = []
         wrapper._trace_reasoning_mode = lambda event, **fields: traces.append(
@@ -1224,7 +1212,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         self.assertTrue(traces[0][1]["supports_reasoning"])
 
     def test_internal_search_caps_validate_and_limit_payload(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.retrieval_limits", )
         onyx = _package("onyx")
         tools_package = _package("onyx.tools")
         implementations = _package("onyx.tools.tool_implementations")
@@ -1266,7 +1254,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         )
 
     def test_llm_context_override_wins_over_stored_values(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.model_limits", )
         onyx = _package("onyx")
         configs = _package("onyx.configs")
         model_configs = ModuleType("onyx.configs.model_configs")
@@ -1296,7 +1284,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         self.assertEqual(utils.get_max_input_tokens_from_llm_provider(stored), 131072)
 
     def test_saved_tool_results_are_used_and_recounted(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.tool_result_history", )
         onyx = _package("onyx")
         chat = _package("onyx.chat")
         chat_utils = ModuleType("onyx.chat.chat_utils")
@@ -1340,7 +1328,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         self.assertEqual(result.simple_messages[0].token_count, len("persisted output"))
 
     def test_open_url_character_defaults_are_patched(self) -> None:
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.retrieval_limits", )
         onyx = _package("onyx")
         tools_package = _package("onyx.tools")
         implementations = _package("onyx.tools.tool_implementations")

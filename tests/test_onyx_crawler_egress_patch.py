@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import os
 import unittest
@@ -10,7 +12,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
     ROOT
-    / "onyx/patches/sitecustomize_api_server/onyx_crawler_egress_patch.py"
+    / "onyx/patches/onyx_wrapper_patches/api/onyx_crawler_egress_patch.py"
 )
 CLIENT_PATH = ROOT / "browser/obscura_client"
 
@@ -20,12 +22,7 @@ def _load_module():
 
     sys.path.insert(0, str(CLIENT_PATH))
     try:
-        spec = importlib.util.spec_from_file_location(
-            "onyx_crawler_egress_patch", MODULE_PATH
-        )
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = load_patch("api.onyx_crawler_egress_patch")
         return module
     finally:
         sys.path.remove(str(CLIENT_PATH))
@@ -60,7 +57,7 @@ class FakeSession:
         self.closed = True
 
 
-class CrawlerEgressPatchTests(unittest.TestCase):
+class CrawlerEgressPatchTests(FreshPatchTestCase):
     def setUp(self):
         self.module = _load_module()
         self.env = {
@@ -70,29 +67,29 @@ class CrawlerEgressPatchTests(unittest.TestCase):
 
     def test_mode_defaults_false_and_is_strict(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertFalse(self.module.use_obscura_browser())
+            self.assertFalse(load_patch("api.config").use_obscura_browser())
         for raw, expected in (("true", True), ("false", False)):
             with patch.dict(
                 os.environ, {"ONYX_AGENT_USE_OBSCURA_BROWSER": raw}, clear=True
             ):
-                self.assertEqual(self.module.use_obscura_browser(), expected)
+                self.assertEqual(load_patch("api.config").use_obscura_browser(), expected)
         with patch.dict(
             os.environ, {"ONYX_AGENT_USE_OBSCURA_BROWSER": "yes"}, clear=True
         ):
             with self.assertRaisesRegex(RuntimeError, "exactly true or false"):
-                self.module.use_obscura_browser()
+                load_patch("api.config").use_obscura_browser()
 
     def test_document_limit_is_positive_decimal_mib(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(self.module._parse_document_limit(), 20 * 1024 * 1024)
+            self.assertEqual(self.module.parse_document_limit(), 20 * 1024 * 1024)
         with patch.dict(os.environ, {"ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB": "7"}):
-            self.assertEqual(self.module._parse_document_limit(), 7 * 1024 * 1024)
+            self.assertEqual(self.module.parse_document_limit(), 7 * 1024 * 1024)
         for value in ("", "0", "-1", "1.5", "unlimited"):
             with self.subTest(value=value), patch.dict(
                 os.environ, {"ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB": value}
             ):
                 with self.assertRaises(RuntimeError):
-                    self.module._parse_document_limit()
+                    self.module.parse_document_limit()
 
     def test_document_limit_overrides_stock_pdf_and_html_limits(self):
         recorded = {}
@@ -237,14 +234,14 @@ class CrawlerEgressPatchTests(unittest.TestCase):
                 {"EGRESS_ALLOW_HTTP_ONION_URLS": raw},
                 clear=True,
             ):
-                self.assertEqual(self.module._allow_http_onion(), expected)
+                self.assertEqual(self.module.allow_http_onion(), expected)
         with patch.dict(
             os.environ,
             {"EGRESS_ALLOW_HTTP_ONION_URLS": "yes"},
             clear=True,
         ):
             with self.assertRaisesRegex(RuntimeError, "exactly true or false"):
-                self.module._allow_http_onion()
+                self.module.allow_http_onion()
 
     def test_admin_private_allowance_cannot_widen_crawler_route(self):
         session = FakeSession([])

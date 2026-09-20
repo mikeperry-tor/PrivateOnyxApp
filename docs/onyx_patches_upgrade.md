@@ -400,7 +400,7 @@ dormant compatibility paths:
    runner. Preserve the independently owned `webui-csp.conf` mount and its
    restrictive policy.
 2. Delete
-   `onyx/patches/sitecustomize_api_server/webui_reconnect_status_patch.py` and
+   `onyx/patches/onyx_wrapper_patches/api/webui_reconnect_status_patch.py` and
    remove its import and install call from that service's `sitecustomize.py`.
    Confirm `/api/chat/reconnect-status/{session_id}` is absent unless the new
    upstream implementation itself deliberately owns an equivalent route.
@@ -1247,6 +1247,15 @@ template/runner markers must fail before nginx starts.
 
 ## Runtime patch contract audit
 
+Automatic startup is exercised by `tests/patch_activation_probe.py` through the
+selected-image harness, including native spawn and separate API/background
+PDFium children with cold/warm timings. Inspect preexisting `sys.modules`
+state before probe imports; manual installation is not discovery evidence.
+Require bootstrap origin and positive child pickle results, without extending
+native timeouts. Harness rejection of missing discovery does not add a runtime
+guard; discovered strict bootstrap failures still exit 78. Native isolated
+child stderr is discarded, and parent PDF fallback is not positive child evidence.
+
 Retest every wrapper patch summarized in
 [Patch information](onyx_patch_info.md). Do not treat a successful import as
 sufficient. For each family, confirm both its strict installation boundary and
@@ -1486,17 +1495,26 @@ eight discovery schedules must be rewritten to five minutes; incognito file
 cleanup must remain at ten minutes; the three Craft cleanup schedules and
 queue/process/memory monitoring plus version-telemetry schedules must be
 removed; conditional schedules must remain absent; and Beat reload must remain
-five minutes. Confirm `DynamicTenantScheduler.tick` remains the unmodified
-upstream method, worker bootsteps are empty, and Beat logs show no
+five minutes. Validate only the materialized schedule; templates remain untouched.
+Reject duplicate names before mapping, and check retained task identifiers and
+cadences plus the independent monitoring-queue prohibition. Exercise native
+generation/reload and inspect installed entry task/cadence/options: same-name
+stale entries can survive native comparison when the multiplier is unchanged.
+Keep that limitation visible; do not repair scheduler persistence in a patch move.
+Confirm `DynamicTenantScheduler.tick` remains the unmodified
+upstream method by comparing its installed code with the pinned image's source
+compiled without execution; a reference captured after bootstrap is not an
+independent baseline. Worker bootsteps must be empty, and Beat logs must show no
 sandbox-manager or monitoring task initialization. The upstream marker should
 continue representing the live scheduler loop; schedule-refresh failures must
 remain logged application errors rather than causing watchdog restart loops.
 
 Confirm the background image's supervisor `environment=PYTHONPATH=...` setting.
 While it resets worker `PYTHONPATH` to `/app`, full-mode Compose must mount the
-strict background bootstrap at `/app/sitecustomize.py` and its shared helper at
-`/app/wrapper_env_patches.py`, in addition to the wrapper-directory mounts used
-by the container entry process. Verify patch-success diagnostics in the actual
+strict background bootstrap once at `/app/sitecustomize.py` and the canonical
+package read-only at `/app/onyx_wrapper_patches`. API also explicitly includes
+`/app` on its Python path. No obsolete shared-module or duplicate background
+bootstrap mounts may supply missing code. Verify patch-success diagnostics in the actual
 Celery worker and in a spawn-based document-fetching child, then run a real
 doc-drop Web connector crawl and PDF extraction.
 

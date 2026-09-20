@@ -505,6 +505,7 @@ else
 ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
 CODE_INTERPRETER_EXECUTOR_TARGETS := code-interpreter-image-ready executor-image-ready
 endif
+ONYX_REQUIRED_IMAGES ?= $(ONYX_STACK_REQUIRED_IMAGES)
 ONYX_INSTALL_SCRIPT ?= ./install.sh
 ONYX_INSTALL_WRAPPER ?= ./install-with-container-bin.sh
 ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env

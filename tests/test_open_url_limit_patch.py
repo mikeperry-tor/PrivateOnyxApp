@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 from contextlib import redirect_stdout
 import importlib.util
 from io import StringIO
@@ -12,18 +14,12 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
-    ROOT / "onyx/patches/sitecustomize_api_server/open_url_limit_patch.py"
+    ROOT / "onyx/patches/onyx_wrapper_patches/api/open_url.py"
 )
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location(
-        "test_open_url_limit_patch_module", MODULE_PATH
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = load_patch("api.open_url")
     return module
 
 
@@ -98,7 +94,7 @@ def _fake_modules(tool_class) -> dict[str, ModuleType]:
     return modules
 
 
-class OpenUrlLimitPatchTests(unittest.TestCase):
+class OpenUrlLimitPatchTests(FreshPatchTestCase):
     @classmethod
     def setUpClass(cls):
         cls.module = _load_module()
@@ -107,7 +103,7 @@ class OpenUrlLimitPatchTests(unittest.TestCase):
         tool_class = type("OpenURLTool", (_CompatibleTool,), {})
         modules = _fake_modules(tool_class)
         with patch.dict(sys.modules, modules), redirect_stdout(StringIO()):
-            self.module.install()
+            self.module.install_url_limit()
 
         tool = tool_class()
         definition = tool.tool_definition()
@@ -120,7 +116,7 @@ class OpenUrlLimitPatchTests(unittest.TestCase):
         tool_class = type("OpenURLTool", (_CompatibleTool,), {})
         modules = _fake_modules(tool_class)
         with patch.dict(sys.modules, modules), redirect_stdout(StringIO()):
-            self.module.install()
+            self.module.install_url_limit()
             override = SimpleNamespace(max_urls=10)
             with self.assertRaises(ToolCallException) as raised:
                 tool_class().run(
@@ -136,7 +132,7 @@ class OpenUrlLimitPatchTests(unittest.TestCase):
         modules = _fake_modules(tool_class)
         urls = [f"https://example.com/{index}" for index in range(10)]
         with patch.dict(sys.modules, modules), redirect_stdout(StringIO()):
-            self.module.install()
+            self.module.install_url_limit()
             result = tool_class().run(None, SimpleNamespace(max_urls=10), urls=urls)
         self.assertEqual(result, urls)
 
@@ -145,7 +141,7 @@ class OpenUrlLimitPatchTests(unittest.TestCase):
         modules = _fake_modules(tool_class)
         urls = [f"https://example.com/{index}" for index in range(10)]
         with patch.dict(sys.modules, modules), redirect_stdout(StringIO()):
-            self.module.install()
+            self.module.install_url_limit()
             result = tool_class().run(
                 None,
                 SimpleNamespace(max_urls=10),
@@ -165,6 +161,21 @@ class OpenUrlLimitPatchTests(unittest.TestCase):
             source.index("install_open_url_limit()"),
             source.index("if use_obscura_browser():"),
         )
+
+    def test_repeated_install_is_per_class_and_replacement_class_is_patched(self):
+        wrappers = []
+        for _ in range(2):
+            tool_class = type("OpenURLTool", (_CompatibleTool,), {})
+            with patch.dict(sys.modules, _fake_modules(tool_class)), redirect_stdout(StringIO()):
+                self.module.install_url_limit()
+                installed = tool_class.run
+                self.module.install_url_limit()
+                self.assertIs(tool_class.run, installed)
+                self.assertEqual(tool_class().run(None, SimpleNamespace(max_urls=10), urls=["https://example.com"]), ["https://example.com"])
+                with self.assertRaises(ToolCallException):
+                    tool_class().run(None, SimpleNamespace(max_urls=10), urls=[f"https://example.com/{index}" for index in range(11)])
+                wrappers.append(installed)
+        self.assertIsNot(wrappers[0], wrappers[1])
 
 
 if __name__ == "__main__":

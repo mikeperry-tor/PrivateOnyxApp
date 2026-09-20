@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,14 +9,12 @@ import unittest
 from unittest.mock import Mock, patch
 
 
-PATH = Path(__file__).resolve().parents[1] / "onyx/patches/sitecustomize_api_server/model_display_name_patch.py"
+PATH = Path(__file__).resolve().parents[1] / "onyx/patches/onyx_wrapper_patches/api/model_display_name_patch.py"
 
 
-class ModelDisplayNameTests(unittest.TestCase):
+class ModelDisplayNameTests(FreshPatchTestCase):
     def setUp(self):
-        spec = importlib.util.spec_from_file_location("model_display_name_patch", PATH)
-        self.module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.module)
+        self.module = load_patch("api.model_display_name_patch")
 
     def test_labels_preserve_exact_ids_and_avoid_duplicates(self):
         for label, model_id, expected in (

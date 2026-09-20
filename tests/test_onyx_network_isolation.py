@@ -1814,8 +1814,8 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertIn(
             {
                 "type": "bind",
-                "source": str(ROOT / "onyx/patches/shared/wrapper_env_patches.py"),
-                "target": "/app/wrapper_env_patches.py",
+                "source": str(ROOT / "onyx/patches/onyx_wrapper_patches"),
+                "target": "/app/onyx_wrapper_patches",
                 "read_only": True,
                 "bind": {},
             },

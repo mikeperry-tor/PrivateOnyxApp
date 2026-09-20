@@ -184,7 +184,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertIn('ENABLE_CRAFT: "false"', self.compose)
         self.assertIn('ENABLE_CRAFT: "false"', self.full)
         background_patch = (
-            ROOT / "onyx/patches/sitecustomize_background/sitecustomize.py"
+            ROOT / "onyx/patches/onyx_wrapper_patches/background/resource_policy.py"
         ).read_text()
         self.assertIn("_apply_sleepy_background_patch()", background_patch)
         for name in (

@@ -37,7 +37,6 @@ services:
 
   code-interpreter:
     environment:
-      ONYX_CODE_INTERPRETER_ENABLE_NETWORK: "true"
       PYTHON_EXECUTOR_DOCKER_NETWORK: "onyx-code-interpreter-executor"
       PYTHON_EXECUTOR_DOCKER_RUN_ARGS: >-
         --env HTTP_PROXY=http://executor-egress-bridge:3128
@@ -54,7 +53,6 @@ services:
   api_server:
     environment:
       ONYX_CODE_INTERPRETER_ENABLE_NETWORK: "true"
-      WRAPPER_PATCH_STRICT: "true"
 
 networks:
   executor-egress:

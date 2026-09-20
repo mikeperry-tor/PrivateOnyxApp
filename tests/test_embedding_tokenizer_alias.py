@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import os
 import sys
@@ -14,8 +16,8 @@ MODULE_PATH = (
     Path(__file__).resolve().parents[1]
     / "onyx"
     / "patches"
-    / "shared"
-    / "wrapper_env_patches.py"
+    / "onyx_wrapper_patches"
+    / "shared/embedding_tokenizer.py"
 )
 
 
@@ -45,16 +47,10 @@ class DriftedHuggingFaceTokenizer:
 
 
 def _load_wrapper_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "wrapper_env_patches_tokenizer_under_test", MODULE_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_patch("shared.embedding_tokenizer")
 
 
-class EmbeddingTokenizerAliasTests(unittest.TestCase):
+class EmbeddingTokenizerAliasTests(FreshPatchTestCase):
     def test_fake_nomic_name_uses_offline_file_only(self) -> None:
         wrapper = _load_wrapper_module()
         onyx = ModuleType("onyx")

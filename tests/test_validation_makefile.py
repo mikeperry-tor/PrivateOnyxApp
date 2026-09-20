@@ -104,7 +104,7 @@ class ValidationMakefileTests(unittest.TestCase):
         self.assertTrue(os.access(IMAGE_SCRIPT_PATH, os.X_OK))
         self.assertIn('image inspect "$image"', IMAGE_SCRIPT)
         self.assertNotRegex(IMAGE_SCRIPT, r'(?m)^.*"\$container_bin" (pull|build)\b')
-        self.assertEqual(IMAGE_SCRIPT.count("--network none"), 14)
+        self.assertEqual(IMAGE_SCRIPT.count("--network none"), IMAGE_SCRIPT.count('"$container_bin" run --rm'))
         self.assertIn("WRAPPER_PATCH_STRICT=true", IMAGE_SCRIPT)
         for setting in (
             "ENABLE_CRAFT=false",
@@ -114,11 +114,11 @@ class ValidationMakefileTests(unittest.TestCase):
         ):
             self.assertIn(setting, IMAGE_SCRIPT)
         self.assertIn(
-            "PYTHONPATH=/api-patches:/wrapper:/obscura-client:/app",
+            'PYTHONPATH="${validation_pythonpath:-/api-patches:/obscura-client:/app}"',
             IMAGE_SCRIPT,
         )
         self.assertIn(
-            "onyx/patches/sitecustomize_api_server:/api-patches:ro",
+            "onyx/patches/sitecustomize_api_server}:/api-patches:ro",
             IMAGE_SCRIPT,
         )
         self.assertIn(

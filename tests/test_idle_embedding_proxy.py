@@ -88,8 +88,12 @@ class IdleEmbeddingLifecycleTests(unittest.TestCase):
         with patch.object(lifecycle, "_terminate_child") as terminate:
             self.assertFalse(lifecycle.reap_if_idle(now=1000))
             terminate.assert_not_called()
-            lifecycle.end_request()
+            # Use an exactly representable clock value for the exact expiry
+            # boundary; adding/subtracting the real uptime can round below 600.
+            with patch.object(self.module.time, "monotonic", return_value=200.0):
+                lifecycle.end_request()
             completed = lifecycle._last_completed
+            self.assertEqual(completed, 200.0)
             self.assertFalse(lifecycle.reap_if_idle(now=completed + 599.99))
             self.assertTrue(lifecycle.reap_if_idle(now=completed + 600))
             terminate.assert_called_once_with(child)

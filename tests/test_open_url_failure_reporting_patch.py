@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import sys
 import unittest
@@ -9,22 +11,16 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
     ROOT
-    / "onyx/patches/sitecustomize_api_server/open_url_failure_reporting_patch.py"
+    / "onyx/patches/onyx_wrapper_patches/api/open_url.py"
 )
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location(
-        "test_open_url_failure_reporting_patch_module", MODULE_PATH
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = load_patch("api.open_url")
     return module
 
 
-class OpenUrlFailureReportingPatchTests(unittest.TestCase):
+class OpenUrlFailureReportingPatchTests(FreshPatchTestCase):
     @classmethod
     def setUpClass(cls):
         cls.module = _load_module()

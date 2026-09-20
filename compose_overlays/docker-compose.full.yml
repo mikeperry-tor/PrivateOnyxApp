@@ -95,7 +95,7 @@ services:
       # metadata at runtime.
       ONYX_EMBEDDING_TOKENIZER_FILE: "/root/.cache/huggingface/private-onyx/nomic-embed-text-v1/tokenizer.json"
       WRAPPER_PATCH_STRICT: "true"
-      PYTHONPATH: "/app/wrapper-patches-background:/app/wrapper-patches-shared:${PYTHONPATH:-}"
+      PYTHONPATH: "/app"
       ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_ENABLED: "true"
       ONYX_WEB_CONNECTOR_HTTP_FRESHNESS_HOSTS: "doc-drop-web"
       ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL: "http://doc-drop-web:8091/"
@@ -111,8 +111,6 @@ services:
       http_proxy: "http://onyx-public-egress-bridge:3128"
       https_proxy: "http://onyx-public-egress-bridge:3128"
       ONYX_HELPER_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
-      ONYX_MCP_PUBLIC_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
-      ONYX_MCP_HOST_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
       ONYX_WEB_CONNECTOR_PUBLIC_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
       ONYX_WEB_CONNECTOR_HOST_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
       ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
@@ -138,9 +136,7 @@ services:
       # strict bootstrap and shared helper there so Celery workers and their
       # spawned indexing children cannot start without the wrapper patches.
       - ./onyx/patches/sitecustomize_background/sitecustomize.py:/app/sitecustomize.py:ro
-      - ./onyx/patches/shared/wrapper_env_patches.py:/app/wrapper_env_patches.py:ro
-      - ./onyx/patches/sitecustomize_background:/app/wrapper-patches-background:ro
-      - ./onyx/patches/shared:/app/wrapper-patches-shared:ro
+      - ./onyx/patches/onyx_wrapper_patches:/app/onyx_wrapper_patches:ro
       - background_logs:/var/log/onyx
       - ./onyx/background_entrypoint.py:/app/wrapper-background-entrypoint.py:ro
       - ./onyx/beat_liveness_watchdog.py:/app/wrapper-beat-liveness-watchdog.py:ro
@@ -288,7 +284,6 @@ services:
       ONYX_EMBEDDING_TOKENIZER_FILE: "/root/.cache/huggingface/private-onyx/nomic-embed-text-v1/tokenizer.json"
       # Match the background/index-creation path for this single-node stack.
       OPENSEARCH_INDEX_NUM_REPLICAS: "0"
-      WRAPPER_PATCH_STRICT: "true"
     depends_on: !override
       cache:
         condition: service_started

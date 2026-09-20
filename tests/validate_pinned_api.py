@@ -10,13 +10,14 @@ from importlib.metadata import version
 from types import SimpleNamespace
 from uuid import UUID
 
-import wrapper_env_patches as patches
+from onyx_wrapper_patches.api import inference_continuation
+from onyx_wrapper_patches.api import python_artifacts
 
 
 def _validate_model_display_names() -> None:
     from unittest.mock import patch
 
-    import model_display_name_patch
+    from onyx_wrapper_patches.api import model_display_name_patch
     from onyx.llm.constants import LlmProviderNames
     from onyx.server.manage.llm import api, models
 
@@ -62,7 +63,7 @@ def _validate_github_egress() -> None:
     from unittest.mock import patch
 
     import requests
-    import github_egress_patch
+    from onyx_wrapper_patches.api import github_egress_patch
     from onyx.utils import github
     from onyx.utils import url as onyx_url
 
@@ -243,7 +244,9 @@ def _validate_durable_stream_buffer_policy() -> None:
 
 def _validate_production_bootstrap() -> None:
     """Prove this process was patched by the same bootstrap as api_server."""
-    import sitecustomize
+    from patch_activation_probe import assert_activation
+    assert_activation()
+    sitecustomize = sys.modules["sitecustomize"]
 
     from onyx.prompts import tool_prompts
     from onyx.prompts.coding_agent import coding_agent as coding_agent_prompts
@@ -262,14 +265,18 @@ def _validate_production_bootstrap() -> None:
     assert sys.modules["sitecustomize"] is sitecustomize
     assert getattr(playwright_fetch, "_wrapper_helper_proxy_patched", False)
     assert mcp_ssrf.mcp_ssrf_httpx_client_factory.__module__ == (
-        "wrapper_env_patches"
+        "onyx_wrapper_patches.api.mcp_egress"
     )
     assert mcp_ssrf.mcp_oauth_challenge_httpx_client_factory.__module__ == (
-        "wrapper_env_patches"
+        "onyx_wrapper_patches.api.mcp_egress"
     )
-    assert onyx_web_crawler.OnyxWebCrawler.contents.__module__ == (
-        "obscura_crawler_patch"
-    )
+    from onyx_wrapper_patches.api.config import use_obscura_browser
+    selected = "obscura_crawler_patch" if use_obscura_browser() else "onyx_crawler_egress_patch"
+    unselected = "onyx_crawler_egress_patch" if use_obscura_browser() else "obscura_crawler_patch"
+    assert "onyx_wrapper_patches.api." + selected in sys.modules
+    assert "onyx_wrapper_patches.api." + unselected not in sys.modules
+    if use_obscura_browser():
+        assert onyx_web_crawler.OnyxWebCrawler.contents.__module__ == "onyx_wrapper_patches.api.obscura_crawler_patch"
     assert getattr(url_utils, "_wrapper_url_identity_preservation_patch", False)
     assert getattr(OpenURLTool, "_wrapper_failure_reporting_patch", False)
     assert getattr(OpenURLTool, "_wrapper_explicit_url_limit_patch", False)
@@ -667,23 +674,23 @@ def _validate_python_file_link_enforcement() -> None:
         "before [graph.png](/api/chat/file/file-id) "
         "and [data.csv](/api/chat/file/data-id) after"
     )
-    assert patches._normalize_chat_file_markdown(raw) == expected
-    assert patches._normalize_chat_file_markdown(
+    assert python_artifacts._normalize_chat_file_markdown(raw) == expected
+    assert python_artifacts._normalize_chat_file_markdown(
         "![Simple Function Graphs](/api/chat/file/file-id)",
         {"file-id": "graph.png"},
     ) == "[graph.png](/api/chat/file/file-id)"
     canonical_id = "0ad58c02-1c2d-4e22-9c41-d9e13a5e1d7b"
-    assert patches._normalize_chat_file_markdown(
+    assert python_artifacts._normalize_chat_file_markdown(
         "![Simple Function Graphs](/api/chat/file/"
         "0ad5_8c02-1c2d-4e22-9c41-d9e13a5e1d7b)",
         {canonical_id: "graph.png"},
     ) == f"[graph.png](/api/chat/file/{canonical_id})"
     fabricated_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    assert patches._normalize_chat_file_markdown(
+    assert python_artifacts._normalize_chat_file_markdown(
         f"![graph.png](/api/chat/file/{fabricated_id})",
         {canonical_id: "graph.png"},
     ) == f"[graph.png](/api/chat/file/{fabricated_id})"
-    assert patches._normalize_chat_file_markdown(
+    assert python_artifacts._normalize_chat_file_markdown(
         f"[descriptive label](/api/chat/file/{fabricated_id})",
         {canonical_id: "graph.png"},
     ) == f"[descriptive label](/api/chat/file/{fabricated_id})"
@@ -700,16 +707,16 @@ def _validate_python_file_link_enforcement() -> None:
             }
         ),
     )
-    assert patches._generated_chat_file_filenames([saved_tool_call]) == {
+    assert python_artifacts._generated_chat_file_filenames([saved_tool_call]) == {
         "saved-id": "saved.png"
     }
     assert session_loading._wrapper_normalize_saved_chat_file_markdown(
         "![Saved chart](/api/chat/file/saved-id)", [saved_tool_call]
     ) == "[saved.png](/api/chat/file/saved-id)"
     literal = "`![literal](/api/chat/file/literal)`"
-    assert patches._normalize_chat_file_markdown(literal) == literal
+    assert python_artifacts._normalize_chat_file_markdown(literal) == literal
     for split in range(len(raw) + 1):
-        stream = patches._ChatFileMarkdownStream()
+        stream = python_artifacts._ChatFileMarkdownStream()
         actual = (
             stream.feed(raw[:split])
             + stream.feed(raw[split:])
@@ -921,7 +928,7 @@ def _validate_litellm_contract() -> None:
     # The continuation suffix is a synthetic user turn. Its partial assistant
     # must therefore declare reasoning_content so stock Pydantic serialization
     # retains it even when the optional cross-turn reasoning patch is disabled.
-    partial = patches._build_midstream_partial_assistant(
+    partial = inference_continuation._build_midstream_partial_assistant(
         AssistantMessage,
         content="partial answer",
         reasoning="forced continuation reasoning",

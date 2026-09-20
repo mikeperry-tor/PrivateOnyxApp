@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import sys
 import types
@@ -12,13 +14,8 @@ from uuid import UUID
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
     ROOT
-    / "onyx/patches/sitecustomize_api_server/webui_reconnect_status_patch.py"
+    / "onyx/patches/onyx_wrapper_patches/api/webui_reconnect_status_patch.py"
 )
-SPEC = importlib.util.spec_from_file_location(
-    "webui_reconnect_status_patch_under_test", MODULE_PATH
-)
-assert SPEC and SPEC.loader
-patch_module = importlib.util.module_from_spec(SPEC)
 
 
 class HTTPException(Exception):
@@ -43,7 +40,7 @@ original_modules = {name: sys.modules.get(name) for name in ("fastapi", "pydanti
 try:
     sys.modules["fastapi"] = fastapi
     sys.modules["pydantic"] = pydantic
-    SPEC.loader.exec_module(patch_module)
+    patch_module = load_patch("api.webui_reconnect_status_patch")
 finally:
     for name, original in original_modules.items():
         if original is None:
@@ -99,7 +96,7 @@ class ChatMessageModel:
     id = DescColumn()
 
 
-class WebUIReconnectStatusPatchTests(unittest.TestCase):
+class WebUIReconnectStatusPatchTests(FreshPatchTestCase):
     def resolve(
         self,
         *,
@@ -229,7 +226,7 @@ class WebUIReconnectStatusPatchTests(unittest.TestCase):
         bootstrap = (
             ROOT / "onyx/patches/sitecustomize_api_server/sitecustomize.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("from webui_reconnect_status_patch import", bootstrap)
+        self.assertIn("from onyx_wrapper_patches.api.webui_reconnect_status_patch import", bootstrap)
         self.assertIn("install_webui_reconnect_status()", bootstrap)
 
     def test_status_route_does_not_load_full_session_history(self) -> None:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase
+
+import importlib
 import importlib.util
 import os
 import sys
@@ -49,13 +52,14 @@ def _compatible_beat_tick(self):
     self._last_reload = now  # noqa: F821
 
 
-class WebConnectorEgressPatchTests(unittest.TestCase):
+class WebConnectorEgressPatchTests(FreshPatchTestCase):
     def _load_patched_modules(
         self,
         level: str,
         *,
         freshness: bool = False,
         head_response=None,
+        env_overrides=None,
     ):
         requests_module = ModuleType("requests")
         sessions_module = ModuleType("requests.sessions")
@@ -239,18 +243,15 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             str(url).endswith(".pdf") or content_type == "application/pdf"
         )
 
-        wrapper_module = ModuleType("wrapper_env_patches")
-        wrapper_module.apply_embedding_tokenizer_alias_patch = lambda: None
-        wrapper_module.apply_playwright_helper_proxy_patch = lambda: None
-        wrapper_module.apply_configured_inference_proxy_patch = lambda: None
-        wrapper_module._validated_fixed_proxy_url = (
-            lambda env_name, expected_host: os.environ[env_name]
-        )
+        from onyx_wrapper_patches.shared.playwright_proxy import select_playwright_proxy as real_selection
+
+        wrapper_module = ModuleType("onyx_wrapper_patches.shared.playwright_proxy")
 
         @contextmanager
         def select_playwright_proxy(proxy_url):
-            playwright_proxies.append(proxy_url)
-            yield
+            with real_selection(proxy_url):
+                playwright_proxies.append(proxy_url)
+                yield
 
         wrapper_module.select_playwright_proxy = select_playwright_proxy
 
@@ -305,6 +306,11 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             "check-for-index-attempt-cleanup": timedelta(minutes=30),
             "check-for-hierarchy-fetching": timedelta(hours=1),
         }
+        from onyx_wrapper_patches.background.resource_policy import _DISCOVERY_TASKS, _HOUSEKEEPING_TASKS
+        for name, identifier in _DISCOVERY_TASKS.items():
+            setattr(task_ids, identifier, name + "-task")
+        for name, (identifier, _) in _HOUSEKEEPING_TASKS.items():
+            setattr(task_ids, identifier, name + "-task")
         removal_specs = {
             "monitor-celery-queues": (task_ids.MONITOR_CELERY_QUEUES, timedelta(seconds=10)),
             "monitor-background-processes": (task_ids.MONITOR_BACKGROUND_PROCESSES, timedelta(minutes=5)),
@@ -365,7 +371,7 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         fake_modules = {
             "requests": requests_module,
             "requests.sessions": sessions_module,
-            "wrapper_env_patches": wrapper_module,
+            "onyx_wrapper_patches.shared.playwright_proxy": wrapper_module,
             "onyx": onyx_module,
             "onyx.background": background_module,
             "onyx.background.celery": celery_module,
@@ -409,16 +415,21 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
             ),
             "ONYX_WEB_CONNECTOR_INTERNAL_BASE_URL": "http://doc-drop-web:8091/",
         }
+        env.update(env_overrides or {})
 
-        spec = importlib.util.spec_from_file_location(
-            "sitecustomize_background_egress_under_test", MODULE_PATH
-        )
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(MODULE_PATH.parents[1]))
+        from onyx_wrapper_patches.background import document_freshness as module
+        from onyx_wrapper_patches.background import resource_policy, web_connector_egress
+        sys.path.pop(0)
+        module._INDEXING_SKIP_PATCHED = False
+        module._PATCH_LOGGER = None
+        module._LOG_ONCE_KEYS.clear()
         with patch.dict(os.environ, env, clear=True), patch.dict(
             sys.modules, fake_modules
         ):
-            spec.loader.exec_module(module)
+            resource_policy._apply_sleepy_background_patch()
+            web_connector_egress._apply_web_connector_egress_patch()
+            module._apply_web_connector_http_freshness_patch()
 
         self.loaded_patch_module = module
         self.scrape_calls = scrape_calls
@@ -426,6 +437,30 @@ class WebConnectorEgressPatchTests(unittest.TestCase):
         self.beat_app_module = beat_app_module
         self.app_base_module = app_base_module
         return connector_module, calls, playwright_proxies, validations
+
+    def test_fixed_proxy_acceptance_reaches_native_connector_selection(self):
+        for name, host in (
+            ("ONYX_WEB_CONNECTOR_PUBLIC_HTTP_PROXY_URL", "onyx-public-egress-bridge"),
+            ("ONYX_WEB_CONNECTOR_HOST_HTTP_PROXY_URL", "onyx-host-egress-bridge"),
+        ):
+            canonical = f"http://{host}:3128"
+            for strict in ("true", "false"):
+                for value in (canonical, " \t" + canonical + "\n"):
+                    with self.subTest(name=name, strict=strict, value=value):
+                        connector, calls, selections, _ = self._load_patched_modules(
+                            "validate_all", env_overrides={name: value, "WRAPPER_PATCH_STRICT": strict}
+                        )
+                        url = "http://doc-drop-web:8091/fixture.pdf" if "HOST" in name else "https://example.com/fixture"
+                        self.assertEqual(list(connector.WebConnector(url).load_from_state()), ["loaded"])
+                        self.assertEqual(selections, [canonical])
+                        self.assertTrue(calls)
+                        self.assertTrue(all(call[2]["proxies"]["http"] == canonical for call in calls))
+                for invalid in ("", canonical + "/", canonical.upper(), canonical.replace(":3128", ":03128"), canonical.replace("http://", "http://user:pass@")):
+                    with self.subTest(name=name, strict=strict, invalid=invalid):
+                        # Validation errors escape the installer in both modes;
+                        # only the outer bootstrap decides whether to exit 78.
+                        with self.assertRaises(RuntimeError):
+                            self._load_patched_modules("validate_all", env_overrides={name: invalid, "WRAPPER_PATCH_STRICT": strict})
 
     def test_sleepy_background_schedule_and_bootsteps_are_effective(self) -> None:
         self._load_patched_modules("validate_all")

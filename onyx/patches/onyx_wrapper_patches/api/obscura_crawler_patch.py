@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from onyx_wrapper_patches.api.config import parse_document_limit, allow_http, allow_http_onion
+
 import contextvars
 import inspect
 import os
@@ -75,38 +77,21 @@ class CrawledSection:
     section: object
 
 
-def _parse_document_limit() -> int:
-    raw = os.environ.get("ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB", "20")
-    if not raw or not raw.isdecimal():
-        raise RuntimeError("ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB must be a positive base-10 integer")
-    mib = int(raw)
-    if mib <= 0 or mib > ((1 << 63) - 1) // (1024 * 1024):
-        raise RuntimeError("ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB is outside the supported range")
-    return mib * 1024 * 1024
 
 
-DOCUMENT_LIMIT_BYTES = _parse_document_limit()
+DOCUMENT_LIMIT_BYTES = parse_document_limit()
 WAIT_UNTIL = validate_wait_until(
     os.environ.get("OBSCURA_BROWSER_WAIT_UNTIL_WEB", "domcontentloaded")
 )
 CDP_URL = os.environ.get(
     "ONYX_OBSCURA_CDP_URL", "ws://obscura-cdp-gateway:9222/devtools/browser"
 )
-ALLOW_HTTP = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").lower() in {
-    "1", "true", "yes", "on"
-}
+ALLOW_HTTP = allow_http()
 
 
-def _parse_allow_http_onion() -> bool:
-    raw = os.environ.get("EGRESS_ALLOW_HTTP_ONION_URLS", "false").strip().lower()
-    if raw == "true":
-        return True
-    if raw == "false":
-        return False
-    raise RuntimeError("EGRESS_ALLOW_HTTP_ONION_URLS must be exactly true or false")
 
 
-ALLOW_HTTP_ONION = _parse_allow_http_onion()
+ALLOW_HTTP_ONION = allow_http_onion()
 
 
 def _failure(url: str, reason: str):
@@ -394,7 +379,7 @@ def install() -> None:
                 self, indexed_sections, crawled_sections, url_to_doc_id,
                 all_urls, failed_web_fetches,
             )
-        from open_url_failure_reporting_patch import record_failures
+        from onyx_wrapper_patches.api.open_url import record_failures
 
         record_failures(failed_web_fetches)
         indexed_by_doc_id = {

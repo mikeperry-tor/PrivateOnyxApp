@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import os
 import sys
@@ -10,7 +12,7 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH_PATH = ROOT / "onyx" / "patches" / "shared" / "wrapper_env_patches.py"
+PATCH_PATH = ROOT / "onyx" / "patches" / "onyx_wrapper_patches" / "api/tool_calls.py"
 
 
 def _try_fallback_tool_extraction(
@@ -53,16 +55,11 @@ ORIGINAL_XML_FLUSH = _XmlToolCallContentFilter.flush
 
 
 def _load_wrapper():
-    spec = importlib.util.spec_from_file_location(
-        "wrapper_env_patches_native_tools_under_test", PATCH_PATH
-    )
-    assert spec and spec.loader
-    wrapper = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(wrapper)
+    wrapper = load_patch("api.tool_calls")
     return wrapper
 
 
-class NativeToolCallsOnlyTests(unittest.TestCase):
+class NativeToolCallsOnlyTests(FreshPatchTestCase):
     def setUp(self):
         _XmlToolCallContentFilter.process = ORIGINAL_XML_PROCESS
         _XmlToolCallContentFilter.flush = ORIGINAL_XML_FLUSH

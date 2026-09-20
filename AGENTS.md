@@ -198,6 +198,10 @@ This stack protects private research, document contents, browsing behavior, infe
 ### Implementation Style
 
 - Prefer small, explicit changes over broad rewrites.
+- Organize runtime patches by installing service, with inert implementation
+  modules and explicit ordered bootstraps. Preserve canonical state identity,
+  import dependencies, composition, and failure boundaries; follow the
+  [patch organization contract](docs/onyx_patch_info.md#package-organization).
 - When necessary, runtime patches should be narrow, startup-validated, covered by tests, and documented in `docs/onyx_patch_info.md` and `docs/onyx_patches_upgrade.md`.
 - Prefer structured parsers or compose-aware inspection over ad hoc text hacks when changing configuration formats.
 - Prefer component-configurable behavior over shims and patches.

@@ -1,6 +1,17 @@
 # Onyx runtime patch organization
 
-Status: planned; implementation has not started.
+Status: package extraction and scoped corrections implemented. Deterministic,
+selected-image, host Docker, and Linux VM Podman/rootless Docker startup/recreation
+checks pass; authenticated
+chat/history, queued synthetic RAG, freshness recrawl, and post-restart
+reprocessing/retrieval checks pass. Synthetic API/database/index records and the
+temporary admin account are removed, and the initial stopped state is restored.
+Live host API PDF retrieval passes for the arXiv and S3 test URLs in both crawler
+modes without VPN; controlled API PDF execution also passes. The W3C URL's
+direct-browser access denial is separate from PDF parsing. Standing package
+ownership and failure contracts are documented in
+[patch information](../onyx_patch_info.md#package-organization); validation
+requirements are maintained in [the upgrade checklist](../onyx_patches_upgrade.md).
 
 ## Objective and scope
 
@@ -111,93 +122,16 @@ API and background: `apply_embedding_tokenizer_alias_patch`,
 Some small utilities also have actual cross-service consumers, notably fixed
 proxy validation and Playwright proxy context selection.
 
-## Standing organization rules to establish
+## Standing organization rules
 
-These rules must become maintained repository guidance during implementation.
-Add a concise rule and link in `AGENTS.md` under implementation/patch guidance;
-put the detailed rules, current package layout, dependency direction, and
-bootstrap contract in a dedicated section of `docs/onyx_patch_info.md`.
-Update `docs/onyx_patches_upgrade.md` with repeatable automatic-startup
-and composition checks, including their limits as runtime enforcement. Keep this
-migration's one-time acceptance matrix here rather than making every future focused
-patch change repeat it.
-Do not leave this plan as the sole authority for these rules.
-Once implemented, replace duplicated standing specification here with links
-to the owning documents and retain consolidated acceptance evidence.
-
-1. **Service ownership follows the installing process.** A patch used by
-   several agents or tools within the API is API-owned, not service-shared.
-   Background-only behavior stays background-owned. Shared installers need
-   identified consumers in more than one service.
-2. **Bootstraps orchestrate; modules implement.** `sitecustomize.py` handles
-   service selection, exact process exclusions, ordered installation, final
-   validation, stderr redirection, and fatal startup failure. Move algorithmic
-   implementations, upstream source contracts, and behavioral state out of it.
-3. **Importing an implementation does not install it.** No patch application,
-   service startup, network access, or heavy Onyx application imports in package
-   initializers. Import upstream application targets inside explicit installers
-   where necessary. Keep lightweight pure helpers independently importable.
-4. **Organize by coherent behavior, not arbitrary file size.** Keep an
-   installer's guards, source contracts, owned state, and local helpers together.
-   Closely coupled operations may share a module; avoid both miscellaneous
-   catch-all modules and one-file-per-trivial-helper fragmentation.
-5. **Separate infrastructure from shared behavior.** Source composition,
-   callable-contract checks, and common configuration parsing are small neutral
-   utilities. Shared inference/Playwright/tokenizer behavior remains separate.
-   API and background modules may import neutral/shared modules; shared modules
-   must not import service-owned modules. No cycles or cross-service private
-   imports. Promote genuinely shared helpers to explicit public utility APIs.
-   Preserve each caller's existing signature, default, parameter-kind, and source
-   checks; a common helper must not weaken them to parameter-name checks alone.
-6. **Installation order is deliberate and visible.** Retain explicit calls and
-   final validators; document dependencies beside the calls. No filesystem
-   discovery, plugin registry, automatic sorting, or alphabetical reordering.
-   Enumerating expected activation for tests is not a dynamic installer registry.
-   Treat imports that capture a callable or constant as dependency edges too.
-   Install foundational adapters before importing their application consumers,
-   including transitive imports from other installers. Keep implementation imports
-   inert so merely collecting installer functions cannot capture unpatched targets.
-   For each replacement, characterize both already-loaded and later-imported
-   consumers and test the real caller after complete bootstrap. When early
-   installation is impossible, explicitly rebind only audited consumer references
-   with strict identity/source checks; account separately for defaults, closures,
-   decorators, and registries, which rebinding a module attribute cannot repair.
-   Preserve the existing `_update_bound_module_attr` scan as the bounded exception
-   described below; do not introduce another scan, import hook, or automatic
-   alias-repair framework. Future patches must record these edges beside their
-   install calls and in their composition tests.
-7. **Compose source rewrites through the common helper within audited limits.**
-   Distinguish successive source rewrites, decorators present in compiled source,
-   and behavioral wrappers subsequently installed around a callable. The current
-   helper retains generated source and execution globals for successive rewrites,
-   but unwrapping and recompiling a callable can discard an externally applied
-   wrapper. `functools.wraps` preserves metadata, not that wrapper's execution.
-   Prefer source rewrites before behavioral wrappers; audit source decorators for
-   reconstruction and repeated-decoration effects. Test actual behavior after the
-   complete installation sequence, including meaningful decorator/wrapper effects.
-   Reject unsupported compositions explicitly at the affected installer boundary
-   rather than silently losing behavior or building a generic wrapper-reconstruction
-   framework. Characterize existing callers before changing the helper or order;
-   isolate any necessary behavioral correction from extraction. Do not claim the
-   existing helper already preserves arbitrary wrappers.
-8. **Failure and process contracts survive moves.** Required drift/import
-   failures remain fatal under strict production settings. CPython suppresses
-   ordinary `sitecustomize` exceptions, so retain the explicit exit behavior.
-   Installation output belongs on stderr; stdout remains available for pickled
-   isolated-process results. Keep bootstrap-local fatal handling independent of
-   the package it must diagnose as missing. Verify automatic discovery and behavior
-   in supported application processes without changing launch mechanisms or
-   widening control-process exemptions. Missing-bootstrap detection belongs to
-   validation in this refactor, not a new runtime enforcement guarantee.
-9. **One canonical module identity per process.** Use package-qualified imports
-   and inert `__init__.py` files. Avoid importing a stateful module through both
-   bare and qualified names, copying it under multiple names, or loading it via
-   ad hoc production `sys.path` mutations. Preserve ContextVar identity, locks,
-   once-only state, and decorator globals.
-10. **Tests follow behavioral ownership.** Move test imports/fixtures with the
-    code, keep cross-family composition tests, and prove service activation
-    separately. Do not add compatibility re-export modules, old import aliases,
-    fallback search paths, or a second bootstrap implementation.
+The maintained rules now live in
+[Package organization](../onyx_patch_info.md#package-organization), with the
+repository-wide pointer in `AGENTS.md` and repeatable checks in the
+[upgrade checklist](../onyx_patches_upgrade.md#runtime-patch-contract-audit).
+They cover service ownership, inert canonical imports, explicit installer
+ordering, dependency direction, source composition limits, preserved failure
+boundaries, and automatic discovery without new runtime enforcement.
+The sections below retain migration-specific decisions and acceptance evidence.
 
 ### Existing reasoning alias repair
 
@@ -750,13 +684,11 @@ does not justify rebuilding unrelated images or changing their pins.
 Discover operational Docker/Podman engines and selected local images at execution
 time. Use Makefile lifecycle commands with an explicit `CONTAINER_BIN`, render
 both engine models, and run the applicable live rows on available supported
-engines; mark unavailable engine rows unrun with the observed reason. Podman is
-currently non-functional on this host; Podman and rootless Docker validation are
-to run in the available VM. Ask the user to start that VM when preparing those
-checks, and obtain its connection details if needed. Continue independent local
-work while waiting; do not mark those rows unavailable merely because the VM is
-stopped. Verify the VM's engines, selected images, and tree under test once it is
-reachable. Docker-only executor checks remain Docker-only.
+engines; mark unavailable engine rows unrun with the observed reason. Native
+Linux Podman and rootless Docker run in the supplied VM; verify its engines,
+selected images, and tree under test. Docker-only executor checks remain
+Docker-only. The consolidated evidence below distinguishes this VM coverage
+from host Docker and rendered-model checks.
 
 Run engines serially when they share stack data or host services, using the
 documented stopped-stack handoff. A second operational engine does not establish
@@ -1059,3 +991,248 @@ only where available evidence establishes them, as specified in the process tabl
   separately discovered defects. Keep durable validation helpers under `tests/`;
   do not make acceptance depend on scripts existing only in `/tmp` or an earlier
   conversation. Do not claim an image contract proves real-worker activation.
+
+## Migration ledger (implementation working record)
+Baseline: 11 Python files, 8,025 lines; manifest remains unchanged. The API
+bootstrap calls 24 monolith installers plus eight dedicated installers; the
+background calls tokenizer, resource policy, Playwright, inference, connector
+egress, and freshness in that order.
+### Monolith symbol ownership
+Every symbol below originates in `shared/wrapper_env_patches.py`; destinations
+are relative to `onyx_wrapper_patches/`. Constants, ContextVars, collections,
+and private helpers stay with the listed owner.
+| Destination | Symbols |
+| --- | --- |
+| `api/coding_final_answer.py` | `_CODING_AGENT_FINAL_TRACE_ENABLED`, `_sanitize_fallback_text`, `_summarize_tool_call_for_final_answer`, `_coding_agent_final_section_kind`, `_flatten_coding_agent_final_answer_history`, `_coding_agent_final_answer_fallback`, `_coding_agent_flattened_final_answer`, `apply_coding_agent_final_answer_fallback_patch` |
+| `api/config.py` | `_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS` |
+| `api/deep_research.py` | `_DEEP_RESEARCH_WORKER_LIMIT`, `_validate_deep_research_control_tool_batch`, `_deep_research_sub_turn_index`, `_prepare_deep_research_tool_calls`, `_DEEP_RESEARCH_OUTPUT_LIMIT_REPLACEMENTS`, `_research_report_output_limits`, `_validate_research_report_output_limit`, `apply_deep_research_output_limit_patch`, `apply_deep_research_chat_agent_tools_patch` |
+| `api/inference_continuation.py` | `_MIDSTREAM_CONTINUATION_NOTICE`, `_MIDSTREAM_CONTINUATION_FAILED_NOTICE`, `_MIDSTREAM_FINALIZATION_FAILED_NOTICE`, `_MIDSTREAM_REASONING_CONTINUATION_NOTICE`, `_MIDSTREAM_CONTINUATION_INSTRUCTION`, `_exception_chain`, `_midstream_retryable_exception`, `_build_midstream_partial_assistant`, `apply_midstream_inference_continuation_patch` |
+| `api/mcp_egress.py` | `apply_mcp_egress_proxy_patch` |
+| `api/model_limits.py` | `apply_llm_max_tokens_override_patch` |
+| `api/prompt_stability.py` | `_PROMPT_STABILITY_CHAT_REPLACEMENTS`, `_PROMPT_STABILITY_DR_REPLACEMENTS`, `_PROMPT_STABILITY_RESEARCH_REPLACEMENTS`, `_PROMPT_STABILITY_FUNCTIONS`, `_PROMPT_STABILITY_CONSTANTS`, `_patch_investigation_source`, `_patch_investigation_constant`, `apply_agent_prompt_stability_patches`, `validate_agent_prompt_stability_patches` |
+| `api/python_artifacts.py` | `_CHAT_FILE_PATH_RE`, `_CHAT_FILE_MARKDOWN_CANDIDATE_LIMIT`, `_relative_chat_file_destination`, `_markdown_link_label`, `_generated_chat_file_filenames`, `_canonical_generated_chat_file_id`, `_find_unescaped`, `_is_escaped`, `_ChatFileMarkdownStream`, `_normalize_chat_file_markdown`, `_append_python_guidance_to_replacement_prompt`, `_ChatFileMarkdownEmitter`, `apply_python_file_link_enforcement_patches`, `apply_chat_file_id_validation_patch`, `_is_uuid`, `_PYTHON_EXECUTION_GUIDANCE`, `_UPSTREAM_PYTHON_STATELESS_GUIDANCE`, `apply_python_file_link_prompt_patches` |
+| `api/python_capabilities.py` | `_is_code_interpreter_network_enabled`, `_PYTHON_PACKAGE_LIST`, `apply_python_package_capability_patches`, `_RESTRICTED_NETWORK_TEXT`, `apply_code_interpreter_network_description_patches` |
+| `api/reasoning.py` | `_REASONING_TRACE_ENABLED`, `_REASONING_TRACE_LITELLM_DEBUG_ENABLED`, `_REASONING_TRACE_SEQ`, `_REASONING_REMINDER_REORDER_ENABLED`, `_NATIVE_REASONING_DETECTION_OVERRIDE_ENABLED`, `_NATIVE_REASONING_DETECTION_OVERRIDE_LOGGED`, `_REASONING_MODE_TRACE`, `_REASONING_MODE_TRACE_SEQ`, `_reasoning_digest`, `_trace_reasoning`, `_trace_reasoning_mode`, `_caller_context`, `_tool_names_from_definitions`, `_update_bound_module_attr`, `_message_field`, `_message_has_field`, `_tool_call_count`, `_message_role_counts`, `_trace_reasoning_message_census`, `_trace_reasoning_request_body`, `_enable_litellm_reasoning_trace_debug`, `_first_non_empty_string`, `_set_extra_attr`, `_attach_reasoning_fields`, `_dump_message_with_reasoning_fields`, `_is_tool_call_response_message`, `_is_assistant_message`, `_is_user_message`, `_message_reasoning_text`, `apply_native_reasoning_detection_override_patch`, `apply_reasoning_mode_trace_patch`, `apply_reasoning_content_preservation_patch` |
+| `api/retrieval_limits.py` | `_set_single_default`, `apply_internal_search_context_patches`, `apply_open_url_char_limit_patches` |
+| `api/searxng_retry.py` | `apply_searxng_single_attempt_patch` |
+| `api/tool_calls.py` | `apply_native_tool_calls_only_patch`, `apply_vllm_glm_auto_tool_choice_patch` |
+| `api/tool_result_history.py` | `apply_preserve_tool_results_patch` |
+| `common/config.py` | `EFFECTIVE_UNLIMITED_CHARS`, `_strict_mode`, `_warn_or_raise`, `_raise_if_strict`, `_replace_or_warn`, `_parse_positive_int`, `_parse_optional_positive_int`, `_env_flag_enabled`, `_env_flag_default_true`, `_required_positive_int`, `_validated_fixed_proxy_url` |
+| `common/source.py` | `_patch_function_source`, `_prompt_stability_replace` |
+| `common/text.py` | `_truncate_text_with_notice` |
+| `shared/embedding_tokenizer.py` | `apply_embedding_tokenizer_alias_patch` |
+| `shared/inference_proxy.py` | `apply_configured_inference_proxy_patch` |
+| `shared/playwright_proxy.py` | `_PLAYWRIGHT_PROXY_OVERRIDE`, `select_playwright_proxy`, `apply_playwright_helper_proxy_patch` |
+
+### Dependency and contract map
+API reasoning reads the import-time sharing flag from `api/config.py`;
+Deep Research, continuation, and coding import reasoning helpers. Prompts
+import the report-limit validator from Deep Research. Artifacts and prompts
+use exact-count replacement in `common/source.py`. Only tokenizer, inference,
+and Playwright installers serve both services. `_update_bound_module_attr`
+remains reasoning-private; its detection and optional trace callers repair
+identity-matched loaded attributes, not defaults/closures/registries.
+
+| Contract | Primary existing evidence | Additional acceptance layer |
+| --- | --- | --- |
+| Reasoning, history, tools, continuation | `test_shared_agent_patch_contracts.py`, `test_midstream_inference_continuation.py`, `test_native_tool_calls_only.py` | Final API composition and bounded live follow-up |
+| Prompts, research, artifacts | `test_agent_prompt_stability.py`, `test_shared_agent_patch_contracts.py` | Pinned translated streams and prompt globals |
+| Inference, MCP, Playwright | `test_helper_and_inference_proxy_patches.py`, `test_mcp_egress_patch.py` | Complete compositions and canonical selection table |
+| Crawlers and open_url | Existing stock/direct/failure/limit/identity tests | Both selected compositions and live PDF retrieval |
+| Resource policy and RAG | `test_background_power_saving.py`, `test_web_connector_egress_patch.py` | Pinned materialized/generated/installed schedules, queued synthetic PDF |
+| Process activation | `test_sitecustomize_stdout.py`, `patch_activation_probe.py` | Automatic startup, spawn, separate native PDF children, live lifecycle |
+
+### Failure boundaries
+API implementation imports occur inside `_install` but outside individual
+installer catches: import failure ends the remaining sequence; the outer
+bootstrap prints to stderr and exits 78 only in strict mode. Each installer
+retains its existing local catches and early returns during extraction.
+Background shared forwarding wrappers catch both import and application
+errors: strict rethrows to exit 78; non-strict reports and continues to the
+next installer. Resource policy catches its entire application similarly.
+Connector egress catches dependency imports only: non-strict import failure
+continues to freshness, but configuration or later application errors escape
+and terminate the remaining sequence without exit 78 in non-strict mode.
+Freshness keeps its separate import/application guards and indexing-sentinel
+validation; control exclusions remain exact. No catch moves across imports.
+
+Corrected configuration defect: fixed-proxy validation previously accepted
+noncanonical representations that Playwright context selection rejected. Canonical equality,
+GitHub whitespace, Playwright empty-value failure, crawler HTTP parsing, and
+materialized schedule checks are intentional corrections, separate from moves.
+
+
+### Background and dedicated-module ownership
+
+The background bootstrap retains only strict fatal handling, exact control
+exclusions, ordered calls, and three shared forwarding wrappers whose catch
+boundaries include implementation imports. `background/config.py` owns its
+strictness and environment helpers. `background/resource_policy.py` owns
+`_apply_sleepy_background_patch` and the new materialized-schedule validator;
+`background/web_connector_egress.py` owns `_WEB_CONNECTOR_PROXY` and its
+installer. All freshness constants, `_INDEXING_SKIP_PATCHED`, `_PATCH_LOGGER`,
+`_LOG_ONCE_KEYS`, callable/source contracts, metadata helpers, display-link
+rewriting, indexing-sentinel filtering, and both freshness installers belong
+to `background/document_freshness.py`. No original background top-level symbol
+is unaccounted for.
+
+The dedicated GitHub, model-display, stock/direct crawler, URL-identity, and
+WebUI-reconnect modules retain their implementation names under `api/`.
+The former failure-reporting and URL-limit modules share `api/open_url.py`,
+including the original-run class marker and request ContextVar; its two explicit
+installers retain failure-before-limit ordering. The crawler selector and
+common crawler parsers belong to `api/config.py`, so selecting stock does not
+import the direct implementation and vice versa.
+
+### Consolidated acceptance evidence
+
+- `make check` passes on macOS and the Linux VM: 689 tests, 20 skips,
+  compilation, help validation, and
+  whitespace checks. The Make-selected platform/feature model matrix passes;
+  this does not qualify unavailable runtimes.
+- Baseline and final pinned-image gates pass on host Docker, without changing
+  image pins or dependency locks. Final automatic API startup passes in both
+  crawler modes; background startup passes with freshness enabled and disabled.
+- Canonical inert imports, native spawn, and native isolated PDFium execution
+  pass under both bootstraps. API PDF cold/warm baseline timings were
+  3.001/2.913 seconds and final timings 3.309/3.355 seconds; background baseline
+  was 2.162/2.145 seconds and final 2.138/2.128 seconds. The native 120-second
+  timeout is unchanged. This controlled evidence does not establish live queued
+  child execution. Controlled strict child startup failures also preserve native
+  parent error mapping, discarded stderr, clean pickle stdout, and pypdf recovery.
+- Negative discovery, wrong-origin bootstrap, missing required package, and
+  source-drift image fixtures pass. Materialized/generated/native-installed
+  schedule checks pass, including detection of native stale same-name entries.
+- Controlled native single-PDF connector entry paths perform two connectivity
+  body GETs in both freshness modes. Disabled freshness performs one scrape GET;
+  matching enabled freshness performs none. These counts are controlled-image
+  evidence, not a live recrawl claim.
+- Host Docker lite (stock crawler) and full (direct Obscura crawler) start and
+  survive clean down/up recreation with native entrypoints and complete patch
+  startup diagnostics. Full published `/api/health` and WebUI return HTTP 200;
+  the native supervisor reports Beat and all six Celery worker roles RUNNING.
+  No patch initialization failure appears in their startup logs. These checks
+  establish startup, not authenticated tool behavior or live child origins.
+  Authenticated stock-lite and direct-full HTML retrieval/tool/history checks
+  pass using a temporary admin API key. Native tool results contained the
+  fetched page, and the follow-up retained its title and synthetic phrase.
+  Direct retrieval of the public W3C test PDF was access-denied; the harness
+  rejected the model's answer from memory as evidence. The host PDF checks below
+  establish successful live retrieval with other public URLs; controlled native
+  PDFium evidence remains separate.
+- Host no-VPN lite API PDF checks pass for both
+  `https://arxiv.org/pdf/1706.03762` and
+  `https://pdf-reader-dkraft.s3.us-east-2.amazonaws.com/1706.03762.pdf`, through
+  both stock and direct Obscura crawler modes. Direct host downloads return
+  HTTP 200 and PDF MIME types (2,215,244 and 2,201,700 bytes respectively).
+  Each serving-process request executes `open_url`; native tool results contain
+  the paper title and requested attention-head passage, rather than relying on
+  the model's prior knowledge. Both crawler modes produce identical extracted
+  text lengths for each URL: 40,435 and 40,258 characters respectively. The
+  four disposable chat sessions and temporary admin account are removed.
+  Separate installed-crawler diagnostics extract `Dummy PDF file` from W3C in
+  stock mode, while direct Obscura receives a 4xx access-denied response before
+  parsing. Those diagnostics do not substitute for serving-process evidence or
+  identify the site's exact reason for denying the browser request.
+- The user authorized creation/removal of one named empty document-source
+  mountpoint. The synthetic PDF stays in `/tmp` and uses the ordinary read-only
+  source mount, serving checks, route, and fixture-only HTTP counter. Native
+  queued attempt 2164 processes one PDF; logs correlate docfetch, processing,
+  and spawned indexing worker PID 132, one chunk, embedding, and index-write
+  stages. Scoped `internal_search` returns exactly that document, with unchanged
+  internal identity and rewritten display link. Live PDFium-versus-fallback and
+  per-child module origins remain unproven by native logs. Initial ingestion
+  succeeds with two GETs (1,214 body bytes) and two HEADs. Unchanged attempt 2165
+  succeeds with one connectivity GET (607 bytes) and one HEAD, without CHUNKING,
+  EMBEDDING, or VECTOR_DB_WRITE stage events. An additional unchanged attempt
+  also succeeds. After full down/up and changing only the synthetic PDF text,
+  attempt 2167 succeeds with fresh chunking, embedding, and an index write;
+  scoped search returns the changed text. Its traffic again includes two GETs
+  (1,214 bytes) and two HEADs. These results establish skipped downstream work
+  and the retained connectivity download; they do not claim zero total GETs.
+  Native queued deletion completed. Exact-ID checks confirm the connector,
+  credential, pair, document, document set, and primary index chunks are gone.
+  The private test persona's native deletion tombstone was purged only after
+  its ownership and absence of chats were verified. The temporary admin key,
+  associated account, and local secret file are removed.
+  The fixture uses the documented recursive Web connector: native single-URL
+  API validation tries to resolve the restricted internal hostname and fails.
+  Owner-only private sets work in this installed edition; explicit private-set
+  user sharing does not. No existing connector, persona, or document is changed.
+- Native Linux ARM64 VM validation uses Podman 5.4.2 with crun and rootless
+  Docker 26.1.5+dfsg1, with Compose 5.1.4. Both checkouts began at
+  `1fcf891fa7fe91ede7185ea75139e6ed6ff51d12` on `onyx_v469_reorg`; the small
+  validation fixes described below were applied to both. Engines ran serially
+  through Make's shared-data ownership handoff. Rootless Docker used its
+  explicit context and separate database volumes. Actual selected models retain
+  the canonical package mounts and bootstrap paths. Docker 26 selects ordinary
+  internal bridges, emits the documented host-reachability warning, and retains
+  controller separation; Engine-28 isolated gateways are not claimed.
+- Both VM `make test-patch-images` gates pass, including inert imports, strict
+  API/background compositions, native spawn/PDFium, negative discovery/drift,
+  and strict-child parent recovery. Podman API PDF cold/warm timings are
+  3.330/3.436 seconds and background 2.218/2.288; rootless Docker API timings
+  are 3.031/3.025 and background 2.161/2.090. The native timeout remains 120
+  seconds. Docker-only executor contracts pass on rootless Docker.
+- Both VM engines pass lite/full startup and full down/up recreation, published
+  API health, actual Beat plus all six worker roles, and authenticated HTML
+  retrieval/history before and after recreation. Public W3C PDF retrieval fails
+  to return the expected native tool content on both; the harness rejects it.
+  This does not weaken the separate controlled PDFium evidence.
+- The user authorized the exact empty VM source mountpoint
+  `onyx-reorg-vm-validation`, with payloads and counters under `/tmp`. Both
+  applications initially lacked LLM/search providers; temporary native entries
+  selected existing Teep/SearXNG services. Their saved 768-dimensional index
+  settings disagreed with the configured 1,024-dimensional Qwen endpoint.
+  After verifying no non-fixture documents existed, user-approved native
+  migrations selected `nomic-ai/nomic-embed-text-v23`, dimension 1,024, and
+  normalization. These corrected settings remain in both applications.
+  Podman's first attempt failed with the old dimension. After migration, an
+  unchanged retry skipped retained document metadata and returned no search
+  result; changing only the fixture text forced real reprocessing. These checks
+  do not qualify recovery from arbitrary failed-ingestion/index migrations.
+- Podman attempt 5 successfully processes the changed PDF after recreation;
+  scoped search verifies its exact uppercase `ONYX` text. Unchanged attempt 6
+  succeeds while skipping downstream work. Rootless attempt 2 ingests the
+  original PDF, attempt 3 skips unchanged downstream work, and attempt 4 after
+  recreation processes and retrieves the changed text. Native logs correlate
+  spawned tasks and processing stages, including rootless attempt 4 child PID
+  104 and one chunk. Each real ingestion uses two GETs (1,214 bytes) plus two
+  HEADs; each unchanged recrawl uses one GET (607 bytes) plus one HEAD. Live
+  child module origins and PDFium-versus-fallback remain unproven by native
+  logs. Conditional secondary-index population remains deferred; no isolated
+  fixture storage platform is introduced by this change.
+- VM prerequisite fixes give standalone Podman `onyx-build` its required image
+  list and cover its dry-run pull commands. An exact-boundary idle-proxy test
+  now uses a fixed clock to avoid uptime-dependent floating-point rounding;
+  runtime lifecycle behavior is unchanged. The admin helper supports explicit
+  Podman selection and disables persistent memory only on its new test account,
+  so chat-history evidence cannot come from a saved memory. The synthetic prompt
+  also avoids asking for persistent memory.
+
+### Reproducible live fixture tools
+
+`tests/patch_reorg_admin.py` creates/revokes an explicitly authorized temporary
+admin key using native Onyx helpers and an exclusive owner-only credential file.
+Use `--container-bin podman` for Podman; Docker inherits `DOCKER_CONTEXT`.
+The newly created account has persistent memory disabled for scoped history tests.
+`tests/validate_patch_live_chat.py` owns only its synthetic chat and hard-deletes
+it after testing. `tests/prepare_patch_reorg_fixture.py` prepares the one-PDF
+submount/counter and Make overlay; `tests/validate_patch_live_rag.py` owns only
+its manifest-recorded connector, credential, document set, private search
+persona, and chats. Queued connector deletion owns removal from the index;
+cleanup must finish before revoking the admin key or stopping the stack.
+`patch_reorg_admin.py revoke --fixture-manifest ...` verifies the exact fixture
+rows and index chunks are absent, purges only its deleted private persona after
+ownership/chat checks, and then revokes the key and removes its secret file.
+
+The host and VM stacks are restored to their initial stopped state; the selected
+`make ps-full` commands are empty and VM shared-data ownership is unclaimed.
+The automatically started host MLX lifecycle proxy was stopped by the supported
+teardown. The approved empty document-source mountpoints, temporary PDFs, and
+overlays are removed. Native exact-ID/index checks precede each temporary admin
+key/account revocation; test-owned providers, personas, document sets, connectors,
+credentials, chats, and indexed documents are removed. Non-secret counters/logs
+remain in disposable acceptance evidence storage; no credential secret remains.
+Only fixture-owned records were removed. The approved VM embedding settings
+remain corrected. The VM validation follow-up changes are uncommitted.

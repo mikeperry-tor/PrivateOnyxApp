@@ -7,7 +7,7 @@ import unittest
 from types import ModuleType
 from unittest.mock import patch
 
-from test_shared_agent_patch_contracts import _load_wrapper
+from patch_test_support import FreshPatchTestCase, load_patch
 
 
 def _foreign_decorator(function):
@@ -17,9 +17,58 @@ def _foreign_decorator(function):
     return timed
 
 
-class PromptStabilityContracts(unittest.TestCase):
+class PromptStabilityContracts(FreshPatchTestCase):
+    def test_source_rebuild_characterizes_external_wrapper_loss(self):
+        wrapper = load_patch("common.source", )
+        module = ModuleType('external_wrapper_fixture')
+        source = 'def loop():\n    return 1\n'
+        filename = '<external-wrapper-fixture>'
+        linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+        exec(compile(source, filename, 'exec'), module.__dict__)
+        original = module.loop
+
+        @functools.wraps(original)
+        def behavioral_wrapper():
+            return original() + 100
+
+        module.loop = behavioral_wrapper
+        self.assertEqual(module.loop(), 101)
+        wrapper._patch_function_source(
+            module=module, function_name='loop',
+            replacements={'return 1': 'return 2'}, patch_name='wrapper limitation',
+        )
+        # Characterization of unsupported ordering, not a preservation claim.
+        self.assertEqual(module.loop(), 2)
+
+    def test_source_decorator_effect_survives_successive_rewrites(self):
+        wrapper = load_patch("common.source", )
+        module = ModuleType('observable_decorator_fixture')
+        calls = []
+
+        def decorate(function):
+            calls.append('decorate')
+
+            @functools.wraps(function)
+            def decorated():
+                return function() + 100
+
+            return decorated
+
+        module.decorate = decorate
+        source = '@decorate\ndef loop():\n    return 1\n'
+        filename = '<observable-decorator-fixture>'
+        linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+        exec(compile(source, filename, 'exec'), module.__dict__)
+        for old, new in [(1, 2), (2, 3)]:
+            wrapper._patch_function_source(
+                module=module, function_name='loop',
+                replacements={f'return {old}': f'return {new}'}, patch_name='source decorator',
+            )
+            self.assertEqual(module.loop(), new + 100)
+        self.assertEqual(calls, ['decorate'] * 3)
+
     def test_research_output_caps_require_exact_upstream_blocks(self):
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.deep_research", )
         modules = {}
         for path in ["onyx.deep_research.dr_loop", "onyx.tools.fake_tools.research_agent"]:
             parts = path.split('.')
@@ -62,7 +111,7 @@ class PromptStabilityContracts(unittest.TestCase):
             self.assertEqual(call.kwargs['replacements'], {old: new})
 
     def test_report_limits_validate_source_and_active_globals(self):
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.deep_research", )
         module = ModuleType('report_limit_fixture')
         module.LIMIT = 10000
         source = 'def report():\n    return dict(max_tokens=LIMIT,)\n'
@@ -88,7 +137,7 @@ class PromptStabilityContracts(unittest.TestCase):
             validate(module, 'report', 'LIMIT', None)
 
     def test_decorated_rebuilds_retain_execution_globals(self):
-        wrapper = _load_wrapper()
+        wrapper = load_patch("common.source", )
         module = ModuleType('decorated_loop_fixture')
         module.__dict__.update(decorate=_foreign_decorator, budget=37)
         source = '@decorate\ndef loop(value=budget):\n    return value + 1\n'
@@ -102,14 +151,14 @@ class PromptStabilityContracts(unittest.TestCase):
         self.assertIs(module.loop._wrapper_source_globals, module.__dict__)
 
     def test_exact_count_rejects_zero_and_duplicate_source(self):
-        wrapper = _load_wrapper()
+        wrapper = load_patch("common.source", )
         for source in ['changed', 'anchor anchor']:
             with self.subTest(source=source), self.assertRaisesRegex(RuntimeError, 'exactly 1'):
                 wrapper._prompt_stability_replace(source, 'anchor', 'stable', 'fixture')
         self.assertEqual(wrapper._prompt_stability_replace('anchor', 'anchor', 'stable', 'fixture'), 'stable')
 
     def test_accumulated_source_and_order_are_required(self):
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.prompt_stability", )
         module = ModuleType('loop_fixture')
         exec('def loop():\n    return 1\n', module.__dict__)
         with self.assertRaisesRegex(RuntimeError, 'must follow existing loop patches'):
@@ -124,7 +173,7 @@ class PromptStabilityContracts(unittest.TestCase):
             wrapper._patch_investigation_source(module, 'loop', {'return 2': 'return 3'})
 
     def test_actual_selected_tools_drive_internal_search_tuning(self):
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.prompt_stability", )
         source = "        include_internal_search_tunings = SearchTool.NAME in allowed_tool_names\n"
         replacement = wrapper._PROMPT_STABILITY_DR_REPLACEMENTS[source].strip()
         from types import SimpleNamespace
@@ -136,7 +185,7 @@ class PromptStabilityContracts(unittest.TestCase):
             self.assertEqual(namespace["include_internal_search_tunings"], expected)
 
     def test_final_validation_rejects_source_constants_and_application_aliases(self):
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.prompt_stability", )
         modules = {}
         for path in ["onyx.chat.llm_loop", "onyx.chat.process_message", "onyx.chat.prompt_utils",
                      "onyx.deep_research.dr_loop", "onyx.tools.fake_tools.research_agent",
@@ -173,7 +222,7 @@ class PromptStabilityContracts(unittest.TestCase):
                     wrapper.validate_agent_prompt_stability_patches()
 
     def test_constant_consumer_drift_fails(self):
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.prompt_stability", )
         owner, consumer = ModuleType('owner'), ModuleType('consumer')
         owner.PROMPT, consumer.PROMPT = 'current', 'stale'
         with self.assertRaisesRegex(RuntimeError, 'stale prompt consumer'):
@@ -184,7 +233,7 @@ class PromptStabilityContracts(unittest.TestCase):
         self.assertEqual(consumer.PROMPT, 'stable')
 
     def test_both_prompt_variants_preserve_configured_budgets_and_bindings(self):
-        wrapper = _load_wrapper()
+        wrapper = load_patch("api.prompt_stability", )
         modules = {}
         paths = [
             'onyx.chat.llm_loop', 'onyx.chat.prompt_utils', 'onyx.deep_research.dr_loop',

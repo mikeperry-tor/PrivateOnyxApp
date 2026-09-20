@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import inspect
 import sys
@@ -12,17 +14,12 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
     ROOT
-    / "onyx/patches/sitecustomize_api_server/url_identity_preservation_patch.py"
+    / "onyx/patches/onyx_wrapper_patches/api/url_identity_preservation_patch.py"
 )
 
 
 def _load_patch():
-    spec = importlib.util.spec_from_file_location(
-        "url_identity_preservation_patch_under_test", MODULE_PATH
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = load_patch("api.url_identity_preservation_patch")
     return module
 
 
@@ -141,7 +138,7 @@ def _install_with_stub_source(patch_module) -> None:
         patch_module.install()
 
 
-class UrlIdentityPreservationPatchTests(unittest.TestCase):
+class UrlIdentityPreservationPatchTests(FreshPatchTestCase):
     def test_preserves_identity_in_every_generic_url_path(self):
         patch_module = _load_patch()
         (
@@ -207,7 +204,7 @@ class UrlIdentityPreservationPatchTests(unittest.TestCase):
             ROOT / "onyx/patches/sitecustomize_api_server/sitecustomize.py"
         ).read_text()
         self.assertIn(
-            "from url_identity_preservation_patch import",
+            "from onyx_wrapper_patches.api.url_identity_preservation_patch import",
             bootstrap,
         )
         self.assertIn("install_url_identity_preservation()", bootstrap)

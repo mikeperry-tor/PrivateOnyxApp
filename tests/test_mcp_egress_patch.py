@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import asyncio
 import importlib.util
 import os
@@ -17,22 +19,16 @@ MODULE_PATH = (
     Path(__file__).resolve().parents[1]
     / "onyx"
     / "patches"
-    / "shared"
-    / "wrapper_env_patches.py"
+    / "onyx_wrapper_patches"
+    / "api/mcp_egress.py"
 )
 
 
 def _load_wrapper_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "wrapper_env_patches_mcp_under_test", MODULE_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_patch("api.mcp_egress")
 
 
-class MCPProxyPatchTests(unittest.TestCase):
+class MCPProxyPatchTests(FreshPatchTestCase):
     @staticmethod
     def _fake_modules(level_name: str):
         class SSRFProtectionLevel(Enum):

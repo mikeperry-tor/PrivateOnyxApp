@@ -467,8 +467,6 @@ services:
       ONYX_HELPER_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
       ONYX_MCP_PUBLIC_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
       ONYX_MCP_HOST_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
-      ONYX_WEB_CONNECTOR_PUBLIC_HTTP_PROXY_URL: "http://onyx-public-egress-bridge:3128"
-      ONYX_WEB_CONNECTOR_HOST_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
       ONYX_CONFIGURED_INFERENCE_HTTP_PROXY_URL: "http://onyx-host-egress-bridge:3128"
       ONYX_CONFIGURED_INFERENCE_INTERNAL_BASE_URL: "http://teep:8337/v1"
       # When true, previous-turn tool responses are preserved in future LLM
@@ -500,7 +498,7 @@ services:
       WRAPPER_PATCH_STRICT: "true"
       # The API-owned direct client passes OBSCURA_BROWSER_WAIT_UNTIL_WEB in
       # its single raw Page.navigate command; it adds no fixed sleep or retry.
-      PYTHONPATH: "/app/wrapper-patches-api:/app/wrapper-patches-shared:/app/obscura-client:${PYTHONPATH:-}"
+      PYTHONPATH: "/app/wrapper-patches-api:/app/obscura-client:/app"
       CUSTOM_ANALYTICS_SECRET_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_PUBLISHABLE_KEY: ""
@@ -520,7 +518,7 @@ services:
       - ./docker-data/file-system:/app/file-system
       - ./docker-data/model-cache:/app/.cache/huggingface
       - ./docker-data/model-cache:/root/.cache/huggingface
-      - ./onyx/patches/shared:/app/wrapper-patches-shared:ro
+      - ./onyx/patches/onyx_wrapper_patches:/app/onyx_wrapper_patches:ro
       - ./onyx/patches/sitecustomize_api_server:/app/wrapper-patches-api:ro
       - ./browser/obscura_client:/app/obscura-client:ro
       - api_server_logs:/var/log/onyx

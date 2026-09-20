@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from onyx_wrapper_patches.api.config import parse_document_limit, allow_http, allow_http_onion
+from onyx_wrapper_patches.common.config import _validated_fixed_proxy_url
+
 import contextvars
 import functools
 import inspect
@@ -18,18 +21,6 @@ _CRAWLER_PLAYWRIGHT_VALIDATION: contextvars.ContextVar[bool] = (
 )
 
 
-def _parse_document_limit() -> int:
-    raw = os.environ.get("ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB", "20")
-    if not raw or not raw.isdecimal():
-        raise RuntimeError(
-            "ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB must be a positive base-10 integer"
-        )
-    mib = int(raw)
-    if mib <= 0 or mib > ((1 << 63) - 1) // (1024 * 1024):
-        raise RuntimeError(
-            "ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB is outside the supported range"
-        )
-    return mib * 1024 * 1024
 
 
 def _configured_crawler_init(original_init, document_limit_bytes: int):
@@ -51,63 +42,19 @@ def _rendered_html_exceeds_limit(rendered, document_limit_bytes: int) -> bool:
     )
 
 
-def use_obscura_browser() -> bool:
-    raw = os.environ.get("ONYX_AGENT_USE_OBSCURA_BROWSER", "false").strip().lower()
-    if raw == "true":
-        return True
-    if raw == "false":
-        return False
-    raise RuntimeError("ONYX_AGENT_USE_OBSCURA_BROWSER must be exactly true or false")
 
 
-def _allow_http() -> bool:
-    raw = os.environ.get("EGRESS_ALLOW_HTTP_URLS", "false").strip().lower()
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    raise RuntimeError("EGRESS_ALLOW_HTTP_URLS must be a boolean")
 
 
-def _allow_http_onion() -> bool:
-    raw = os.environ.get("EGRESS_ALLOW_HTTP_ONION_URLS", "false").strip().lower()
-    if raw == "true":
-        return True
-    if raw == "false":
-        return False
-    raise RuntimeError("EGRESS_ALLOW_HTTP_ONION_URLS must be exactly true or false")
 
-
-def _validate_proxy() -> str:
-    proxy_url = os.environ.get("ONYX_HELPER_HTTP_PROXY_URL", "").strip()
-    parsed = urlsplit(proxy_url)
-    try:
-        port = parsed.port
-    except ValueError:
-        port = None
-    if (
-        proxy_url != PUBLIC_PROXY_URL
-        or parsed.scheme != "http"
-        or parsed.hostname != "onyx-public-egress-bridge"
-        or port != 3128
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise RuntimeError(
-            "ONYX_HELPER_HTTP_PROXY_URL must be exactly " + PUBLIC_PROXY_URL
-        )
-    return proxy_url
 
 
 def _normalize(url: str, *, ssrf_exception_type: type[Exception]) -> str:
     try:
         normalized, _fragment = normalize_public_url(
             url,
-            allow_http=_allow_http(),
-            allow_http_onion=_allow_http_onion(),
+            allow_http=allow_http(),
+            allow_http_onion=allow_http_onion(),
         )
         return normalized
     except ObscuraClientError as exc:
@@ -173,9 +120,9 @@ def _proxied_get(
 def install() -> None:
     """Install the public-only transport around the pinned stock crawler."""
     _validate_proxy()
-    _allow_http()
-    _allow_http_onion()
-    document_limit_bytes = _parse_document_limit()
+    allow_http()
+    allow_http_onion()
+    document_limit_bytes = parse_document_limit()
 
     from onyx.tools.tool_implementations.open_url import onyx_web_crawler
     from onyx.utils import playwright_fetch
@@ -288,3 +235,7 @@ def install() -> None:
         f"(document_limit_bytes={document_limit_bytes})",
         flush=True,
     )
+
+
+def _validate_proxy() -> str:
+    return _validated_fixed_proxy_url("ONYX_HELPER_HTTP_PROXY_URL", "onyx-public-egress-bridge")

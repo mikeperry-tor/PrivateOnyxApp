@@ -72,9 +72,9 @@ this plan as per-user isolation.
 This plan applies only to:
 
 - the direct-Obscura replacement installed by
-  `onyx/patches/sitecustomize_api_server/obscura_crawler_patch.py`; and
+  `onyx/patches/onyx_wrapper_patches/api/obscura_crawler_patch.py`; and
 - the stock Onyx Requests/Playwright path wrapped by
-  `onyx/patches/sitecustomize_api_server/onyx_crawler_egress_patch.py`.
+  `onyx/patches/onyx_wrapper_patches/api/onyx_crawler_egress_patch.py`.
 
 It does not:
 
@@ -833,8 +833,8 @@ Expected implementation files are:
   `browser/obscura_client/private_onyx_obscura/`;
 - `browser/obscura_client/private_onyx_obscura/__init__.py` and the owning
   model module if cookie values are separated;
-- `onyx/patches/sitecustomize_api_server/obscura_crawler_patch.py`;
-- `onyx/patches/sitecustomize_api_server/onyx_crawler_egress_patch.py`;
+- `onyx/patches/onyx_wrapper_patches/api/obscura_crawler_patch.py`;
+- `onyx/patches/onyx_wrapper_patches/api/onyx_crawler_egress_patch.py`;
 - focused tests under `tests/`;
 - the existing Makefile-derived SearXNG input hash; and
 - the documentation listed below.

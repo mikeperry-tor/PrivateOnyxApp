@@ -1288,6 +1288,21 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn('"$(CONTAINER_BIN)" pull', podman_build)
         self.assertNotIn("ONYX_INSTALL_WRAPPER", podman_build)
 
+    def test_standalone_podman_onyx_build_selects_required_images(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / "empty.env"
+            env_file.write_text("", encoding="utf-8")
+            result = subprocess.run(
+                ["make", "-n", "onyx-build", "CONTAINER_BIN=podman",
+                 f"ENV_FILE={env_file}",
+                 "ONYX_BACKEND_IMAGE=example/backend:pinned",
+                 "ONYX_WEB_SERVER_IMAGE=example/web:pinned"],
+                cwd=ROOT, capture_output=True, text=True, check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("for image in example/backend:pinned example/web:pinned;", result.stdout)
+        self.assertIn('"podman" pull "$image"', result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

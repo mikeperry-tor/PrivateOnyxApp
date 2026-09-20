@@ -24,6 +24,14 @@ Web Crawler `open_url` paths. Search always uses the pinned Obscura browser.
 `open_url` uses the stock Onyx crawler by default and has an explicit direct
 Obscura mode. There is no CRW in either path.
 
+Both transports parse `EGRESS_ALLOW_HTTP_URLS` after stripping whitespace and
+ignoring case: `1/true/yes/on` enable it, `0/false/no/off` disable it, and other
+values fail visibly. The default is false. The internal
+`EGRESS_ALLOW_HTTP_ONION_URLS` capability accepts only `true` or `false` after
+the same normalization. Direct crawling evaluates these at module import;
+stock crawling retains its request-time evaluation. Independent final-hop
+destination policy is unchanged.
+
 ## Runtime flows
 
 ```text

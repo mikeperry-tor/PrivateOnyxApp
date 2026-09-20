@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import importlib.util
 import os
 import sys
@@ -19,31 +21,27 @@ from private_onyx_obscura import ObscuraClientError  # noqa: E402
 
 
 def _load_patch():
-    path = ROOT / "onyx/patches/sitecustomize_api_server/obscura_crawler_patch.py"
-    spec = importlib.util.spec_from_file_location("test_obscura_crawler_patch", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    path = ROOT / "onyx/patches/onyx_wrapper_patches/api/obscura_crawler_patch.py"
+    module = load_patch("api.obscura_crawler_patch")
     return module
 
 
-class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
+class OnyxObscuraCrawlerPatchTests(FreshPatchTestCase):
     @classmethod
     def setUpClass(cls):
         cls.module = _load_patch()
 
     def test_document_limit_is_positive_decimal_mib(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(self.module._parse_document_limit(), 20 * 1024 * 1024)
+            self.assertEqual(self.module.parse_document_limit(), 20 * 1024 * 1024)
         with patch.dict(os.environ, {"ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB": "7"}):
-            self.assertEqual(self.module._parse_document_limit(), 7 * 1024 * 1024)
+            self.assertEqual(self.module.parse_document_limit(), 7 * 1024 * 1024)
         for value in ("", "0", "-1", "1.5", "unlimited"):
             with self.subTest(value=value), patch.dict(
                 os.environ, {"ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB": value}
             ):
                 with self.assertRaises(RuntimeError):
-                    self.module._parse_document_limit()
+                    self.module.parse_document_limit()
 
     def test_http_onion_capability_is_strict(self):
         for raw, expected in (("true", True), ("false", False)):
@@ -52,14 +50,14 @@ class OnyxObscuraCrawlerPatchTests(unittest.TestCase):
                 {"EGRESS_ALLOW_HTTP_ONION_URLS": raw},
                 clear=True,
             ):
-                self.assertEqual(self.module._parse_allow_http_onion(), expected)
+                self.assertEqual(self.module.allow_http_onion(), expected)
         with patch.dict(
             os.environ,
             {"EGRESS_ALLOW_HTTP_ONION_URLS": "yes"},
             clear=True,
         ):
             with self.assertRaisesRegex(RuntimeError, "exactly true or false"):
-                self.module._parse_allow_http_onion()
+                self.module.allow_http_onion()
 
     def test_invocation_state_is_deadline_and_finalization_guard(self):
         live = self.module.InvocationState(time.monotonic() + 10)

@@ -8,7 +8,9 @@ from threading import Barrier, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import wrapper_env_patches as patches
+from onyx_wrapper_patches.api import deep_research
+from onyx_wrapper_patches.api import prompt_stability
+from onyx_wrapper_patches.api import python_artifacts
 from onyx.chat import llm_loop
 from onyx.chat.chat_state import ChatStateContainer
 from onyx.chat.models import ChatMessageSimple, ExtractedContextFiles, ToolCallSimple
@@ -121,7 +123,7 @@ def assert_python_execution_guidance(request):
     descriptions = [t['function']['description'] for t in request['tools']
                     if t['function']['name'] == PythonTool.NAME]
     assert len(descriptions) == 1
-    assert patches._PYTHON_EXECUTION_GUIDANCE in descriptions[0]
+    assert python_artifacts._PYTHON_EXECUTION_GUIDANCE in descriptions[0]
 
 
 def assert_prefix(first, second):
@@ -240,7 +242,7 @@ def validate_main_chat():
     for request in requests:
         system = request['prompt'][0]['content']
         assert 'Replacement system' in system and 'response_markdown' in system
-        assert patches._PYTHON_EXECUTION_GUIDANCE in system
+        assert python_artifacts._PYTHON_EXECUTION_GUIDANCE in system
         assert_python_execution_guidance(request)
         assert 'snippets completely answer the query' not in system
         assert REQUIRE_CITATION_GUIDANCE.strip() not in system
@@ -250,7 +252,7 @@ def validate_main_chat():
     for request in requests:
         system = request['prompt'][0]['content']
         assert 'Custom empty-base system' in system and 'response_markdown' in system
-        assert patches._PYTHON_EXECUTION_GUIDANCE in system
+        assert python_artifacts._PYTHON_EXECUTION_GUIDANCE in system
         assert_python_execution_guidance(request)
         assert 'response_markdown' in request['tools'][2]['function']['description']
         assert 'snippets completely answer the query' not in system
@@ -390,7 +392,7 @@ def validate_concurrent_batches():
                     custom_agent_prompt=None, context_files=context_files(), persona=None,
                     user_memory_context=None, llm=model, token_counter=lambda s: len(s)//4)
                 assert len(state.get_tool_calls()) == 3
-            assert patches._DEEP_RESEARCH_WORKER_LIMIT.get() is None
+            assert deep_research._DEEP_RESEARCH_WORKER_LIMIT.get() is None
             assert len(model.requests) == 3
             for first, second in zip(model.requests, model.requests[1:]):
                 assert_prefix(first, second)
@@ -469,8 +471,8 @@ def validate_report_output_limits():
 
 def validate_constants():
     import string
-    patches.validate_agent_prompt_stability_patches()
-    for owner, consumer, name, value in patches._PROMPT_STABILITY_CONSTANTS:
+    prompt_stability.validate_agent_prompt_stability_patches()
+    for owner, consumer, name, value in prompt_stability._PROMPT_STABILITY_CONSTANTS:
         assert getattr(owner, name) == getattr(consumer, name) == value
         fields = {field: 'fixture' for _, field, _, _ in string.Formatter().parse(value) if field}
         fields.update(max_cycles=19, current_cycle_count=0)

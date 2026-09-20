@@ -25,6 +25,31 @@ def validate_model(model: dict, *, engine: str, gateway: str) -> None:
     services = model.get("services")
     if not isinstance(services, dict) or "api_server" not in services:
         raise ValueError("invalid Compose services")
+    for name in ("api_server", "background"):
+        if name not in services:
+            continue
+        service = services[name]
+        environment = service["environment"]
+        expected_path = "/app" if name == "background" else "/app/wrapper-patches-api:/app/obscura-client:/app"
+        if environment.get("PYTHONPATH") != expected_path or environment.get("WRAPPER_PATCH_STRICT") != "true":
+            raise ValueError("incorrect patch discovery path or strict setting")
+        mounts = {mount["target"]: mount for mount in service["volumes"]}
+        package = mounts.get("/app/onyx_wrapper_patches", {})
+        if package.get("source") != str(ROOT / "onyx/patches/onyx_wrapper_patches") or not package.get("read_only"):
+            raise ValueError("canonical patch package mount missing")
+        if {"/app/wrapper_env_patches.py", "/app/wrapper-patches-shared", "/app/wrapper-patches-background"} & mounts.keys():
+            raise ValueError("obsolete patch mount remains")
+        unused_prefix = "ONYX_MCP_" if name == "background" else "ONYX_WEB_CONNECTOR_"
+        if any(key.startswith(unused_prefix) and key.endswith("HTTP_PROXY_URL") for key in environment):
+            raise ValueError("service has another service's proxy configuration")
+        used_prefix = "ONYX_WEB_CONNECTOR_" if name == "background" else "ONYX_MCP_"
+        for role in ("PUBLIC", "HOST"):
+            if environment.get(used_prefix + role + "_HTTP_PROXY_URL") != f"http://onyx-{role.lower()}-egress-bridge:3128":
+                raise ValueError("installing service is missing its fixed proxy")
+        if name == "background" and not mounts.get("/app/sitecustomize.py", {}).get("read_only"):
+            raise ValueError("background reset-path bootstrap is missing")
+    if "ONYX_CODE_INTERPRETER_ENABLE_NETWORK" in services.get("code-interpreter", {}).get("environment", {}):
+        raise ValueError("unused controller network selection setting remains")
     for name, network in model["networks"].items():
         if not isinstance(network, dict):
             raise ValueError("invalid network definition")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from patch_test_support import FreshPatchTestCase, load_patch
+
 import copy
 import importlib.util
 import sys
@@ -11,7 +13,7 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH_PATH = ROOT / "onyx" / "patches" / "shared" / "wrapper_env_patches.py"
+PATCH_PATH = ROOT / "onyx" / "patches" / "onyx_wrapper_patches" / "api/inference_continuation.py"
 
 
 class RetryableConnectionError(Exception):
@@ -233,17 +235,12 @@ def _fake_modules(llm_cls=FakeLitellmLLM):
 
 
 def _load_and_install():
-    spec = importlib.util.spec_from_file_location(
-        "wrapper_env_patches_midstream_under_test", PATCH_PATH
-    )
-    assert spec and spec.loader
-    wrapper = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(wrapper)
+    wrapper = load_patch("api.inference_continuation")
     wrapper.apply_midstream_inference_continuation_patch()
     return wrapper
 
 
-class MidstreamInferenceContinuationTests(unittest.TestCase):
+class MidstreamInferenceContinuationTests(FreshPatchTestCase):
     def setUp(self):
         FakeLitellmLLM.stream = ORIGINAL_FAKE_STREAM
         self.modules = _fake_modules()
@@ -501,7 +498,7 @@ class MidstreamInferenceContinuationTests(unittest.TestCase):
         self.assertEqual(len(llm.calls), 1)
 
 
-class MidstreamProviderAttemptAccountingTests(unittest.TestCase):
+class MidstreamProviderAttemptAccountingTests(FreshPatchTestCase):
     def setUp(self):
         FakeUpstreamRetryingLitellmLLM.stream = ORIGINAL_RETRYING_FAKE_STREAM
         self.modules = _fake_modules(FakeUpstreamRetryingLitellmLLM)
@@ -529,7 +526,7 @@ class MidstreamProviderAttemptAccountingTests(unittest.TestCase):
         self.assertIn("Recovery also failed", content)
 
 
-class MidstreamContinuationComposeTests(unittest.TestCase):
+class MidstreamContinuationComposeTests(FreshPatchTestCase):
     def test_compose_uses_upstream_prechunk_retry_and_progress_gating(self):
         compose = (ROOT / "docker-compose.yaml").read_text()
         self.assertIn('LLM_FIRST_CHUNK_MAX_RETRIES: "1"', compose)
