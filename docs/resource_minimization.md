@@ -239,9 +239,16 @@ are not duplicate enforcement.
 
 ### Executor lifetime and cleanup
 
+`PYTHON_EXECUTOR_DOCKER_IMAGE_WATCHDOG_INTERVAL_SEC=0` disables the native
+periodic image inspection and registry re-pull loop. The Makefile prepares the
+exact local derived executor before controller startup. Removing that image
+while the stack runs makes execution and controller health fail; rebuild it
+with `make executor-build`. The controller does not periodically retry a
+registry for an image that is built locally.
+
 The controller creates children outside Compose's service inventory. Interrupted
 cleanup can leave workspaces and resources alive and prevent old network removal.
-Controller 0.4.6 computes transient child sleep as `(timeout_ms * 1000) + 10`;
+The pinned controller computes transient child sleep as `(timeout_ms * 1000) + 10`;
 sessions permit TTLs up to 24 hours. The daemon-wide session reaper uses generic
 labels and deletion accepts a generic prefix, neither of which establishes
 stack ownership. The wrapper does not sweep children, add a reaper, or require

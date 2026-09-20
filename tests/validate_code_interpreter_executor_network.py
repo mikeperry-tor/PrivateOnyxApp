@@ -157,4 +157,26 @@ def validate_native_executor_contract(executor_class: type | None = None) -> Non
 
 if __name__ == "__main__":
     validate_native_executor_contract()
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+    from app import main
+
+    assert main.SERVICE_VERSION == "0.4.7"
+    assert main.PYTHON_EXECUTOR_DOCKER_IMAGE_WATCHDOG_INTERVAL_SEC == 0
+
+    async def validate_lifespan() -> None:
+        # Exercise native task ownership without a Docker socket or registry.
+        with (
+            patch.object(main, "_ensure_docker_image_available") as prepare,
+            patch.object(main, "_reap_expired_sessions_once", new_callable=AsyncMock),
+            patch.object(main, "_session_reaper_loop", new_callable=AsyncMock) as reaper,
+            patch.object(main, "_image_watchdog_loop", new_callable=AsyncMock) as watchdog,
+        ):
+            async with main.lifespan(main.create_app()):
+                await asyncio.sleep(0)
+            prepare.assert_called_once()
+            reaper.assert_awaited_once()
+            watchdog.assert_not_called()
+
+    asyncio.run(validate_lifespan())
     print("PINNED_EXECUTOR_NATIVE_NETWORK_CONTRACT_OK")

@@ -931,6 +931,13 @@ functions, constants, active execution globals, reminder placement, and direct
 `process_message` caller bindings after crawler installation. Missing,
 duplicate, reordered, or stale bindings fail strict startup.
 
+File metadata guidance uses the actual tool set passed by each rebuilt loop.
+Only an offered `read_file` receives file UUIDs; an offered `internal_search`
+receives indexed-file guidance, and a step with neither tool reports that it
+cannot read the omitted contents. Tool-free Deep Research steps pass an empty
+set. This native guidance composes with reminder relocation and stable prompts;
+it does not replace either patch.
+
 The prefix guarantee requires unchanged model/deployment, tool choice,
 reasoning options, chat template/arguments, initial injected context, existing
 message content, multimodal inputs, and output-token policy. It excludes new
@@ -956,6 +963,14 @@ search/page batches, citation isolation, and worker-limit context cleanup with
 synthetic individual tool results.
 
 ## Reasoning, tool history, and coding finalization
+
+Native provider request policy remains authoritative: GPT-5.4+ tool requests
+using chat completions send explicit `reasoning_effort=none`, including aliases
+recognized by model name or a provider rejection. The retry ladder retains
+that required value while removing other rejected tuning parameters. Responses
+routes and non-GPT models retain their native reasoning policy. The wrapper's
+reasoning capability override and history preservation do not override this
+transport requirement or force fresh reasoning from such a request.
 
 The reasoning patch family carries assistant `reasoning_content` across Onyx's
 structured-message, reconstructed-history, and LiteLLM serialization
@@ -1106,9 +1121,14 @@ successful tool evidence.
 ## Context and result-size patches
 
 The configured LLM context override validates both upstream token-limit lookup
-functions before making `GEN_AI_MAX_TOKENS` authoritative. The internal-search
-patch validates the complete formatter signature and result/content JSON
-construction before applying optional per-result and aggregate character caps.
+functions before making `GEN_AI_MAX_TOKENS` authoritative. Native provider
+updates avoid creating a stored context override that merely
+repeats the resolved model lookup, but retain existing explicit values. That
+write-time policy does not make the wrapper's configured override redundant:
+the wrapper still takes precedence over stored limits at both read boundaries.
+The internal-search patch validates the complete formatter signature and
+result/content JSON construction before applying optional per-result and aggregate
+character caps.
 With both settings empty or zero it is not installed; positive settings cap only the
 model-facing serialization after retrieval and section selection. The
 `open_url`/web-search patch validates the positional defaults it changes.
@@ -1188,7 +1208,10 @@ persistence and stateless-guidance anchors must each occur once or startup fails
 
 When optional executor networking is enabled, Compose uses upstream's native
 `PYTHON_EXECUTOR_DOCKER_NETWORK` and `PYTHON_EXECUTOR_DOCKER_RUN_ARGS` settings.
-The code-interpreter service has no wrapper runtime patch. Deterministic tests
+The code-interpreter service has no wrapper runtime patch. Its native image
+watchdog is disabled with `PYTHON_EXECUTOR_DOCKER_IMAGE_WATCHDOG_INTERVAL_SEC=0`;
+the Makefile owns the locally built executor, and a missing image remains a
+visible execution/health failure. Deterministic tests
 parse the configured run arguments and reject extra or mismatched values. Image
 validation inspects the exact pinned `DockerExecutor._build_run_command()`
 signature and critical source layout, constructs a harmless sample command, and

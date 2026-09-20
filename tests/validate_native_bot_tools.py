@@ -30,7 +30,7 @@ def validate_native_tools(*, background: bool) -> None:
             assert cls.is_available(MagicMock()) is (not background), cls.__name__
         if background:
             persona = SimpleNamespace(id=123, name="fixture", tools=[
-                SimpleNamespace(id=i, name=cls.NAME, in_code_tool_id=cls.__name__)
+                SimpleNamespace(id=i, name=cls.NAME, enabled=True, in_code_tool_id=cls.__name__)
                 for i, cls in enumerate((python_tool.PythonTool, CodingAgentTool), 1)
             ], document_sets=[], attached_documents=[], hierarchy_nodes=[])
             stack.enter_context(patch.object(tool_constructor, "get_current_search_settings"))

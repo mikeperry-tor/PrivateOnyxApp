@@ -639,7 +639,8 @@ Full mode trades some background responsiveness for lower idle CPU and memory:
   indexing remains unavailable until the operator clears the block. A missing
   index or blocked index creation is still a startup error rather than a
   degraded-read exception.
-- MinIO uses `MINIO_SCANNER_SPEED=slowest`; object healing, lifecycle cleanup,
+- MinIO uses its digest-pinned Quay release from `stack.versions.env` and
+  `MINIO_SCANNER_SPEED=slowest`; object healing, lifecycle cleanup,
   and scanner-driven maintenance can therefore take longer. Its retained
   healthcheck uses the common slow steady cadence.
 - Redis and OpenSearch origin checks are disabled because dependent local

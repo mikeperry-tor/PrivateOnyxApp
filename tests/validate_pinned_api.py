@@ -1537,6 +1537,8 @@ if __name__ == "__main__":
                    env=dict(os.environ, ONYX_DEEP_RESEARCH_PROVIDE_CHAT_AGENT_TOOLS="false",
                             MAX_RESEARCH_AGENT_CYCLES="37"))
     validate_prompt_stability()
+    from validate_reasoning_tool_availability import validate as validate_reasoning_tools
+    validate_reasoning_tools()
     _validate_durable_stream_buffer_policy()
     _validate_production_bootstrap()
     from validate_native_bot_tools import validate_native_tools

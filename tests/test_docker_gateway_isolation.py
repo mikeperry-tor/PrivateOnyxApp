@@ -168,6 +168,7 @@ class DockerGatewayIsolationTests(unittest.TestCase):
                             ))
                         if engine == "docker":
                             controller = model["services"]["code-interpreter"]
+                            self.assertEqual(controller["environment"]["PYTHON_EXECUTOR_DOCKER_IMAGE_WATCHDOG_INTERVAL_SEC"], "0")
                             self.assertTrue(controller["image"].startswith(
                                 "local/private-onyx-code-interpreter:"
                             ))

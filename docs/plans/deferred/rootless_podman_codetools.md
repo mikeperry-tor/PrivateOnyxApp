@@ -21,7 +21,7 @@ bundled Docker CLI will continue to use its upstream `docker` executor backend;
 Podman's Docker-compatible API will create, inspect, execute in, and remove the
 short-lived executor containers.
 
-The completed feature must support both code-tool forms used by Onyx v4.6.7:
+The completed feature must support both code-tool forms used by Onyx v4.6.9:
 
 - `run_python`, including streamed execution, staged input files, generated
   files, download, deletion, timeouts, resource limits, and optional restricted
@@ -50,9 +50,9 @@ The initial implementation targets this exact component set:
 
 | Component | Pinned contract |
 | --- | --- |
-| Onyx | `v4.6.7` |
-| code-interpreter API | `0.4.6` |
-| upstream Python executor | `0.4.5`, pinned by digest |
+| Onyx | `v4.6.9` |
+| code-interpreter API | `0.4.7` |
+| upstream Python executor | `0.4.7`, pinned by digest |
 | derived executor | the Makefile-derived tag from the upstream digest, `executor/Dockerfile`, and hashed dependency lock |
 
 Onyx treats code-interpreter as an HTTP service selected through
@@ -424,7 +424,7 @@ existing create/configure/start sequence:
 5. install and re-inspect native Podman startup health for every retained
    health check, including code-interpreter;
 6. start the graph with the existing bounded wait; and
-7. assert the controller is healthy and reports version `0.4.6`.
+7. assert the controller is healthy and reports version `0.4.7`.
 
 Controller health must prove both engine connectivity and exact executor-image
 availability. A socket file existing is not sufficient. The startup flow must

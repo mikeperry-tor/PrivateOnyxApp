@@ -68,7 +68,7 @@ echo "Validating WebUI privacy and streaming contracts in $onyx_web_server_image
     --entrypoint node \
     -v "$repo_root/tests/validate_pinned_webui_settings.js:/validate-settings.js:ro" \
     "$onyx_web_server_image" \
-    -e 'const fs=require("fs"),path=require("path"); for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.6.7") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); const chunks=[]; const visit=(dir)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const item=path.join(dir,entry.name); if(entry.isDirectory()) visit(item); else if(item.endsWith(".js")) chunks.push(fs.readFileSync(item,"utf8"));}}; visit("/app/.next"); const bundle=chunks.join("\n"); for(const marker of ["/api/chat/send-chat-message","/resume-stream?cursor=","chat_heartbeat","message_start","message_delta","reasoning_start","reasoning_delta","reasoning_done","stop_reason","Failed to resume in-flight run","Server did not honor the incognito request","Unknown packet:"]) { if(!bundle.includes(marker)) throw new Error(`missing WebUI streaming marker: ${marker}`); } console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK"); console.log("PINNED_WEBUI_STREAMING_CONTRACT_OK"); require("/validate-settings.js");'
+    -e 'const fs=require("fs"),path=require("path"); for (const name of ["NEXT_PUBLIC_POSTHOG_KEY","NEXT_PUBLIC_POSTHOG_HOST","NEXT_PUBLIC_CLOUD_ENABLED","NEXT_PUBLIC_SENTRY_DSN","NEXT_PUBLIC_GTM_ENABLED","NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","NEXT_PUBLIC_RECAPTCHA_SITE_KEY"]) { if (process.env[name]) throw new Error(`${name} is enabled in the pinned image`); } if (process.env.ONYX_VERSION !== "v4.6.9") throw new Error(`unexpected ONYX_VERSION=${process.env.ONYX_VERSION}`); const chunks=[]; const visit=(dir)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const item=path.join(dir,entry.name); if(entry.isDirectory()) visit(item); else if(item.endsWith(".js")) chunks.push(fs.readFileSync(item,"utf8"));}}; visit("/app/.next"); const bundle=chunks.join("\n"); for(const marker of ["/api/chat/send-chat-message","/resume-stream?cursor=","chat_heartbeat","message_start","message_delta","reasoning_start","reasoning_delta","reasoning_done","stop_reason","Failed to resume in-flight run","Server did not honor the incognito request","Unknown packet:"]) { if(!bundle.includes(marker)) throw new Error(`missing WebUI streaming marker: ${marker}`); } console.log("PINNED_WEBUI_PRIVACY_CONTRACT_OK"); console.log("PINNED_WEBUI_STREAMING_CONTRACT_OK"); require("/validate-settings.js");'
 
 echo "Validating wrapper WebUI reconnect companion in $onyx_web_server_image"
 "$container_bin" run --rm \
@@ -124,6 +124,7 @@ echo "Validating API patch contracts in $onyx_backend_image"
     -v "$tokenizer_tmp/tokenizer.json:/offline-tokenizer/tokenizer.json:ro" \
     -v "$repo_root/tests/validate_pinned_api.py:/validation/validate_pinned_api.py:ro" \
     -v "$repo_root/tests/validate_prompt_stability.py:/validation/validate_prompt_stability.py:ro" \
+    -v "$repo_root/tests/validate_reasoning_tool_availability.py:/validation/validate_reasoning_tool_availability.py:ro" \
     -v "$repo_root/tests/validate_native_bot_tools.py:/validation/validate_native_bot_tools.py:ro" \
     "$onyx_backend_image" \
     /validation/validate_pinned_api.py
@@ -222,6 +223,7 @@ if [ "$validate_code_interpreter" = true ]; then
     "$container_bin" run --rm \
         --network none \
         --entrypoint python \
+        -e PYTHON_EXECUTOR_DOCKER_IMAGE_WATCHDOG_INTERVAL_SEC=0 \
         -e PYTHON_EXECUTOR_DOCKER_NETWORK=onyx-code-interpreter-executor \
         -e 'PYTHON_EXECUTOR_DOCKER_RUN_ARGS=--env HTTP_PROXY=http://executor-egress-bridge:3128 --env HTTPS_PROXY=http://executor-egress-bridge:3128 --env ALL_PROXY=http://executor-egress-bridge:3128 --env NO_PROXY=127.0.0.1,localhost,::1 --env http_proxy=http://executor-egress-bridge:3128 --env https_proxy=http://executor-egress-bridge:3128 --env all_proxy=http://executor-egress-bridge:3128 --env no_proxy=127.0.0.1,localhost,::1' \
         -v "$repo_root/tests/validate_code_interpreter_executor_network.py:/app/validate_code_interpreter_executor_network.py:ro" \

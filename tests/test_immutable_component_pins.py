@@ -58,11 +58,11 @@ class ImmutableComponentPinTests(unittest.TestCase):
         executor_tag = self.value("PYTHON_EXECUTOR_IMAGE_TAG")
         self.assertRegex(executor_tag, r"^\d+\.\d+\.\d+$")
         self.assertNotEqual(executor_tag, "latest")
-        self.assertEqual(self.value("CODE_INTERPRETER_IMAGE_TAG"), "0.4.6")
-        self.assertEqual(executor_tag, "0.4.5")
+        self.assertEqual(self.value("CODE_INTERPRETER_IMAGE_TAG"), "0.4.7")
+        self.assertEqual(executor_tag, "0.4.7")
         self.assertRegex(
             self.value("PYTHON_EXECUTOR_UPSTREAM_IMAGE"),
-            r"^docker\.io/onyxdotapp/python-executor-sci:0\.4\.5@sha256:[0-9a-f]{64}$",
+            r"^docker\.io/onyxdotapp/python-executor-sci:0\.4\.7@sha256:[0-9a-f]{64}$",
         )
         self.assertIn(
             "PYTHON_EXECUTOR_UPSTREAM_IMAGE ?= $(call env_value,PYTHON_EXECUTOR_UPSTREAM_IMAGE)",
@@ -78,7 +78,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
     def test_minio_release_records_its_image_source_revision(self) -> None:
         self.assertRegex(
             self.value("MINIO_IMAGE"),
-            r"^docker\.io/minio/minio:RELEASE\.[0-9TZ-]+-cpuv1$",
+            r"^quay\.io/minio/minio:RELEASE\.[0-9TZ-]+-cpuv1@sha256:[0-9a-f]{64}$",
         )
         self.assertRegex(self.value("MINIO_SOURCE_REF"), r"^[0-9a-f]{40}$")
 
@@ -96,7 +96,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
             "MINIO_IMAGE",
         ):
             self.assertTrue(
-                self.value(name).startswith("docker.io/"),
+                self.value(name).startswith("quay.io/" if name == "MINIO_IMAGE" else "docker.io/"),
                 f"{name} must not rely on a short-name registry default",
             )
 

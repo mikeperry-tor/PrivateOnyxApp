@@ -1319,6 +1319,12 @@ wrappers.
   stay distinct and invocation-local, and the worker-limit context must reset
   before a thread serves another invocation. Synchronize inside tool execution
   to prove overlap, and install shared test substitutions before starting threads.
+  Also merge concurrent intermediate reports with overlapping local citation
+  numbers, sparse existing numbers, and repeated sources. Verify the merged
+  markers, source identities, and exact final rendered URLs. Citation presence
+  alone is insufficient: a live attribution investigation must capture the raw
+  report input/output and mappings before and after collapse, distinguishing
+  model-invented numbering from application remapping.
   Compare semantic message prefixes, reasoning and paired results, ordered tool
   definitions, and request options. Coding validation remains constants,
   source/bindings, and existing helper tests, without a coding-loop harness.
@@ -1333,6 +1339,15 @@ wrappers.
   live checks and their actual blockers. Cache telemetry is optional evidence,
   never an acceptance gate. The canonical scope and deliberate boundaries are
   in [Investigation prompt stability](onyx_patch_info.md#investigation-prompt-stability).
+- **Tool availability and provider reasoning policy:** run
+  `validate_reasoning_tool_availability.py` through the complete pinned API
+  bootstrap. Require disabled persona tools to remain unavailable even with an
+  explicit whitelist, metadata guidance to name only the actual selected
+  retrieval tools, and stable translated prefixes with file metadata present.
+  Verify explicit GPT chat-completions `reasoning_effort=none` survives tuning
+  retries, opaque aliases learn it from the provider rejection, and Responses
+  and non-GPT requests retain their reasoning settings. Incognito policy fields,
+  tools, tool choice, and messages must survive those retries unchanged.
 - **Reasoning and saved history:** re-audit the structured-message builder,
   chat reconstruction, LiteLLM serialization, all rebuilt agent loops, native
   detector signature/model-map fallback, saved response helper, and complete
@@ -1401,6 +1416,11 @@ wrappers.
   bounds, upstream timeout, error scrubbing, single-attempt forwarding, prefix
   selection, and the requested normalization behavior. Reject zero or otherwise
   non-normalizable vectors when normalization is enabled.
+- **Executor image lifecycle:** require the effective Docker controller to set
+  `PYTHON_EXECUTOR_DOCKER_IMAGE_WATCHDOG_INTERVAL_SEC=0`. Exercise its native
+  lifespan with external I/O substituted, proving startup image verification
+  and session reaping remain while no image-watchdog task is created. Missing
+  local derived images require the Makefile build flow, not registry retries.
 - **Executor networking:** validate the exact code-interpreter command-builder
   signature/source, one `docker run`, one native network argument, and the
   native run-argument setting containing exactly eight proxy variables.
@@ -1445,10 +1465,10 @@ backend image. The API contract validates the final composed callables plus
 configured-inference, MCP, Playwright, restricted-executor descriptions,
 incognito gateway fallback, local-embedding caller behavior, and the selected
 direct-Obscura crawler in composition with every `open_url` wrapper. A separate
-pinned-image contract retains stock-crawler coverage. The target also installs
-the executor patch inside the pinned code-interpreter image, checks SymPy inside
-the derived Python executor, and runs the SearXNG runtime/parser checks inside
-the derived image. Any source, signature, model, prompt, or command shape
+pinned-image contract retains stock-crawler coverage. The target also validates
+the native executor command and lifecycle inside the pinned code-interpreter
+image, checks SymPy inside the derived Python executor, and runs the SearXNG
+runtime/parser checks inside the derived image. Any source, signature, model, prompt, or command shape
 mismatch is an upgrade blocker, not a reason to weaken validation.
 
 The executor image contract is Docker-only because the socket-dependent code
@@ -1518,7 +1538,8 @@ plus the documented reachability boundary.
 
 Require immutable Tailscale and code-interpreter upstream digests, exact Myst and Teep Git revisions in
 both image labels and build arguments, and the MinIO source revision associated
-with its release image. Run
+with its digest-pinned Quay release image. Verify registry availability and
+manifest architectures as well as the locally cached artifact. Run
 `make health-inventory`, inspect effective startup/steady intervals, and verify
 Docker Engine API 1.44+ preserves `start_interval` after the shared Compose
 model probe has retained `start_interval`, `!override`, and `gw_priority`. For

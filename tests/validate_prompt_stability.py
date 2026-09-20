@@ -485,6 +485,59 @@ def validate_constants():
             assert str(owner.MAX_CODING_AGENT_CYCLES) in first
 
 
+def validate_report_citation_provenance():
+    """Overlapping subagent IDs must keep their source identity through reports."""
+    from onyx.deep_research import dr_loop
+    from onyx.deep_research.models import ResearchAgentCallResult
+    from onyx.tools.fake_tools import research_agent
+
+    def document(name):
+        url = f'https://example.org/{name}'
+        return SearchDoc(document_id=url, chunk_ind=0, semantic_identifier=name,
+                         link=url, blurb=name, source_type=DocumentSource.WEB,
+                         boost=1, hidden=False, metadata={}, match_highlights=[],
+                         is_internet=True)
+
+    existing, alpha, beta = [document(name) for name in ('existing', 'alpha', 'beta')]
+    reports = [
+        ResearchAgentCallResult(
+            intermediate_report='Alpha [11]. Existing [29].',
+            citation_mapping={11: alpha, 29: existing}),
+        ResearchAgentCallResult(
+            intermediate_report='Beta [11]. Alpha again [29].',
+            citation_mapping={11: beta, 29: alpha}),
+    ]
+    rendezvous = Barrier(2)
+
+    def nested(call, *_args):
+        rendezvous.wait(timeout=10)
+        return reports[call]
+
+    emitter = SimpleNamespace(emit=lambda packet: None)
+    with patch.object(research_agent, 'run_research_agent_call', side_effect=nested):
+        combined = research_agent.run_research_agent_calls(
+            research_agent_calls=[0, 1], parent_tool_call_ids=['a', 'b'],
+            tools=[], emitter=emitter, state_container=ChatStateContainer(),
+            llm=ScriptedLLM([]), is_reasoning_model=True, token_counter=len,
+            citation_mapping={3: existing})
+    assert combined.intermediate_reports == [
+        'Alpha [4]. Existing [3].', 'Beta [5]. Alpha again [4].']
+    assert {key: value.document_id for key, value in combined.citation_mapping.items()} == {
+        3: existing.document_id, 4: alpha.document_id, 5: beta.document_id}
+    answer = ' '.join(combined.intermediate_reports)
+    model = ScriptedLLM([answer])
+    state = ChatStateContainer()
+    dr_loop.generate_final_report(
+        history=user_history(), research_plan='Evidence', llm=model,
+        token_counter=lambda text: len(text) // 4, state_container=state,
+        emitter=emitter, turn_index=1, citation_mapping=combined.citation_mapping,
+        user_identity=None)
+    assert state.answer_tokens == (
+        'Alpha [[4]](https://example.org/alpha). Existing [[3]](https://example.org/existing). '
+        'Beta [[5]](https://example.org/beta). Alpha again [[4]](https://example.org/alpha).')
+    assert state.get_citation_to_doc() == combined.citation_mapping
+
+
 def validate_prompt_stability():
     validate_constants()
     validate_main_chat()
@@ -492,4 +545,5 @@ def validate_prompt_stability():
     validate_research()
     validate_concurrent_batches()
     validate_report_output_limits()
+    validate_report_citation_provenance()
     print('PINNED_TRANSLATED_PROMPT_STABILITY_OK')
