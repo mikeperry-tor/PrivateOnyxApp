@@ -30,9 +30,8 @@ services:
       LANGFUSE_PUBLIC_KEY: ""
       LANGFUSE_HOST: ""
       IDP_PROFILE_ENRICHMENT_ENABLED: "false"
-      # Native usage accounting records system-owned indexing enrichment as
-      # well as user calls in the local administrative ledger.
-      USER_USAGE_TRACKING_ENABLED: "true"
+      # Disable local usage ledger writes and the idle recorder thread.
+      USER_USAGE_TRACKING_ENABLED: "false"
       # Keep the all-editions document-content export sink disabled. Local RAG
       # indexing must not acquire an implicit external document-copy path.
       DOCUMENT_PUSH_ENDPOINT_URL: ""

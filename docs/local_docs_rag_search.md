@@ -629,19 +629,21 @@ startup stops before creating a new API/background tier.
 
 ## Indexing enrichment and accounting
 
-Before running optional contextual RAG or image summarization, Onyx checks any
-enabled global token and cost budgets configured by an administrator at
-`/admin/token-rate-limits`. This check requires no separate indexing setting and
-does not block enrichment when no global budget is enabled. If a budget is
-exhausted, documents requiring enrichment receive an explicit indexing failure
-rather than being indexed without it; documents that do not require enrichment
-can still proceed.
+Before running optional contextual RAG or image summarization, native Onyx checks
+any enabled global token and cost budgets. Documents requiring enrichment fail
+explicitly when a budget is exhausted; documents that do not require enrichment
+can still proceed. The admin Usage page, which includes budget controls, requires
+Onyx's Business tier.
 
-Background usage recording remains enabled so system-owned generations appear
-in the local administrative ledger. Global budget checks use the user ledger,
-not the separate system ledger. User activity exhausting a global budget can
-therefore block enrichment, but enrichment's own usage does not count toward
-that budget. Recording system usage does not enforce a hard system-spend ceiling.
+The wrapper disables local user and system usage recording with
+`USER_USAGE_TRACKING_ENABLED=false` in both API and background services. This
+removes the recorder threads, queues, and ledger writes without disabling
+indexing enrichment. Usage budgets must remain unconfigured because their
+counters no longer advance. The setting does not remove existing budgets or
+records, and existing exhausted budgets can still block enrichment. Native
+global budget checks use the user ledger rather than the separate system ledger,
+so they do not enforce a hard system-enrichment spend ceiling even when recording
+is enabled. See [resource policy](resource_minimization.md#onyx-background-work).
 
 Enrichment traces use metadata-only content mode. Configuring an external trace
 provider still exports usage and model metadata; ordinary chat tracing retains

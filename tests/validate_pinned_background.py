@@ -311,33 +311,29 @@ def _validate_native_connector_entry(background_patch) -> None:
     print(f"PINNED_NATIVE_CONNECTOR_TRAFFIC_OK freshness={enabled} connectivity_GETs=2 scrape_GETs={0 if enabled else 1}")
 
 
-def _validate_system_usage() -> None:
+def _validate_disabled_usage_recording() -> None:
     from unittest.mock import patch
-    from onyx.db.enums import SystemUsageAttribution
+    import threading
+    from onyx.tracing import setup
     from onyx.tracing.processors import user_usage_processor as usage
-    from onyx.tracing.framework.span_data import GenerationSpanData
-    from onyx.tracing.flows import LLMFlow
 
-    processor = object.__new__(usage.UserUsageTracingProcessor)
-    data = GenerationSpanData(model="fixture", model_config={
-        "flow": LLMFlow.CONTEXTUAL_RAG_DOC_SUMMARY, "model_provider": "openai"},
-        usage={"input_tokens": 30, "output_tokens": 10,
-               "cache_read_input_tokens": 5, "cache_creation_input_tokens": 3})
-    with patch.object(usage, "get_current_user_id", return_value=None), patch.object(
-        usage, "get_current_tenant_id", return_value="public"
-    ):
-        record = processor._capture(SimpleNamespace(span_data=data))
-    assert record.user_id is None
-    assert record.system_attribution == SystemUsageAttribution.ATTRIBUTED
-    assert record.cache_creation_tokens == 3
-    with patch.object(usage, "compute_cost_cents", return_value=(2, 1)), patch.object(
-        usage, "record_system_usage"
-    ) as system_write, patch.object(usage, "record_user_usage") as user_write:
-        processor._write_record(None, record)
-    user_write.assert_not_called()
-    assert system_write.call_args.kwargs["usage"].cost_cents == 3
-    assert system_write.call_args.kwargs["attribution"] == SystemUsageAttribution.ATTRIBUTED
-    print("PINNED_BACKGROUND_SYSTEM_USAGE_OK")
+    before = {thread.ident for thread in threading.enumerate()}
+    with patch.object(setup, "USER_USAGE_TRACKING_ENABLED", False), patch.object(
+        setup, "_initialized", False
+    ), patch.object(setup, "_dynamic_processor", None), patch.object(
+        setup, "_user_usage_processor", None
+    ), patch.object(setup, "DynamicTracingProcessor") as dynamic, patch.object(
+        setup, "set_trace_processors"
+    ), patch.object(setup, "add_trace_processor") as add_processor, patch.object(
+        usage, "UserUsageTracingProcessor"
+    ) as recorder:
+        dynamic.return_value.reconcile.return_value = None
+        assert setup.setup_tracing() == []
+        recorder.assert_not_called()
+        add_processor.assert_not_called()
+        assert setup._user_usage_processor is None
+        assert {thread.ident for thread in threading.enumerate()} == before
+    print("PINNED_DISABLED_USAGE_RECORDING_OK")
 
 
 def main() -> None:
@@ -346,7 +342,7 @@ def main() -> None:
     from onyx_wrapper_patches.background import document_freshness as background_patch
     _validate_schedules(background_patch)
     _validate_scheduler_reload()
-    _validate_system_usage()
+    _validate_disabled_usage_recording()
     _validate_native_connector_entry(background_patch)
     _validate_supervisor()
     from validate_native_bot_tools import validate_native_tools, validate_bot_requests

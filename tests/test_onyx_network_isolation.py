@@ -1244,11 +1244,11 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         background = services["background"]
         self.assertEqual(background["environment"]["PROMETHEUS_METRICS_ENABLED"], "false")
         self.assertEqual(
-            background["environment"]["USER_USAGE_TRACKING_ENABLED"], "true"
+            background["environment"]["USER_USAGE_TRACKING_ENABLED"], "false"
         )
-        self.assertNotIn(
-            "USER_USAGE_TRACKING_ENABLED",
-            services["api_server"]["environment"],
+        self.assertEqual(
+            services["api_server"]["environment"]["USER_USAGE_TRACKING_ENABLED"],
+            "false",
         )
         self.assertEqual(background["environment"]["ONYX_AGENT_SLACK_BOT"], "false")
         self.assertEqual(background["environment"]["ONYX_AGENT_DISCORD_BOT"], "false")
@@ -1271,12 +1271,13 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         self.assertEqual(
             podman_background["environment"]["USER_USAGE_TRACKING_ENABLED"],
-            "true",
+            "false",
         )
         self.assertEqual(podman_background["environment"]["LOG_TO_FILE"], "false")
 
     def test_api_resource_defaults(self) -> None:
         expected = {
+            "USER_USAGE_TRACKING_ENABLED": "false",
             "POSTGRES_API_SERVER_POOL_SIZE": "5",
             "POSTGRES_API_SERVER_POOL_OVERFLOW": "15",
             "POSTGRES_API_SERVER_READ_ONLY_POOL_SIZE": "2",

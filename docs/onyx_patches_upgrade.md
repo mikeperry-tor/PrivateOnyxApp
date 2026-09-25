@@ -240,7 +240,8 @@ and [runtime patch contract audit](#runtime-patch-contract-audit) below rather
 than creating a parallel specification here.
 
 Establish the applicability, necessity, and obsolescence of every wrapper RAG
-patch and shim, including system-owned usage accounting and enrichment-limit failures,
+patch and shim, including disabled user/system usage recording, its budget-check
+consequences, and enrichment-limit failures,
 old-index reclamation queues and gates, re-download/re-parse/re-index avoidance, content-hash
 and secondary-index paths, parser/Pydantic shapes, nomic spoofing, embedding
 prefix/request/retry/normalization contracts, and OpenSearch query/index

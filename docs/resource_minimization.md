@@ -151,11 +151,15 @@ hour. Do not copy fixed counts into documentation.
   is active; the discovery task does not create a second simultaneous attempt.
 - Retained Celery workers run without event heartbeat or gossip. Their upstream
   file-liveness bootstep is disabled.
-- Native usage accounting remains enabled in background workers. It records
-  system-owned contextual-RAG, image-summary, and knowledge-graph generations
-  in the local system ledger even without a request user. Each worker retains
-  the native bounded recorder queue and thread; this is required accounting
-  work. External trace exports remain independently disabled.
+- Native local usage recording is disabled in both API and background services
+  with `USER_USAGE_TRACKING_ENABLED=false`. No usage-recorder thread or bounded
+  queue is created, and user/system token and cost ledgers stop accumulating.
+  Onyx's admin Usage page requires the Business tier; the underlying Community
+  Edition usage APIs still exist but receive no new records. Existing records
+  are retained. Usage budgets depend on these ledgers and must remain
+  unconfigured while recording is disabled; this setting does not disable the
+  budget checks or clear existing limits. External tracing is independently
+  disabled. Chat, embedding, and indexing do not require the local recorder.
 - Old-index reclamation is enabled and runs every 30 minutes after native
   port-drain, retention (24 hours by default), and replacement-index health gates. The light
   worker consumes `index_reclaim`.
