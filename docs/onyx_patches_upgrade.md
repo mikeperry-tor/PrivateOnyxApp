@@ -1146,8 +1146,11 @@ one engine does not substitute for the other engine's lifecycle validation.
 ## Privacy and WebUI CSP audit
 
 `tests/validate_webui_live.py` exercises login hydration, same-origin API access,
-and CSP enforcement of external images and fetches with the image’s bundled
-Chromium. Run it as a separate browser-test process inside the API container
+and CSP enforcement of external images, fetches, scripts, frames, media, fonts,
+inline event handlers, and eval with the image’s bundled Chromium. It also checks
+local blob/data images, blob document fetches, workers, and frames. Eval must be
+exercised from a page-loaded script: DevTools evaluation bypasses that CSP check.
+Run it as a separate browser-test process inside the API container
 with `PYTHONPATH` cleared, targeting internal nginx; keep the container’s
 internal-only networks intact. This does not replace authenticated streaming,
 recovery, or upload checks. With an explicitly approved disposable standard
@@ -1155,6 +1158,19 @@ user, `tests/validate_authenticated_webui.py` covers real offline-stream
 recovery, saved-message reload, same-origin uploaded-image rendering, and
 unsafe-MIME attachment headers. It removes its chats and queues upload deletion;
 verify file deletion and revoke the test account separately.
+
+With the same approved disposable user,
+`tests/validate_webui_inference_recovery.py` injects provider failures into an
+isolated patched LLM instance, translates its packets through native Onyx, and
+feeds them incrementally to the shipped WebUI under the active CSP. Require
+successive continuation, exhausted recovery, reasoning recovery, post-finish
+failure, and malformed textual tool payloads to preserve partial output, issue
+one send, and reload the saved answer. A real follow-up after exhausted recovery
+must remain usable. The fixture uses native DB helpers for its own messages;
+it does not inject faults into the running API/provider or test the entire
+send/persistence pipeline. Run the authenticated transport-recovery check above
+separately. Both checks delete only their own sessions; revoke the account after
+native upload deletion completes.
 
 Reconcile all conclusions with the leak surfaces and browser boundaries in
 [Internal network security](internal_network_security.md), the

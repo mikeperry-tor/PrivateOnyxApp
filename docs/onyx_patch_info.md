@@ -559,8 +559,8 @@ permitting a general data-document source.
 
 The official image's dynamic Next.js HTML contains inline bootstrap and React
 stream scripts, so a static `script-src 'self'` policy breaks hydration. The
-compiled Onyx Proxy does not preserve a CSP nonce request header through to the
-pinned Next renderer. A stricter nonce policy requires source-level integration
+wrapper does not supply a per-response nonce shared by its policy and the
+Next.js bootstrap/stream scripts. A stricter nonce policy requires integration
 that covers rendering, streaming, and chunk/preload loading together.
 
 The compatible no-rebuild policy consequently allows inline script blocks but
