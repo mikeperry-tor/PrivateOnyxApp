@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -85,6 +87,68 @@ class ValidationMakefileTests(unittest.TestCase):
             r"\t@COMPOSE_FILE=\$\(FULL_FILES\).*\n"
             r"\t\tpython - redis < tests/validate_chat_stream_cache_backend.py$",
         )
+
+    def test_upgrade_builds_use_refreshed_locks_and_preserve_explicit_images(self) -> None:
+        rule = re.search(r"(?m)^upgrade:.*(?:\n\t.*)+", MAKEFILE).group(0)
+        targets = ("myst-build teep-build searxng-build executor-build "
+                   "code-interpreter-build tor-build tailscale-build "
+                   "obscura-image-ready upgrade-onyx")
+        images = ("SEARXNG_WRAPPER_IMAGE", "PYTHON_EXECUTOR_IMAGE")
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "lock").write_text("old")
+                definitions = ""
+                for image in images:
+                    definitions += (
+                        f"{image}_ORIGIN := $(origin {image})\n"
+                        f"{image} ?= fixture:$(shell cat lock)\n"
+                        f"{image} := $({image})\nexport {image}\n"
+                    )
+                (root / "Makefile").write_text(
+                    definitions + rule + "\n"
+                    "upgrade-python-deps:\n\t@echo refreshed > lock\n"
+                    + targets + ":\n\t@echo $(SEARXNG_WRAPPER_IMAGE) $(PYTHON_EXECUTOR_IMAGE) >> images\n"
+                )
+                environment = dict(os.environ)
+                for image in images:
+                    environment.pop(image, None)
+                    if explicit:
+                        environment[image] = "fixture:explicit"
+                result = subprocess.run(["make", "upgrade"], cwd=root, env=environment,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = "fixture:explicit" if explicit else "fixture:refreshed"
+                self.assertEqual((root / "images").read_text().splitlines(),
+                                 [f"{expected} {expected}"] * len(targets.split()))
+
+    def test_onyx_download_failure_cannot_keep_a_stale_compose_layer(self) -> None:
+        rule = re.search(r"(?m)^upgrade-onyx:.*(?:\n\t.*)+", MAKEFILE).group(0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            deployment = root / "onyx/onyx_data/deployment"
+            deployment.mkdir(parents=True)
+            craft = deployment / "docker-compose.craft.yml"
+            craft.write_text("stale fixture")
+            (root / "runtime.env").touch()
+            (root / "Makefile").write_text(
+                "ONYX_CONFIG_REF=fixture\nONYX_ENV_FILE=runtime.env\n" + rule
+                + "\nsync-onyx-env:\n\t@touch synced\n"
+            )
+            curl = root / "curl"
+            curl.write_text(
+                "#!/bin/sh\nset -eu\n"
+                'case "$2" in *docker-compose.craft.yml) exit 22;; esac\n'
+                'printf fresh > "$4"\n'
+            )
+            curl.chmod(0o755)
+            result = subprocess.run(["make", "upgrade-onyx"], cwd=root,
+                                    env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"]),
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(craft.read_text(), "stale fixture")
+            self.assertFalse((deployment / "docker-compose.yml").exists())
+            self.assertFalse((root / "synced").exists())
 
     def test_opensearch_validation_is_container_engine_neutral(self) -> None:
         runtime = (ROOT / "tests" / "opensearch_runtime_validation.py").read_text()

@@ -627,6 +627,31 @@ connections, and disables ambient proxy discovery. Without the required host
 policy permission, the one-shot `/ready` validation fails and full-stack
 startup stops before creating a new API/background tier.
 
+## Indexing enrichment and accounting
+
+Before running optional contextual RAG or image summarization, Onyx checks any
+enabled global token and cost budgets configured by an administrator at
+`/admin/token-rate-limits`. This check requires no separate indexing setting and
+does not block enrichment when no global budget is enabled. If a budget is
+exhausted, documents requiring enrichment receive an explicit indexing failure
+rather than being indexed without it; documents that do not require enrichment
+can still proceed.
+
+Background usage recording remains enabled so system-owned generations appear
+in the local administrative ledger. Global budget checks use the user ledger,
+not the separate system ledger. User activity exhausting a global budget can
+therefore block enrichment, but enrichment's own usage does not count toward
+that budget. Recording system usage does not enforce a hard system-spend ceiling.
+
+Enrichment traces use metadata-only content mode. Configuring an external trace
+provider still exports usage and model metadata; ordinary chat tracing retains
+its separate content policy. The wrapper leaves external tracing disabled.
+
+Internal search uses a doubled candidate-selection token budget before relevance
+selection and context expansion. The optional wrapper content caps remain at
+the final model-facing formatting boundary and do not limit those earlier LLM
+calls or ingestion.
+
 ## Full-Mode Idle Storage Policy
 
 Full mode trades some background responsiveness for lower idle CPU and memory:
@@ -649,7 +674,7 @@ Full mode trades some background responsiveness for lower idle CPU and memory:
   indexing remains unavailable until the operator clears the block. A missing
   index or blocked index creation is still a startup error rather than a
   degraded-read exception.
-- MinIO uses its digest-pinned Quay release from `stack.versions.env` and
+- MinIO uses its digest-pinned Onyx mirror from `stack.versions.env` and
   `MINIO_SCANNER_SPEED=slowest`; object healing, lifecycle cleanup,
   and scanner-driven maintenance can therefore take longer. Its retained
   healthcheck uses the common slow steady cadence.

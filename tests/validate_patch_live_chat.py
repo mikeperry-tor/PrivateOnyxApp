@@ -38,6 +38,8 @@ def validate(credential_file: Path, evidence: Path, base_url: str, timeout: int)
     session = created["chat_session_id"]
     (evidence / "session.json").write_text(json.dumps(created))
     try:
+        # The native open_url policy rejects content shorter than 50 characters;
+        # use a complete test page rather than a one-line dummy PDF.
         requests = [
             {
                 "message": "Use open_url to read https://example.com/ and give its page title. The synthetic phrase for this conversation is amber otter 742. Do not save a persistent memory or use other tools.",
@@ -49,7 +51,7 @@ def validate(credential_file: Path, evidence: Path, base_url: str, timeout: int)
                 "allowed_tool_ids": [],
             },
             {
-                "message": "Use open_url to read https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf and report the exact text in this public test PDF. Do not use any other tool.",
+                "message": "Use open_url to read https://www.orimi.com/pdf-test.pdf and report the heading in this public test PDF. Do not use any other tool.",
                 "allowed_tool_ids": allowed,
                 "forced_tool_id": tools["OpenURLTool"],
             },
@@ -72,8 +74,8 @@ def validate(credential_file: Path, evidence: Path, base_url: str, timeout: int)
             else:
                 calls = result.get("tool_calls") or []
                 assert calls and all(tool["tool_name"] == "open_url" for tool in calls)
-                assert any("dummy pdf file" in tool["tool_result"].lower() for tool in calls), "PDF text missing from native tool result"
-                assert "dummy pdf file" in result["answer"].lower(), "PDF text missing from answer"
+                assert any("pdf test file" in tool["tool_result"].lower() for tool in calls), "PDF text missing from native tool result"
+                assert "pdf test file" in result["answer"].lower(), "PDF text missing from answer"
             print(f"Synthetic chat turn {index} passed", flush=True)
     finally:
         # A timed-out HTTP client must not leave its test-owned inference running.

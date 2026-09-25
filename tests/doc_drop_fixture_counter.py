@@ -64,6 +64,15 @@ class FixtureRequestHandler(doc_drop_webserver.DocDropRequestHandler):
                     temporary.write_text(json.dumps(totals, sort_keys=True) + "\n")
                     temporary.replace(output)
 
+    def send_head(self):
+        ordinary_directory = self.directory
+        try:
+            if urlsplit(self.path).path == self.server.fixture_path:
+                self.directory = self.server.fixture_directory
+            return super().send_head()
+        finally:
+            self.directory = ordinary_directory
+
     def send_response(self, code, message=None):
         self._status = int(code)
         super().send_response(code, message)
@@ -76,6 +85,7 @@ class FixtureRequestHandler(doc_drop_webserver.DocDropRequestHandler):
 def main():
     fixture_path = os.environ["ONYX_TEST_FIXTURE_PATH"]
     counter_file = os.environ["ONYX_TEST_COUNTER_FILE"]
+    fixture_directory = str(Path(os.environ["ONYX_TEST_FIXTURE_DIRECTORY"]).resolve(strict=True))
     if not fixture_path.startswith("/onyx-reorg-") or not fixture_path.endswith("/fixture.pdf"):
         raise RuntimeError("counter requires the exact synthetic fixture path")
     # Configure only this test process; no production setting or handler changes.
@@ -84,6 +94,7 @@ def main():
 
     class FixtureServer(original):
         def __init__(self, *args, **kwargs):
+            self.fixture_directory = fixture_directory
             self.fixture_path = fixture_path
             self.counter_file = counter_file
             super().__init__(*args, **kwargs)

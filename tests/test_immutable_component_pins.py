@@ -78,7 +78,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
     def test_minio_release_records_its_image_source_revision(self) -> None:
         self.assertRegex(
             self.value("MINIO_IMAGE"),
-            r"^quay\.io/minio/minio:RELEASE\.[0-9TZ-]+-cpuv1@sha256:[0-9a-f]{64}$",
+            r"^docker\.io/onyxdotapp/minio:RELEASE\.[0-9TZ-]+-cpuv1@sha256:[0-9a-f]{64}$",
         )
         self.assertRegex(self.value("MINIO_SOURCE_REF"), r"^[0-9a-f]{40}$")
 
@@ -96,7 +96,7 @@ class ImmutableComponentPinTests(unittest.TestCase):
             "MINIO_IMAGE",
         ):
             self.assertTrue(
-                self.value(name).startswith("quay.io/" if name == "MINIO_IMAGE" else "docker.io/"),
+                self.value(name).startswith("docker.io/"),
                 f"{name} must not rely on a short-name registry default",
             )
 

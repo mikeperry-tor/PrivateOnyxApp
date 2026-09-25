@@ -74,8 +74,11 @@ def _internal_search_formatter(
     return json.dumps(payload, indent=2), {1: "doc"}
 
 
-def _configured_max(model_configuration):
-    return model_configuration.max_input_tokens
+def llm_from_provider(model_configuration):
+    configured_max_input_tokens = (
+        model_configuration.max_input_tokens if model_configuration else None
+    )
+    return configured_max_input_tokens, model_configuration.reasoning_effort_default
 
 
 def _provider_max(model_configuration, model_name=None):
@@ -1262,7 +1265,7 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         llm = _package("onyx.llm")
         factory = ModuleType("onyx.llm.factory")
         utils = ModuleType("onyx.llm.utils")
-        factory._get_model_configured_max_input_tokens = _configured_max
+        factory.llm_from_provider = llm_from_provider
         factory.get_max_input_tokens_from_llm_provider = _provider_max
         utils.get_max_input_tokens_from_llm_provider = _provider_max
         modules = {
@@ -1279,8 +1282,9 @@ def get_file_id_by_user_file_id(user_file_id, db_session):
         ):
             wrapper.apply_llm_max_tokens_override_patch()
 
-        stored = SimpleNamespace(max_input_tokens=4096)
-        self.assertEqual(factory._get_model_configured_max_input_tokens(stored), 131072)
+        stored = SimpleNamespace(max_input_tokens=4096, reasoning_effort_default="high")
+        self.assertEqual(factory.llm_from_provider(stored), (131072, "high"))
+        self.assertEqual(stored.max_input_tokens, 4096)
         self.assertEqual(utils.get_max_input_tokens_from_llm_provider(stored), 131072)
 
     def test_saved_tool_results_are_used_and_recounted(self) -> None:

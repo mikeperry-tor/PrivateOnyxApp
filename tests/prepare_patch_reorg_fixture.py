@@ -1,13 +1,7 @@
-"""Prepare one disposable PDF submount and synthetic-only HTTP counter overlay.
+"""Prepare a disposable PDF route and synthetic-only HTTP counter overlay.
 
-Run Make with its normal Makefile plus the emitted Make fragment. The normal
-document source stays mounted unchanged; this adds only a unique fixture subtree.
-Cleanup removes only this newly created directory after the ordinary stack is down.
-
-Docker requires an existing empty directory with the emitted fixture_name in
-the configured document source before mounting below its read-only parent.
-Create/remove that exact empty mountpoint only with authorization to modify the
-private source; this helper deliberately does not access the document source.
+The normal document source stays mounted unchanged. The exact fixture path
+uses a separate read-only tree outside the private document mount.
 """
 
 from __future__ import annotations
@@ -25,19 +19,21 @@ def prepare(directory: Path) -> dict:
     directory = directory.resolve()
     repo = Path(__file__).resolve().parents[1]
     name = "onyx-reorg-" + uuid.uuid4().hex
-    fixture = directory / "document"
-    fixture.mkdir()
+    fixture_root = directory / "document"
+    fixture = fixture_root / name
+    fixture.mkdir(parents=True)
     (fixture / "fixture.pdf").write_bytes(synthetic_pdf())
     output = directory / "counters"
     output.mkdir()
     overlay = directory / "compose.json"
     overlay.write_text(json.dumps({"services": {"doc-drop-web": {
         "volumes": [
-            f"{fixture}:/import/docs/{name}:ro",
+            f"{fixture_root}:/fixture-data:ro",
             f"{repo / 'tests/doc_drop_fixture_counter.py'}:/app/doc_drop_fixture_counter.py:ro",
             f"{output}:/fixture-output",
         ],
         "environment": {
+            "ONYX_TEST_FIXTURE_DIRECTORY": "/fixture-data",
             "ONYX_TEST_FIXTURE_PATH": f"/{name}/fixture.pdf",
             "ONYX_TEST_COUNTER_FILE": "/fixture-output/counters.json",
         },

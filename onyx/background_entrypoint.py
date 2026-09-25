@@ -30,13 +30,13 @@ WORKER_QUEUES = {
     "celery_worker_primary": "celery",
     "celery_worker_light": (
         "vespa_metadata_sync,connector_deletion,doc_permissions_upsert,"
-        "checkpoint_cleanup,index_attempt_cleanup,opensearch_migration,"
+        "checkpoint_cleanup,index_attempt_cleanup,index_reclaim,opensearch_migration,"
         "chat_ttl_deletion"
     ),
     "celery_worker_heavy": (
         "connector_pruning,connector_doc_permissions_sync,"
         "connector_external_group_sync,csv_generation,sandbox,"
-        "connector_hierarchy_fetching"
+        "connector_hierarchy_fetching,capability_checks"
     ),
     "celery_worker_docprocessing": "docprocessing,port",
     "celery_worker_user_file_processing": (

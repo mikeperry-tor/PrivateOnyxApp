@@ -300,6 +300,7 @@ def validate_research():
             emitter=SimpleNamespace(emit=packets.append), state_container=state,
             simple_chat_history=user_history(), tools=selected_tools(), custom_agent_prompt=None,
             llm=model, token_counter=lambda s: len(s)//4, skip_clarification=True,
+            user_language=None,
         )
     assert len(model.requests) == 3
     assert_prefix(model.requests[1], model.requests[2])
@@ -321,6 +322,7 @@ def validate_research():
             parent_tool_call_id='parent', tools=selected_tools(),
             emitter=SimpleNamespace(emit=packets.append), state_container=state,
             llm=model, is_reasoning_model=True, token_counter=lambda s: len(s)//4, user_identity=None,
+            language_section='Reply in the user’s language.',
         )
     assert result is not None, packets
     assert len(model.requests) == 2
@@ -384,7 +386,7 @@ def validate_concurrent_batches():
                         placement=Placement(turn_index=1, tab_index=index)),
                     parent_tool_call_id=label, tools=selected_tools(), emitter=emitter,
                     state_container=state, llm=model, is_reasoning_model=True,
-                    token_counter=lambda s: len(s)//4, user_identity=None)
+                    token_counter=lambda s: len(s)//4, user_identity=None, language_section='Reply in the user’s language.')
                 assert result is not None, packets
             else:
                 llm_loop.run_llm_loop(emitter=emitter, state_container=state,
@@ -445,7 +447,7 @@ def validate_report_output_limits():
             assert dr_loop.MAX_FINAL_REPORT_TOKENS is None
             dr_loop.generate_final_report(history=user_history(), research_plan='Evidence',
                 llm=model, token_counter=lambda s: len(s)//4, state_container=state,
-                emitter=emitter, turn_index=1, citation_mapping={1: doc}, user_identity=None)
+                emitter=emitter, turn_index=1, citation_mapping={1: doc}, user_identity=None, language_section='Reply in the user’s language.')
             assert 'Evidence' in state.get_answer_tokens()
             assert state.get_citation_to_doc()[1].document_id == doc.document_id
         else:
@@ -455,7 +457,7 @@ def validate_report_output_limits():
             report = research_agent.generate_intermediate_report(research_topic='Evidence',
                 history=user_history(), llm=model, token_counter=lambda s: len(s)//4,
                 citation_processor=citations, user_identity=None, emitter=emitter,
-                placement=Placement(turn_index=1, tab_index=0))
+                placement=Placement(turn_index=1, tab_index=0), language_section='Reply in the user’s language.')
             deltas = [p.obj.content for p in packets if type(p.obj).__name__ == 'IntermediateReportDelta']
             assert report == ''.join(deltas) and 'Evidence' in report
             cited = next(p.obj for p in packets if type(p.obj).__name__ == 'IntermediateReportCitedDocs')
@@ -464,6 +466,7 @@ def validate_report_output_limits():
         assert len(model.requests) == 1
         request = model.requests[0]
         assert request['max_tokens'] is None
+        assert 'Reply in the user’s language.' in json.dumps(request['prompt'], ensure_ascii=False)
         assert request['tools'] == []
         assert request['timeout_override'] == research_agent.DR_REPORT_LLM_TIMEOUT_S
     print('PINNED_REPORT_OUTPUT_ALLOWANCE_OK')
@@ -521,7 +524,7 @@ def validate_report_citation_provenance():
             research_agent_calls=[0, 1], parent_tool_call_ids=['a', 'b'],
             tools=[], emitter=emitter, state_container=ChatStateContainer(),
             llm=ScriptedLLM([]), is_reasoning_model=True, token_counter=len,
-            citation_mapping={3: existing})
+            citation_mapping={3: existing}, language_section='Reply in the user’s language.')
     assert combined.intermediate_reports == [
         'Alpha [4]. Existing [3].', 'Beta [5]. Alpha again [4].']
     assert {key: value.document_id for key, value in combined.citation_mapping.items()} == {
@@ -533,7 +536,7 @@ def validate_report_citation_provenance():
         history=user_history(), research_plan='Evidence', llm=model,
         token_counter=lambda text: len(text) // 4, state_container=state,
         emitter=emitter, turn_index=1, citation_mapping=combined.citation_mapping,
-        user_identity=None)
+        user_identity=None, language_section='Reply in the user’s language.')
     assert state.answer_tokens == (
         'Alpha [[4]](https://example.org/alpha). Existing [[3]](https://example.org/existing). '
         'Beta [[5]](https://example.org/beta). Alpha again [[4]](https://example.org/alpha).')

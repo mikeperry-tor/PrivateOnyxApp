@@ -151,11 +151,16 @@ hour. Do not copy fixed counts into documentation.
   is active; the discovery task does not create a second simultaneous attempt.
 - Retained Celery workers run without event heartbeat or gossip. Their upstream
   file-liveness bootstep is disabled.
-- Per-user usage accounting is disabled in the background service. Celery work
-  has no request user identity, so its recorder cannot produce attributable
-  usage rows; disabling it avoids one idle recorder thread and its bounded
-  queue in every worker process. API-side usage and cost reporting remains
-  enabled for user-attributed generations.
+- Native usage accounting remains enabled in background workers. It records
+  system-owned contextual-RAG, image-summary, and knowledge-graph generations
+  in the local system ledger even without a request user. Each worker retains
+  the native bounded recorder queue and thread; this is required accounting
+  work. External trace exports remain independently disabled.
+- Old-index reclamation is enabled and runs every 30 minutes after native
+  port-drain, retention (24 hours by default), and replacement-index health gates. The light
+  worker consumes `index_reclaim`.
+  Stale capability-run cleanup runs every ten minutes; manually requested
+  capability checks use the heavy worker's `capability_checks` queue.
 - Only the materialized self-hosted schedule is transformed; imported templates
   remain untouched. Validation rejects duplicate names, wrong retained task
   identifiers/cadences, unknown producers, and monitoring-queue destinations.
@@ -187,6 +192,10 @@ one controls consumers/processes and the other controls task production. They
 are not duplicate enforcement.
 
 ### Onyx API
+
+- LiteLLM uses its packaged model map with telemetry disabled. Native Onyx
+  disables per-chunk LiteLLM streaming logging because its own tracing and cost
+  accounting own those records, avoiding unused callback tasks and event loops.
 
 - The synchronous and asynchronous API database engines each use a base pool
   of five with up to 15 overflow connections. This still accommodates Onyx's

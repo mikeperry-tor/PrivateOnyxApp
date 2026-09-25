@@ -38,7 +38,7 @@ def validate_native_tools(*, background: bool) -> None:
             stack.enter_context(patch.object(tool_constructor, "get_session_with_current_tenant_if_none", return_value=nullcontext(MagicMock())))
             assert tool_constructor.construct_tools(
                 persona=persona, emitter=MagicMock(),
-                user=SimpleNamespace(oauth_accounts=[], enable_memory_tool=False),
+                user=SimpleNamespace(live_oauth_token=None, enable_memory_tool=False),
                 llm=MagicMock(), db_session=MagicMock(),
             ) == {}
             for db, client in clients:

@@ -76,6 +76,8 @@ def _validate_schedules(background_patch) -> None:
     assert effective["check-for-incognito-file-cleanup"]["schedule"] == timedelta(
         minutes=10
     )
+    assert effective["check-for-old-index-reclaim"]["schedule"] == timedelta(minutes=30)
+    assert effective["check-for-stale-capability-runs"]["schedule"] == timedelta(minutes=10)
     assert DynamicTenantScheduler.RELOAD_INTERVAL == 300
     _validate_scheduler_tick(beat)
     assert app_base.get_bootsteps() == []
@@ -309,12 +311,42 @@ def _validate_native_connector_entry(background_patch) -> None:
     print(f"PINNED_NATIVE_CONNECTOR_TRAFFIC_OK freshness={enabled} connectivity_GETs=2 scrape_GETs={0 if enabled else 1}")
 
 
+def _validate_system_usage() -> None:
+    from unittest.mock import patch
+    from onyx.db.enums import SystemUsageAttribution
+    from onyx.tracing.processors import user_usage_processor as usage
+    from onyx.tracing.framework.span_data import GenerationSpanData
+    from onyx.tracing.flows import LLMFlow
+
+    processor = object.__new__(usage.UserUsageTracingProcessor)
+    data = GenerationSpanData(model="fixture", model_config={
+        "flow": LLMFlow.CONTEXTUAL_RAG_DOC_SUMMARY, "model_provider": "openai"},
+        usage={"input_tokens": 30, "output_tokens": 10,
+               "cache_read_input_tokens": 5, "cache_creation_input_tokens": 3})
+    with patch.object(usage, "get_current_user_id", return_value=None), patch.object(
+        usage, "get_current_tenant_id", return_value="public"
+    ):
+        record = processor._capture(SimpleNamespace(span_data=data))
+    assert record.user_id is None
+    assert record.system_attribution == SystemUsageAttribution.ATTRIBUTED
+    assert record.cache_creation_tokens == 3
+    with patch.object(usage, "compute_cost_cents", return_value=(2, 1)), patch.object(
+        usage, "record_system_usage"
+    ) as system_write, patch.object(usage, "record_user_usage") as user_write:
+        processor._write_record(None, record)
+    user_write.assert_not_called()
+    assert system_write.call_args.kwargs["usage"].cost_cents == 3
+    assert system_write.call_args.kwargs["attribution"] == SystemUsageAttribution.ATTRIBUTED
+    print("PINNED_BACKGROUND_SYSTEM_USAGE_OK")
+
+
 def main() -> None:
     from patch_activation_probe import assert_activation
     assert_activation()
     from onyx_wrapper_patches.background import document_freshness as background_patch
     _validate_schedules(background_patch)
     _validate_scheduler_reload()
+    _validate_system_usage()
     _validate_native_connector_entry(background_patch)
     _validate_supervisor()
     from validate_native_bot_tools import validate_native_tools, validate_bot_requests

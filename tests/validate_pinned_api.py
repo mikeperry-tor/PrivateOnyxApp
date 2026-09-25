@@ -46,6 +46,7 @@ def _validate_model_display_names() -> None:
             id=1, name="mlx-community/Example-4bit", display_name="Example",
             custom_display_name="Admin label", is_visible=True,
             max_input_tokens=8192, llm_model_flow_types=[],
+            temperature_default=None, reasoning_effort_default=None, reasoning_effort_max=None,
         )
         view = models.ModelConfigurationView.from_model(row, provider)
         assert view.display_name == (
@@ -270,6 +271,15 @@ def _validate_production_bootstrap() -> None:
     assert mcp_ssrf.mcp_oauth_challenge_httpx_client_factory.__module__ == (
         "onyx_wrapper_patches.api.mcp_egress"
     )
+    from onyx.server.features.mcp import client as mcp_client, oauth, oauth_flow
+    for consumer in (mcp_client, oauth, oauth_flow):
+        assert consumer.mcp_ssrf_httpx_client_factory is mcp_ssrf.mcp_ssrf_httpx_client_factory
+    assert oauth_flow.mcp_oauth_challenge_httpx_client_factory is mcp_ssrf.mcp_oauth_challenge_httpx_client_factory
+    from importlib.metadata import version
+    from onyx.llm.litellm_singleton import litellm
+    assert version("litellm") == "1.93.0"
+    assert litellm.telemetry is False
+    assert litellm.disable_streaming_logging is True
     from onyx_wrapper_patches.api.config import use_obscura_browser
     selected = "obscura_crawler_patch" if use_obscura_browser() else "onyx_crawler_egress_patch"
     unselected = "onyx_crawler_egress_patch" if use_obscura_browser() else "obscura_crawler_patch"
@@ -429,6 +439,46 @@ def _validate_native_ssrf_contract() -> None:
         pass
     else:
         raise AssertionError("disabled SSRF level accepted link-local metadata")
+
+
+def _validate_native_output_and_file_policy() -> None:
+    from unittest.mock import patch
+    from onyx.chat import token_budget
+    from onyx.file_store.serving import resolve_inline_disposition
+
+    # Native chat budgets continue to enforce packaged model output metadata;
+    # the wrapper's input override and research allowance must not erase it.
+    llm = SimpleNamespace(config=SimpleNamespace(
+        max_input_tokens=100000, model_provider="openai",
+        model_name="fixture", deployment_name=None,
+    ))
+    with patch.object(token_budget, "get_model_map", return_value={}), patch.object(
+        token_budget, "find_model_obj", return_value={
+            "max_input_tokens": 100000, "max_output_tokens": 16000,
+            "max_context_tokens": 100000,
+        },
+    ):
+        budget = token_budget.resolve_chat_token_budget(llm)
+        assert budget.output_allowance(1000) == 16000
+        assert budget.input_tokens + budget.safety_tokens == 100000
+        remaining = max(1, token_budget.GEN_AI_NUM_RESERVED_OUTPUT_TOKENS)
+        assert budget.output_allowance(100000 - budget.safety_tokens - remaining) == min(16000, remaining)
+        assert budget.output_allowance(100000) is None
+    with patch.object(token_budget, "get_model_map", return_value={}), patch.object(
+        token_budget, "find_model_obj", return_value=None,
+    ):
+        assert token_budget.resolve_chat_token_budget(llm).output_allowance(1000) is None
+
+    for media_type in ("image/png", "application/pdf", "text/plain; charset=utf-8"):
+        served, headers = resolve_inline_disposition(media_type)
+        assert served == media_type
+        assert headers == {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"}
+    for media_type in ("text/html", "image/svg+xml", "application/javascript"):
+        served, headers = resolve_inline_disposition(media_type)
+        assert served == "application/octet-stream"
+        assert headers["Content-Disposition"] == "attachment"
+        assert headers["X-Content-Type-Options"] == "nosniff"
+        assert headers["Content-Security-Policy"] == "sandbox"
 
 
 def _validate_new_network_surface_contract() -> None:
@@ -1552,6 +1602,7 @@ if __name__ == "__main__":
     validate_native_tools(background=False)
     _validate_native_ssrf_contract()
     _validate_new_network_surface_contract()
+    _validate_native_output_and_file_policy()
     _validate_model_display_names()
     _validate_github_egress()
     _validate_python_tool_identity()

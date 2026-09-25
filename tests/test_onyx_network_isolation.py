@@ -1244,7 +1244,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         background = services["background"]
         self.assertEqual(background["environment"]["PROMETHEUS_METRICS_ENABLED"], "false")
         self.assertEqual(
-            background["environment"]["USER_USAGE_TRACKING_ENABLED"], "false"
+            background["environment"]["USER_USAGE_TRACKING_ENABLED"], "true"
         )
         self.assertNotIn(
             "USER_USAGE_TRACKING_ENABLED",
@@ -1271,7 +1271,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         self.assertEqual(
             podman_background["environment"]["USER_USAGE_TRACKING_ENABLED"],
-            "false",
+            "true",
         )
         self.assertEqual(podman_background["environment"]["LOG_TO_FILE"], "false")
 

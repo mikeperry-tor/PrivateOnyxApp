@@ -399,6 +399,7 @@ endif
 # the derived image. `make up-*` therefore cannot reuse an older image after a
 # client, engine, dependency-lock, or Dockerfile change. A command-line
 # SEARXNG_IMAGE_TAG override also selects a distinct derived tag.
+SEARXNG_WRAPPER_IMAGE_ORIGIN := $(origin SEARXNG_WRAPPER_IMAGE)
 SEARXNG_WRAPPER_IMAGE ?= $(SEARXNG_WRAPPER_IMAGE_REPOSITORY):$(SEARXNG_IMAGE_TAG)-$(SEARXNG_WRAPPER_SOURCE_HASH)
 SEARXNG_WRAPPER_IMAGE := $(SEARXNG_WRAPPER_IMAGE)
 OBSCURA_WRAPPER_BUILD_INPUTS := \
@@ -495,6 +496,7 @@ PYTHON_EXECUTOR_WRAPPER_SOURCE_HASH := $(call os_image_hash,$(PYTHON_EXECUTOR_UP
 ifeq ($(strip $(PYTHON_EXECUTOR_WRAPPER_SOURCE_HASH)),)
 $(error could not compute the Python executor wrapper source hash)
 endif
+PYTHON_EXECUTOR_IMAGE_ORIGIN := $(origin PYTHON_EXECUTOR_IMAGE)
 PYTHON_EXECUTOR_IMAGE ?= $(PYTHON_EXECUTOR_WRAPPER_IMAGE_REPOSITORY):$(PYTHON_EXECUTOR_IMAGE_TAG)-$(PYTHON_EXECUTOR_WRAPPER_SOURCE_HASH)
 PYTHON_EXECUTOR_IMAGE := $(PYTHON_EXECUTOR_IMAGE)
 export PYTHON_EXECUTOR_IMAGE
@@ -832,7 +834,10 @@ check-upgrade:
 	@$(MAKE) --no-print-directory check
 	@$(MAKE) --no-print-directory test-all-images
 
-upgrade: upgrade-python-deps myst-build teep-build searxng-build executor-build code-interpreter-build tor-build tailscale-build obscura-image-ready upgrade-onyx
+# Reparse after lock generation so content-derived image tags match build inputs.
+# Clear only our exported defaults; explicit caller image overrides still win.
+upgrade: upgrade-python-deps
+	@env $(foreach image,SEARXNG_WRAPPER_IMAGE PYTHON_EXECUTOR_IMAGE,$(if $(filter undefined,$($(image)_ORIGIN)),-u $(image))) $(MAKE) --no-print-directory myst-build teep-build searxng-build executor-build code-interpreter-build tor-build tailscale-build obscura-image-ready upgrade-onyx
 	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."
 
 upgrade-python-deps:
@@ -1173,17 +1178,14 @@ upgrade-onyx:
 	echo "Downloading Onyx deployment files for ref $$config_ref..."; \
 	curl -fsSL "$$compose_base/docker-compose.yml" -o "$$tmp_dir/docker-compose.yml"; \
 	curl -fsSL "$$compose_base/docker-compose.onyx-lite.yml" -o "$$tmp_dir/docker-compose.onyx-lite.yml"; \
-	if curl -fsSL "$$compose_base/docker-compose.craft.yml" -o "$$tmp_dir/docker-compose.craft.yml" 2>/dev/null; then \
-		install -m 0644 "$$tmp_dir/docker-compose.craft.yml" onyx/onyx_data/deployment/docker-compose.craft.yml; \
-	else \
-		echo "No docker-compose.craft.yml at ref $$config_ref; keeping existing local file if present"; \
-	fi; \
+	curl -fsSL "$$compose_base/docker-compose.craft.yml" -o "$$tmp_dir/docker-compose.craft.yml"; \
 	curl -fsSL "$$compose_base/env.template" -o "$$tmp_dir/env.template"; \
 	curl -fsSL "$$compose_base/README.md" -o "$$tmp_dir/README.md"; \
 	curl -fsSL "$$nginx_base/app.conf.template" -o "$$tmp_dir/app.conf.template"; \
 	curl -fsSL "$$nginx_base/run-nginx.sh" -o "$$tmp_dir/run-nginx.sh"; \
 	install -m 0644 "$$tmp_dir/docker-compose.yml" onyx/onyx_data/deployment/docker-compose.yml; \
 	install -m 0644 "$$tmp_dir/docker-compose.onyx-lite.yml" onyx/onyx_data/deployment/docker-compose.onyx-lite.yml; \
+	install -m 0644 "$$tmp_dir/docker-compose.craft.yml" onyx/onyx_data/deployment/docker-compose.craft.yml; \
 	install -m 0644 "$$tmp_dir/env.template" onyx/onyx_data/deployment/env.template; \
 	install -m 0644 "$$tmp_dir/README.md" onyx/onyx_data/README.md; \
 	install -m 0644 "$$tmp_dir/app.conf.template" onyx/onyx_data/data/nginx/app.conf.template; \

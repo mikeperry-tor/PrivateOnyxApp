@@ -26,11 +26,13 @@ with redirect_stdout(sys.stderr):
     from onyx.db.engine.sql_engine import SqlEngine, get_session_with_current_tenant
     from onyx.db.api_key import insert_api_key
     from onyx.server.api_key.models import APIKeyArgs
-    from onyx.auth.schemas import UserRole
+    from onyx.db.users import fetch_default_group, DEFAULT_ADMIN_GROUP_NAME
     from onyx.db.models import User
     SqlEngine.init_engine(pool_size=1, max_overflow=0)
     with get_session_with_current_tenant() as session:
-        key = insert_api_key(session, APIKeyArgs(name=sys.argv[1], role=UserRole.ADMIN), None)
+        admin_group = fetch_default_group(session, DEFAULT_ADMIN_GROUP_NAME)
+        assert admin_group is not None
+        key = insert_api_key(session, APIKeyArgs(name=sys.argv[1], group_ids=[admin_group.id]), None)
         user = session.get(User, UUID(str(key.user_id)))
         assert user is not None
         user.use_memories = False

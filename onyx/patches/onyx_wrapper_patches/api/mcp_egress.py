@@ -157,6 +157,7 @@ def apply_mcp_egress_proxy_patch() -> None:
     for module_name in (
         "onyx.server.features.mcp.client",
         "onyx.server.features.mcp.oauth",
+        "onyx.server.features.mcp.oauth_flow",
     ):
         cached_module = sys.modules.get(module_name)
         if cached_module is not None:
@@ -165,7 +166,7 @@ def apply_mcp_egress_proxy_patch() -> None:
                 "mcp_ssrf_httpx_client_factory",
                 _patched_factory,
             )
-            if module_name == "onyx.server.features.mcp.oauth":
+            if module_name == "onyx.server.features.mcp.oauth_flow":
                 setattr(
                     cached_module,
                     "mcp_oauth_challenge_httpx_client_factory",

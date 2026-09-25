@@ -18,15 +18,19 @@ class FixtureCounterTests(unittest.TestCase):
     def test_exact_path_head_get_bytes_and_ordinary_handler_restoration(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            fixture = root / "onyx-reorg-test"
-            fixture.mkdir()
+            fixture_root = root / "synthetic"
+            fixture = fixture_root / "onyx-reorg-test"
+            fixture.mkdir(parents=True)
+            ordinary = root / "ordinary"
+            ordinary.mkdir()
             (fixture / "fixture.pdf").write_bytes(b"synthetic fixture")
-            (root / "ordinary.txt").write_text("unrecorded")
+            (ordinary / "ordinary.txt").write_text("unrecorded")
             counters = root / "counter.json"
             server = doc_drop_webserver.BoundedThreadingHTTPServer(
-                ("127.0.0.1", 0), partial(FixtureRequestHandler, directory=directory),
+                ("127.0.0.1", 0), partial(FixtureRequestHandler, directory=str(ordinary)),
                 loopback_peers_only=True,
             )
+            server.fixture_directory = str(fixture_root)
             server.fixture_path = "/onyx-reorg-test/fixture.pdf"
             server.counter_file = str(counters)
             thread = threading.Thread(target=server.serve_forever)

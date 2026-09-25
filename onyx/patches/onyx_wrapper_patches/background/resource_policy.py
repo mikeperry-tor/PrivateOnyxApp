@@ -19,6 +19,8 @@ _DISCOVERY_TASKS = {
     "check-for-pruning": "CHECK_FOR_PRUNING",
 }
 _HOUSEKEEPING_TASKS = {
+    "check-for-old-index-reclaim": ("CHECK_FOR_OLD_INDEX_RECLAIM", timedelta(minutes=30)),
+    "check-for-stale-capability-runs": ("CHECK_FOR_STALE_CAPABILITY_RUNS", timedelta(minutes=10)),
     "check-for-incognito-file-cleanup": ("CHECK_FOR_INCOGNITO_FILE_CLEANUP", timedelta(minutes=10)),
     "check-for-checkpoint-cleanup": ("CHECK_FOR_CHECKPOINT_CLEANUP", timedelta(hours=1)),
     "check-for-index-attempt-cleanup": ("CHECK_FOR_INDEX_ATTEMPT_CLEANUP", timedelta(minutes=30)),

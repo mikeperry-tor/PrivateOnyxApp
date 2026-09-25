@@ -433,7 +433,8 @@ embedding shim retain their public/host route-class selection. Both MCP client
 factories are patched: the ordinary client and the synthetic OAuth-challenge
 client used for discovery, registration, and token exchange. The challenge
 state machine is retained while every real request delegates to the selected
-fixed proxy. The exact
+fixed proxy. Installation also replaces the imported factory bindings in the
+MCP client, OAuth refresh, and OAuth discovery/registration flow modules. The exact
 internal Teep base is a startup-validated direct exception. Full-mode doc-drop
 uses its exact local gateway rather than a process-wide direct crawl.
 Configured OpenAI-compatible inference also gives the shared `/v1/models`
@@ -898,8 +899,10 @@ concurrency, placement, and compatible automatic tool choice natively.
 The wrapper removes the pinned Onyx orchestrator's 1,024-token and nested
 research agent's 1,000-token per-request output caps, along with the 10,000-token
 intermediate-report and 20,000-token final-report caps. All four calls pass
-`max_tokens=None`, using the normal provider-controlled output allowance as
-ordinary chat does. Provider/model output and context limits still apply;
+`max_tokens=None`, using the provider-controlled output allowance. Ordinary chat
+independently
+uses native model metadata and estimated input consumption to bound its output
+allowance. Provider/model output and context limits still apply;
 this does not promise unlimited generation. Native reasoning shares that
 allowance with tool arguments or report text. `ONYX_AGENT_LLM_MAX_TOKENS` remains an input
 context-window override, not an output-token budget.
@@ -916,7 +919,9 @@ timeouts, report streaming/citations, and no-tool completion behavior are
 unchanged. Remove this patch when upstream delegates these calls' output
 allowance to the provider natively.
 
-Installed-loop captures assert `max_tokens=None` at all four LLM boundaries,
+Native reply-language guidance remains in the user-facing research reports and
+clarifications. Installed-loop captures assert `max_tokens=None` at all four LLM
+boundaries,
 including report text, citation packets, final citation state, and unchanged
 report timeout arguments. The disabled-sharing bootstrap also exercises both
 report generators. Provider-limited output can still truncate; longer reports
@@ -1174,8 +1179,11 @@ successful tool evidence.
 
 ## Context and result-size patches
 
-The configured LLM context override validates both upstream token-limit lookup
-functions before making `GEN_AI_MAX_TOKENS` authoritative. Native provider
+The configured LLM context override validates the provider construction and
+context lookup before making `GEN_AI_MAX_TOKENS` authoritative. Its narrow
+construction rewrite leaves model temperature, user reasoning defaults, and
+admin reasoning ceilings intact; it does not mutate saved model configuration.
+Native provider
 updates avoid creating a stored context override that merely
 repeats the resolved model lookup, but retain existing explicit values. That
 write-time policy does not make the wrapper's configured override redundant:
@@ -1316,7 +1324,9 @@ consequences of keeping Craft absent are documented in
 `docs/resource_minimization.md`.
 The strict background bootstrap materializes eight connector-discovery
 schedules at five minutes, retains incognito generated-file cleanup at ten
-minutes, transforms only the materialized self-hosted schedule list, removes the three Craft cleanup
+minutes, retains old-index reclamation at 30 minutes and stale capability-run
+cleanup at ten minutes, transforms only the materialized self-hosted schedule
+list, removes the three Craft cleanup
 schedules, and removes the queue/process/memory monitoring and version-
 telemetry producers. It rejects duplicate names, unknown producers, wrong
 retained task identifiers/cadences, and monitoring-queue destinations. Templates

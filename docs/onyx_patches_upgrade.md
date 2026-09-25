@@ -79,7 +79,9 @@ Docker-only. `make test-all-images` includes the security gate.
 2. Read the upstream implementations named below. Do not infer compatibility
    from a tag or passing import alone.
 3. Run `make upgrade` to update pins/hashed locks and rebuild or refresh the
-   required images. Container and service entrypoints must not invoke a package
+   required images. Image preparation reparses the completed locks before deriving
+   content-addressed image tags; explicit caller image overrides remain authoritative.
+   Container and service entrypoints must not invoke a package
    manager, `pip`, or a Playwright browser download. The Makefile may refresh a
    previously installed bundled host MLX environment before starting it, as
    specified below; first-time installation remains explicit.
@@ -238,7 +240,8 @@ and [runtime patch contract audit](#runtime-patch-contract-audit) below rather
 than creating a parallel specification here.
 
 Establish the applicability, necessity, and obsolescence of every wrapper RAG
-patch and shim, including re-download/re-parse/re-index avoidance, content-hash
+patch and shim, including system-owned usage accounting and enrichment-limit failures,
+old-index reclamation queues and gates, re-download/re-parse/re-index avoidance, content-hash
 and secondary-index paths, parser/Pydantic shapes, nomic spoofing, embedding
 prefix/request/retry/normalization contracts, and OpenSearch query/index
 compatibility. Audit new ingestion and query paths as well as wrapped symbols,
@@ -774,7 +777,8 @@ lifecycle proxy retains its separate five-minute post-readiness blocked-socket
 bound.
 
 Audit the exact LiteLLM dependency installed in the pinned Onyx image,
-including serialization, model metadata and cost-map loading, callbacks,
+including serialization, model metadata and cost-map loading, the native
+`disable_streaming_logging` optimization, callbacks,
 telemetry, retries, timeouts, proxy behavior, and environment handling.
 Compare it with the matching source in `reference_repos/litellm` when
 available. Exercise reasoning/tool history and configured inference through
@@ -1127,6 +1131,17 @@ and Podman for relevant container-engine or OpenSearch/Onyx upgrades; a pass on
 one engine does not substitute for the other engine's lifecycle validation.
 
 ## Privacy and WebUI CSP audit
+
+`tests/validate_webui_live.py` exercises login hydration, same-origin API access,
+and CSP enforcement of external images and fetches with the image’s bundled
+Chromium. Run it as a separate browser-test process inside the API container
+with `PYTHONPATH` cleared, targeting internal nginx; keep the container’s
+internal-only networks intact. This does not replace authenticated streaming,
+recovery, or upload checks. With an explicitly approved disposable standard
+user, `tests/validate_authenticated_webui.py` covers real offline-stream
+recovery, saved-message reload, same-origin uploaded-image rendering, and
+unsafe-MIME attachment headers. It removes its chats and queues upload deletion;
+verify file deletion and revoke the test account separately.
 
 Reconcile all conclusions with the leak surfaces and browser boundaries in
 [Internal network security](internal_network_security.md), the
@@ -1492,7 +1507,8 @@ Confirm Compose still sets `ENABLE_CRAFT=false` for the API and full-mode
 background services unless the wrapper deliberately adds and documents a
 Craft backend. Re-audit the exact schedule names, tasks, and original cadences:
 eight discovery schedules must be rewritten to five minutes; incognito file
-cleanup must remain at ten minutes; the three Craft cleanup schedules and
+cleanup and stale capability-run cleanup must remain at ten minutes; old-index
+reclamation must remain at 30 minutes with its light-worker queue; the three Craft cleanup schedules and
 queue/process/memory monitoring plus version-telemetry schedules must be
 removed; conditional schedules must remain absent; and Beat reload must remain
 five minutes. Validate only the materialized schedule; templates remain untouched.
@@ -1559,7 +1575,7 @@ plus the documented reachability boundary.
 
 Require immutable Tailscale and code-interpreter upstream digests, exact Myst and Teep Git revisions in
 both image labels and build arguments, and the MinIO source revision associated
-with its digest-pinned Quay release image. Verify registry availability and
+with its digest-pinned mirrored release image. Verify registry availability and
 manifest architectures as well as the locally cached artifact. Run
 `make health-inventory`, inspect effective startup/steady intervals, and verify
 Docker Engine API 1.44+ preserves `start_interval` after the shared Compose

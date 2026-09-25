@@ -248,15 +248,19 @@ receive the data inherent in their explicitly configured functions. Custom
 provider and tracing clients do not all use Onyx's SSRF validator or the
 wrapper's reviewed adapters. On an internal-only application network, clients
 without a working proxy fail closed for public Internet access, but they can
-still address reachable internal service names. Full administrators are
-therefore trusted data-export and network-configuration principals.
+still address reachable internal service names. Full administrators and
+principals with delegated provider-management permissions are therefore trusted
+data-export and network-configuration principals.
 
 That trust includes Onyx's single-tenant LLM custom-configuration setting.
 Unsupported provider keys may be installed temporarily as process environment
 variables around a LiteLLM call. Onyx serializes those calls and restores the
 environment afterward, but values such as provider endpoints, credentials, or
-transport settings can still influence the selected provider. Only a trusted
-full administrator may configure LLM providers; the final-hop restrictions and
+transport settings can still influence the selected provider. Provider management
+is authorized by the native `MANAGE_LLMS` permission,
+including a group to which that permission is deliberately delegated. Treat
+every such principal as trusted for data export and network configuration; the
+final-hop restrictions and
 explicit configured-inference adapter remain authoritative where applicable.
 Portkey model discovery plus its OpenAI- and Anthropic-compatible inference
 modes use explicit environment-independent clients on the host-capable bridge;
@@ -282,7 +286,10 @@ Imported instructions and code subsequently inherit the existing code
 interpreter boundary; Craft remains disabled. The unauthenticated MCP OAuth
 client-metadata endpoint publishes only the canonical client identifier, name,
 and redirect URIs and contains no client secret. Usage and cost APIs remain
-authenticated local-database views and create no outbound callback.
+authenticated local-database views and create no outbound callback. Single-tenant
+`/auth/sso/discover` returns the configured workspace login options without an
+outbound lookup or email-to-workspace enumeration; its native cloud-only rate
+limiter is not active in this deployment.
 
 By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` means the LLM-controlled
 stock crawler does not inherit that Admin private-network allowance. Its

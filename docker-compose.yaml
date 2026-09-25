@@ -601,6 +601,11 @@ services:
       nginx: {condition: service_healthy}
 
   code-interpreter:
+    # Retain the native executor-readiness probe at the wrapper idle cadence.
+    healthcheck:
+      interval: 10m
+      start_interval: 5s
+      retries: 1
     cap_drop: [NET_RAW, NET_ADMIN]
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml

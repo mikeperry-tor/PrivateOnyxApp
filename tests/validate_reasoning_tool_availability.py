@@ -101,7 +101,7 @@ def validate_file_tool_availability() -> None:
     requests, _, _ = main_chat(context_files=context_files(file_metadata_for_tool=[metadata]))
     assert_prefix(requests[0], requests[1])
     assert_prefix(requests[1], requests[2])
-    assert "no tool here can read" in str(requests[0]["prompt"])
+    assert "python tool receives them" in str(requests[0]["prompt"])
     from onyx.tools.tool_implementations.file_reader.file_reader_tool import FileReaderTool
     reader = FileReaderTool(tool_id=104, emitter=MagicMock(), user_file_ids=[], chat_file_ids=[])
     for final_cycle in (False, True):
@@ -130,7 +130,7 @@ def validate_disabled_tools() -> None:
         for whitelist in (None, [], [1]):
             result = module._construct_tools_impl(
                 persona=persona, db_session=MagicMock(), emitter=MagicMock(),
-                user=SimpleNamespace(oauth_accounts=[], enable_memory_tool=False),
+                user=SimpleNamespace(live_oauth_token=None, enable_memory_tool=False),
                 llm=MagicMock(), allowed_tool_ids=whitelist,
             )
             assert result == {}
@@ -138,7 +138,7 @@ def validate_disabled_tools() -> None:
         tool.enabled = True
         assert 1 in module._construct_tools_impl(
             persona=persona, db_session=MagicMock(), emitter=MagicMock(),
-            user=SimpleNamespace(oauth_accounts=[], enable_memory_tool=False), llm=MagicMock(),
+            user=SimpleNamespace(live_oauth_token=None, enable_memory_tool=False), llm=MagicMock(),
         )
 
 
@@ -155,8 +155,19 @@ def validate_context_override() -> None:
         assert storage._stored_max_input_tokens("openai", "fixture", None, 8192) is None
         assert storage._stored_max_input_tokens("ollama_chat", "fixture", 32768, None) == 32768
     assert GEN_AI_MAX_TOKENS
-    # No database access is necessary when the wrapper override is selected.
-    assert factory._get_model_configured_max_input_tokens(None, None) == GEN_AI_MAX_TOKENS
+    from onyx.llm.models import ReasoningEffort
+    model = SimpleNamespace(name="fixture", max_input_tokens=4096,
+                            temperature_default=0.3, reasoning_effort_default=ReasoningEffort.HIGH,
+                            reasoning_effort_max=ReasoningEffort.HIGH)
+    provider = SimpleNamespace(model_configurations=[model], provider="openai",
+        deployment_name=None, api_key="fixture", api_base=None, api_version=None, custom_config={})
+    with patch.object(factory, "get_llm") as construct:
+        factory.llm_from_provider("fixture", provider)
+    assert construct.call_args.kwargs["max_input_tokens"] == GEN_AI_MAX_TOKENS
+    assert construct.call_args.kwargs["temperature"] == 0.3
+    assert construct.call_args.kwargs["reasoning_effort_default"] == ReasoningEffort.HIGH
+    assert construct.call_args.kwargs["reasoning_effort_max"] == ReasoningEffort.HIGH
+    assert model.max_input_tokens == 4096
     assert utils.get_max_input_tokens_from_llm_provider(None, None) == GEN_AI_MAX_TOKENS
 
 

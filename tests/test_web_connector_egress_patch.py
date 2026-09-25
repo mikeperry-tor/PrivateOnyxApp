@@ -305,6 +305,8 @@ class WebConnectorEgressPatchTests(FreshPatchTestCase):
             "check-for-checkpoint-cleanup": timedelta(hours=1),
             "check-for-index-attempt-cleanup": timedelta(minutes=30),
             "check-for-hierarchy-fetching": timedelta(hours=1),
+            "check-for-old-index-reclaim": timedelta(minutes=30),
+            "check-for-stale-capability-runs": timedelta(minutes=10),
         }
         from onyx_wrapper_patches.background.resource_policy import _DISCOVERY_TASKS, _HOUSEKEEPING_TASKS
         for name, identifier in _DISCOVERY_TASKS.items():

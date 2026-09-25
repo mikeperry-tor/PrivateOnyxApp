@@ -6,6 +6,7 @@ import functools
 import inspect
 from onyx_wrapper_patches.common.config import _raise_if_strict
 from onyx_wrapper_patches.common.config import _warn_or_raise
+from onyx_wrapper_patches.common.source import _patch_function_source
 
 
 def apply_llm_max_tokens_override_patch() -> None:
@@ -34,7 +35,7 @@ def apply_llm_max_tokens_override_patch() -> None:
 
     try:
         configured_source = inspect.getsource(
-            factory._get_model_configured_max_input_tokens
+            factory.llm_from_provider
         )
         provider_source = inspect.getsource(
             llm_utils.get_max_input_tokens_from_llm_provider
@@ -45,7 +46,7 @@ def apply_llm_max_tokens_override_patch() -> None:
 
     if "model_configuration.max_input_tokens" not in configured_source:
         _warn_or_raise(
-            "factory._get_model_configured_max_input_tokens no longer "
+            "factory.llm_from_provider no longer "
             "contains the expected DB max_input_tokens lookup"
         )
         return
@@ -56,24 +57,24 @@ def apply_llm_max_tokens_override_patch() -> None:
         )
         return
 
-    original_get_model_configured_max_input_tokens = (
-        factory._get_model_configured_max_input_tokens
+    assignment = "model_configuration.max_input_tokens if model_configuration else None"
+    if configured_source.count(assignment) != 1:
+        _warn_or_raise("unexpected llm_from_provider context assignment")
+        return
+    _patch_function_source(
+        module=factory,
+        function_name="llm_from_provider",
+        replacements={assignment: repr(GEN_AI_MAX_TOKENS)},
+        patch_name="configured input context override",
     )
     original_get_max_input_tokens_from_llm_provider = (
         llm_utils.get_max_input_tokens_from_llm_provider
     )
 
-    @functools.wraps(original_get_model_configured_max_input_tokens)
-    def _override_model_configured_max_input_tokens(*args, **kwargs):
-        return GEN_AI_MAX_TOKENS
-
     @functools.wraps(original_get_max_input_tokens_from_llm_provider)
     def _override_max_input_tokens_from_llm_provider(*args, **kwargs):
         return GEN_AI_MAX_TOKENS
 
-    factory._get_model_configured_max_input_tokens = (
-        _override_model_configured_max_input_tokens
-    )
     factory.get_max_input_tokens_from_llm_provider = (
         _override_max_input_tokens_from_llm_provider
     )

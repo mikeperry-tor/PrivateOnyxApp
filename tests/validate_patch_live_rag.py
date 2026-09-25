@@ -110,7 +110,7 @@ def main():
         try:
             result = call("POST", "/chat/send-chat-message", {
                 "chat_session_id": session,
-                "message": "Use internal_search to find the synthetic PDF containing the exact phrase onyx synthetic activation fixture. Report the text found in that document, using only the selected document set.",
+                "message": f"Use internal_search to find the synthetic PDF containing the exact phrase {args.expected_document_text}. Report the text found in that document, using only the selected document set.",
                 "allowed_tool_ids": [tool_id], "forced_tool_id": tool_id,
                 "internal_search_filters": {"document_set": [manifest["fixture_name"]]},
                 "stream": False,
@@ -123,7 +123,7 @@ def main():
             calls = result.get("tool_calls") or []
             assert calls and all(tool["tool_name"] == "internal_search" for tool in calls), "native internal_search missing"
             assert any(args.expected_document_text in str(tool["tool_result"]) for tool in calls), "current fixture text absent from tool result"
-            assert "onyx synthetic activation fixture" in result["answer"].lower(), "fixture absent from answer"
+            assert args.expected_document_text.lower() in result["answer"].lower(), "fixture absent from answer"
             documents = result.get("top_documents") or []
             assert documents and all(doc["document_id"] == manifest["url"] for doc in documents), "retrieval escaped the fixture scope"
             assert all(doc["link"] != manifest["url"] and doc["link"].endswith("/" + manifest["fixture_name"] + "/fixture.pdf") for doc in documents), "display-only URL rewrite missing"

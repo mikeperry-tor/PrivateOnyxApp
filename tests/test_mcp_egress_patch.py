@@ -94,6 +94,7 @@ class MCPProxyPatchTests(FreshPatchTestCase):
         mcp_ssrf = ModuleType("onyx.server.features.mcp.ssrf")
         mcp_client = ModuleType("onyx.server.features.mcp.client")
         mcp_oauth = ModuleType("onyx.server.features.mcp.oauth")
+        mcp_flow = ModuleType("onyx.server.features.mcp.oauth_flow")
 
         models.SSRFProtectionLevel = SSRFProtectionLevel
         store.get_security_settings = lambda: SimpleNamespace(
@@ -150,7 +151,8 @@ class MCPProxyPatchTests(FreshPatchTestCase):
         mcp_package.mcp_ssrf = mcp_ssrf
         mcp_client.mcp_ssrf_httpx_client_factory = original_factory
         mcp_oauth.mcp_ssrf_httpx_client_factory = original_factory
-        mcp_oauth.mcp_oauth_challenge_httpx_client_factory = (
+        mcp_flow.mcp_ssrf_httpx_client_factory = original_factory
+        mcp_flow.mcp_oauth_challenge_httpx_client_factory = (
             original_challenge_factory
         )
 
@@ -163,6 +165,7 @@ class MCPProxyPatchTests(FreshPatchTestCase):
             "onyx.server.features.mcp.ssrf": mcp_ssrf,
             "onyx.server.features.mcp.client": mcp_client,
             "onyx.server.features.mcp.oauth": mcp_oauth,
+            "onyx.server.features.mcp.oauth_flow": mcp_flow,
             "onyx.server.security": security,
             "onyx.server.security.models": models,
             "onyx.server.security.store": store,
@@ -201,7 +204,7 @@ class MCPProxyPatchTests(FreshPatchTestCase):
             )
             self.assertIs(
                 modules[
-                    "onyx.server.features.mcp.oauth"
+                    "onyx.server.features.mcp.oauth_flow"
                 ].mcp_oauth_challenge_httpx_client_factory,
                 challenge_factory,
             )
