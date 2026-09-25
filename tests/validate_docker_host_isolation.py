@@ -82,6 +82,79 @@ for line in pathlib.Path('/proc/net/if_inet6').read_text().splitlines():
 print(json.dumps({'ipv4':addresses,'ipv6':ipv6,'interfaces':[name for _,name in socket.if_nameindex()]}))
 '''
 
+# A test-owned upstream sits outside the internal networks. Positive controls
+# join its network; negative controls must not deliver queries across the boundary.
+DNS_RECEIVER = r'''
+import ipaddress,json,socket,struct,threading,time
+def answer(packet):
+ pos=12;labels=[]
+ while packet[pos]:
+  size=packet[pos];assert size<64
+  labels.append(packet[pos+1:pos+1+size].decode('ascii'));pos+=size+1
+ pos+=1
+ qtype,qclass=struct.unpack('!HH',packet[pos:pos+4])
+ name='.'.join(labels)
+ assert name.endswith('.invalid') and qclass==1
+ print(json.dumps({'dns_query':name,'qtype':qtype}),flush=True)
+ raw=ipaddress.ip_address('198.51.100.10' if qtype==1 else '2001:db8::10').packed
+ assert qtype in (1,28)
+ return packet[:2]+struct.pack('!HHHHH',0x8180,1,1,0,0)+packet[12:pos+4]+struct.pack('!HHHIH',0xc00c,qtype,1,0,len(raw))+raw
+def read_exact(conn,count):
+ data=b''
+ while len(data)<count:
+  part=conn.recv(count-len(data));assert part
+  data+=part
+ return data
+udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);udp.bind(('0.0.0.0',53))
+tcp=socket.socket(socket.AF_INET,socket.SOCK_STREAM);tcp.bind(('0.0.0.0',53));tcp.listen()
+def serve_udp():
+ while True:
+  packet,peer=udp.recvfrom(4096);udp.sendto(answer(packet),peer)
+def serve_tcp():
+ while True:
+  conn,peer=tcp.accept()
+  with conn:
+   conn.settimeout(5)
+   packet=read_exact(conn,struct.unpack('!H',read_exact(conn,2))[0])
+   response=answer(packet);conn.sendall(struct.pack('!H',len(response))+response)
+threading.Thread(target=serve_udp,daemon=True).start()
+threading.Thread(target=serve_tcp,daemon=True).start()
+print(json.dumps({'dns_ready':True}),flush=True)
+time.sleep(600)
+'''
+DNS_CLIENT = r'''
+import json,socket,struct,sys
+args=json.loads(sys.argv[1]);results=[]
+# Positive internal-name control uses the actual container resolver.
+assert socket.getaddrinfo(args['peer'],53,type=socket.SOCK_STREAM)
+servers=[line.split()[1] for line in open('/etc/resolv.conf') if line.startswith('nameserver ')]
+assert servers==['127.0.0.11'],servers
+def read_exact(conn,count):
+ data=b''
+ while len(data)<count:
+  part=conn.recv(count-len(data));assert part
+  data+=part
+ return data
+for transport in ('udp','tcp'):
+ for qtype in (1,28):
+  name=f"{args['token']}-{transport}-{qtype}.invalid"
+  qname=b''.join(bytes([len(label)])+label.encode() for label in name.split('.'))+b'\0'
+  packet=struct.pack('!HHHHHH',1234,0x100,1,0,0,0)+qname+struct.pack('!HH',qtype,1)
+  with socket.socket(socket.AF_INET,socket.SOCK_DGRAM if transport=='udp' else socket.SOCK_STREAM) as sock:
+   sock.settimeout(5);sock.connect((servers[0],53))
+   if transport=='udp': sock.send(packet);response=sock.recv(4096)
+   else:
+    sock.sendall(struct.pack('!H',len(packet))+packet)
+    response=read_exact(sock,struct.unpack('!H',read_exact(sock,2))[0])
+  ident,flags,questions,answers,authority,additional=struct.unpack('!HHHHHH',response[:12])
+  assert ident==1234 and flags&0x8000
+  rcode=flags&15
+  if args['forward']: assert rcode==0 and answers==1,(name,rcode,answers)
+  else: assert rcode in (2,3,5) and answers==0,(name,rcode,answers)
+  results.append({'name':name,'transport':transport,'qtype':qtype,'rcode':rcode,'answers':answers})
+print(json.dumps({'internal_dns':True,'queries':results}))
+'''
+
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -103,10 +176,12 @@ def main():
     prefix='private-onyx-probe-'+uuid.uuid4().hex[:12]
     containers=[];networks=[]
     report={'server':{k:identity.get(k) for k in ('Version','Os','Arch','ApiVersion')},'image':image_id,'security_options':json.loads(call('info','--format','{{json .SecurityOptions}}')),'cases':[]}
-    def create(name,network,code,*,uid='65534:65534',payload=None):
+    def create(name,network,code,*,uid='65534:65534',payload=None,dns=None):
         command=['create','--pull','never','--name',name,'--label',f'private-onyx.probe={prefix}',
                  '--network',network,'--user',uid,'--cap-drop','NET_RAW','--cap-drop','NET_ADMIN',
-                 '--security-opt','no-new-privileges:true','--entrypoint','python',args.image,'-u','-c',code]
+                 '--security-opt','no-new-privileges:true','--entrypoint','python']
+        if dns is not None: command+=['--dns',dns]
+        command += [args.image,'-u','-c',code]
         if payload is not None: command.append(json.dumps(payload))
         call(*command);containers.append(name)
         return name
@@ -121,6 +196,40 @@ def main():
         raise RuntimeError('test receiver did not start')
     def received(name,token):
         return [json.loads(line) for line in call('logs',name).splitlines() if json.loads(line).get('received')==token]
+    def dns_checks(pair,isolated):
+        uplink=prefix+f'-dns-control-{isolated}'
+        call('network','create','--label',f'private-onyx.probe={prefix}',uplink)
+        networks.append(uplink)
+        peer=prefix+f'-dns-peer-{isolated}'
+        receiver(peer,pair[0])
+        server=create(prefix+f'-dns-{isolated}',uplink,DNS_RECEIVER)
+        call('start',server)
+        for _ in range(30):
+            if any(json.loads(line).get('dns_ready') for line in call('logs',server).splitlines()):
+                break
+            time.sleep(.1)
+        else:
+            raise RuntimeError('test DNS receiver did not start')
+        address=json.loads(call('inspect',server,'--format','{{json .NetworkSettings.Networks}}'))[uplink]['IPAddress']
+        cases=[]
+        for forward,uid in ((True,'65534:65534'),(False,'65534:65534'),(False,'0:0'),(True,'65534:65534')):
+            token=f'{prefix}-dns-{len(cases)}-{isolated}'.lower()
+            subject=create(token,pair[0],DNS_CLIENT,uid=uid,dns=address,
+                           payload={'peer':peer,'token':token,'forward':forward})
+            call('network','connect',uplink if forward else pair[1],subject)
+            result=json.loads(call('start','-a',subject))
+            deliveries=[json.loads(line) for line in call('logs',server).splitlines()
+                        if json.loads(line).get('dns_query','').startswith(token+'-')]
+            expected={query['name'] for query in result['queries']} if forward else set()
+            if {item['dns_query'] for item in deliveries} != expected:
+                raise RuntimeError('DNS forwarding boundary failed: '+json.dumps(deliveries))
+            cases.append({'external_access':forward,'uid':uid,'result':result,'upstream_deliveries':deliveries})
+        # Re-read after the trailing positive control to catch delayed deliveries.
+        all_deliveries=[json.loads(line) for line in call('logs',server).splitlines() if 'dns_query' in json.loads(line)]
+        forbidden={query['name'] for case in cases if not case['external_access'] for query in case['result']['queries']}
+        if any(item['dns_query'] in forbidden for item in all_deliveries):
+            raise RuntimeError('internal DNS query reached the test upstream')
+        report.setdefault('dns_cases',[]).append({'isolated_gateway':isolated,'cases':cases})
     try:
         host=prefix+'-host';host_ports=receiver(host,'host')
         facts_name=create(prefix+'-facts','host',HOST_FACTS)
@@ -138,6 +247,7 @@ def main():
                 if isolated:
                     for version in (4,6): options+=['--opt',f'com.docker.network.bridge.gateway_mode_ipv{version}=isolated']
                 call(*options,name);networks.append(name);pair.append(name)
+            dns_checks(pair,isolated)
             peer=prefix+f'-peer-{isolated}';peer_ports=receiver(peer,pair[0])
             peer_network=json.loads(call('inspect',peer,'--format','{{json .NetworkSettings.Networks}}'))[pair[0]]
             inventory=[json.loads(call('network','inspect',n))[0] for n in pair]

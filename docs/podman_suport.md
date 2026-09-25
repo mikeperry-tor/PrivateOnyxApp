@@ -38,6 +38,10 @@ socket. The Podman overlay translates the private control tmpfs to native
 `U,mode=0700` ownership, constrains `ping_group_range` to the mapped Tor group
 102 for rootless crun, and translates the onion gateway tmpfs to the existing `:U` form.
 Startup health uses `podman/startup_health.py`; Docker is never a fallback.
+Docker's separate preflight requires a stable server version of 25.0.5 or newer
+for internal-network DNS isolation, regardless of ordinary/isolated gateway
+selection. This Docker version floor does not change Podman's capability checks
+or qualify its DNS forwarding behavior.
 
 Qualification covers all four role models, `make tor-onion-address`,
 cookie-authenticated control health, outbound Tor, simultaneous

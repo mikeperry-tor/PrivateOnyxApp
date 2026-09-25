@@ -68,7 +68,7 @@ def _expected(service: str = "api_server") -> dict[str, dict]:
 class PodmanStartupHealthTests(unittest.TestCase):
     @patch.object(startup_health, "_run")
     def test_docker_gateway_selection_uses_server_and_warns_only_at_start(self, run):
-        for version, mode in (("26.1.5", "ordinary"), ("28.0.0", "isolated"), ("29.7.2", "isolated")):
+        for version, mode in (("25.0.5", "ordinary"), ("25.0.5+vendor", "ordinary"), ("26.1.5", "ordinary"), ("28.0.0", "isolated"), ("29.7.2", "isolated")):
             run.return_value = subprocess.CompletedProcess([], 0, stdout=version)
             stderr = io.StringIO()
             with contextlib.redirect_stderr(stderr):
@@ -80,6 +80,16 @@ class PodmanStartupHealthTests(unittest.TestCase):
             self.assertEqual(stderr.getvalue().count("WARNING:"), int(mode == "ordinary"))
             with self.assertRaises(startup_health.ContractError):
                 startup_health.docker_gateway_mode("docker", expected="unknown")
+
+    @patch.object(startup_health, "_run")
+    def test_docker_dns_security_floor_cannot_be_overridden(self, run):
+        for version in ("23.0.11", "24.0.9", "25.0.0", "25.0.4", "25.0.4+vendor",
+                        "25.0.5-rc1", "26.0.0-rc2", "29.0.0-dev"):
+            run.return_value = subprocess.CompletedProcess([], 0, stdout=version)
+            for expected in (None, "ordinary", "isolated"):
+                with self.subTest(version=version, expected=expected):
+                    with self.assertRaisesRegex(startup_health.ContractError, "CVE-2024-29018"):
+                        startup_health.docker_gateway_mode("docker", expected=expected)
 
     @patch.object(startup_health, "_run")
     def test_docker_gateway_selection_fails_closed(self, run):

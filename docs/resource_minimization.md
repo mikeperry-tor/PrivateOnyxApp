@@ -63,7 +63,8 @@ fallbacks, retries, migrations, or weaker ownership checks.
   host-DNS work and readiness delays on both container and host paths.
 - Health checks perform local-only work. They do not run inference, public DNS,
   Internet requests, or storage migrations.
-- Docker requires Engine API 1.44+ for native `start_interval` support. The
+- Docker startup requires a stable Engine 25.0.5+ for internal-network DNS
+  isolation and Engine API 1.44+ for native `start_interval` support. The
   shared Compose probe also requires the model to retain `start_interval`,
   `!override`, and routing-critical `gw_priority`.
 - Podman validates its engine/image-store/Compose capability once before any

@@ -158,9 +158,19 @@ the same reliability bar.
 
 ## DNS ownership
 
-Docker DNS resolves only internal service names. Browser target names, and
-stock-crawler target names when its optional mode is selected, are passed
-unresolved to the final hop:
+Reviewed wrapper adapters use engine DNS only for internal service names.
+Browser and stock-crawler target names are passed unresolved to the final hop.
+Unadapted native clients may attempt local external-name lookups first. Patched
+Docker (25.0.5+ stable, enforced at startup) blocks host-namespace DNS
+forwarding for internal-only containers. Other upstream resolvers remain subject
+to container-network reachability. The wrapper provides no reachable DNS
+forwarder to Onyx, so these external lookups fail before its HTTP proxy can
+resolve the name. Internal service discovery remains available. This boundary
+must be reviewed if adding a DNS upstream or uplink, and separately qualified
+for Podman.
+See the native-client limitations in
+[internal network security](internal_network_security.md#destination-validation).
+For the reviewed routes:
 
 | Mode | Target DNS and route |
 | --- | --- |

@@ -47,7 +47,7 @@ The Docker Compose files in this stack relies on the following components:
 ## Prerequisites
 
 - Docker Compose 2.35.0 or later is required with both Docker and Podman.
-- Docker Engine 25 is the minimum supported Docker Engine.
+- Docker Engine 25.0.5 or later (stable release) is required for internal-network DNS isolation.
   - Docker Engine 28+ enables additional network isolation security.
 - Podman 5.4.2+ is the minimum tested Podman version;
   older versions may work when the startup checks pass.

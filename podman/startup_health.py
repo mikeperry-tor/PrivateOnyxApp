@@ -103,7 +103,13 @@ def docker_gateway_mode(container_bin: str, *, expected: str | None = None) -> s
     match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+][A-Za-z0-9._-]+)?", version)
     if match is None:
         raise ContractError("Docker returned a malformed server version")
-    mode = "isolated" if int(match[1]) >= 28 else "ordinary"
+    release = tuple(int(match[index]) for index in (1, 2, 3))
+    if release < (25, 0, 5) or re.search(r"-(?:alpha|beta|rc|dev)", version, re.I):
+        raise ContractError(
+            "Docker Engine 25.0.5+ stable is required to prevent internal-network "
+            "host-resolver DNS forwarding (CVE-2024-29018); upgrade the selected Docker server."
+        )
+    mode = "isolated" if release[0] >= 28 else "ordinary"
     if expected is not None and expected != mode:
         raise ContractError("Docker gateway selection changed or failed; rerun make")
     if expected is not None and mode == "ordinary":

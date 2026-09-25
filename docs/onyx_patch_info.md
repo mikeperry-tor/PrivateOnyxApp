@@ -521,8 +521,10 @@ Local administrative usage/query analytics also remain available:
 they are stored and rendered by this deployment and are not the optional
 PostHog, Sentry, or custom-script integrations described above. Operator-added
 connectors, MCP servers, inference providers, web-search providers, OAuth
-flows, and similar configured integrations retain their intended outbound
-behavior through the documented route class.
+flows, and similar configured integrations require a transport compatible with
+the documented route class. Reviewed adapters provide that routing; native
+clients are not universally proxy-aware. See the native-client limitations in
+[internal network security](internal_network_security.md#destination-validation).
 
 The WebUI executes in the user's browser, so injected script, a Markdown image,
 or an embedded component would otherwise use the user's ordinary network and

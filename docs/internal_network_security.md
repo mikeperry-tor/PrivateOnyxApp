@@ -124,15 +124,50 @@ LLM-controlled `open_url` validates at every level except `DISABLED`, where it
 retains the loopback/link-local floor. This validation does not replace
 final-hop policy.
 
-For HTTPS, upstream Onyx validates one DNS answer and then lets the HTTP client
-resolve the hostname again, leaving a DNS time-of-check/time-of-use window.
-The wrapper's direct-DNS final hops close that window by resolving, validating,
-and pinning the address used for the connection. Both MCP HTTP factories,
+Native `ssrf_safe_get` pins HTTP and direct HTTPS requests to a validated IP,
+retaining the original hostname for HTTPS SNI and certificate verification and
+validating each redirect. Its strict resolver rejects mixed public/private
+answers. This protection belongs to that GET helper: URL validation followed by
+an independent HTTP client, including native MCP transport and OIDC discovery,
+does not by itself pin the eventual connection. The wrapper's direct-DNS final
+hops resolve, validate, and pin the connected address for their reviewed routes.
+Both MCP HTTP factories,
 including the synthetic OAuth-challenge transport used by automatic discovery,
 delegate redirect, discovery, registration, token, and request destination
 authority to that same selected final hop rather than relying on an upstream
 transport's earlier DNS result. Startup validation fails if either pinned
 factory or the challenge state machine drifts.
+
+Native GET pinning does not replace the wrapper adapters. It asks the local
+resolver for target addresses before using the proxy. Patched Docker blocks
+forwarding from the host namespace for internal-only containers. Other DNS
+upstreams are contacted from the container namespace and remain subject to its
+network reachability; an explicitly configured reachable internal resolver can
+still receive external-name queries. See the
+[Moby resolver policy](https://github.com/moby/moby/blob/master/daemon/libnetwork/resolver.go).
+The wrapper supplies no such DNS forwarder to Onyx. With its default resolver
+and exclusive internal-network membership, external lookups fail; internal
+service names remain available. An attempted lookup alone proves neither a leak
+nor absence of forwarding.
+
+Docker engines affected by
+[CVE-2024-29018](https://github.com/moby/moby/security/advisories/GHSA-mq39-4gv4-mvpx)
+are rejected at startup: the selected server must be a stable Docker 25.0.5 or
+newer. The version check is independent of Engine API and gateway-mode selection;
+a caller override cannot bypass it. Do not add a reachable DNS upstream or an
+uplink to restricted application containers without reviewing this boundary.
+Podman's internal-network DNS behavior requires separate live qualification.
+
+Local resolution therefore remains a functionality problem for unadapted
+external clients. The native HTTPS adapter
+sets hostname verification/SNI on direct pools but not Requests' proxy pools;
+with `HTTPS_PROXY`, the pool instead targets the numeric IP. Hostname-only
+certificates can therefore fail verification on that path. Database-configured
+JWT key retrieval and redirected Zoom transcript downloads use this native
+helper and are not qualified wrapper routes. Keep the explicit crawler and
+GitHub adapters, which preserve hostname-based proxy requests and final-hop DNS.
+A transport failure must not be repaired by disabling TLS verification or
+adding application uplink access.
 
 `ONYX_INTEGRATIONS_ALLOW_LAN_ENDPOINTS=true` adds validated RFC1918 LAN
 destinations only to the host-capable route used by configured MCP/Web
@@ -226,6 +261,30 @@ in the existing key-value store, introduces no schema migration or new outbound
 client, and does not enable IdP profile enrichment. Relink diagnostics contain
 user and provider subject identifiers and must be treated as private logs.
 
+JWT authentication can use a full-administrator-configured key URL, audience,
+and issuer stored in the security settings. Database-configured key URLs require
+HTTPS and native SSRF validation, including redirects; their proxy limitation is
+described above. Environment-pinned key URLs instead use ordinary Requests and
+are trusted operator configuration. Startup copies set JWT environment values
+into the database, so removing an environment variable alone does not revoke
+the stored authentication configuration. Audience and issuer restrictions are
+optional and must be set deliberately when that authentication mode is used.
+OIDC discovery validates its URL and advertised authorization, token, userinfo,
+and JWKS endpoints, but those checks are not a general connection-time DNS or
+redirect guarantee for its separate OAuth clients.
+
+Connector capability checks require `MANAGE_CONNECTORS` and the native
+credential/pairing visibility checks, and are absent from usable lite-mode
+connector workflows. A permitted manager can trigger background probes using
+an unsaved connector configuration and the associated stored credential.
+These checks instantiate connector clients and may perform credentialed
+requests before any indexing begins; they do not introduce a universal SSRF or
+proxy adapter. Treat delegated connector managers, as well as action/MCP
+managers, as trusted network-configuration principals within their granted
+scope. Reports can retain exception text and endpoint details; source-specific
+redaction is not a universal secret-scrubbing guarantee. A timed-out capability
+probe can leave its request thread running until the underlying operation ends.
+
 Paid enterprise hooks are inactive because paid-EE and license enforcement are
 explicitly disabled. Their delivery path is not a supported route: it validates
 an HTTPS endpoint when the hook is configured, then uses a direct HTTP client
@@ -251,6 +310,36 @@ without a working proxy fail closed for public Internet access, but they can
 still address reachable internal service names. Full administrators and
 principals with delegated provider-management permissions are therefore trusted
 data-export and network-configuration principals.
+
+Native voice transports are not uniformly proxy-aware. Zoom Scribe, OpenAI
+Realtime, and ElevenLabs streaming clients create `aiohttp.ClientSession()`
+without proxy environment inheritance or an explicit proxy; Azure and ElevenLabs
+also use this pattern for REST speech requests. These paths cannot reach public
+providers from the isolated API container. This does not imply that every
+non-streaming provider path fails: each selected transport needs qualification.
+Provider URL validation at configuration time is not a connection-time
+destination guard. Supporting these paths requires scoped HTTP/WebSocket proxy
+adapters with final-hop destination enforcement.
+
+Native email delivery uses direct `smtplib.SMTP` sockets, and the IMAP connector
+uses direct `imaplib.IMAP4_SSL` sockets. HTTP proxy variables do not transport
+these protocols. External email delivery (including reset/verification messages
+when enabled) and IMAP ingestion therefore require separately reviewed fixed
+relays or protocol-specific transports. Configuring credentials or granting an
+HTTP host-port exception does not make these direct clients proxy-aware.
+
+Generic provider OAuth token acquisition and refresh validate configured token
+URLs before making Requests calls. When the selected SSRF policy requires local
+DNS, an external token URL can fail validation before the HTTP proxy is used.
+OIDC discovery/refresh has the same local-validation consideration. These paths
+are separate from the wrapper's reviewed MCP OAuth transport.
+
+`MANAGE_SERVICE_ACCOUNT_API_KEYS` is administrator-equivalent authority, even
+when granted without the full-admin-panel permission. Its holder can create or
+update service-account keys with membership in any group, including Admin, and
+can rotate existing keys. Do not delegate it as a limited credential-rotation
+role. Network separation cannot constrain the application authority of a key
+that intentionally receives administrator permissions.
 
 That trust includes Onyx's single-tenant LLM custom-configuration setting.
 Unsupported provider keys may be installed temporarily as process environment
@@ -290,6 +379,12 @@ authenticated local-database views and create no outbound callback. Single-tenan
 `/auth/sso/discover` returns the configured workspace login options without an
 outbound lookup or email-to-workspace enumeration; its native cloud-only rate
 limiter is not active in this deployment.
+Each discovery request can still perform a local database lookup; lack of
+email enumeration is not a denial-of-service protection. Public
+`/health/ready` reports thread-pool capacity, borrowed tokens, and queued work,
+which reveals coarse server load but no chat or document contents. These public
+surfaces remain reachable through every enabled frontend. Local usage recording
+is disabled; authenticated usage APIs can still read retained historical rows.
 
 By default, `ONYX_AGENT_USE_OBSCURA_BROWSER=false` means the LLM-controlled
 stock crawler does not inherit that Admin private-network allowance. Its
@@ -366,7 +461,9 @@ ordinary host bridge addresses without enabling IPv6 or changing application
 IPAM, aliases, fixed addresses, or same-network communication. A failed or
 malformed version discovery blocks startup; a supported older Docker warns
 once and continues with controller separation and ordinary internal bridges.
-Existing Engine API 1.44+ and Compose capability requirements remain in force.
+Docker 25.0.5+ stable, Engine API 1.44+, and Compose capability requirements
+remain in force. The DNS security floor applies to both ordinary and isolated
+bridge modes.
 Diagnostics and shutdown do not acquire a startup capability prerequisite.
 
 Ordinary internal bridges retain host addresses and can reach wildcard or
@@ -429,6 +526,12 @@ network-namespace peers when the selected routing mode co-locates them.
 Caller gateways constrain application ingress; they do not isolate those
 co-resident trusted processes from one another.
 
+Native chat-file serving adds `nosniff` and a sandbox CSP. Active formats such
+as HTML, SVG, and JavaScript are served as octet-stream attachments rather than
+inline active content; allowed image/document previews retain their native
+policy. These response controls complement the wrapper CSP and do not remove
+the requirement for file authorization.
+
 The end-user browser is outside these container networks. As defense in depth,
 nginx supplies a separate restrictive CSP that limits external scripts to
 same-origin chunks, denies inline event-handler attributes and eval, and
@@ -488,7 +591,18 @@ Docker 28+ fixture test using the selected local Python image. It creates only
 labelled disposable networks/containers and temporary host-namespace TCP/UDP
 listeners, retains receiver-side delivery evidence, verifies IPv4/IPv6 internal
 connectivity and raw-socket denial, and removes its resources on completion.
-It never pulls images or modifies host firewall/rpcbind configuration. The
+Its DNS cases use a labelled disposable upstream receiver on a separate
+non-internal fixture network. UDP and TCP queries for A and AAAA records must
+fail without receiver delivery from internal-only root and non-root clients,
+while internal service names still resolve. Controls joined to the receiver's
+network must receive answers before and after the negative cases. Both ordinary
+and isolated gateway modes are covered; only synthetic `.invalid` names are
+used. This tests container-namespace DNS reachability, not the historical
+host-loopback forwarding flaw: the independent version floor excludes affected
+engines. It does not inspect or modify the host resolver or capture every
+production DNS path.
+It never pulls images, publishes DNS ports, or modifies host DNS, firewall, or
+rpcbind configuration. The
 underlying `tests/validate_docker_host_isolation.py` accepts repeated `--service`
 arguments to execute additional probes inside running Python application
 containers under normal and container-root credentials. Its stated limitations
@@ -519,6 +633,13 @@ only disposable files/sessions, with cleanup in `finally`.
 - Full-mode doc-drop remains a local path and does not gain browser/CDP access.
 - Document push remains explicitly blank. Tracing has no enabled provider
   unless a full administrator deliberately configures that sensitive export.
+- Native GET tests cover HTTPS IP pinning with original-host TLS identity,
+  mixed-address rejection, and redirect revalidation. Independently audit proxy
+  pooling and local-DNS behavior before qualifying a new native-helper caller.
+- Capability checks retain permission and pairing scope, and their configured
+  clients/reports do not acquire an unreviewed network or credential-export path.
+- JWT environment removal is not treated as revocation of persisted settings;
+  OIDC/JWT clients and any voice WebSocket provider require route-specific tests.
 - OpenAPI/docs remain unregistered, and tracing, provider, voice, Craft,
   mobile/SSO, and other expanded routes retain their intended authentication
   and feature gates.

@@ -441,6 +441,68 @@ def _validate_native_ssrf_contract() -> None:
         raise AssertionError("disabled SSRF level accepted link-local metadata")
 
 
+
+def _validate_native_get_pinning() -> None:
+    """Exercise native GET protection separately from the wrapper proxy adapters."""
+    import socket
+    import requests
+    from unittest.mock import patch
+    from onyx.utils import url as native
+
+    public_ip = "93.184.216.34"
+    answers = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (public_ip, 443))]
+    calls = []
+    redirect = None
+
+    def send(adapter, request, **kwargs):
+        calls.append(request)
+        assert request.url == "https://93.184.216.34/fixture"
+        assert request.headers["Host"] == "fixture.example"
+        assert adapter.poolmanager.connection_pool_kw["server_hostname"] == "fixture.example"
+        assert adapter.poolmanager.connection_pool_kw["assert_hostname"] == "fixture.example"
+        assert kwargs["verify"] is True
+        response = requests.Response()
+        response.status_code = 302 if redirect else 200
+        response.url = request.url
+        response.request = request
+        response._content = b"fixture"
+        if redirect:
+            response.headers["Location"] = redirect
+        return response
+
+    with patch.object(native.socket, "getaddrinfo", return_value=answers) as dns, patch.object(
+        requests.adapters.HTTPAdapter, "send", send
+    ):
+        assert native.ssrf_safe_get("https://fixture.example/fixture").status_code == 200
+        assert dns.call_count == 1
+        assert len(calls) == 1
+        # A redirected private address or HTTPS downgrade must never be sent.
+        for target in ("https://169.254.169.254/metadata", "https://127.0.0.1/private",
+                       "http://fixture.example/cleartext"):
+            redirect = target
+            calls.clear()
+            try:
+                native.ssrf_safe_get("https://fixture.example/fixture", https_only=True)
+            except native.SSRFException:
+                pass
+            else:
+                raise AssertionError(f"native GET accepted redirect to {target}")
+            assert len(calls) == 1
+        redirect = None
+        calls.clear()
+        dns.return_value = answers + [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 443))
+        ]
+        try:
+            native.ssrf_safe_get("https://fixture.example/fixture")
+        except native.SSRFException:
+            pass
+        else:
+            raise AssertionError("native GET accepted mixed public/private answers")
+        assert not calls
+    print("PINNED_NATIVE_GET_PINNING_OK")
+
+
 def _validate_native_output_and_file_policy() -> None:
     from unittest.mock import patch
     from onyx.chat import token_budget
@@ -1601,6 +1663,7 @@ if __name__ == "__main__":
     from validate_native_bot_tools import validate_native_tools
     validate_native_tools(background=False)
     _validate_native_ssrf_contract()
+    _validate_native_get_pinning()
     _validate_new_network_surface_contract()
     _validate_native_output_and_file_policy()
     _validate_model_display_names()

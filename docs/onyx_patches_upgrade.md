@@ -684,7 +684,19 @@ Re-derive the pinned Onyx SSRF levels and every consumer rather than assuming
 one global policy covers Web Connectors, `open_url`, MCP, OAuth, integrations,
 callbacks, and redirects. Inspect validation-time DNS, connection-time DNS,
 redirect handling, proxy environment use, and final-hop destination pinning,
-including DNS-rebinding/TOCTOU cases. For MCP, validate both the ordinary HTTP
+including DNS-rebinding/TOCTOU cases. Exercise native GET IP pinning with
+original-host TLS identity, mixed answers, and redirects; inspect direct and
+proxy connection pools separately and identify application-side DNS lookups.
+Distinguish attempted lookups from upstream forwarding: qualify the engine's
+internal-network DNS behavior with internal-name positive controls and external
+queries, and use receiver-side evidence when claiming absence of forwarding.
+Retain the Docker 25.0.5+ stable startup floor independently of API-version and
+gateway selection, and run the controlled-upstream DNS cases in
+`make integration-network-isolation` when changing that boundary.
+Audit JWT settings persistence, OIDC discovery clients, connector capability
+probes and report disclosure, administrator-equivalent service-account-key
+management, public readiness/discovery endpoints, and voice
+WebSocket proxy support. For MCP, validate both the ordinary HTTP
 factory and the synthetic OAuth-challenge factory used for discovery,
 registration, and token exchange; exercise their public/private saved-level
 route selection and fail startup if either contract drifts. Verify canonical
