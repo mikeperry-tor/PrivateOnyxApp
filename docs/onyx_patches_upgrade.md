@@ -1154,10 +1154,36 @@ Run it as a separate browser-test process inside the API container
 with `PYTHONPATH` cleared, targeting internal nginx; keep the container’s
 internal-only networks intact. This does not replace authenticated streaming,
 recovery, or upload checks. With an explicitly approved disposable standard
-user, `tests/validate_authenticated_webui.py` covers real offline-stream
-recovery, saved-message reload, same-origin uploaded-image rendering, and
-unsafe-MIME attachment headers. It removes its chats and queues upload deletion;
-verify file deletion and revoke the test account separately.
+user, `tests/validate_authenticated_webui.py` and its adjacent
+`tests/webui_recovery_fixture.py` cover deterministic offline-stream recovery,
+saved-message reload, same-origin uploaded-image rendering, and unsafe-MIME
+attachment headers. The fixture launches a loopback-only isolated API process
+with a controlled LLM completion boundary; it retains native authentication,
+send processing, shared-cache recording, reconnect/resume endpoints, and message
+persistence. A loopback test proxy streams browser chat requests to that API
+while the shipped WebUI and CSP come from nginx. It permits only the internal nginx
+origin and explicitly severs the send socket during offline emulation; Chromium
+offline mode alone can leave an established connection alive. No running
+application or stored provider configuration is patched. This does not qualify the production nginx streaming hop or real
+provider transport, which remain integration concerns.
+
+Require both replay/tailing of a still-running turn and hydration of a turn
+completed while offline. Gate generation explicitly after observed partial
+output and confirmed disconnection, require a successful native resume before
+releasing a running turn, compare exact fixture paragraphs and saved source,
+and require one send without resubmission. Do not derive recovery expectations from model prompt
+compliance. Retain synthetic failure diagnostics before removing test sessions.
+The validator prints its private temporary diagnostic directory and queues
+upload deletion; verify file deletion and revoke the test account separately.
+
+Run `tests/validate_webui_inference_smoke.py` separately with the same credential
+file and adjacent fixture helper. It sends one short prompt through the running
+API and configured inference provider, checks successful nonempty completion
+and persistence, then reloads the browser. It imposes no exact wording, Markdown,
+or item-count requirement. Provider availability failures belong to this
+integration smoke, not the deterministic recovery gate. Run both checks with
+`PYTHONPATH` cleared and `--credential-file <owner-only-json>` in the API image;
+run transport recovery under both lite/PostgreSQL and full/Redis configurations.
 
 With the same approved disposable user,
 `tests/validate_webui_inference_recovery.py` injects provider failures into an
@@ -1165,8 +1191,9 @@ isolated patched LLM instance, translates its packets through native Onyx, and
 feeds them incrementally to the shipped WebUI under the active CSP. Require
 successive continuation, exhausted recovery, reasoning recovery, post-finish
 failure, and malformed textual tool payloads to preserve partial output, issue
-one send, and reload the saved answer. A real follow-up after exhausted recovery
-must remain usable. The fixture uses native DB helpers for its own messages;
+one send, and reload the saved answer. A deterministic follow-up after exhausted
+recovery must remain usable and survive reload. The fixture uses native DB
+helpers for its own messages;
 it does not inject faults into the running API/provider or test the entire
 send/persistence pipeline. Run the authenticated transport-recovery check above
 separately. Both checks delete only their own sessions; revoke the account after
@@ -1793,6 +1820,10 @@ data-network reachability, and positive aggregate internal-search cap behavior.
 Validate native shared-cache writes, reads, and expiry as well as chat buffers:
 lite PostgreSQL uses `DEFAULT_REDIS_PREFIX=public` to select its existing
 schema, while full mode retains the Redis shared namespace.
+The two chat-stream cache integration targets also exercise concurrent
+`set_if_absent` and `getdel` calls used by OAuth authorization attempts. Require
+exactly one writer and one consumer, byte-valued results, expired-key replacement,
+and rejection of replacement while an unexpired or non-expiring value exists.
 
 For an Obscura-only pin change, update the tagged upstream image's
 multi-architecture manifest digest, release version, exact source revision,

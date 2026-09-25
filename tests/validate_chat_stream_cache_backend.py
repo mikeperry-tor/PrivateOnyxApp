@@ -5,10 +5,54 @@ from __future__ import annotations
 import sys
 import time
 import zlib
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from uuid import uuid4
 
 from onyx.cache.factory import get_cache_backend, get_shared_cache_backend
 from onyx.chat import stream_buffer
+
+
+def validate_atomic_cache(cache) -> None:
+    """OAuth state needs a single winner across competing writers/consumers."""
+    key = f"wrapper-validation-atomic-cache:{uuid4()}"
+    workers = 8
+
+    def race(operation):
+        barrier = Barrier(workers, timeout=15)
+
+        def run(index):
+            barrier.wait()
+            return operation(index)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(run, range(workers)))
+
+    try:
+        winners = race(lambda index: cache.set_if_absent(key, str(index), ex=30))
+        assert winners.count(True) == 1, winners
+        winner = str(winners.index(True)).encode()
+        assert cache.get(key) == winner
+        consumed = race(lambda _: cache.getdel(key))
+        assert consumed.count(winner) == 1, consumed
+        assert consumed.count(None) == workers - 1, consumed
+        assert cache.get(key) is None
+
+        cache.set(key, "expired", ex=1)
+        time.sleep(1.1)
+        assert cache.getdel(key) is None
+        # An expired PostgreSQL row may still exist physically. Replacement
+        # must remain atomic, just as Redis SET NX after expiration does.
+        winners = race(lambda index: cache.set_if_absent(key, str(index), ex=30))
+        assert winners.count(True) == 1, winners
+        assert cache.getdel(key) == str(winners.index(True)).encode()
+        assert cache.getdel(key) is None
+
+        assert cache.set_if_absent(key, "no expiry")
+        assert not cache.set_if_absent(key, "replacement", ex=30)
+        assert cache.getdel(key) == b"no expiry"
+    finally:
+        cache.delete(key)
 
 
 def main() -> None:
@@ -19,7 +63,7 @@ def main() -> None:
         # API lifespan before exercising the PostgreSQL cache implementation.
         from onyx.db.engine.sql_engine import SqlEngine
 
-        SqlEngine.init_engine(pool_size=1, max_overflow=0)
+        SqlEngine.init_engine(pool_size=8, max_overflow=0)
     cache = get_cache_backend()
     actual_backend = type(cache).__name__
     expected_type = {
@@ -27,6 +71,8 @@ def main() -> None:
         "redis": "RedisCacheBackend",
     }[expected_backend]
     assert actual_backend == expected_type, (actual_backend, expected_type)
+    validate_atomic_cache(cache)
+    print(f"ATOMIC_CACHE_CONCURRENCY_OK backend={expected_backend}")
 
     shared_cache = get_shared_cache_backend()
     shared_key = f"wrapper-validation-shared-cache:{uuid4()}"

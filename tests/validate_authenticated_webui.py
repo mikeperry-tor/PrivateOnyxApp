@@ -1,4 +1,4 @@
-"""Opt-in browser recovery and upload smoke using an approved disposable user.
+"""Opt-in deterministic browser recovery and upload validation using an approved disposable user.
 
 Run in the API image with PYTHONPATH cleared and an owner-only JSON credential
 file containing email/password/user_id. The account must have no existing data.
@@ -10,26 +10,30 @@ import argparse
 import base64
 import json
 from pathlib import Path
-import time
 from urllib.parse import quote
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
+
+from webui_recovery_fixture import ANSWER, CASES, PARAGRAPHS, fixture_api, wait_until
 
 
 def validate(credential_file: Path) -> None:
     auth = json.loads(credential_file.read_text())
     assert auth['email'].startswith('onyx-browser-validation-')
     sessions, files = set(), set()
-    with sync_playwright() as playwright:
+    with fixture_api() as (fixture_origin, diagnostics), sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, args=['--no-sandbox'])
-        context = browser.new_context()
+        context = browser.new_context(proxy={'server': fixture_origin})
         page = context.new_page()
-        recovery_requests = []
-        page.on('request', lambda request: recovery_requests.append(request.url)
+        case_requests = []
+        resume_responses = []
+        page.on('response', lambda response: resume_responses.append(response.status)
+                if '/resume-stream' in response.url else None)
+        page.on('request', lambda request: case_requests.append(request.url)
                 if 'reconnect-status/' in request.url or '/resume-stream' in request.url else None)
 
         def api(method, path, **kwargs):
-            response = context.request.fetch('http://nginx/api' + path, method=method, **kwargs)
+            response = requests.fetch('http://nginx/api' + path, method=method, **kwargs)
             assert response.ok, (method, path, response.status)
             return response
 
@@ -40,6 +44,7 @@ def validate(credential_file: Path) -> None:
             page.locator('button[type="submit"]').click()
             page.wait_for_url('**/app**', timeout=60000)
             page.wait_for_load_state('networkidle')
+            requests = playwright.request.new_context(storage_state=context.storage_state())
             assert api('GET', '/me').json()['id'] == auth['user_id']
             assert api('GET', '/chat/get-user-chat-sessions').json()['sessions'] == []
             name_prompt = page.get_by_role('group', name='non-admin-name-prompt')
@@ -48,38 +53,78 @@ def validate(credential_file: Path) -> None:
                 name_prompt.get_by_role('button', name='Save', exact=True).click()
             print('AUTHENTICATED_WEBUI_LOGIN_OK', flush=True)
 
-            textbox = page.locator('[contenteditable="true"][role="textbox"]').first
-            textbox.fill('For a synthetic connection recovery test, write exactly 100 Markdown numbered list items. The text of each item must be amber otter recovery. Do not use tools or save memories. No introduction or conclusion.')
-            with page.expect_request('**/api/chat/send-chat-message') as sent:
-                textbox.press('Enter')
-            session_id = sent.value.post_data_json['chat_session_id']
-            sessions.add(session_id)
-            # Interrupt a real reserved/running turn, not an already finished page.
-            deadline = time.monotonic() + 30
-            while True:
-                status = api('GET', '/chat/reconnect-status/' + session_id).json()
-                if status['current_run'] or status['pending_reservation']:
-                    break
-                assert time.monotonic() < deadline, status
-                page.wait_for_timeout(200)
-            context.set_offline(True)
-            page.wait_for_timeout(2000)
-            context.set_offline(False)
-            completed = page.get_by_test_id('onyx-ai-message').first
-            completed.wait_for(state='visible', timeout=240000)
-            rendered = completed.inner_text()
-            assert rendered.lower().count('amber otter recovery') == 100, 'incomplete or duplicated rendered response'
-            assert completed.locator('li').count() == 100
-            assert recovery_requests, 'no status or resume request after interruption'
-            saved = api('GET', '/chat/get-chat-session/' + session_id).json()
-            assistants = [message for message in saved['messages'] if message['message_type'] == 'assistant']
-            assert len(assistants) == 1, len(assistants)
-            assert assistants[0]['message'].lower().count('amber otter recovery') == 100
-            page.reload(wait_until='networkidle')
-            completed = page.get_by_test_id('onyx-ai-message').first
-            completed.wait_for(state='visible', timeout=30000)
-            assert completed.inner_text().lower().count('amber otter recovery') == 100
-            print('AUTHENTICATED_STREAM_OFFLINE_RECOVERY_AND_RELOAD_OK', flush=True)
+            def route_chat(route):
+                payload = route.request.post_data_json if route.request.method == 'POST' else None
+                if route.request.url.endswith('/send-chat-message'):
+                    assert payload['chat_session_id'] in sessions
+                    payload['allowed_tool_ids'] = []
+                    sends.append(payload['chat_session_id'])
+                route.continue_(post_data=json.dumps(payload) if payload is not None else None)
+
+            page.route('http://nginx/api/chat/**', route_chat)
+            for case in CASES:
+                session_id = api('POST', '/chat/create-chat-session', data={
+                    'description': 'wrapper-recovery-' + case,
+                }).json()['chat_session_id']
+                sessions.add(session_id)
+                sends = []
+                case_requests.clear()
+                resume_responses.clear()
+                page.goto('http://nginx/app?chatId=' + session_id, wait_until='networkidle')
+                tick = lambda seconds: page.wait_for_timeout(seconds * 1000)
+                try:
+                    textbox = page.locator('[contenteditable="true"][role="textbox"]:visible').first
+                    textbox.fill('wrapper-recovery-' + case)
+                    textbox.press('Enter')
+                    wait_until(lambda: (diagnostics / (case + '.paused')).exists(), tick=tick)
+                    # Prove the browser received partial content before cutting
+                    # transport; completion is held by an explicit gate.
+                    expect(page.get_by_text(PARAGRAPHS[0], exact=True)).to_be_visible(timeout=30000)
+                    status = api('GET', '/chat/reconnect-status/' + session_id).json()
+                    assert status['current_run'] and status['resumable'], status
+                    case_requests.clear()
+                    context.set_offline(True)
+                    page.wait_for_function('navigator.onLine === false')
+                    # Chromium offline emulation can leave existing sockets alive.
+                    # Sever the actual send connection before provider completion.
+                    (diagnostics / (case + '.disconnect')).touch()
+                    wait_until(lambda: (diagnostics / (case + '.disconnected')).exists(), tick=tick)
+                    if case == 'complete_offline':
+                        (diagnostics / (case + '.release')).touch()
+                        wait_until(lambda: not api('GET', '/chat/reconnect-status/' + session_id).json()['current_run'],
+                                   timeout=60, tick=tick)
+                        expect(page.get_by_text(PARAGRAPHS[-1], exact=True)).not_to_be_visible()
+                    context.set_offline(False)
+                    wait_until(lambda: any('reconnect-status/' in url for url in case_requests), tick=tick)
+                    if case == 'resume_running':
+                        wait_until(lambda: 200 in resume_responses, tick=tick)
+                        expect(page.get_by_text(PARAGRAPHS[0], exact=True)).to_be_visible()
+                        (diagnostics / (case + '.release')).touch()
+                    wait_until(lambda: not api('GET', '/chat/reconnect-status/' + session_id).json()['current_run'],
+                               timeout=60, tick=tick)
+                    completed = page.get_by_test_id('onyx-ai-message')
+                    expect(completed).to_have_count(1, timeout=60000)
+                    expect(completed.locator('p')).to_have_text(list(PARAGRAPHS), timeout=60000)
+                    assert any('reconnect-status/' in url for url in case_requests)
+                    assert sends == [session_id], 'Recovery sent the prompt again'
+                    saved = api('GET', '/chat/get-chat-session/' + session_id).json()
+                    assistants = [m for m in saved['messages'] if m['message_type'] == 'assistant']
+                    assert len(assistants) == 1 and not assistants[0]['error']
+                    assert assistants[0]['message'] == ANSWER
+                    page.reload(wait_until='networkidle')
+                    expect(page.get_by_test_id('onyx-ai-message').locator('p')).to_have_text(list(PARAGRAPHS))
+                    print('AUTHENTICATED_DETERMINISTIC_RECOVERY_OK', case, flush=True)
+                except BaseException:
+                    context.set_offline(False)
+                    evidence = {'case': case, 'requests': case_requests, 'sends': sends,
+                                'resume_responses': resume_responses,
+                                'body': page.locator('body').inner_text(),
+                                'rendered': page.get_by_test_id('onyx-ai-message').all_text_contents(),
+                                'status': api('GET', '/chat/reconnect-status/' + session_id).json(),
+                                'saved': api('GET', '/chat/get-chat-session/' + session_id).json()}
+                    (diagnostics / (case + '.json')).write_text(json.dumps(evidence, indent=2))
+                    raise
+            page.unroute('http://nginx/api/chat/**', route_chat)
 
             png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=')
             for name, media, content in (
@@ -94,7 +139,7 @@ def validate(credential_file: Path) -> None:
                 file = uploaded['user_files'][0]
                 files.add(file['id'])
                 path = '/api/chat/file/' + quote(file['file_id'], safe='')
-                response = context.request.get('http://nginx' + path)
+                response = requests.get('http://nginx' + path)
                 assert response.status == 200
                 assert response.body() == content
                 assert response.headers['x-content-type-options'] == 'nosniff'

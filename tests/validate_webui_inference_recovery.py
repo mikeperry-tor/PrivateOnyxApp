@@ -27,7 +27,7 @@ def fixture_worker():
     from onyx.configs.constants import MessageType
     from onyx.db.chat import create_new_chat_message, get_or_create_root_message
     from onyx.db.engine.sql_engine import SqlEngine, get_session_with_current_tenant
-    from onyx.db.models import ChatSession, User
+    from onyx.db.models import ChatMessage, ChatSession, User
     from onyx.llm import model_response
     from onyx.llm.model_response import Delta, ModelResponseStream, StreamingChoice
     from onyx.llm.models import ToolChoiceOptions
@@ -36,7 +36,7 @@ def fixture_worker():
 
     request = json.load(sys.stdin)
     case = request['case']
-    assert case in ('progress', 'exhausted', 'reasoning', 'finalization', 'tool_text')
+    assert case in ('progress', 'exhausted', 'reasoning', 'finalization', 'tool_text', 'followup')
     assert getattr(LitellmLLM.stream, '_wrapper_midstream_continuation', False)
     llm = LitellmLLM(api_key=None, model_provider='wrapper-contract-provider',
                     model_name='wrapper-contract-model', max_input_tokens=4096, timeout=1)
@@ -53,6 +53,9 @@ def fixture_worker():
         attempt = calls
 
         def stream():
+            if case == 'followup':
+                yield chunk('Synthetic followup completed.', finish='stop')
+                return
             if case == 'reasoning':
                 yield chunk(reasoning='Synthetic reasoning segment. ')
                 if attempt == 1:
@@ -93,7 +96,7 @@ def fixture_worker():
     assert kinds.count('message_start') == 1 and 'error' not in kinds
     assert state.get_answer_tokens() == result.answer
     assert calls == {'progress': 4, 'exhausted': 3, 'reasoning': 2,
-                     'finalization': 1, 'tool_text': 2}[case], calls
+                     'finalization': 1, 'tool_text': 2, 'followup': 1}[case], calls
     packets.append(Packet(placement=Placement(turn_index=0), obj=OverallStop()).model_dump(mode='json'))
     SqlEngine.init_engine(pool_size=1, max_overflow=0)
     with get_session_with_current_tenant() as db:
@@ -101,9 +104,15 @@ def fixture_worker():
         session = db.get(ChatSession, UUID(request['session_id']))
         assert user and user.email.startswith('onyx-browser-validation-') and not user.is_superuser
         assert session and session.user_id == user.id
-        assert session.description == 'webui-inference-contract-' + case
-        root = get_or_create_root_message(session.id, db)
-        assert root.latest_child_message_id is None, 'fixture session must be empty'
+        assert session.description == 'webui-inference-contract-' + ('exhausted' if case == 'followup' else case)
+        if case == 'followup':
+            root = db.get(ChatMessage, request['parent_message_id'])
+            assert root and root.chat_session_id == session.id
+            assert root.message_type == MessageType.ASSISTANT
+            assert root.latest_child_message_id is None
+        else:
+            root = get_or_create_root_message(session.id, db)
+            assert root.latest_child_message_id is None, 'fixture session must be empty'
         human = create_new_chat_message(session.id, root, request['message'], 10, MessageType.USER, db)
         answer = create_new_chat_message(session.id, human, result.answer, 100,
                                         MessageType.ASSISTANT, db, reasoning_tokens=result.reasoning)
@@ -134,7 +143,7 @@ DELAY_STREAM = """(() => {
 
 
 def browser_check(credential_file):
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import sync_playwright, expect
     auth = json.loads(credential_file.read_text())
     assert auth['email'].startswith('onyx-browser-validation-')
     sessions = []
@@ -231,13 +240,37 @@ def browser_check(credential_file):
                 if case == 'reasoning':
                     assert 'reasoning stream was interrupted' in answers[0]['reasoning_tokens']
                 if case == 'exhausted':
+                    def followup_intercept(route):
+                        payload = route.request.post_data_json
+                        assert payload['chat_session_id'] == session_id
+                        result = subprocess.run([sys.executable, __file__, '--fixture-worker'],
+                            input=json.dumps({'case': 'followup', 'session_id': session_id,
+                                'user_id': auth['user_id'], 'message': payload['message'],
+                                'parent_message_id': answers[0]['message_id']}),
+                            env={**os.environ, 'PYTHONPATH': '/app/wrapper-patches-api:/app/obscura-client:/app'},
+                            capture_output=True, text=True, timeout=90)
+                        assert result.returncode == 0, result.stderr[-3000:]
+                        rows = [line.removeprefix('WEBUI_FIXTURE=') for line in result.stdout.splitlines()
+                                if line.startswith('WEBUI_FIXTURE=')]
+                        assert len(rows) == 1
+                        data = json.loads(rows[0])
+                        route.fulfill(status=200, headers={'content-type': 'application/json',
+                            'x-private-onyx-test-stream': '1'},
+                            body=''.join(json.dumps(packet) + '\n' for packet in data['packets']))
+
+                    page.route('**/api/chat/send-chat-message', followup_intercept)
                     textbox = page.locator('[contenteditable="true"][role="textbox"]').first
-                    textbox.fill('Reply only with recovery followup ready. Do not use tools or save memories.')
+                    textbox.fill('Synthetic followup after exhausted recovery.')
                     textbox.press('Enter')
                     followup = page.get_by_test_id('onyx-ai-message').nth(1)
-                    followup.wait_for(state='visible', timeout=240000)
-                    assert 'recovery followup ready' in followup.inner_text().lower()
-                    print('WEBUI_REAL_FOLLOWUP_AFTER_EXHAUSTED_RECOVERY_OK', flush=True)
+                    followup.wait_for(state='visible', timeout=90000)
+                    expect(followup.locator('p')).to_have_text(['Synthetic followup completed.'], timeout=30000)
+                    page.unroute('**/api/chat/send-chat-message', followup_intercept)
+                    page.reload(wait_until='networkidle')
+                    followup = page.get_by_test_id('onyx-ai-message').nth(1)
+                    followup.wait_for(state='visible', timeout=30000)
+                    expect(followup.locator('p')).to_have_text(['Synthetic followup completed.'], timeout=30000)
+                    print('WEBUI_DETERMINISTIC_FOLLOWUP_AFTER_EXHAUSTED_RECOVERY_OK', flush=True)
                 assert not errors, errors
                 print('WEBUI_INFERENCE_RECOVERY_OK', case, flush=True)
         finally:
