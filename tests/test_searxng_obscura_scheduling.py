@@ -206,6 +206,13 @@ def _new_patchable_search(patch, query: str):
 
 
 class SearxngObscuraSchedulingTests(unittest.TestCase):
+    def test_provider_override_deduplicates_without_reordering_or_adding_engines(self):
+        module = _load_patch_module()
+        with patch.dict(module.os.environ, {"SEARXNG_ROUND_ROBIN_PROVIDERS": " bing2, x402exa,bing2,google2,x402exa, "}):
+            self.assertEqual(module._round_robin_providers(), ("bing2", "x402exa", "google2"))
+        with patch.dict(module.os.environ, {"SEARXNG_ROUND_ROBIN_PROVIDERS": " , "}):
+            self.assertEqual(module._round_robin_providers(), ())
+
     def setUp(self):
         self.module = _load_module()
         self.addCleanup(self.module._PROVIDER_BROWSER_LOOP.stop)

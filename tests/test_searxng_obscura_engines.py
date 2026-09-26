@@ -117,6 +117,12 @@ class SearxngObscuraEngineTests(unittest.TestCase):
         self.assertEqual(fixed_fields, ())
         self.assertIsNone(guard)
 
+    def test_brave_pagination_uses_provider_page_offsets(self):
+        for page, fields in ((1, ()), (2, (("offset", "1"),)), (5, (("offset", "4"),))):
+            with self.subTest(page=page), patch.object(self.obscura, "submit_search", return_value="fixture") as submit, patch.object(self.brave, "_parse_html", return_value=[]):
+                self.brave.search("query", {"pageno": page})
+                submit.assert_called_once_with("brave2", "query", fields, None)
+
     def test_bing_visible_one_last_step_is_typed_captcha(self):
         challenge = """
         <html><head><title>Search</title></head><body>

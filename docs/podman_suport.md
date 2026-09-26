@@ -964,7 +964,9 @@ files without container ownership repair.
 
 Validate enabled/disabled lite/full models, executor plus Exa where supported,
 platform layers, both Tor roles, native startup-health translation, host binding,
-and wallet permissions/log suppression. Enablement changes require matching-mode
+and wallet permissions/log suppression. Include GNU Make 3.81 command-line key
+overrides of opposite file/environment values in lite/full model checks.
+Enablement changes require matching-mode
 down/config-change/up on the same engine; namespace holder, Myst and both policy
 proxies must be recreated. Down removes old Exa services even after key removal.
 Rendered models do not establish live Linux, rootless, Desktop, or Podman behavior.

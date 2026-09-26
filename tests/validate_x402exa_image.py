@@ -1,9 +1,11 @@
 """Real pinned scheduler/processor/engine with synthetic payments, offline only."""
 import asyncio
 import base64
+import concurrent.futures
 import json
 import os
 import threading
+import time
 from unittest.mock import patch
 
 import httpx
@@ -151,3 +153,77 @@ with patch.object(_x402_payment, "exchange", fake_exchange), webapp.app.test_cli
     assert response.status_code == 200 and not response.json["results"]
     assert len(calls) == before
 print("PINNED_X402EXA_SCORING_AND_EMPTY_QUERY_OK")
+
+# Native fan-out admission expiry is not a provider failure, including when
+# capacity becomes available only after a waiter reacquires the condition.
+processor = searx.search.PROCESSORS["x402exa"]
+processor.suspended_status.resume()
+with patch.object(processor.engine, "search", side_effect=AssertionError("expired admission dispatched")) as search:
+    for delayed in (False, True):
+        clock = [10.0]
+        _x402_admission._last_start = float("-inf")
+        held = _x402_admission.reserve(lambda: True) if delayed else None
+        def expired_wakeup(_delay):
+            clock[0] = 12.0
+            _x402_admission.release(held)
+        with patch.object(_x402_admission.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(_x402_admission._condition, "wait", side_effect=expired_wakeup):
+            processor.search("fixture", {}, searx.results.ResultContainer(), 10.0 if delayed else 0.0, 2.0)
+        assert not processor.suspended_status.is_suspended
+        assert not _x402_admission._active and _x402_admission._token is None
+    search.assert_not_called()
+
+# Competing real searches with duplicate paid-provider names must wait on API
+# admission. The one worker-local cache needs only one discovery; every paid
+# exchange still gets a fresh authorization. Keep the real three-second clock.
+barrier = threading.Barrier(4)
+starts = []
+active = 0
+peak = 0
+calls.clear()
+payment_client().requirements = None
+_x402_admission._last_start = float("-inf")
+
+async def concurrent_exchange(*args, **kwargs):
+    global active, peak
+    active += 1
+    peak = max(peak, active)
+    starts.append(time.monotonic())
+    try:
+        await asyncio.sleep(.05)
+        return await exchange(*args, **kwargs, transport=httpx.MockTransport(respond))
+    finally:
+        active -= 1
+
+def concurrent_search(index):
+    barrier.wait(timeout=5)
+    with app.test_request_context("/"):
+        return bool(searx.search.Search(SearchQuery(
+            "fixture " + str(index), [EngineRef("x402exa", "general")], lang="all",
+        )).search().main_results_map)
+
+with patch.dict(os.environ, {"SEARXNG_ROUND_ROBIN_PROVIDERS": " x402exa ,x402exa "}), \
+        patch.object(_x402_payment, "exchange", concurrent_exchange), \
+        concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+    assert all(pool.map(concurrent_search, range(4)))
+assert peak == 1 and len(calls) == 5
+assert all(b - a >= 2.9 for a, b in zip(starts, starts[1:]))
+from x402.http.utils import decode_payment_signature_header
+nonces = [decode_payment_signature_header(r.headers["PAYMENT-SIGNATURE"]).payload["authorization"]["nonce"]
+          for r in calls if "PAYMENT-SIGNATURE" in r.headers]
+assert len(set(nonces)) == 4
+assert not _x402_admission._active and _x402_admission._token is None
+
+# Failure publication precedes release even with waiting real search calls.
+starts.clear()
+_x402_admission._last_start = float("-inf")
+async def failed_exchange(*args, **kwargs):
+    starts.append(time.monotonic())
+    await asyncio.sleep(.05)
+    raise ValueError("synthetic-failure")
+with patch.object(_x402_payment, "exchange", failed_exchange), \
+        concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+    assert not any(pool.map(concurrent_search, range(4)))
+assert len(starts) == 1 and processor.suspended_status.is_suspended
+assert not _x402_admission._active and _x402_admission._token is None
+print("PINNED_X402EXA_ADMISSION_CONCURRENCY_OK")

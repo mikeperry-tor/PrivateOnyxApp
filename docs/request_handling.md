@@ -547,7 +547,7 @@ SearXNG's normal HTTP transport, retry internally, or choose another provider.
 
 The provider forms receive these explicit engine-owned values in addition to
 their own successful controls: Google receives `hl=en`, `udm=14`, and optional
-`start`; Brave receives optional `offset`; DuckDuckGo receives
+`start`; Brave receives a zero-based page `offset` (page two uses `1`); DuckDuckGo receives
 `ia=web`; Startpage receives `cat=web` and optional `page`; and Bing receives
 `adlt=off`, `setlang=en`, and optional `first`. Existing provider-generated
 hidden state remains in the form. Unknown, duplicate, or conflicting explicit
@@ -1059,7 +1059,8 @@ once per candidate and dispatches those same params. Inside a pool, regular
 browser engines precede Bing, which precedes Exa; untried eligible free engines
 that are busy/reserved/cooling force waiting. Empty results and failed attempts
 exhaust that provider for the request. No provider is selected twice. The internal
-`SEARXNG_ROUND_ROBIN_PROVIDERS` override stays unrestricted: intersection selects
+`SEARXNG_ROUND_ROBIN_PROVIDERS` override removes duplicate names while preserving
+their first-occurrence order and otherwise stays unrestricted: intersection selects
 only those names; an empty/disjoint pool restores native dispatch, potentially
 running Exa alongside free engines. Explicit Exa-only selection can pay immediately.
 
@@ -1081,6 +1082,8 @@ after admission and the actual processor deadline minus one second, including
 shorter query/configuration limits. Async HTTPX I/O uses that absolute deadline;
 synchronous parsing/signing checks it before and afterward and before dispatch.
 Timeout markers prevent late signing/submission; already-submitted payments can settle.
+Native admission checks expiry before reserving capacity on every wakeup. An
+expired waiter cannot start an attempt or suspend the provider for other callers.
 
 The fixed endpoint is `https://api.exa.ai/search`, using verified Python TLS through
 `http://searxng-x402-egress-bridge:3128`. No ambient proxy, netrc, NO_PROXY bypass,

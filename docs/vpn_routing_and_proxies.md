@@ -458,6 +458,13 @@ Exa bridges coexist. Neither network adds host exceptions or browser/executor
 reachability. Disabled startup omits the route; down includes it to remove a
 previously enabled route even after key removal.
 
+Command-line key assignments take precedence over the environment and wrapper
+file, including an explicitly empty assignment. On GNU Make 3.81, selection uses
+the command-line value's presence and recipe-time validation receives the exported
+key; parse-time shells cannot observe updated Make exports. Startup preflight and
+the diagnostic/teardown gates reject invalid values before acting. The key is
+never interpolated into a shell command to select topology.
+
 Enablement changes require matching-mode `make down-lite`/`make down-full`, then
 configuration change, then that mode's up target on the same engine. The namespace
 holder and all its residents, including Myst and both policy proxies, must be

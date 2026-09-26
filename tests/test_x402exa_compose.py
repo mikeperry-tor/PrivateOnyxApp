@@ -1,4 +1,5 @@
 """Make-selected feature models with synthetic configuration only."""
+import itertools
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ KEY = "0" * 63 + "1"
 
 
 def model(mode, engine, enabled, executor=False, tor=False, onion=False, host=None, down=False,
-          host_os="Darwin", engine_mode="rootful", vpn=False, proxy=""):
+          host_os="Darwin", engine_mode="rootful", vpn=False, proxy="", file_key=None, key_override=None):
     env = _wrapper_neutral_environment() | SECRET_ENV
     env.pop("SEARXNG_X402_PRIVKEY", None)
     if enabled:
@@ -23,6 +24,9 @@ def model(mode, engine, enabled, executor=False, tor=False, onion=False, host=No
     with tempfile.TemporaryDirectory() as directory:
         configuration = Path(directory) / "settings.env"
         configuration.write_text((ROOT / ".env.wrapper.example").read_text())
+        if file_key is not None:
+            with configuration.open("a") as stream:
+                stream.write("\nSEARXNG_X402_PRIVKEY=" + file_key + "\n")
         command = ["make", "-s", "--no-print-directory", "-f", "Makefile", "-f", "-", "model",
                    "MAKECMDGOALS=" + ("down-" if down else "up-") + mode,
                    "ENV_FILE=" + str(configuration), "CONTAINER_BIN=" + engine,
@@ -31,6 +35,8 @@ def model(mode, engine, enabled, executor=False, tor=False, onion=False, host=No
                    "MYST_VPN_ENABLED=" + str(vpn).lower(), "EGRESS_UPSTREAM_PROXY_URL=" + proxy,
                    "ONYX_CODE_INTERPRETER_ENABLE_NETWORK=" + str(executor).lower(),
                    "TOR_EGRESS_ENABLED=" + str(tor).lower(), "TOR_ONION_SERVICE_ENABLED=" + str(onion).lower()]
+        if key_override is not None:
+            command.append("SEARXNG_X402_PRIVKEY=" + key_override)
         variable = mode.upper() + ("_DOWN_FILES" if down else "_FILES")
         recipe = 'model:\n\t@COMPOSE_FILE=$(' + variable + ') ' + shlex.join([
             *_compose_command(), "--env-file", "stack.versions.env", "--env-file", str(configuration),
@@ -41,6 +47,43 @@ def model(mode, engine, enabled, executor=False, tor=False, onion=False, host=No
 
 
 class ComposeTests(unittest.TestCase):
+    def test_command_line_key_overrides_file_and_environment_in_both_modes(self):
+        for mode, engine in itertools.product(("lite", "full"), ("docker", "podman")):
+            for environment_enabled, file_key, override in (
+                (False, KEY, ""), (True, KEY, ""),
+                (False, "", KEY), (False, "invalid-overridden-key", KEY),
+            ):
+                with self.subTest(mode=mode, engine=engine, environment_enabled=environment_enabled, override_enabled=bool(override)):
+                    value = model(mode, engine, environment_enabled, file_key=file_key, key_override=override)
+                    services = value["services"]
+                    selected = bool(override)
+                    self.assertEqual("searxng-x402-egress-bridge" in services, selected)
+                    self.assertEqual("searxng-x402-egress" in services["searxng-core"]["networks"], selected)
+                    self.assertEqual(services["searxng-core"]["environment"].get("SEARXNG_X402_PRIVKEY"), override if selected else None)
+                    peers = services["onyx-public-egress-proxy"]["environment"]["EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"].split(",")
+                    self.assertEqual("searxng-x402-egress-bridge" in peers, selected)
+
+    def test_invalid_command_line_key_fails_before_diagnostic_or_teardown_action(self):
+        for goal in ("up-lite", "up-full", "ps-lite", "logs-full", "down-lite", "down-full", "health-inventory", "integration-x402exa", "wrapper-config-preflight"):
+            with self.subTest(goal=goal), tempfile.TemporaryDirectory() as directory:
+                marker = Path(directory) / "must-not-run"
+                container_marker = Path(directory) / "container-action"
+                container = Path(directory) / "docker"
+                container.write_text("#!/bin/sh\ntouch " + shlex.quote(str(container_marker)) + "\nexit 99\n")
+                container.chmod(0o755)
+                key = "secret-canary$(shell touch " + str(marker) + ")"
+                result = subprocess.run([
+                    "make", "-s", goal, "ENV_FILE=.env.wrapper.example",
+                    "CONTAINER_BIN=" + str(container), "DOCKER_SOCK_PATH=/tmp/fixture.sock",
+                    "PRIVATE_ONYX_DOCKER_ENGINE_MODE=rootful", "PRIVATE_ONYX_DOCKER_GATEWAY_MODE=isolated",
+                    "SEARXNG_X402_PRIVKEY=" + key,
+                ], cwd=ROOT, env=_wrapper_neutral_environment(), capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("invalid SEARXNG_X402_PRIVKEY", result.stderr)
+                self.assertNotIn("secret-canary", result.stdout + result.stderr)
+                self.assertFalse(marker.exists())
+                self.assertFalse(container_marker.exists())
+
     def test_platform_and_final_hop_variants(self):
         for engine, host_os, engine_mode in (("docker", "Linux", "rootful"),
                                             ("docker", "Linux", "rootless"),

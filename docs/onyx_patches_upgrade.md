@@ -1967,5 +1967,12 @@ SDK signing with synthetic keys and fake transport; socket fixtures separately
 prove CONNECT, TLS rejection, framing, decompression and deadlines. Verify Onyx's
 empty-query probe against the pinned SearXNG format-before-missing-query route and
 ordinary retry removal. Require enabled/disabled feature transition evidence and
-both engines' network isolation differences. See [request handling](request_handling.md#optional-x402exa-api-search)
+both engines' network isolation differences. Cover empty/nonempty Make command-line
+keys overriding file and environment values on GNU Make 3.81 as well as current
+Make; invalid keys must fail before any stack or paid-test action without appearing
+in command text or diagnostics. Require Brave page-two/page-five form offsets,
+expired API admission before entry and after wakeup without suspension, and real
+concurrent duplicate-provider searches with one discovery, unique authorizations,
+three-second spacing, and failure publication before waiter release.
+See [request handling](request_handling.md#optional-x402exa-api-search)
 for the standing payment, cache, deadline, failure, and live qualification contract.

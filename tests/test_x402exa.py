@@ -181,6 +181,30 @@ class WalletTests(unittest.TestCase):
 
 
 class AdmissionAndRunnerTests(unittest.TestCase):
+    def test_expired_admission_never_reserves_available_capacity(self):
+        from searxng.engines import _x402_admission as admission
+        with patch.object(admission, "_last_start", float("-inf")), patch.object(admission, "reserve", wraps=admission.reserve) as reserve:
+            self.assertIsNone(admission.wait(lambda: True, time.monotonic() - 1))
+            reserve.assert_not_called()
+
+    def test_admission_rechecks_deadline_after_capacity_wakeup(self):
+        from searxng.engines import _x402_admission as admission
+        # Advance a controlled clock while the waiter is asleep; no timing race
+        # or real delay is needed to model waking after the deadline.
+        now = [10.0]
+        with patch.object(admission, "_last_start", float("-inf")), patch.object(admission.time, "monotonic", side_effect=lambda: now[0]):
+            held = admission.reserve(lambda: True)
+            def wake_after_deadline(_delay):
+                now[0] = 12.0
+                admission.release(held)
+            with patch.object(admission._condition, "wait", side_effect=wake_after_deadline) as wait:
+                self.assertIsNone(admission.wait(lambda: True, 11.0))
+                wait.assert_called_once()
+            self.assertIsNone(admission._token)
+            healthy = admission.wait(lambda: True, 13.0)
+            self.assertIsNotNone(healthy)
+            admission.release(healthy)
+
     def test_atomic_api_ownership_spacing_and_suspension_before_release(self):
         from searxng.engines import _x402_admission as admission
         tokens = []

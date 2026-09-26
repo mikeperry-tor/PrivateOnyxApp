@@ -93,7 +93,7 @@ def _round_robin_providers() -> tuple[str, ...]:
     raw = os.environ.get(_ROUND_ROBIN_PROVIDER_ENV)
     if raw is None:
         return _ROUND_ROBIN_DEFAULT_PROVIDERS + (("x402exa",) if _engine("x402exa") is not None else ())
-    return tuple(name.strip() for name in raw.split(",") if name.strip())
+    return tuple(dict.fromkeys(name.strip() for name in raw.split(",") if name.strip()))
 
 
 def _is_processor_available(engine_name: str) -> bool:

@@ -24,12 +24,12 @@ def reserve(available):
 def wait(available, deadline=None):
     with _condition:
         while available():
-            token = reserve(available)
-            if token:
-                return token
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 return None
+            token = reserve(available)
+            if token:
+                return token
             cooling = 3 - (time.monotonic() - _last_start)
             delay = cooling if cooling > 0 and not _active and _token is None else None
             if remaining is not None:

@@ -52,7 +52,8 @@ url_xpath = './/cite[contains(@class, "snippet-url")]'
 def search(query: str, params: "RequestParams"):
     """Submit the Brave homepage form and parse the rendered result DOM."""
     fixed_fields: list[tuple[str, str]] = []
-
+    if params["pageno"] > 1:
+        fixed_fields.append(("offset", str(params["pageno"] - 1)))
 
     return _parse_html(
         _obscura.submit_search(

@@ -575,8 +575,8 @@ SEARXNG_REQUIREMENTS := searxng/requirements.txt
 SEARXNG_PYTHON_VERSION := 3.14
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
-# Key values remain solely in Compose's environment interpolation. This helper
-# emits one validated boolean only for workflows selecting a running stack.
+# Never interpolate the key into shell commands; recipes receive it via export.
+override X402_KEY_ORIGIN := $(origin SEARXNG_X402_PRIVKEY)
 ifneq ($(filter command line environment,$(origin SEARXNG_X402_PRIVKEY)),)
 override SEARXNG_X402_PRIVKEY := $(value SEARXNG_X402_PRIVKEY)
 export SEARXNG_X402_PRIVKEY
@@ -592,7 +592,17 @@ X402_DOWN_SUFFIX := $(X402_DOWN_SUFFIX):$(X402_DOCKER_FILE)
 endif
 endif
 ifneq ($(filter up up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full health-inventory wrapper-config-preflight integration-x402exa,$(MAKECMDGOALS)),)
+ifeq ($(X402_KEY_ORIGIN),command line)
+# Make 3.81's parse-time shell does not receive updated command-line exports.
+# Select by presence here; validate the actual exported value before any action.
+override X402_SELECTED := $(if $(SEARXNG_X402_PRIVKEY),true,false)
+# Startup and wrapper-config-preflight already validate the complete settings.
+down-lite down-full ps-lite ps-full logs-lite logs-full health-inventory integration-x402exa: x402-config-preflight
+x402-config-preflight:
+	@python3 tor/render_config.py x402-enabled --settings-file "$(ENV_FILE)" >/dev/null
+else
 override X402_SELECTED := $(shell python3 tor/render_config.py x402-enabled --settings-file "$(ENV_FILE)" || echo invalid)
+endif
 ifneq ($(filter $(X402_SELECTED),true false),$(X402_SELECTED))
 $(error x402exa configuration selection failed)
 endif
@@ -636,7 +646,7 @@ FULL_MODE_HOST_PROCESS_TARGETS += podman-doc-server-stop-if-started
 endif
 endif
 
-.PHONY: help test check test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-chat-stream-cache-lite integration-chat-stream-cache-full integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine release-myst-data-ownership prepare-lite-host-data prepare-full-host-data prepare-onyx-tokenizer up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-sync-environment embedserv-sync-if-installed embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded tailscale-build code-interpreter-build code-interpreter-image-ready test-security-images
+.PHONY: help test check x402-config-preflight test-patch-images test-obscura-image test-tor-image test-opensearch-image test-all-images check-upgrade integration-chat-stream-cache-lite integration-chat-stream-cache-full integration-opensearch integration-opensearch-restart integration-opensearch-onyx health-inventory shared-data-engine-status claim-shared-data-engine adopt-shared-data-engine release-shared-data-engine release-myst-data-ownership prepare-lite-host-data prepare-full-host-data prepare-onyx-tokenizer up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full check-container-health-capability prepare-podman-postgres-data prepare-podman-opensearch-data podman-doc-server-start podman-doc-server-stop-if-started embedding-ready-once ensure-onyx-config init-onyx-env sync-onyx-env upgrade upgrade-onyx upgrade-python-deps searxng-image-ready searxng-build executor-image-ready executor-build obscura-image-ready obscura-build tailscale-image-ready wrapper-config-preflight tor-config-ready tor-image-ready tor-build tor-onion-address myst-image-ready myst-build teep-image-ready teep-build onyx-image-ready onyx-build embedserv-install embedserv-sync-environment embedserv-sync-if-installed embedserv-verify-model embedserv-start-if-installed embedserv-stop-if-started embedserv-stop-after-custom-ready vpn-signup-orderform vpn-signup-blockchain vpn-signup-stop vpn-orderstatus vpn-balance vpn-connection-info ensure-myst-funded tailscale-build code-interpreter-build code-interpreter-image-ready test-security-images
 
 .NOTPARALLEL: up-lite up-full
 
