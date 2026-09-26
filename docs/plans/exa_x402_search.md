@@ -2,7 +2,7 @@
 
 Status: implemented; funded live and full-stack lifecycle qualification pending. The decisions below
 include the user's explicit preferences and the subsequent implementation
-clarifications. This file provides the accepted design for implementation. Current behavior is documented in [request handling](../request_handling.md#optional-x402exa-api-search), [routing](../vpn_routing_and_proxies.md#optional-exa-api-route), and [setup](../../README.md#optional-paid-exa-search).
+clarifications. This file provides the accepted design for implementation. Current behavior is documented in [request handling](../request_handling.md#optional-x402exa-api-search), [routing](../vpn_routing_and_proxies.md#optional-exa-api-route), and [setup](../../README_OPTIONAL.md#optional-paid-exa-search).
 
 ## Objective and accepted decisions
 
@@ -796,6 +796,10 @@ Complete writes before reporting success; on failure clean up only the file
 created by that invocation, never an existing wallet. Test interrupted/failed
 writes, permission checks, symlinks, and concurrent creation. No binds requiring
 cross-engine ownership repair, no host pip installation, no external key service.
+
+When a valid owner-only wallet file already exists, leave it unchanged and
+print its derived public address and the same setup instructions, as documented
+in [request handling](../request_handling.md#optional-x402exa-api-search).
 
 Print the public address and file path with instructions to fund that address
 with a small amount of native USDC on Base and manually copy the assignment

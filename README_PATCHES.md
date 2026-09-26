@@ -22,7 +22,7 @@ We carry several patches to SearXNG and Obscura Browser to improve search engine
 - Onyx's duplicate search retries are disabled so that SearXNG alone decides when to try another provider. Each query tries a provider at most once, avoiding repeated attempts against an already blocked engine.
 
 - Optional `x402exa` purchases API searches after selected/capable free providers
-  and Bing are exhausted. [Setup](README.md#optional-paid-exa-search) and
+  and Bing are exhausted. [Setup](README_OPTIONAL.md#optional-paid-exa-search) and
   [paid-search policy](docs/request_handling.md#optional-x402exa-api-search) describe
   uncapped spending, wallet linkage, and routing.
 - Onyx's admin connection check validates identity and empty-query JSON handling

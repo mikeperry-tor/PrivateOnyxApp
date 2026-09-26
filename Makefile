@@ -641,8 +641,6 @@ endif
 .NOTPARALLEL: up-lite up-full
 
 help:
-	@echo "  make x402-wallet            # Create a new owner-only Base wallet; never overwrites"
-	@echo "  make integration-x402exa    # One paid search on the running stack (MODE=full for full mode)"
 	@echo "Lite mode (use these commands together):"
 	@echo "  make up-lite                # Start wrapper + Onyx lite"
 	@echo "  make down-lite              # Stop wrapper + Onyx lite"
@@ -661,6 +659,9 @@ help:
 	@echo ""
 	@echo "Optional Tor Onion Service (requires TOR_ONION_SERVICE_ENABLED=true):"
 	@echo "  make tor-onion-address      # Print the running onion service address"
+	@echo ""
+	@echo "Optional Paid Exa Search Wallet:"
+	@echo "  make x402-wallet            # Create a Base wallet or show its address and setup instructions"
 	@echo ""
 	@echo "Optional VPN setup and payment (requries MYST_VPN_ENABLED=true):"
 	@echo "  make vpn-signup-orderform   # Start standalone Myst container, create identity + CoinGate order, show payment URL"

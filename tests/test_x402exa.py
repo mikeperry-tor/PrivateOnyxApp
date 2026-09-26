@@ -72,6 +72,57 @@ class ConfigurationTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "posix", "wallet permissions require the supported POSIX hosts")
 class WalletTests(unittest.TestCase):
+    def test_existing_wallet_address_and_setup_without_key_disclosure(self):
+        import contextlib
+        import io
+        from types import SimpleNamespace
+        address = "0x" + "a" * 40
+        contents = "SEARXNG_X402_PRIVKEY=0x" + KEY + "\n"
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root).resolve() / ".x402-wallet"
+            directory.mkdir(mode=0o700)
+            path = directory / "private-key.env"
+            path.write_text(contents)
+            path.chmod(0o600)
+            identity = path.stat().st_ino
+            def run(command, **kwargs):
+                if "run" in command:
+                    self.assertEqual(command[-1], wallet.ADDRESS_PROGRAM)
+                    self.assertEqual(kwargs["input"], ("0x" + KEY).encode())
+                    self.assertNotIn(KEY, " ".join(command))
+                    self.assertIn("none", command)
+                    return SimpleNamespace(returncode=0, stdout=(address + "\n").encode())
+                return SimpleNamespace(returncode=0)
+            output = io.StringIO()
+            with patch.object(wallet.subprocess, "run", side_effect=run), \
+                    patch.object(wallet.Path, "cwd", return_value=directory.parent), \
+                    patch.object(wallet.signal, "signal"), \
+                    patch("sys.argv", ["wallet", "--container-bin", "docker", "--image", "local:test"]), \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(wallet.main(), 0)
+            self.assertIn("already exists", output.getvalue())
+            self.assertIn(address, output.getvalue())
+            self.assertIn("SEARXNG_X402_PRIVKEY", output.getvalue())
+            self.assertIn(".env.wrapper", output.getvalue())
+            self.assertNotIn(KEY, output.getvalue())
+            self.assertEqual(path.read_text(), contents)
+            self.assertEqual(path.stat().st_ino, identity)
+
+            for unsafe in ("permissions", "contents", "symlink"):
+                with self.subTest(unsafe=unsafe):
+                    if unsafe == "permissions":
+                        path.chmod(0o644)
+                    elif unsafe == "contents":
+                        path.chmod(0o600)
+                        path.write_text("invalid")
+                    else:
+                        path.unlink()
+                        path.symlink_to(directory / "missing")
+                    with patch.object(wallet.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
+                        with self.assertRaises((ValueError, OSError)):
+                            wallet.create_wallet("docker", "local:test", directory, report_existing=True)
+                        self.assertEqual(run.call_count, 1)  # Image inspection only.
+
     def test_concurrent_creation_and_symlink_rejection(self):
         from types import SimpleNamespace
         payload = json.dumps({"key": "0x" + KEY, "address": "0x" + "a" * 40}).encode()

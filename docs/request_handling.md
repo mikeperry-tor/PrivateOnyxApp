@@ -1045,7 +1045,13 @@ A valid nonempty `SEARXNG_X402_PRIVKEY` enables `x402exa` and its matching short
 in `general`; empty disables it. Malformed keys, disabled round-robin, a worker
 count other than one, or a mismatched fixed proxy fail service startup. No startup
 balance lookup, discovery, RPC, or payment occurs. Free engines remain the base
-configuration. See [wallet setup](../README.md#optional-paid-exa-search).
+configuration. See [wallet setup](../README_OPTIONAL.md#optional-paid-exa-search).
+
+`make x402-wallet` creates an owner-only key file or reports an existing wallet’s
+public address and manual `.env.wrapper` setup instructions. Existing files are
+never overwritten. Address recovery validates file ownership, permissions and
+format, then passes the key through stdin to the selected offline image with
+container logging disabled; it never prints the key.
 
 The scheduler chooses pool-versus-native dispatch from the actual caller-selected
 set before filtering capabilities or suspensions. It computes native `get_params`

@@ -245,51 +245,12 @@ In either case, Docker Compose network-namespace routing restricts egress to the
 
 Selecting Firecrawl or Exa for Web, or Brave, Serpa, Exa, or Google PSE for Search, is supported. Connections to these services use the selected Tor/VPN/proxy route, but these external providers perform their accesses from their own IP address space. None of these providers offer ZDR policies to consumer end users, so your API key and account on these services will be associated with your usage activity, and this data will be stored, trained on, and/or sold by these providers. A nice rant about this situation can be found at the [end of this README](#the-anti-bot-landscape-is-also-anti-privacy).
 
-## Optional paid Exa search
-
-SearXNG's optional `x402exa` engine buys Exa searches using native USDC on Base.
-It is separate from Onyx's Exa provider. Free search remains the default. Default
-selection exhausts selected, capable free providers, then Bing, before Exa;
-busy free providers cause waiting. Explicit `x402exa` selection can pay immediately.
-
-Run `make x402-wallet` to create `.x402-wallet/private-key.env` (owner-only, never
-overwritten). Fund the printed address with a small amount of native USDC on
-Base. Run the matching `make down-lite` or `make down-full`, manually copy the
-wallet assignment into `.env.wrapper`, keep `SEARXNG_ROUND_ROBIN=true`, then run
-`make up-lite` or `make up-full`. Use the same down/edit/up sequence to disable it.
-
-**Enabling the key authorizes automatic uncapped spending.** There is no payment,
-daily, or aggregate budget. Anyone able to reach SearXNG can select Exa and spend.
-`SEARXNG_HOST` defaults to `127.0.0.1`, including when empty; a broader explicit
-bind exposes an unauthenticated spending endpoint. Local callers remain
-unauthenticated. Exa sees queries linked to the wallet, and public payments may
-link its funding source, even over Tor. Container administrators can inspect the key.
-
-Onyx stopping its wait does not cancel queued searches: they may later pay.
-Submitted authorizations may settle after timeout, cooldown, or a later top-up.
-Failures suspend Exa temporarily and recover on demand without restarting.
-Cold-cache discovery may be rate limited on shared exits. Requirements are reused
-until rejection; each payment still receives a fresh authorization.
-
-Exa excludes page > 1 and concrete requested languages; unsupported Exa-only
-requests do not pay. Time-filtered default searches skip the five browser engines.
-Moderate and strict SafeSearch both enable Exa moderation. Query operators such
-as `site:` pass through as text without equivalent-filtering guarantees.
-
-Once enabled and running, `make integration-x402exa` (`MODE=full` for full mode)
-sends at most one runner-issued search. This excludes unrelated or queued stack
-traffic and provides no wallet-wide spending bound. The target never starts or
-reconfigures the stack and is excluded from automatic checks. Success qualifies
-the result/payment path under Exa's contract, not independent proof of a debit;
-an unsolicited unpaid success is indistinguishable. See
-[request handling](docs/request_handling.md#optional-x402exa-api-search).
-
 ## Additional Optional Configuration
 
 Read [`.env.wrapper.example`](./.env.wrapper.example) and
 [README\_OPTIONAL.md](./README_OPTIONAL.md) for additional options, including
 native Tor support, VPN support, proxy support, MCP support, local inference,
-remote access via Tailscale Funnel, and RAG document search.
+remote access via Tailscale Funnel, paid Exa search, and RAG document search.
 
 ## Upgrading the Stack
 
