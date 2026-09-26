@@ -61,9 +61,12 @@ class PaymentClient:
         from x402.http.utils import decode_payment_required_header
 
         requirements = decode_payment_required_header(header)
-        if (requirements.x402_version != 2 or requirements.extensions
+        if (requirements.x402_version != 2
                 or (requirements.resource and requirements.resource.url != ENDPOINT)):
             raise ValueError("unsupported_payment_policy")
+        # Optional extensions are not part of this client's payment contract.
+        # Never pass them to SDK hooks/schemes or echo them into signatures.
+        requirements = requirements.model_copy(update={"extensions": None})
         # SDK selection validates deployment policy without creating a payment.
         self.client._select_requirements_v2(requirements.accepts)
         return requirements

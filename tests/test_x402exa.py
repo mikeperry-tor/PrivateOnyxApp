@@ -236,6 +236,26 @@ class SDKTests(unittest.TestCase):
     def setUp(self):
         self.client = payment.PaymentClient(KEY)
 
+    def test_advertised_extensions_are_removed_before_signing(self):
+        from x402.http.utils import decode_payment_signature_header
+        extensions = {
+            "bazaar": {"info": {"input": {"query": "untrusted"}}, "schema": {}},
+            "agentkit": {"info": {"nonce": "never-sign-this"}, "schema": {},
+                         "_options": {}, "supportedChains": ["eip155:8453"]},
+        }
+        for advertised in ({}, {"bazaar": extensions["bazaar"]},
+                           {"agentkit": extensions["agentkit"]}, extensions,
+                           extensions | {"unknown": {"info": {"signature": "never-echo"}}}):
+            with self.subTest(names=list(advertised)):
+                self.client.requirements = self.client.decode(encoded(challenge() | {"extensions": advertised}))
+                self.assertIsNone(self.client.requirements.extensions)
+                with patch.object(self.client.client, "create_payment_payload",
+                                  wraps=self.client.client.create_payment_payload) as create:
+                    signed = decode_payment_signature_header(self.client.sign())
+                self.assertIsNone(create.call_args.args[0].extensions)
+                self.assertFalse(signed.extensions)
+                self.assertEqual(set(signed.payload), {"signature", "authorization"})
+
     def test_sdk_offer_policy_uncapped_signing_nonce_and_lifetime(self):
         from x402.http.utils import decode_payment_signature_header
         self.client.requirements = self.client.decode(encoded(challenge(maxTimeoutSeconds=0)))
@@ -253,7 +273,7 @@ class SDKTests(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(Exception):
                 self.client.decode(encoded(challenge(extra=extra)))
         self.client.decode(encoded(challenge(extra={})))
-        for field, value in (("x402Version", 3), ("extensions", {"unknown": {}}),
+        for field, value in (("x402Version", 3),
                              ("resource", {"url": "https://other.example/search"})):
             with self.assertRaises(Exception):
                 self.client.decode(encoded(challenge() | {field: value}))

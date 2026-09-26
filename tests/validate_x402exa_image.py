@@ -25,7 +25,9 @@ assert "x402exa" not in _obscura._PROVIDERS
 assert all("privkey" not in json.dumps(e).lower() for e in searx.settings["engines"])
 calls = []
 attempts = []
-terms = {"x402Version": 2, "resource": {"url": _x402_payment.ENDPOINT}, "accepts": [{
+terms = {"x402Version": 2, "resource": {"url": _x402_payment.ENDPOINT},
+"extensions": {"bazaar": {"info": {}, "schema": {}},
+               "agentkit": {"info": {"nonce": "never-sign"}, "schema": {}}}, "accepts": [{
     "scheme": "exact", "network": _x402_payment.NETWORK, "asset": _x402_payment.ASSET,
     "amount": "7000", "payTo": "0x" + "2" * 40, "maxTimeoutSeconds": 60,
     "extra": {"name": "USD Coin", "version": "2"},
@@ -36,6 +38,8 @@ def respond(request):
     calls.append(request)
     if "PAYMENT-SIGNATURE" not in request.headers:
         return httpx.Response(402, headers={"PAYMENT-REQUIRED": encode(terms)})
+    from x402.http.utils import decode_payment_signature_header
+    assert not decode_payment_signature_header(request.headers["PAYMENT-SIGNATURE"]).extensions
     return httpx.Response(200, headers={"PAYMENT-RESPONSE": encode({
         "success": True, "transaction": "synthetic", "network": _x402_payment.NETWORK,
     })}, json={"results": [{"url": "https://example.org/item?id=1%2F2#x%2Fy", "title": "Example", "highlights": ["A useful snippet"]}]})

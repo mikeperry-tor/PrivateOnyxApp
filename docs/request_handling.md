@@ -1091,12 +1091,18 @@ may return unpaid results and never fabricates terms or signs. Paid 402 is termi
 
 The x402 SDK alone decodes protocol structures, selects supported offers, serializes
 headers and signs EIP-3009. The deployment supports v2, exact, native Base USDC,
-no extensions, matching optional resource URL, authorization flow, and the effective
+matching optional resource URL, authorization flow, and the effective
 USD Coin/version 2 domain. It removes the SDK monetary ceiling without disabling
 asset filtering. There is no application spending budget or price ceiling.
 The SDK controls nonce, `validAfter=0`, and authorization lifetime. No wrapper
 lifetime cap, clock-skew rule, signature reconstruction, or receipt correlation
 is imposed. Keep the host clock synchronized.
+
+Advertised optional extensions, including unfamiliar names, do not reject an
+otherwise supported offer. All extensions are removed from the SDK-decoded
+requirements before caching or signing. No extension hooks, extra authentication,
+or extension payloads are used or echoed. A server requiring extension
+participation can reject the normal payment; that does not authorize a retry.
 
 One demand-driven worker-local entry reuses validated requirements across queries,
 filters, exits, and expired prior authorizations. Exa specifies no reuse lifetime;

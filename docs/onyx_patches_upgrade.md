@@ -1945,7 +1945,10 @@ Keep the SDK first-supported selector, including duplicate/differing offers; no
 price comparison. No RPC signer, extension hooks, recovery hooks, or second payment.
 
 The SDK codecs own aliases, coercions, ignored fields and omitted version default 2;
-explicitly reject decoded non-v2, extensions, and mismatched optional resource URL.
+explicitly reject decoded non-v2 and mismatched optional resource URL. Strip all
+advertised optional extensions from the decoded requirements before caching or
+signing, including unfamiliar names. Verify that the SDK receives no extensions
+and that the outgoing payment contains none; do not register extension hooks.
 The SDK only special-cases literal permit2, so deployment policy must reject unknown
 methods. Missing domain name uses the SDK local USD Coin/version 2 table; supplied
 name with missing version resolves to 1 and is rejected. Signing uses random nonce,

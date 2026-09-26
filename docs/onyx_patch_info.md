@@ -1423,7 +1423,9 @@ work; other bootstrap failures exit 78 instead of CPython suppressing them.
 
 Scheduling carries once-per-candidate native params into dispatch, uses separate
 browser/API admission, and retains classification-before-release. Exa stays outside
-the browser registry. Scoring recompiles the validated upstream ordering function
+the browser registry. Advertised optional payment extensions are removed from the
+SDK-decoded requirements before caching/signing; no extension hooks or additional
+authentication are enabled. Scoring recompiles the validated upstream ordering function
 with function-local sorting; it never mutates the results module's globals or
 serializes independent containers. Native mixed-engine Bing scoring stays intact.
 

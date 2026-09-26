@@ -1,6 +1,7 @@
 # Optional Exa search through x402 on Base
 
-Status: implemented; funded live and full-stack lifecycle qualification pending. The decisions below
+Status: implemented; funded Docker Desktop lite/no-VPN qualification complete.
+Other mode, platform, and route live rows remain unqualified. The decisions below
 include the user's explicit preferences and the subsequent implementation
 clarifications. This file provides the accepted design for implementation. Current behavior is documented in [request handling](../request_handling.md#optional-x402exa-api-search), [routing](../vpn_routing_and_proxies.md#optional-exa-api-route), and [setup](../../README_OPTIONAL.md#optional-paid-exa-search).
 
@@ -128,7 +129,7 @@ audited against the release source, not inferred from the main README:
 | --- | --- |
 | `client.py`, `client_base.py`, `mechanisms/evm/exact/register.py` | Use `x402ClientSync` with direct `register("eip155:8453", ExactEvmScheme(EthAccountSigner(account)))`. Do not use `register_exact_evm_client`: even with an explicit v2 network it also registers every legacy v1 EVM network. Register no creation, response, recovery, or extension hooks. |
 | `client_base.py` | Call `set_spend_controls({"max_amount_per_payment": False})` to remove the monetary ceiling while retaining the SDK default-asset filtering. Register one deployment policy for native Base USDC, `exact`, absent or `eip3009` transfer method, and absent or `authorization` payment flow. The SDK otherwise recognizes `upfront`/`escrow` too and prefers authorization offers before its first-remaining selector. Within the supported policy, retain the first offer without price comparison or deduplication. |
-| `schemas/base.py`, `schemas/payments.py`, `http/utils.py` | Decode `PAYMENT-REQUIRED` with `decode_payment_required_header`; encode with `encode_payment_signature_header` and the v2 `PAYMENT-SIGNATURE` name. Models accept camelCase/field-name aliases, use ordinary Pydantic coercion, ignore unmodeled fields, and default an omitted `x402Version` to 2. Version is an integer, not a literal constraint: explicitly require the decoded version to equal 2. Require absent/empty top-level extensions. Resource metadata is optional; when present, its URL must equal the fixed endpoint. Do not create a second wire parser. |
+| `schemas/base.py`, `schemas/payments.py`, `http/utils.py` | Decode `PAYMENT-REQUIRED` with `decode_payment_required_header`; encode with `encode_payment_signature_header` and the v2 `PAYMENT-SIGNATURE` name. Models accept camelCase/field-name aliases, use ordinary Pydantic coercion, ignore unmodeled fields, and default an omitted `x402Version` to 2. Version is an integer, not a literal constraint: explicitly require the decoded version to equal 2. Strip all optional top-level extensions from the decoded requirements before caching/signing; unknown names are allowed but never used. Resource metadata is optional; when present, its URL must equal the fixed endpoint. Do not create a second wire parser. |
 | `mechanisms/evm/exact/client.py`, `default_assets.py` | Only the literal `permit2` selects Permit2; other values fall through to EIP-3009 in the SDK. Therefore filter unknown transfer methods before signing. Native Base USDC resolves to `USD Coin`, version `2`. If `extra.name` is absent the signer fills name/version from its local asset table; if name exists but version is absent it defaults to `1`. Check the effective domain against Base USDC before signing, accepting the SDK's missing-name fallback but rejecting a supplied incomplete/mismatched domain that resolves differently. The fallback can mutate the selected offer's `extra`; preserve SDK behavior and do not reconstruct signed payloads. |
 | `mechanisms/evm/exact/client.py`, `utils.py`, `eip712.py` | Every creation obtains `os.urandom(32)` for its nonce, sets `validAfter="0"`, and sets `validBefore=str(int(time.time()) + (max_timeout_seconds or 3600))`. The required timeout field has no positive-range schema bound; zero selects 3,600 seconds. Typed data uses `TransferWithAuthorization`, the signer address, quoted recipient/value, selected chain/asset, and effective domain. Numeric conversion and typed-data encoding remain SDK/signer responsibilities; no wrapper lifetime ceiling or stricter amount parser is added. |
 | `mechanisms/evm/signers.py` | Use `EthAccountSigner(Account.from_key(...))`, never `EthAccountSignerWithRPC` or a facilitator signer. The selected EIP-3009 path performs local typed-data signing with no RPC/facilitator call. Importing the signer still requires both `eth_account` and `web3`; retain the `evm` dependency extra rather than inventing a replacement signer. Its debug log contains the authorization message: force `x402.signers` to WARNING before signing to preserve payment-data redaction. |
@@ -511,8 +512,9 @@ State machine:
    Accept absent/explicit `eip3009` transfer method and absent/explicit
    `authorization` payment flow as established by the audit above; exclude
    Permit2, unknown methods, upfront, and escrow before signing.
-   Register no extension signing hooks; require absent/empty top-level
-   extensions for this initial deployment. Descriptive resource metadata is
+   Register no extension signing hooks; strip all optional top-level extensions
+   from the decoded requirements before caching/signing. Unknown extension names
+   are allowed but never used or echoed. Descriptive resource metadata is
    not an extension. Never sign allowances, approvals, or extension payloads.
 5. Trust the recipient and quote supplied by the authenticated fixed Exa HTTPS
    origin; do not pin a recipient from examples or independently revalidate
@@ -935,7 +937,7 @@ Required cases:
   coercions/defaults without introducing stricter wrapper expectations.
 - Mixed Base/Solana alternatives; duplicate and differing supported offers use
   the SDK selector; no supported offer; absent/explicit EIP-3009 method;
-  Permit2, unknown methods, upfront/escrow flows, and extensions excluded before signing;
+  Permit2, unknown methods, and upfront/escrow flows rejected before signing; all optional extensions stripped before caching/signing;
   descriptive metadata accepted; no allowance/approval signing or RPC calls.
   Explicit non-v2 versions are rejected after decoding; omitted version retains
   the SDK default. Cover missing-name domain fallback, name-without-version
@@ -1051,7 +1053,7 @@ Faults must be confined to disposable/test-owned resources or an explicitly
 authorized running stack, with cleanup restoring its prior state.
 
 Add `make integration-x402exa` as the sole paid qualification workflow,
-listed in `make help` and the request-handling validation section. It is never
+documented in the request-handling validation section and omitted from `make help`. It is never
 a dependency of startup, wallet generation, `make test`, `make check`, image
 gates, or upgrade targets. Use the configured already-running stack; do not
 create a separate paid instance, test Compose overlay, or live free-provider
@@ -1162,13 +1164,36 @@ simultaneous Tor ingress/egress, macOS/Linux and rootless overlays, down-layer
 removal, and unset/empty/explicit host binds. These are model checks, not live
 network-isolation or namespace-transition evidence.
 
-The new wallet is stored in the ignored owner-only local wallet directory;
-its key has not been installed into operator configuration. No live paid request
-has been sent. Funded `integration-x402exa`, matching-mode down/config-change/up,
-actual host-bind checks, host/public-policy connectivity, and live route-failure
-checks remain for the configured live phase. Full-stack `up-lite`/`up-full` and
-targeted service logs were not exercised during offline implementation because
-the new key has not been explicitly configured and the operator stack was not
-reconfigured. Native Linux/rootless Docker and Podman execution remain unavailable
-in this Docker Desktop qualification; rendered-model evidence does not replace
-those platform rows. Live Tor latency/exit acceptance is likewise still unqualified.
+Live acceptance covers Docker Desktop lite mode with the configured explicit
+no-VPN route and executor networking enabled. Normal Make startup and matching
+shutdown succeed. A temporary empty-key environment override (without editing
+`.env.wrapper`) starts only the five free engines with no wallet key or Exa
+bridge/networks; matching shutdown and restored configured startup recreate the
+namespace holder and its residents. The final stack is healthy, uses the updated
+SearXNG image, publishes search only on `127.0.0.1:8080`, and supplies the key only
+to SearXNG. Both host/public policy paths remain reachable and enforce denial.
+
+Live non-payment probes establish verified HTTPS through the fixed Exa bridge,
+blocked direct Internet/host-publisher access and external DNS from SearXNG,
+and denied private destinations through the proxy. Pausing either the Exa bridge
+or public final-hop proxy causes transport failure without direct fallback;
+restoring each recovers the route. Both were restored. The actual Onyx non-search
+connection probe passes against the running SearXNG service.
+
+The initial live attempt rejected Exa's advertised optional extensions before
+submitting payment. The accepted policy now strips all optional extensions from
+SDK-decoded requirements before caching/signing, including unfamiliar names.
+After the updated image passed the offline gate, two explicit integration-target
+invocations on the same worker returned nonempty attributed snippets without
+a worker restart; offline tests establish the cold/warm protocol details.
+The unsigned discovery quote was
+7,000 native USDC atomic units ($0.007) per search. This qualifies the result/payment
+path under Exa's settlement contract, not an independently observed debit or
+wallet balance; ordinary results cannot distinguish unsolicited unpaid success.
+
+Full-mode startup/RAG, native Linux/rootless Docker, Podman, and alternate
+VPN/upstream-proxy/Tor live routes were not exercised in this lite/no-VPN run.
+Their rendered-model and offline evidence does not replace those live rows.
+Live Tor latency/exit acceptance remains unqualified. The operator's configured
+funded lite stack is left running; private configuration and wallet files were
+not modified by validation.
