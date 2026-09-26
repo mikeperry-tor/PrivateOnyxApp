@@ -71,43 +71,27 @@ on one hostname does not log out the others.
 
 ## Optional: Paid Exa Search
 
-SearXNG's optional `x402exa` engine buys Exa searches using native USDC on Base.
-It is separate from Onyx's Exa provider. Free search remains the default. Default
-selection exhausts selected, capable free providers, then Bing, before Exa;
-busy free providers cause waiting. Explicit `x402exa` selection can pay immediately.
+With heavy use of either Deep Research or even regular Chat research, the agent can issue enough search queries that all search engines end up blocking or rate limiting it. This is especially true when using Tor.
 
-Run `make x402-wallet` to create `.x402-wallet/private-key.env` (owner-only, never
-overwritten). Running the command again displays the existing wallet’s public
-address and setup instructions without replacing its key. Fund the printed address
-with a small amount of native USDC on Base. Run the matching `make down-lite` or `make down-full`, manually copy the
-wallet assignment into `.env.wrapper`, keep `SEARXNG_ROUND_ROBIN=true`, then run
-`make up-lite` or `make up-full`. Use the same down/edit/up sequence to disable it.
+As a backstop for this, the stack provides the option to use USDC to pay for
+Exa search queries via x402 in the event that all other providers are blocked.
+Exa search queries cost $0.007 USDC per query.
 
-**Enabling the key authorizes automatic uncapped spending.** There is no payment,
-daily, or aggregate budget. Anyone able to reach SearXNG can select Exa and spend.
-`SEARXNG_HOST` defaults to `127.0.0.1`, including when empty; a broader explicit
-bind exposes an unauthenticated spending endpoint. Local callers remain
-unauthenticated. Exa sees queries linked to the wallet, and public payments may
-link its funding source, even over Tor. Container administrators can inspect the key.
+To set this up, run `make x402-wallet` to create `.x402-wallet/private-key.env`. Running the command again displays the existing wallet's public address and setup instructions without replacing its key.
 
-Onyx stopping its wait does not cancel queued searches: they may later pay.
-Submitted authorizations may settle after timeout, cooldown, or a later top-up.
-Failures suspend Exa temporarily and recover on demand without restarting.
-Cold-cache discovery may be rate limited on shared exits. Requirements are reused
-until rejection; each payment still receives a fresh authorization.
+Fund the printed address with a small amount of native USDC on Base. Exa
+sees queries linked to the wallet, and public payments can link its funding
+source, even over Tor. For this reason, fund the wallet with a ZEC or XMR swap, use small amounts at a time, and regenerate fresh wallet keys prior to every
+top-up.
 
-Exa excludes page > 1 and concrete requested languages; unsupported Exa-only
-requests do not pay. Time-filtered default searches skip the five browser engines.
-Moderate and strict SafeSearch both enable Exa moderation. Query operators such
-as `site:` pass through as text without equivalent-filtering guarantees.
+Once the wallet is funded, restart the stack: run the matching `make down-lite`
+or `make down-full`, manually copy the `SEARXNG_X402_PRIVKEY` value from
+`.x402-wallet/private-key.env` into `.env.wrapper`, then run `make up-lite` or
+`make up-full`.
 
-Once enabled and running, `make integration-x402exa` (`MODE=full` for full mode)
-sends at most one runner-issued search. This excludes unrelated or queued stack
-traffic and provides no wallet-wide spending bound. The target never starts or
-reconfigures the stack and is excluded from automatic checks. Success qualifies
-the result/payment path under Exa's contract, not independent proof of a debit;
-an unsolicited unpaid success is indistinguishable. See
-[request handling](docs/request_handling.md#optional-x402exa-api-search).
+**Enabling this wallet key authorizes automatic uncapped spending.** There is no *payment, daily, or aggregate budget; you control spending by limiting the amount you deposit in this wallet.
+
+Payment and other failures will cause SearXNG to suspend Exa temporarily; it will recover on demand without restarting.
 
 ## Optional: Tailscale Funnel
 

@@ -38,9 +38,9 @@ The Docker Compose files in this stack relies on the following components:
 
 5. [Mysterium](https://github.com/mysteriumnetwork/node) is an optional open-source WireGuard dVPN that accepts cryptocurrency payment and has a large pool of residential endpoints. It is disabled by default. Enabling it can reduce captchas and rate limiting by search engines and websites through residential exit addresses. Mysterium server-side code is open source and collects VPN start/end times and aggregate byte counts, but does not collect exit outbound connection activity. No comparable Zero Data Retention options are available to end-users to reduce captcha and ban frequency. (Firecrawl, Exa, and Brave retain all user API activity and do not offer ZDR to consumers).
 
-6. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides the five browser search engines, and optionally the built-in Onyx Web Crawler. Obscura supplies anti-fingerprinting defenses without an HTTP prefetch or local-browser fallback. Obscura and SearXNG run on narrow internal networks with authenticated browser control; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy that ensures public internet access.
+6. [Obscura Browser](https://github.com/h4ckf0r0day/obscura) provides the five browser search engines, and optionally the built-in Onyx Web Crawler. Obscura is a lightweight Chrome-like headless browser with anti-fingerprinting defenses. Obscura and SearXNG run on restricted internal networks with authenticated browser control; browser traffic crosses a fixed bridge to a destination-validating final-hop proxy that ensures all public internet access uses Tor, the Myst VPN, or a configured proxy.
 
-7. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. It is patched to issue queries in round-robin fashion to Google, Brave, DuckDuckGo, and Startpage, accessed through Obscura Browser. If an attempt produces no usable result, SearXNG will continue sequentially with a different provider. Providers are suspended after visible anti-bot failures or rate-limit responses. Bing follows exhausted selected/capable regular providers; optional paid Exa follows Bing.
+7. [SearXNG](https://github.com/searxng/searxng) is an open source meta-search engine. It is patched to issue queries in round-robin fashion to Google, Brave, DuckDuckGo, and Startpage, accessed through Obscura Browser. If an attempt produces no usable result, SearXNG will continue sequentially with a different provider. Providers are suspended after visible anti-bot failures or rate-limit responses. Bing is used as a last resort if all providers are blocked. If Bing is also blocked, [optionally configured x402 payments](./README_OPTIONAL.md#optional-paid-exa-search) are used for Exa search.
 
 8. [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) is optionally installed for local embeddings on MacOS, for RAG document search. Other local embedding providers are supported but not recommended due to accuracy and API issues. Teep can also be used for private embeddings on non-Mac hosts.
 
@@ -235,7 +235,7 @@ Select SearXNG and the built-in **Onyx Web Crawler** in the [Web Search Admin Pa
 
 The stock Onyx Web Crawler is the default reliability-oriented path, but you can set `ONYX_AGENT_USE_OBSCURA_BROWSER=true` to cause the Onyx Web Crawler to use the more isolated Obscura Browser instead of Onyx's internal fetch plus Chromium Playwright fallback.
 
-SearXNG’s five free engines use Obscura. Each browser provider keeps its own session
+SearXNG's five free engines use Obscura. Each of these engines keeps its own browser session
 for up to one hour after its last query, preserving provider cookies,
 profile/fingerprint state, and connection continuity without sharing state with
 another provider. `SEARXNG_TIMED_TYPING_PROVIDERS` can opt selected providers
@@ -358,7 +358,9 @@ The reality is that many websites subject Tor and datacenter VPNs to increased c
 
 Clouldflare has "come to the rescue" with their [web bot auth](https://blog.cloudflare.com/web-bot-auth/) program and their [monetization gateway](https://blog.cloudflare.com/monetization-gateway/), but these systems do not natively support privacy of any kind. Web Bot Auth is basically "papers please" gated-registration for commercial entities, and current x402 micropayment specs are just another form of web tracking, except you're additionally publishing your browsing wallet activity on public blockchains. As a selling point, I guess, this browsing activity can be conveniently and publicly associated with any other purchases you may have made with that wallet. [We Live in Public](https://en.wikipedia.org/wiki/We_Live_in_Public) now, apprently. (Spoiler: that movie did not end well).
 
-Personally, I do actually like micropayments as a concept. They would be vastly better than endless captchas, gated approval whitelists for big tech, and IP address bans for  self-hosted plebs and privacy-exiles. In fact, privacy-enhancing x402 micropayment middleware _do_ exist in [various](https://github.com/betterclever/zimppy/) [stages](https://github.com/DVB-ANRS/SecretPay) of [prototype](https://github.com/Micopay/micopay-protocol), but even x402 payments themselves do not yet have widespread adoption.
+Personally, I do actually like micropayments as a concept. They would be vastly better than endless captchas, gated approval whitelists for big tech, and IP address bans for  self-hosted plebs and privacy-exiles. In fact, privacy-enhancing x402 micropayment middleware _do_ exist in [various](https://github.com/betterclever/zimppy/) [stages](https://github.com/DVB-ANRS/SecretPay) of [prototype](https://github.com/Micopay/micopay-protocol), but these protocols are not compatible with x402 as it is currently deployed.
+
+If you would like to experiment with x402, you can [configure SearXNG to use USDC to pay Exa](./README_OPTIONAL.md#optional-paid-exa-search), but all search activity sent to Exa will be linkable to the wallet you create. (Exa does not currently support any privacy preserving x402 protocols).
 
 In the meantime, for users who need a residential IP address exit, Mysterium is the primary supported optional choice because its server side is open source and payment can be made in cryptocurrency.
 
