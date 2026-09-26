@@ -10,7 +10,7 @@ search:
   formats:
     - html
     - json
-  # Keep every blocking suspension equal to the provider browser-session idle
+  # Keep browser-provider blocking suspension equal to the provider browser-session idle
   # timeout so a blocked connection expires before SearXNG admits the provider
   # again.
   suspended_times:
@@ -33,7 +33,12 @@ outgoing:
 plugins: {}
 
 engines:
-  # Offline callbacks own their Obscura homepage/form transactions. The normal
+  # Five browser callbacks own their Obscura homepage/form transactions.
+  # Enabled x402exa is registered in memory before engine loading. Default pool
+  # order is selected/capable regular browsers, Bing, then Exa. Busy free engines
+  # cause waiting. SEARXNG_ROUND_ROBIN_PROVIDERS can omit free engines or Exa;
+  # an empty/disjoint pool restores native fan-out and may pay alongside free
+  # providers. Exa has a separate API failure cooldown policy. The normal
   # SearXNG HTTP client is intentionally not involved. Bing may perform a
   # second bounded transaction for sparse first-page results.
   - name: google2

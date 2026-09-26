@@ -1,0 +1,38 @@
+# Optional paid-search egress. Selected by Make only for a nonempty valid key.
+services:
+  netns-holder:
+    networks:
+      searxng-x402-policy-upstream:
+        aliases: [myst-client]
+  searxng-core:
+    environment:
+      SEARXNG_X402_PRIVKEY: "${SEARXNG_X402_PRIVKEY:-}"
+      SEARXNG_X402_PROXY: "http://searxng-x402-egress-bridge:3128"
+    networks: [searxng-x402-egress]
+    depends_on:
+      searxng-x402-egress-bridge: {condition: service_healthy}
+  searxng-x402-egress-bridge:
+    image: ${SOCAT_IMAGE:?SOCAT_IMAGE must be set}
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.forwarding: "0"
+    command: ["tcp-listen:3128,fork,reuseaddr", "tcp-connect:myst-client:3132"]
+    networks: [searxng-x402-egress, searxng-x402-policy-upstream]
+    depends_on:
+      onyx-public-egress-proxy: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\n' | socat -T 3 STDIO,ignoreeof TCP:127.0.0.1:3128,connect-timeout=3 | grep -q '^HTTP/1.1 403'"]
+      interval: 10m
+      start_interval: 5s
+      timeout: 5s
+      retries: 1
+      start_period: 30s
+
+networks:
+  searxng-x402-egress: {internal: true}
+  searxng-x402-policy-upstream: {internal: true}

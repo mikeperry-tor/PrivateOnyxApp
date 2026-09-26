@@ -1,7 +1,7 @@
 # Request handling
 
 This document describes the wrapper-managed `web_search` and built-in Onyx
-Web Crawler `open_url` paths. Search always uses the pinned Obscura browser.
+Web Crawler `open_url` paths. The five free search engines use the pinned Obscura browser; optional `x402exa` uses the Exa API.
 `open_url` uses the stock Onyx crawler by default and has an explicit direct
 Obscura mode. There is no CRW in either path.
 
@@ -512,7 +512,7 @@ returning results; omitting optional plugins does not add a search navigation
 or change final-hop routing.
 
 The settings loader also keeps none of SearXNG's inherited default engines and
-then adds only the five wrapper engines below. This is stronger than marking
+then adds the five browser engines below; enabled Exa is registered in memory before loading. This is stronger than marking
 stock engines disabled: unused engines are never imported or initialized, so
 they cannot perform startup DNS/network work or retain engine-specific state.
 
@@ -547,7 +547,7 @@ SearXNG's normal HTTP transport, retry internally, or choose another provider.
 
 The provider forms receive these explicit engine-owned values in addition to
 their own successful controls: Google receives `hl=en`, `udm=14`, and optional
-`start`/`tbs`; Brave receives optional `tf`/`offset`; DuckDuckGo receives
+`start`; Brave receives optional `offset`; DuckDuckGo receives
 `ia=web`; Startpage receives `cat=web` and optional `page`; and Bing receives
 `adlt=off`, `setlang=en`, and optional `first`. Existing provider-generated
 hidden state remains in the form. Unknown, duplicate, or conflicting explicit
@@ -773,7 +773,7 @@ arming the idle clock. Session state does not otherwise change suspension,
 provider selection, cooldown, or scoring.
 
 With `SEARXNG_ROUND_ROBIN=true` (default), the existing orchestration selects
-one available normal custom provider and removes the other selected engines
+one selected request-capable regular browser provider and removes the other selected engines
 from that attempt. A completed zero-result attempt or an unresponsive attempt
 with no main results advances sequentially to another normal provider. A
 normal provider that is merely active, reserved, or cooling remains eligible
@@ -784,7 +784,8 @@ rule, so neither occupied regular providers nor an ineligible Bing are recorded
 as rate-limited in engine statistics.
 Bing becomes eligible only after every selected non-suspended normal provider
 has failed in that request or the remaining normal providers are already
-suspended. Last-resort scoring is retained. Blocking conditions flow through
+suspended or incapable of that request. Optional Exa follows selected/capable Bing
+under the default pool policy. Last-resort scoring is retained. Browser blocking conditions flow through
 the ordinary offline processor and suspend the provider. SearXNG owns caller
 timeouts, late results, unresponsive-engine reporting, and suspension state.
 
@@ -851,7 +852,7 @@ carried from one provider rotation into another:
   continues cleanup/outcome processing and retains its provider lease until it
   actually finishes.
 
-A request that sequentially reaches all five distinct providers therefore has
+A request that sequentially reaches all five distinct browser providers therefore has
 up to 300 seconds of nominal provider execution windows, plus admission waits.
 There is intentionally no separate whole-SearXNG-request deadline in this
 wrapper. The one-hour browser idle lifetime and blocking suspension are state
@@ -1037,3 +1038,107 @@ Relevant controls are documented in `.env.wrapper.example`:
 Obscura connection capacity, direct API fetch concurrency, browser navigation
 deadline, and the internal retention limits are fixed reviewed implementation
 values, not user-facing tuning controls.
+
+## Optional x402exa API search
+
+A valid nonempty `SEARXNG_X402_PRIVKEY` enables `x402exa` and its matching shortcut
+in `general`; empty disables it. Malformed keys, disabled round-robin, a worker
+count other than one, or a mismatched fixed proxy fail service startup. No startup
+balance lookup, discovery, RPC, or payment occurs. Free engines remain the base
+configuration. See [wallet setup](../README.md#optional-paid-exa-search).
+
+The scheduler chooses pool-versus-native dispatch from the actual caller-selected
+set before filtering capabilities or suspensions. It computes native `get_params`
+once per candidate and dispatches those same params. Inside a pool, regular
+browser engines precede Bing, which precedes Exa; untried eligible free engines
+that are busy/reserved/cooling force waiting. Empty results and failed attempts
+exhaust that provider for the request. No provider is selected twice. The internal
+`SEARXNG_ROUND_ROBIN_PROVIDERS` override stays unrestricted: intersection selects
+only those names; an empty/disjoint pool restores native dispatch, potentially
+running Exa alongside free engines. Explicit Exa-only selection can pay immediately.
+
+Exa buys one fixed `auto` search with at most ten results, highlights, text off,
+no summary, and no extra content request. Page > 1 and concrete requested languages
+are ineligible before admission. Language provenance comes from native
+`selected_locale`, not the resolved automatic locale. Time ranges mean the preceding
+1/7/30/365 days, captured once for both exchanges. Time-filtered default requests
+skip every current browser engine. SafeSearch 0 disables moderation; 1 and 2 enable
+it. Query operators remain text; equivalent structured filtering is not promised.
+
+One worker-local API reservation admits one active attempt, with at least three
+seconds between first HTTP request starts. No browser lease/context is allocated.
+The processor owns admission through real cleanup and records suspension before
+release. Native `SuspendedStatus` is the sole suspension authority. Scheduled
+capacity waiting precedes a fresh 60-second engine window; native fan-out waiting
+consumes its existing window. Transport and signing share the earlier of 55 seconds
+after admission and the actual processor deadline minus one second, including
+shorter query/configuration limits. Async HTTPX I/O uses that absolute deadline;
+synchronous parsing/signing checks it before and afterward and before dispatch.
+Timeout markers prevent late signing/submission; already-submitted payments can settle.
+
+The fixed endpoint is `https://api.exa.ai/search`, using verified Python TLS through
+`http://searxng-x402-egress-bridge:3128`. No ambient proxy, netrc, NO_PROXY bypass,
+redirect, HTTP retry, SDK recovery hook, RPC, or facilitator request is permitted.
+A cold attempt makes at most one unsigned POST and one signed POST with the same
+serialized body. A warm attempt sends only one newly signed POST. Unsigned 200
+may return unpaid results and never fabricates terms or signs. Paid 402 is terminal.
+
+The x402 SDK alone decodes protocol structures, selects supported offers, serializes
+headers and signs EIP-3009. The deployment supports v2, exact, native Base USDC,
+no extensions, matching optional resource URL, authorization flow, and the effective
+USD Coin/version 2 domain. It removes the SDK monetary ceiling without disabling
+asset filtering. There is no application spending budget or price ceiling.
+The SDK controls nonce, `validAfter=0`, and authorization lifetime. No wrapper
+lifetime cap, clock-skew rule, signature reconstruction, or receipt correlation
+is imposed. Keep the host clock synchronized.
+
+One demand-driven worker-local entry reuses validated requirements across queries,
+filters, exits, and expired prior authorizations. Exa specifies no reuse lifetime;
+the accepted policy is unbounded reuse until rejection, not a guarantee of acceptance.
+A signed 402 or decoded negative settlement invalidates terms, optionally retaining
+validated replacement terms for a later search. Other failures retain usable terms.
+Restart clears the entry. There is no query/result cache, signed-payload cache,
+refresh timer, polling, persistent payment ledger, or permanent API event-loop thread.
+
+Paid results require successful HTTP status and a v2 SDK-decoded successful receipt.
+The receipt is an authenticated server assertion with schema validation only, not
+on-chain or authorization-correlated proof. Record it from headers before reading
+the body. Payment outcome is separate from result validity: malformed/truncated/
+undecodable bodies retain any reported settlement success and never cause repayment.
+Unknown after submission remains potentially charged. Valid empty results are success.
+Malformed responses or all-invalid rows are errors. Keep up to ten valid rows in order,
+plain-text title/highlights, snippets bounded to 2,000 characters, and no images.
+URL normalization uses the shared public URL helper without DNS/fetches and preserves
+queries, encoded separators, and fragments. HTTP/onion metadata does not authorize
+subsequent crawling. Native HTTP/SDK response allocation remains unbounded by bytes;
+deadlines and output limits are not hard memory or synchronous CPU protection.
+
+429 suspends 60..3,600 seconds using bounded Retry-After; access denial suspends
+3,600 seconds. Other failures suspend 60 seconds before signed dispatch or 300 after.
+All unexpected parser/SDK/transport failures take this native suspension path,
+with sanitized reason and payment outcome. Admission expiry/capability exclusions
+are not failures. Funding requires no restart after cooldown; it does not revoke
+an ambiguous authorization, which can settle after a later top-up. Queued requests
+can begin paying after Onyx's ten-minute wait ends or the caller disconnects.
+
+The Exa path never automatically logs queries, keys, raw challenges, signatures,
+wallet addresses, transactions, or bodies. SDK signer and HTTP transport debug logs
+are suppressed; existing Onyx debug query logging remains unchanged.
+
+Onyx admin setup uses bounded five-second connect/read calls without redirects:
+GET `/config` must identify SearXNG, then POST `/search` with only `format=json`
+and empty `q` must return HTTP 400 JSON exactly `{"error":"No query"}`. Other
+statuses/content types/bodies fail; 403 diagnoses JSON access. This route returns
+before engine dispatch, so it cannot pay. Ordinary `test` remains a normal query.
+This validates local identity/JSON access, not provider or payment readiness.
+
+Validation: `make check`, `make test-patch-images` with synthetic keys and disabled
+networking, and effective Compose models for enabled/disabled lite/full, both
+engines, executor composition, and both Tor roles. Socket fixtures must separately
+prove CONNECT/TLS/deadline behavior. `make integration-x402exa` is the sole paid
+qualification workflow, sending one public synthetic query explicitly to Exa on
+the running stack with no retry/start/reconfiguration. Empty configuration skips;
+invalid configuration fails. It is excluded from startup, tests, image gates and
+upgrades. Its one-search bound excludes unrelated/queued stack traffic. Nonempty
+attributed snippets qualify the path under Exa's settlement contract, not independent
+proof of a debit; ordinary results cannot identify an unsolicited unpaid success.

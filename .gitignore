@@ -1,4 +1,5 @@
 # Local configuration and private data used by the stack
+/.x402-wallet/
 /.env.wrapper
 /doc-drop/
 /docker-data/

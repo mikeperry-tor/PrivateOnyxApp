@@ -1,8 +1,8 @@
 # Optional Exa search through x402 on Base
 
-Status: implementation plan; implementation has not started. The decisions below
+Status: implemented; funded live and full-stack lifecycle qualification pending. The decisions below
 include the user's explicit preferences and the subsequent implementation
-clarifications. This file provides the accepted design for implementation.
+clarifications. This file provides the accepted design for implementation. Current behavior is documented in [request handling](../request_handling.md#optional-x402exa-api-search), [routing](../vpn_routing_and_proxies.md#optional-exa-api-route), and [setup](../../README.md#optional-paid-exa-search).
 
 ## Objective and accepted decisions
 
@@ -1139,3 +1139,32 @@ passing, focused selected-image evidence recorded, effective models qualified,
 practical lifecycle/live rows either completed or explicitly reported blocked,
 and owning docs matching implementation. No new hidden retries, spending caps,
 direct egress, unrequested wallet mutation, or unrelated patch rewrites.
+
+## Consolidated implementation qualification
+
+The implementation is in the owning documents linked above. Offline acceptance
+includes the deterministic suite, Make-selected effective models, and the focused
+selected-image gate. The latter exercises real SDK signing with synthetic keys,
+actual loopback CONNECT/TLS and response failures, the real scheduler and processor,
+concurrent scoring, native locale handling, Onyx's non-search probe, and the real
+SearXNG parent/worker entrypoint in network-disabled disposable containers.
+ARM64 and AMD64 builds pass hashed dependency installation, combined-environment
+consistency, imports, and synthetic SDK/socket checks. AMD64 execution uses Docker
+Desktop emulation, not a native Linux host.
+
+Model coverage includes lite/full, disabled/enabled Exa, Docker/Podman,
+executor composition where supported, no-VPN/VPN/upstream proxy/Tor routes,
+simultaneous Tor ingress/egress, macOS/Linux and rootless overlays, down-layer
+removal, and unset/empty/explicit host binds. These are model checks, not live
+network-isolation or namespace-transition evidence.
+
+The new wallet is stored in the ignored owner-only local wallet directory;
+its key has not been installed into operator configuration. No live paid request
+has been sent. Funded `integration-x402exa`, matching-mode down/config-change/up,
+actual host-bind checks, host/public-policy connectivity, and live route-failure
+checks remain for the configured live phase. Full-stack `up-lite`/`up-full` and
+targeted service logs were not exercised during offline implementation because
+the new key has not been explicitly configured and the operator stack was not
+reconfigured. Native Linux/rootless Docker and Podman execution remain unavailable
+in this Docker Desktop qualification; rendered-model evidence does not replace
+those platform rows. Live Tor latency/exit acceptance is likewise still unqualified.

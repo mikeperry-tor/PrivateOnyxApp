@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SECRET_ENV = {
     # Production Make invocations export the content-derived image name before
     # Compose interpolation. Direct Compose-model tests supply an inert value.
+    "PRIVATE_ONYX_PUBLIC_PROXY_PEERS": "onyx-public-egress-bridge,obscura-egress-bridge",
     "SEARXNG_WRAPPER_IMAGE": "local/private-onyx-searxng:test-model",
     "PYTHON_EXECUTOR_IMAGE": "local/private-onyx-python-executor:test-model",
     "CODE_INTERPRETER_IMAGE": "local/private-onyx-code-interpreter:test-model",
@@ -104,10 +105,15 @@ def _compose_model(
         "--format",
         "json",
     ])
+    peers = SECRET_ENV["PRIVATE_ONYX_PUBLIC_PROXY_PEERS"]
+    if "docker-compose.code-interpreter-network.yml" in extra_files:
+        peers += ",executor-egress-bridge"
+    if "docker-compose.searxng-x402.yml" in extra_files:
+        peers += ",searxng-x402-egress-bridge"
     completed = subprocess.run(
         command,
         cwd=ROOT,
-        env={**_wrapper_neutral_environment(), **SECRET_ENV, **(env_overrides or {})},
+        env={**_wrapper_neutral_environment(), **SECRET_ENV, "PRIVATE_ONYX_PUBLIC_PROXY_PEERS": peers, **(env_overrides or {})},
         check=True,
         capture_output=True,
         text=True,
@@ -378,6 +384,8 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             "docker-compose.tor-onion.yml",
             "docker-compose.tor-podman.yml",
             "docker-compose.tor.yml",
+            "docker-compose.searxng-x402.yml",
+            "docker-compose.searxng-x402-docker.yml",
         }
         overlay_directory = ROOT / "compose_overlays"
         self.assertEqual(
@@ -551,6 +559,8 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 docker = _compose_model(
                     "lite",
                     "docker-compose.tor.yml",
+                "docker-compose.searxng-x402.yml",
+                "docker-compose.searxng-x402-docker.yml",
                     "docker-compose.tor-egress.yml",
                     "docker-compose.tor-docker.yml",
                     "docker-compose.tor-egress-docker.yml",

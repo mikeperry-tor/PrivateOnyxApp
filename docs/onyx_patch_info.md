@@ -256,7 +256,7 @@ The derived image is based on SearXNG `2026.7.15-7b2199ecd` and strictly
 validates the upstream offline processor, search orchestration, result
 container, timeout, and exception shapes used by its runtime patches. The
 derived `searxng/Dockerfile` installs all build-time pinned Python
-dependencies, including the audited Playwright 1.58 client, from the generated
+dependencies, including the x402 SDK and direct WebSockets client, from the generated
 hashed `searxng/requirements.txt` lock. It downloads neither a browser nor
 packages at runtime. The Makefile derives the local image tag from the pinned
 upstream tag and the complete set of embedded Dockerfile, lock, shared-client,
@@ -397,7 +397,7 @@ without a later redundant idle close. This mode is not used by either
 in [Request handling](request_handling.md).
 
 The overlay uses `use_default_settings.engines.keep_only: []` and explicitly
-adds only those five engines. Unused stock engines are absent rather than merely
+adds those five engines; the optional Exa bootstrap adds a sixth in memory. Unused stock engines are absent rather than merely
 disabled, preventing their initialization and associated startup network work.
 
 The SearXNG startup patch keeps round-robin selection/rotation and last-resort
@@ -417,7 +417,7 @@ produce an empty result or make Bing eligible.
 The API bootstrap unwraps only Onyx's generic three-attempt
 `SearXNGClient.search` retry, so each query creates one SearXNG `/search` HTTP
 request and SearXNG is the only rotation authority. It does not change the
-separate built-in `open_url` crawler or its transport recovery. Every blocking
+separate built-in `open_url` crawler or its transport recovery. Every browser blocking
 condition suspends its provider for the same one-hour period as session idle
 expiry. See [Request handling](request_handling.md) for the scheduling,
 cooldown, concurrency, and failure contracts.
@@ -1411,3 +1411,22 @@ unavailability with the explicitly empty URL, persona tool exclusion, API
 availability with a healthy controller fixture, and Slack/Discord request
 semantics. Keep the [executor cleanup residual](resource_minimization.md#executor-lifetime-and-cleanup)
 explicit without adding a mandatory lifetime probe or daemon-wide cleanup.
+
+## Optional API search and non-search setup validation
+
+SearXNG's ordered bootstrap validates the key/worker/round-robin/proxy configuration,
+augments the canonical settings object before processor/search imports and engine
+loading, and installs the native selected-locale adapter before webapp imports.
+Settings paths and auxiliary lookup directories stay unchanged. Pure support
+modules are inert. The exact resource-tracker exclusion bypasses all application
+work; other bootstrap failures exit 78 instead of CPython suppressing them.
+
+Scheduling carries once-per-candidate native params into dispatch, uses separate
+browser/API admission, and retains classification-before-release. Exa stays outside
+the browser registry. Scoring recompiles the validated upstream ordering function
+with function-local sorting; it never mutates the results module's globals or
+serializes independent containers. Native mixed-engine Bing scoring stays intact.
+
+The API bootstrap separately installs the strict non-search SearXNG connection
+probe while preserving ordinary search retry removal. See the canonical
+[API search and diagnostics contract](request_handling.md#optional-x402exa-api-search).

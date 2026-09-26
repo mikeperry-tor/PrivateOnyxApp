@@ -62,6 +62,13 @@ class _Processor:
     def __init__(self, suspended: bool):
         self.suspended_status = SimpleNamespace(is_suspended=suspended)
 
+    def get_params(self, query, category):
+        return {}
+
+    @property
+    def engine(self):
+        return SimpleNamespace(timeout=60)
+
     def extend_container_if_suspended(self, result_container):
         if not self.suspended_status.is_suspended:
             return False
@@ -129,6 +136,8 @@ def _install_scheduler_stubs(*, suspended: set[str], reservable: set[str]):
     search = types.ModuleType("searx.search")
     search.__path__ = []
     search.default_timer = time.monotonic
+    search.settings = {"outgoing": {"max_request_timeout": None}}
+    search.counter_inc = lambda *args: None
     processors = types.ModuleType("searx.search.processors")
     processors.__path__ = []
     processors.PROCESSORS = {
@@ -179,9 +188,10 @@ def _new_patchable_search(patch, query: str):
     search = _PatchableSearch()
     search.search_query = SimpleNamespace(
         engineref_list=[
-            SimpleNamespace(name=name) for name in patch._round_robin_providers()
+            SimpleNamespace(name=name, category="general") for name in patch._round_robin_providers()
         ],
         query=query,
+        timeout_limit=None,
     )
     search.result_container = SimpleNamespace(
         main_results_map={},
@@ -259,7 +269,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
                 "q",
                 "/search",
                 "get",
-                {"hl", "udm", "start", "tbs"},
+                {"hl", "udm", "start"},
             ),
             "brave2": (
                 "https://search.brave.com/",
@@ -267,7 +277,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
                 "q",
                 "/search",
                 "get",
-                {"tf", "offset"},
+                {"offset"},
             ),
             "duckduckgo2": (
                 "https://noai.duckduckgo.com/",
@@ -826,7 +836,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         patch = _load_patch_module()
         patch._env_enabled = lambda *_args: True
         patch._require_source = lambda *_args, **_kwargs: None
-        provider_names = tuple(patch._round_robin_providers())
+        provider_names = patch._ROUND_ROBIN_DEFAULT_PROVIDERS
         searx = types.ModuleType("searx")
         searx.__path__ = []
         engines = types.ModuleType("searx.engines")
@@ -838,6 +848,8 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         engines._obscura = self.module
         search_module = types.ModuleType("searx.search")
         search_module.__path__ = []
+        search_module.settings = {"outgoing": {"max_request_timeout": None}}
+        search_module.counter_inc = lambda *args: None
         search_module.Search = _PatchableSearch
         search_module.default_timer = time.monotonic
         processors = types.ModuleType("searx.search.processors")
@@ -1095,7 +1107,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             suspended=set(),
             reservable={"bing2"},
         )
-        refs = [SimpleNamespace(name=name) for name in patch._round_robin_providers()]
+        refs = [SimpleNamespace(name=name, category="general") for name in patch._round_robin_providers()]
 
         selected, reservations = patch._round_robin_selected_refs(refs)
 
@@ -1128,7 +1140,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             suspended=regular,
             reservable={"bing2"},
         )
-        refs = [SimpleNamespace(name=name) for name in patch._round_robin_providers()]
+        refs = [SimpleNamespace(name=name, category="general") for name in patch._round_robin_providers()]
 
         selected, reservations = patch._round_robin_selected_refs(refs)
 
@@ -1142,7 +1154,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             suspended={"brave2", "duckduckgo2", "startpage2", "bing2"},
             reservable={"google2"},
         )
-        refs = [SimpleNamespace(name=name) for name in patch._round_robin_providers()]
+        refs = [SimpleNamespace(name=name, category="general") for name in patch._round_robin_providers()]
 
         selected, reservations = patch._round_robin_selected_refs(
             refs,
@@ -1218,6 +1230,8 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         engines._obscura = obscura
         search_module = types.ModuleType("searx.search")
         search_module.__path__ = []
+        search_module.settings = {"outgoing": {"max_request_timeout": None}}
+        search_module.counter_inc = lambda *args: None
         search_module.Search = _PatchableSearch
         search_module.default_timer = lambda: 321.0
         processors = types.ModuleType("searx.search.processors")
@@ -1244,8 +1258,9 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
 
         search = _PatchableSearch()
         search.search_query = SimpleNamespace(
-            engineref_list=[SimpleNamespace(name=name) for name in provider_names],
+            engineref_list=[SimpleNamespace(name=name, category="general") for name in provider_names],
             query="capacity",
+            timeout_limit=None,
         )
         unavailable = []
         search.result_container = SimpleNamespace(
@@ -1285,6 +1300,8 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             lambda name, token: released.append((name, token))
         )
         search_module = sys.modules["searx.search"]
+        search_module.settings = {"outgoing": {"max_request_timeout": None}}
+        search_module.counter_inc = lambda *args: None
         search_module.Search = _PatchableSearch
         abstract = types.ModuleType("searx.search.processors.abstract")
         abstract.EngineProcessor = SimpleNamespace(extend_container=lambda: None)
@@ -1294,9 +1311,10 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         search = _PatchableSearch()
         search.search_query = SimpleNamespace(
             engineref_list=[
-                SimpleNamespace(name=name) for name in patch._round_robin_providers()
+                SimpleNamespace(name=name, category="general") for name in patch._round_robin_providers()
             ],
             query="dispatch failure",
+            timeout_limit=None,
         )
         search.result_container = SimpleNamespace(
             main_results_map={},

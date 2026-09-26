@@ -55,8 +55,10 @@ def read_wrapper_settings(
     *,
     require_file: bool = False,
     validate_all: bool = False,
+    names: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Read selected settings and optionally validate the complete wrapper file."""
+    names = SETTING_DEFAULTS if names is None else names
     values: dict[str, str] = {}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -80,16 +82,16 @@ def read_wrapper_settings(
             raw_name != name or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
         ):
             raise ConfigError(f"invalid wrapper setting name on line {line_number}")
-        if name not in SETTING_DEFAULTS and not validate_all:
+        if name not in names and not validate_all:
             continue
-        if name in SETTING_DEFAULTS and (
+        if name in names and (
             raw_name != name or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
         ):
             raise ConfigError(
                 f"invalid wrapper setting name on line {line_number}"
             )
         parsed_value = _parse_env_value(value, line_number=line_number)
-        if name in SETTING_DEFAULTS:
+        if name in names:
             values[name] = parsed_value
     return values
 
@@ -275,9 +277,25 @@ def atomic_write(path: Path, content: str) -> None:
         raise
 
 
+def x402_enabled(path):
+    # Do not add the key to generic getters, diagnostics, or Make expansions.
+    import importlib.util
+    config_path = Path(__file__).resolve().parents[1] / "searxng/patches/x402_config.py"
+    spec = importlib.util.spec_from_file_location("wrapper_x402_config", config_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    defaults = {module.KEY_NAME: "", "SEARXNG_ROUND_ROBIN": "true"}
+    values = defaults | read_wrapper_settings(path, names=defaults)
+    values.update({name: os.environ[name] for name in defaults if name in os.environ})
+    try:
+        return module.enabled(values[module.KEY_NAME], values["SEARXNG_ROUND_ROBIN"])
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("get", "validate", "render"))
+    parser.add_argument("action", choices=("get", "validate", "render", "x402-enabled"))
     parser.add_argument("--settings-file", required=True)
     parser.add_argument("--name", choices=tuple(SETTING_DEFAULTS))
     parser.add_argument("--output")
@@ -287,6 +305,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.action == "x402-enabled":
+            if args.name or args.output:
+                raise ConfigError("x402-enabled accepts only --settings-file")
+            print("true" if x402_enabled(Path(args.settings_file)) else "false")
+            return 0
         values = settings_from_file_and_environment(
             Path(args.settings_file),
             require_file=args.action != "get",
@@ -301,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.name:
             raise ConfigError("--name is valid only for get")
+        if args.action == "validate":
+            x402_enabled(Path(args.settings_file))
         egress, onion, country, fingerprints = validate_settings(values)
         if args.action == "render":
             if not args.output:

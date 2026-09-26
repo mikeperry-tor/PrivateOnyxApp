@@ -42,7 +42,7 @@ class EmbedservEnvironmentSyncTests(unittest.TestCase):
         )
         self.assertEqual(
             (ROOT / "searxng/requirements.in").read_text(encoding="utf-8"),
-            "playwright==1.58.0\nwebsockets==17.0.1\n",
+            "eth-account==0.13.7\nhttpx==0.28.1\nwebsockets==17.0.1\nx402[evm]==2.24.0\n",
         )
         self.assertEqual(
             (ROOT / "executor/requirements.in").read_text(encoding="utf-8"),

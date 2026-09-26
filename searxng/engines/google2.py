@@ -32,7 +32,6 @@ time_range_support = False
 safesearch = False
 language_support = False
 
-time_range_dict = {"day": "d", "week": "w", "month": "m", "year": "y"}
 
 # Google SERP result links.  Google rotates class names frequently; the most
 # stable hook across classic and udm=14 ("Web") SERPs is still a title anchor
@@ -64,10 +63,7 @@ def search(query: str, params: "RequestParams"):
     fixed_fields: list[tuple[str, str]] = [("hl", "en"), ("udm", "14")]
     if start:
         fixed_fields.append(("start", str(start)))
-    if params.get("time_range") in time_range_dict:
-        fixed_fields.append(
-            ("tbs", "qdr:" + time_range_dict[params["time_range"]])
-        )
+
 
     return _parse_html(
         _obscura.submit_search(

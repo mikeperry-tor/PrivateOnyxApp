@@ -59,7 +59,7 @@ INTERACTIONS = {
         query_field_name="q",
         form_action_path="/search",
         form_method="get",
-        allowed_fixed_field_names=frozenset({"hl", "udm", "start", "tbs"}),
+        allowed_fixed_field_names=frozenset({"hl", "udm", "start"}),
     ),
     "brave2": SearchInteractionSpec(
         homepage_url="https://search.brave.com/",
@@ -69,7 +69,7 @@ INTERACTIONS = {
         query_field_name="q",
         form_action_path="/search",
         form_method="get",
-        allowed_fixed_field_names=frozenset({"tf", "offset"}),
+        allowed_fixed_field_names=frozenset({"offset"}),
     ),
     "duckduckgo2": SearchInteractionSpec(
         homepage_url="https://noai.duckduckgo.com/",

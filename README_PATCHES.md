@@ -15,11 +15,18 @@ We carry several patches to SearXNG and Obscura Browser to improve search engine
 ### SearXNG Anti-Ban Improvements
 
 - Google, Brave, DuckDuckGo, Startpage, and Bing searches use Obscura Browser to submit each provider's search form. Each provider retains its own cookies and stable browser fingerprint between searches, reducing repeated session setup and inconsistent browser signals.
-- Searches rotate among available providers and try another provider when an attempt fails or returns no results. Searches to the same provider are serialized and spaced at least three seconds apart, with a one-hour suspension after blocks or rate limits.
+- Searches rotate among available providers and try another provider when an attempt fails or returns no results. Searches to the same provider are serialized and spaced at least three seconds apart, with a one-hour browser-provider suspension after blocks or rate limits.
 - Startpage searches can complete Anubis proof-of-work challenges automatically within the search time limit. Unsupported challenges and CAPTCHAs still cause the provider to be temporarily suspended.
-- Bing is an engine of last resort, used only after the other selected providers have failed for that query or are suspended. If its first page has fewer than five valid results, the engine also checks page two and returns up to ten distinct results.
+- Bing follows the regular browser engines, used only after the other selected providers have failed for that query or are suspended. If its first page has fewer than five valid results, the engine also checks page two and returns up to ten distinct results.
 - DuckDuckGo searches use its JavaScript-rendered No-AI search page and wait for results to finish loading. Unexpected or incomplete result pages are reported as failures rather than mistaken for an empty search.
 - Onyx's duplicate search retries are disabled so that SearXNG alone decides when to try another provider. Each query tries a provider at most once, avoiding repeated attempts against an already blocked engine.
+
+- Optional `x402exa` purchases API searches after selected/capable free providers
+  and Bing are exhausted. [Setup](README.md#optional-paid-exa-search) and
+  [paid-search policy](docs/request_handling.md#optional-x402exa-api-search) describe
+  uncapped spending, wallet linkage, and routing.
+- Onyx's admin connection check validates identity and empty-query JSON handling
+  without executing engines or payments.
 
 ### Obscura Browser Anti-Ban Improvements
 

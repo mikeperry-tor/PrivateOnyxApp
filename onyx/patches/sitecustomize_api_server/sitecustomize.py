@@ -38,6 +38,7 @@ def _install() -> None:
     from onyx_wrapper_patches.api.reasoning import apply_reasoning_content_preservation_patch
     from onyx_wrapper_patches.api.reasoning import apply_reasoning_mode_trace_patch
     from onyx_wrapper_patches.api.searxng_retry import apply_searxng_single_attempt_patch
+    from onyx_wrapper_patches.api.searxng_retry import apply_searxng_connection_probe_patch
     from onyx_wrapper_patches.api.tool_calls import apply_vllm_glm_auto_tool_choice_patch
     from onyx_wrapper_patches.api.open_url import (
         install_failure_reporting as install_open_url_failure_reporting,
@@ -86,6 +87,7 @@ def _install() -> None:
     apply_agent_prompt_stability_patches()
     apply_chat_file_id_validation_patch()
     apply_searxng_single_attempt_patch()
+    apply_searxng_connection_probe_patch()
     install_webui_reconnect_status()
     install_url_identity_preservation()
     # Identity precedes failure reporting; the limit wrapper captures that

@@ -950,3 +950,22 @@ Compose container or shared-data marker is created.
 Record exactly what could not be exercised and why. Leave the matching Podman
 stack state explicit at handoff, and never stop or recreate a user-owned VM or
 delete a native volume without authorization.
+
+## Optional x402exa composition
+
+Make selects the Exa bridge overlay for a valid nonempty key on either engine.
+The two dedicated networks are internal; Docker alone selects isolated gateway
+options. Podman retains its existing host-service reachability limitations.
+The host search publisher defaults to IPv4 loopback for unset/empty
+`SEARXNG_HOST` in both modes. Explicit broader binds remain unauthenticated and
+can spend. The wallet helper uses the selected existing image without networking,
+volumes, runtime env files or container log storage, and writes owner-only host
+files without container ownership repair.
+
+Validate enabled/disabled lite/full models, executor plus Exa where supported,
+platform layers, both Tor roles, native startup-health translation, host binding,
+and wallet permissions/log suppression. Enablement changes require matching-mode
+down/config-change/up on the same engine; namespace holder, Myst and both policy
+proxies must be recreated. Down removes old Exa services even after key removal.
+Rendered models do not establish live Linux, rootless, Desktop, or Podman behavior.
+See [routing](vpn_routing_and_proxies.md#optional-exa-api-route).

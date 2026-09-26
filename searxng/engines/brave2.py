@@ -35,7 +35,6 @@ time_range_support = False
 safesearch = False
 language_support = False
 
-time_range_dict = {"day": "pd", "week": "pw", "month": "pm", "year": "py"}
 
 # Each organic result is <div class="snippet ..." data-type="web" data-pos="N">.
 results_xpath = '//div[@data-type="web"]'
@@ -53,10 +52,7 @@ url_xpath = './/cite[contains(@class, "snippet-url")]'
 def search(query: str, params: "RequestParams"):
     """Submit the Brave homepage form and parse the rendered result DOM."""
     fixed_fields: list[tuple[str, str]] = []
-    if params.get("time_range") in time_range_dict:
-        fixed_fields.append(("tf", time_range_dict[params["time_range"]]))
-    if params["pageno"] > 1:
-        fixed_fields.append(("offset", str((params["pageno"] - 1) * 10)))
+
 
     return _parse_html(
         _obscura.submit_search(

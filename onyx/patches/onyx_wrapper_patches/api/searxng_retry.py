@@ -7,6 +7,58 @@ from onyx_wrapper_patches.common.config import _raise_if_strict
 from onyx_wrapper_patches.common.config import _warn_or_raise
 
 
+def apply_searxng_connection_probe_patch() -> None:
+    """Validate local identity and JSON access without executing a search."""
+    from onyx.tools.tool_implementations.web_search.clients import searxng_client as module
+    client = module.SearXNGClient
+    for method, markers in (
+        (client.test_connection, ('requests.get(', 'config.get("brand", {}).get("GIT_URL")', 'self._test_json_mode()')),
+        (client._test_json_mode, ('"q": "test"', 'requests.post(', 'timeout=5')),
+    ):
+        if list(inspect.signature(method).parameters) != ["self"] or any(
+            marker not in inspect.getsource(method) for marker in markers
+        ):
+            _warn_or_raise("SearXNG connection probe source contract changed")
+            return
+
+    def fail(detail):
+        raise module.HTTPException(status_code=400, detail=detail) from None
+
+    def test_json(self):
+        try:
+            response = module.requests.post(
+                f"{self._searxng_base_url}/search", data={"format": "json", "q": ""},
+                timeout=(5, 5), allow_redirects=False,
+            )
+            if response.status_code == 403:
+                fail("SearXNG denied JSON access; enable json in search.formats and check access policy.")
+            if (response.status_code != 400
+                    or response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json"
+                    or response.json() != {"error": "No query"}):
+                fail("SearXNG returned an unexpected empty-query JSON response.")
+        except (module.requests.RequestException, ValueError):
+            fail("SearXNG JSON connection validation failed.")
+
+    def test_connection(self):
+        try:
+            response = module.requests.get(
+                f"{self._searxng_base_url}/config", timeout=(5, 5), allow_redirects=False,
+            )
+            if response.status_code != 200:
+                fail("SearXNG configuration endpoint is unavailable.")
+            config = response.json()
+            if not isinstance(config, dict) or not isinstance(config.get("brand"), dict) or config["brand"].get("GIT_URL") != "https://github.com/searxng/searxng":
+                fail("This does not appear to be a SearXNG instance.")
+        except (module.requests.RequestException, ValueError):
+            fail("SearXNG identity validation failed.")
+        self._test_json_mode()
+        return {"status": "ok"}
+
+    client.test_connection = test_connection
+    client._test_json_mode = test_json
+    print("sitecustomize: installed non-search SearXNG connection probe", flush=True)
+
+
 def apply_searxng_single_attempt_patch() -> None:
     """Send each Onyx web-search query to SearXNG exactly once.
 

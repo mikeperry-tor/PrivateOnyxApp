@@ -542,3 +542,15 @@ For affected lifecycle changes, validate both engines where supported:
 - No short deadline for a live cold model load.
 - No weakening of VPN, proxy, bridge, peer, PID, port, model, or shared-storage
   ownership validation in exchange for lower idle usage.
+
+### Optional API search resources
+
+The default/disabled set remains five browser engines. Enabled Exa adds one
+worker-local active API attempt with three-second first-request spacing and one
+in-memory validated-requirements entry. Native processor suspension is its sole
+cooldown authority. Requirements are retained until rejection, lost on restart,
+and refreshed only on demand; no timer, balance polling, ledger, persistence,
+request deduplication, or permanent API event-loop thread is added. A fresh
+per-attempt async loop and HTTP client close after actual cleanup. The fixed
+bridge uses local five-second startup/ten-minute steady health checks that never
+search or pay. Output limits and deadlines do not provide a response-memory cap.

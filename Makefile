@@ -575,10 +575,53 @@ SEARXNG_REQUIREMENTS := searxng/requirements.txt
 SEARXNG_PYTHON_VERSION := 3.14
 UV_CACHE_DIR ?= /tmp/private-onyx-uv-cache
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)$(DOCKER_NETWORK_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_MACOS_FULL_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_LINUX_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_TEEP_EMBEDDING_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)$(DOCKER_NETWORK_SUFFIX)
-LITE_DOWN_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)$(DOCKER_NETWORK_SUFFIX)
-FULL_DOWN_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_MACOS_FULL_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_LINUX_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_TEEP_EMBEDDING_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)$(DOCKER_NETWORK_SUFFIX)
+# Key values remain solely in Compose's environment interpolation. This helper
+# emits one validated boolean only for workflows selecting a running stack.
+ifneq ($(filter command line environment,$(origin SEARXNG_X402_PRIVKEY)),)
+override SEARXNG_X402_PRIVKEY := $(value SEARXNG_X402_PRIVKEY)
+export SEARXNG_X402_PRIVKEY
+endif
+X402_SUFFIX :=
+override X402_SELECTED := false
+X402_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.searxng-x402.yml
+X402_DOCKER_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.searxng-x402-docker.yml
+X402_DOWN_SUFFIX := :$(X402_FILE)
+ifeq ($(PODMAN_SELECTED),false)
+ifneq ($(PRIVATE_ONYX_DOCKER_GATEWAY_MODE),ordinary)
+X402_DOWN_SUFFIX := $(X402_DOWN_SUFFIX):$(X402_DOCKER_FILE)
+endif
+endif
+ifneq ($(filter up up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full health-inventory wrapper-config-preflight integration-x402exa,$(MAKECMDGOALS)),)
+override X402_SELECTED := $(shell python3 tor/render_config.py x402-enabled --settings-file "$(ENV_FILE)" || echo invalid)
+ifneq ($(filter $(X402_SELECTED),true false),$(X402_SELECTED))
+$(error x402exa configuration selection failed)
+endif
+ifneq ($(words $(X402_SELECTED)),1)
+$(error x402exa configuration selection must return one boolean)
+endif
+ifeq ($(X402_SELECTED),true)
+X402_SUFFIX := :$(X402_FILE)
+ifeq ($(PODMAN_SELECTED),false)
+ifneq ($(PRIVATE_ONYX_DOCKER_GATEWAY_MODE),ordinary)
+X402_SUFFIX := $(X402_SUFFIX):$(X402_DOCKER_FILE)
+endif
+endif
+endif
+endif
+# This list is stack-owned and is computed once so optional peers compose.
+override PRIVATE_ONYX_PUBLIC_PROXY_PEERS := onyx-public-egress-bridge,obscura-egress-bridge
+ifeq ($(ONYX_CODE_INTERPRETER_ENABLE_NETWORK),true)
+override PRIVATE_ONYX_PUBLIC_PROXY_PEERS := $(PRIVATE_ONYX_PUBLIC_PROXY_PEERS),executor-egress-bridge
+endif
+ifeq ($(X402_SELECTED),true)
+override PRIVATE_ONYX_PUBLIC_PROXY_PEERS := $(PRIVATE_ONYX_PUBLIC_PROXY_PEERS),searxng-x402-egress-bridge
+endif
+export PRIVATE_ONYX_PUBLIC_PROXY_PEERS
+
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)$(DOCKER_NETWORK_SUFFIX)$(X402_SUFFIX)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_MACOS_FULL_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_LINUX_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_TEEP_EMBEDDING_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)$(DOCKER_NETWORK_SUFFIX)$(X402_SUFFIX)
+LITE_DOWN_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)$(X402_DOWN_SUFFIX)$(DOCKER_NETWORK_SUFFIX)
+FULL_DOWN_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_MACOS_FULL_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_LINUX_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_TEEP_EMBEDDING_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)$(X402_DOWN_SUFFIX)$(DOCKER_NETWORK_SUFFIX)
 
 # Lite mode has no wrapper-owned host services. Full mode always reconciles the
 # optional bundled MLX service, but selects the host document server only for
@@ -598,6 +641,8 @@ endif
 .NOTPARALLEL: up-lite up-full
 
 help:
+	@echo "  make x402-wallet            # Create a new owner-only Base wallet; never overwrites"
+	@echo "  make integration-x402exa    # One paid search on the running stack (MODE=full for full mode)"
 	@echo "Lite mode (use these commands together):"
 	@echo "  make up-lite                # Start wrapper + Onyx lite"
 	@echo "  make down-lite              # Stop wrapper + Onyx lite"
@@ -661,6 +706,7 @@ check: test
 		tor \
 		searxng/engines \
 		searxng/patches \
+		searxng/wallet.py \
 		tests
 	git diff --check
 
@@ -844,6 +890,19 @@ check-upgrade:
 upgrade: upgrade-python-deps
 	@env $(foreach image,SEARXNG_WRAPPER_IMAGE PYTHON_EXECUTOR_IMAGE,$(if $(filter undefined,$($(image)_ORIGIN)),-u $(image))) $(MAKE) --no-print-directory myst-build teep-build searxng-build executor-build code-interpreter-build tor-build tailscale-build obscura-image-ready upgrade-onyx
 	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."
+
+.PHONY: x402-wallet integration-x402exa
+x402-wallet:
+	@python3 searxng/wallet.py --container-bin "$(CONTAINER_BIN)" --image "$(SEARXNG_WRAPPER_IMAGE)"
+
+MODE ?= lite
+integration-x402exa:
+ifeq ($(X402_SELECTED),true)
+	@case "$(MODE)" in lite|full) ;; *) echo "MODE must be lite or full" >&2; exit 1;; esac
+	@COMPOSE_FILE=$(if $(filter full,$(MODE)),$(FULL_FILES),$(LITE_FILES)) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) exec -T searxng-core /usr/local/searxng/.venv/bin/python -I - < tests/integration_x402exa.py
+else
+	@echo "SKIP: SEARXNG_X402_PRIVKEY is unset or empty; no paid search was sent."
+endif
 
 upgrade-python-deps:
 	@set -eu; \

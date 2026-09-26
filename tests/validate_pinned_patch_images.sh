@@ -300,6 +300,12 @@ else
 fi
 
 echo "Validating SearXNG runtime patches in $searxng_wrapper_image"
+"$container_bin" run --rm --network none --entrypoint python \
+    -e PYTHONPATH=/app \
+    -v "$repo_root/onyx/patches/onyx_wrapper_patches:/app/onyx_wrapper_patches:ro" \
+    -v "$repo_root/tests/validate_searxng_probe_image.py:/validate-probe.py:ro" \
+    "$onyx_backend_image" /validate-probe.py
+
 "$container_bin" run --rm \
     --network none \
     --entrypoint /usr/local/searxng/.venv/bin/python \
@@ -318,6 +324,20 @@ echo "Running image-only SearXNG parser tests in $searxng_wrapper_image"
     -v "$repo_root:/workspace:ro" \
     -w /workspace \
     "$searxng_wrapper_image" \
-    -m unittest tests.test_searxng_obscura_engines -v
+    -m unittest tests.test_searxng_obscura_engines tests.test_x402exa tests.test_x402exa_transport -v
 
+echo "Validating x402exa scheduler and payment path with a public synthetic key"
+"$container_bin" run --rm --network none --read-only --tmpfs /tmp \
+    --cap-drop ALL --entrypoint /usr/local/searxng/.venv/bin/python \
+    -e PYTHONPATH=/patches:/usr/local/lib:/usr/local/searxng \
+    -e SEARXNG_ROUND_ROBIN=true -e GRANIAN_WORKERS=1 \
+    -e SEARXNG_X402_PRIVKEY=0000000000000000000000000000000000000000000000000000000000000001 \
+    -e SEARXNG_X402_PROXY=http://searxng-x402-egress-bridge:3128 \
+    -v "$repo_root/searxng/patches:/patches:ro" \
+    -v "$repo_root/searxng/core-config:/etc/searxng:ro" \
+    -v "$repo_root/tests/validate_x402exa_image.py:/validate-x402.py:ro" \
+    "$searxng_wrapper_image" /validate-x402.py
+
+python3 "$repo_root/tests/validate_x402exa_entrypoint.py" \
+    --container-bin "$container_bin" --image "$searxng_wrapper_image"
 echo "Pinned-image patch validation passed."

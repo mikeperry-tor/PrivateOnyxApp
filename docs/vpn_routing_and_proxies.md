@@ -446,3 +446,27 @@ are defined in [internal network security](internal_network_security.md#docker-g
 They preserve every selected final-hop route and route-owner uplink. Ordinary
 internal bridges on older Docker and Podman retain direct host-service exposure;
 proxy policy alone does not prevent that compromised-process path.
+
+## Optional Exa API route
+
+A nonempty validated Exa key selects a dedicated internal caller network and fixed
+`searxng-x402-egress-bridge:3128`, connected through
+`searxng-x402-policy-upstream` to the existing public listener at port 3132 in
+`netns-holder`. It uses the selected no-VPN/VPN/upstream-proxy/Tor route, with
+no direct fallback. Make computes the public peer list centrally so executor and
+Exa bridges coexist. Neither network adds host exceptions or browser/executor
+reachability. Disabled startup omits the route; down includes it to remove a
+previously enabled route even after key removal.
+
+Enablement changes require matching-mode `make down-lite`/`make down-full`, then
+configuration change, then that mode's up target on the same engine. The namespace
+holder and all its residents, including Myst and both policy proxies, must be
+recreated together; an in-place up is unsupported. Prefer down before removing
+the old key. Validate host-policy as well as public-policy connectivity afterward.
+
+The API uses Python TLS, not browser impersonation. Exa sees queries and stable
+wallet identity even over Tor. The application fixes Exa's HTTPS endpoint; the
+network policy permits general public destinations after SearXNG compromise.
+The diagnostic host publisher defaults to IPv4 loopback even for an empty bind
+setting; it remains unauthenticated and can spend. See
+[paid-search handling](request_handling.md#optional-x402exa-api-search).

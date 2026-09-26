@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import textwrap
 import threading
 import typing as t
 
@@ -91,7 +92,7 @@ def _is_last_resort_engine(name: str) -> bool:
 def _round_robin_providers() -> tuple[str, ...]:
     raw = os.environ.get(_ROUND_ROBIN_PROVIDER_ENV)
     if raw is None:
-        return _ROUND_ROBIN_DEFAULT_PROVIDERS
+        return _ROUND_ROBIN_DEFAULT_PROVIDERS + (("x402exa",) if _engine("x402exa") is not None else ())
     return tuple(name.strip() for name in raw.split(",") if name.strip())
 
 
@@ -122,6 +123,10 @@ def apply_offline_block_suspension_patch() -> None:
 
     def _patched(self, query, params, result_container, start_time, timeout_limit):
         from searx.engines import _obscura
+
+        if self.engine.name == "x402exa":
+            from searx.engines.x402exa import process
+            return process(self, query, params, result_container, start_time, timeout_limit)
 
         reservation_token = params.get(_obscura.RESERVATION_PARAM)
         try:
@@ -183,7 +188,11 @@ def _reserve_round_robin_engine(
         for offset in range(len(engine_names)):
             index = (_ROUND_ROBIN_CURSOR + offset) % len(engine_names)
             engine_name = engine_names[index]
-            token = _obscura.reserve_provider(engine_name)
+            if engine_name == "x402exa":
+                from searx.engines import _x402_admission
+                token = _x402_admission.reserve(lambda: _is_processor_available(engine_name))
+            else:
+                token = _obscura.reserve_provider(engine_name)
             if token is not None:
                 _ROUND_ROBIN_CURSOR = index + 1
                 return engine_name, token
@@ -238,26 +247,36 @@ def _round_robin_selected_refs(
         available_regular = [
             name
             for name in candidate_provider_order
-            if not _is_last_resort_engine(name) and _is_processor_available(name)
+            if name != "x402exa" and not _is_last_resort_engine(name) and _is_processor_available(name)
         ]
         available_last_resort = [
             name
             for name in candidate_provider_order
             if _is_last_resort_engine(name) and _is_processor_available(name)
         ]
+        available_paid = [name for name in candidate_provider_order
+                          if name == "x402exa" and _is_processor_available(name)]
         chosen, token = _reserve_round_robin_engine(available_regular)
         # A regular provider that is not suspended but is merely busy or
         # cooling must block last-resort selection. Wait for regular capacity
         # instead of returning an empty result or spilling into Bing.
         if chosen is None and not available_regular:
             chosen, token = _reserve_round_robin_engine(available_last_resort)
+        if chosen is None and not available_regular and not available_last_resort:
+            chosen, token = _reserve_round_robin_engine(available_paid)
         if chosen is not None and token is not None:
             return [first_ref_by_name[chosen]], {chosen: token}
 
-        wait_names = tuple(available_regular or available_last_resort)
+        wait_names = tuple(available_regular or available_last_resort or available_paid)
         if not wait_for_capacity or not wait_names:
             return [], {}
-        _obscura.wait_for_provider_capacity_change(generation, wait_names)
+        if wait_names == ("x402exa",):
+            from searx.engines import _x402_admission
+            token = _x402_admission.wait(lambda: _is_processor_available("x402exa"))
+            if token:
+                return [first_ref_by_name["x402exa"]], {"x402exa": token}
+        else:
+            _obscura.wait_for_provider_capacity_change(generation, wait_names)
 
 
 def _has_round_robin_provider_pool(engineref_list: list[object]) -> bool:
@@ -281,12 +300,12 @@ def _record_unavailable_round_robin_providers(
     candidate_provider_order = [
         name for name in selected_provider_order if name not in exclude
     ]
-    last_resort_eligible = not any(
-        not _is_last_resort_engine(name) and _is_processor_available(name)
-        for name in candidate_provider_order
-    )
+    def tier(name):
+        return 2 if name == "x402exa" else int(_is_last_resort_engine(name))
+    available = [name for name in candidate_provider_order if _is_processor_available(name)]
+    active_tier = min((tier(name) for name in available), default=2)
     for engine_name in candidate_provider_order:
-        if _is_last_resort_engine(engine_name) and not last_resort_eligible:
+        if tier(engine_name) > active_tier:
             continue
         processor = PROCESSORS.get(engine_name)
         if processor is not None and processor.extend_container_if_suspended(
@@ -375,50 +394,68 @@ def apply_round_robin_search_patch() -> None:
     original_search_standard = search_mod.Search.search_standard
 
     def _patched_get_requests(self):
+        from searx.search.processors import PROCESSORS
         original_refs = self.search_query.engineref_list
-        excluded = getattr(self, "_wrapper_round_robin_attempted", set())
-        selected_refs, reservations = _round_robin_selected_refs(
-            original_refs,
-            exclude=excluded,
-            wait_for_capacity=True,
-        )
-        if selected_refs is original_refs:
+        if not _has_round_robin_provider_pool(original_refs):
             return original_get_requests(self)
+        # Resolve native capabilities once, before admission, and carry the
+        # exact params into dispatch. Pool identity is decided before filtering.
+        cached = getattr(self, "_wrapper_candidate_params", None)
+        if cached is None:
+            cached = {}
+            _, pool = _round_robin_ref_map(original_refs)
+            for ref in original_refs:
+                processor = PROCESSORS.get(ref.name)
+                if ref.name in pool and processor and ref.name not in cached:
+                    cached[ref.name] = processor.get_params(self.search_query, ref.category)
+            self._wrapper_candidate_params = cached
+        eligible = [ref for ref in original_refs if cached.get(ref.name) is not None]
+        excluded = getattr(self, "_wrapper_round_robin_attempted", set())
+        if not eligible:
+            return [], 0
+        selected_refs, reservations = _round_robin_selected_refs(
+            eligible, exclude=excluded, wait_for_capacity=True,
+        )
         if not selected_refs:
             _record_unavailable_round_robin_providers(
-                engineref_list=original_refs,
-                exclude=excluded,
+                engineref_list=eligible, exclude=excluded,
                 result_container=self.result_container,
             )
-
-        self.search_query.engineref_list = selected_refs
+            return [], 0
+        requests = []
+        timeout = 0
         try:
-            requests, actual_timeout = original_get_requests(self)
-            if not reservations:
-                return requests, actual_timeout
-            from searx.engines import _obscura
-
-            reserved_name, token = next(iter(reservations.items()))
-            for engine_name, _query, params in requests:
-                if engine_name == reserved_name:
-                    params[_obscura.RESERVATION_PARAM] = token
-                    return requests, actual_timeout
-            _obscura.release_provider_reservation(reserved_name, token)
-            return requests, actual_timeout
-        except Exception:
-            if reservations:
+            for ref in selected_refs:
+                processor = PROCESSORS[ref.name]
+                if processor.extend_container_if_suspended(self.result_container):
+                    _release_reservation(ref.name, reservations.get(ref.name))
+                    continue
+                params = cached[ref.name]
                 from searx.engines import _obscura
-
-                for engine_name, token in reservations.items():
-                    _obscura.release_provider_reservation(engine_name, token)
+                parameter = _obscura.RESERVATION_PARAM
+                if ref.name == "x402exa":
+                    from searx.engines import _x402_admission
+                    parameter = _x402_admission.RESERVATION_PARAM
+                params[parameter] = reservations[ref.name]
+                search_mod.counter_inc('engine', ref.name, 'search', 'count', 'sent')
+                requests.append((ref.name, self.search_query.query, params))
+                timeout = max(timeout, processor.engine.timeout)
+            for bound in (search_mod.settings['outgoing']['max_request_timeout'], self.search_query.timeout_limit):
+                if bound is not None:
+                    timeout = min(timeout, bound)
+            if not requests:
+                return self._get_requests()
+            return requests, timeout
+        except Exception:
+            for name, token in reservations.items():
+                _release_reservation(name, token)
             raise
-        finally:
-            self.search_query.engineref_list = original_refs
 
     def _patched_search_standard(self):
         if not _has_round_robin_provider_pool(self.search_query.engineref_list):
             return original_search_standard(self)
 
+        self._wrapper_candidate_params = None
         attempted: set[str] = set()
         while True:
             setattr(self, "_wrapper_round_robin_attempted", attempted)
@@ -446,10 +483,7 @@ def apply_round_robin_search_patch() -> None:
                 from searx.engines import _obscura
 
                 for engine_name, _query, params in requests:
-                    _obscura.release_provider_reservation(
-                        engine_name,
-                        params.get(_obscura.RESERVATION_PARAM),
-                    )
+                    _release_reservation(engine_name, params.get(_obscura.RESERVATION_PARAM) or params.get("_wrapper_x402_reservation"))
                 raise
 
             if _has_main_results(self.result_container):
@@ -678,36 +712,16 @@ def apply_last_resort_scoring_patch() -> None:
             for eng_name in result.engines:
                 results_mod.counter_add(result.score, "engine", eng_name, "score")
 
-    def _has_regular_engine(result: object) -> bool:
-        engines = getattr(result, "engines", set())
-        return any(not _is_last_resort_engine(engine_name) for engine_name in engines)
-
-    def _patched_get_ordered_results(self):
-        if not self._closed:
-            self.close()
-
-        if self._main_results_sorted:
-            return self._main_results_sorted
-
-        original_sorted = sorted
-
-        def _wrapper_sorted(iterable, *, key=None, reverse=False):
-            return original_sorted(
-                iterable,
-                key=lambda result: (1 if _has_regular_engine(result) else 0, result.score),
-                reverse=True,
-            )
-
-        had_sorted_global = "sorted" in original_get_ordered_results.__globals__
-        saved_sorted = original_get_ordered_results.__globals__.get("sorted")
-        original_get_ordered_results.__globals__["sorted"] = _wrapper_sorted
-        try:
-            return original_get_ordered_results(self)
-        finally:
-            if had_sorted_global:
-                original_get_ordered_results.__globals__["sorted"] = saved_sorted
-            else:
-                del original_get_ordered_results.__globals__["sorted"]
+    source = textwrap.dedent(inspect.getsource(original_get_ordered_results))
+    old_sort = 'results = sorted(self.main_results_map.values(), key=lambda x: x.score, reverse=True)'
+    if source.count(old_sort) != 1:
+        raise RuntimeError("SearXNG result sorting shape changed")
+    source = source.replace(old_sort,
+        'results = sorted(self.main_results_map.values(), key=lambda x: (any(not _wrapper_is_last_resort(n) for n in x.engines), x.score), reverse=True)')
+    namespace = dict(original_get_ordered_results.__globals__)
+    namespace["_wrapper_is_last_resort"] = _is_last_resort_engine
+    exec(compile(source, "<wrapper-local-result-sort>", "exec"), namespace)
+    _patched_get_ordered_results = namespace[original_get_ordered_results.__name__]
 
     results_mod.ResultContainer._merge_main_result = _patched_merge_main_result
     results_mod.ResultContainer.close = _patched_close
@@ -720,7 +734,39 @@ def apply_last_resort_scoring_patch() -> None:
     )
 
 
+def _release_reservation(name, token):
+    if name == "x402exa":
+        from searx.engines import _x402_admission
+        _x402_admission.release(token)
+    else:
+        from searx.engines import _obscura
+        _obscura.release_provider_reservation(name, token)
+
+
+def apply_x402_capability_patch():
+    from searx.search.processors.abstract import EngineProcessor
+    original = EngineProcessor.get_params
+    _require_source("EngineProcessor.get_params", original,
+                    ("search_query.pageno > 1", "search_query.time_range"))
+    def get_params(self, search_query, engine_category):
+        if self.engine.name == "x402exa" and getattr(search_query, "_wrapper_selected_locale", search_query.lang) not in (None, "", "auto", "all"):
+            return None
+        return original(self, search_query, engine_category)
+    EngineProcessor.get_params = get_params
+
+
 if not current_process_is_resource_tracker():
-    apply_offline_block_suspension_patch()
-    apply_round_robin_search_patch()
-    apply_last_resort_scoring_patch()
+    try:
+        from x402_bootstrap import install, install_locale_adapter
+        install()
+        apply_offline_block_suspension_patch()
+        apply_round_robin_search_patch()
+        apply_last_resort_scoring_patch()
+        apply_x402_capability_patch()
+        install_locale_adapter()
+    except Exception:
+        # CPython suppresses ordinary sitecustomize exceptions. Do not allow
+        # a configured paid engine to disappear while the service stays healthy.
+        import sys
+        print("sitecustomize: fatal SearXNG bootstrap validation failure", file=sys.stderr, flush=True)
+        os._exit(78)

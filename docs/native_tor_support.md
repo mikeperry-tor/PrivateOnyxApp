@@ -269,3 +269,19 @@ OpenSearch image families, or for a broad release gate. Complete the documented
 Docker/Podman live matrix for Tor runtime changes, including real Tor egress,
 onion ingress, selector failure, identity persistence, and simultaneous
 frontend behavior.
+
+## Optional Exa search over Tor
+
+The Exa API bridge reaches the existing public final hop and selected Tor egress;
+it receives no Tor socket or direct uplink. Onion ingress may be enabled at the
+same time without changing that route. Exa uses verified Python TLS and exposes
+stable wallet identity despite Tor. An exit block or unavailable bridge/Tor path
+fails closed with no route switch or payment replay.
+
+The 60-second engine window contains at most 55 seconds for discovery, signing,
+paid request and settlement; shorter caller limits still apply. Slow routes must
+fit this allowance, or fail visibly. Qualify latency using the single explicit
+`make integration-x402exa` attempt on the configured running route, after offline
+socket/deadline tests. Pure use of this final hop requires no Tor image rebuild
+or unrelated image gate. Enablement changes require matching-mode down/edit/up,
+recreating the namespace holder and its residents; verify both Tor roles compose.

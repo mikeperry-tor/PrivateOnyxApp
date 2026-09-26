@@ -171,6 +171,8 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
 - `make up-lite` / `make up-full` - start the selected stack; full mode also
   performs its documented staged embedding-readiness flow; `CONTAINER_BIN` selects
   between docker and podman runtimes for the stack.
+- `make x402-wallet` - create a new owner-only local Base wallet without networking or overwrite; see [setup](README.md#optional-paid-exa-search).
+- `make integration-x402exa` - explicitly paid, single-search qualification against an already-running stack (`MODE=full` for full mode); excluded from automatic checks. See [request handling](docs/request_handling.md#optional-x402exa-api-search).
 - `make health-inventory` - render the Makefile-selected engine/environment and
   optional overlays for lite/full healthcheck commands, startup/steady
   cadences, and approximate steady checks per hour.

@@ -130,9 +130,7 @@ but the direct compatibility pin itself is still required. The former
 Transformers 5.13 upper bound is obsolete.
 
 For SearXNG, upgrade its exact WebSockets pin only after the direct Obscura
-client suite and a live restricted-route fetch pass. Upgrade its exact
-Playwright pin only with the pinned Onyx browser release and repeat the full
-browser compatibility matrix. For the executor, retain exact SymPy and
+client suite and a live restricted-route fetch pass. SearXNG has no Playwright dependency; Onyx retains its separate browser compatibility matrix. For the executor, retain exact SymPy and
 cryptography selections. Cryptography wheels carry their own OpenSSL,
 independently of Debian's `libssl3t64`; verify both. Run the executor image
 contract whenever either pin changes.
@@ -857,11 +855,11 @@ containers, timeout/late-result handling, engine selection, round-robin
 rotation patch points, and last-resort scoring.
 
 Confirm that `use_default_settings.engines.keep_only` remains supported and
-that the effective engine list contains exactly `google2`, `brave2`,
+that the disabled-mode engine list contains exactly `google2`, `brave2`,
 `duckduckgo2`, `startpage2`, and `bing2`. No inherited engine may initialize or
 perform startup DNS/network work.
 
-For every custom engine verify:
+For every custom browser engine verify:
 
 - offline registration and no normal SearXNG HTTP transport;
 - URL/query/locale/safe-search/time/page construction;
@@ -1927,3 +1925,44 @@ unavailability with the explicitly empty URL, persona tool exclusion, API
 availability with a healthy controller fixture, and Slack/Discord request
 semantics. Keep the [executor cleanup residual](resource_minimization.md#executor-lifetime-and-cleanup)
 explicit without adding a mandatory lifetime probe or daemon-wide cleanup.
+
+## x402exa SDK and image upgrade contract
+
+The released SDK is `x402[evm]==2.24.0`, tag `pypi-x402@v2.24.0`, commit
+`71eb9a55e081e7b81ba3046d0bd17c3eb9c7bf81`. Re-audit changed source on upgrades.
+The current HTTPX direct pin is 0.28.1 and eth-account is 0.13.7. The resolver's
+Web3 7.5.0 supports the pinned WebSockets 17.0.1; later Web3 bounds must not silently
+force a client downgrade. The Python 3.14 Debian-built native dependencies must
+import and pass combined-environment dependency checks inside the actual Void
+runtime on each supported architecture. Hashed installation is build-time only;
+SearXNG's unused Playwright and its transitive dependencies are removed.
+
+Use direct `x402ClientSync.register("eip155:8453", ExactEvmScheme(EthAccountSigner))`,
+not wildcard/v1 registration helpers or HTTP wrappers. Set
+`max_amount_per_payment=False` while retaining default asset filtering; one policy
+filters native USDC, exact, absent/eip3009 method and absent/authorization flow.
+Keep the SDK first-supported selector, including duplicate/differing offers; no
+price comparison. No RPC signer, extension hooks, recovery hooks, or second payment.
+
+The SDK codecs own aliases, coercions, ignored fields and omitted version default 2;
+explicitly reject decoded non-v2, extensions, and mismatched optional resource URL.
+The SDK only special-cases literal permit2, so deployment policy must reject unknown
+methods. Missing domain name uses the SDK local USD Coin/version 2 table; supplied
+name with missing version resolves to 1 and is rejected. Signing uses random nonce,
+validAfter 0, and current wall time plus maxTimeoutSeconds (zero defaults to 3,600).
+There is no wrapper lifetime cap/skew rule or post-signature reconstruction. Suppress
+`x402.signers` and HTTP transport debug output. The v2-only settlement codec validates
+schema/success, not transaction format or authorization correlation; payer/amount
+remain optional. Preserve outcome before body handling. Terms have no specified
+provider reuse lifetime and remain cached without TTL until payment rejection.
+
+Image gates must load five engines disabled/six enabled before serving, preserve
+canonical settings identity, qualify real parent/worker fatal startup, resource
+tracker exclusion, native selected-locale propagation, once-per-candidate params,
+free/Bing/Exa ordering and concurrent scoring without shared globals. Exercise real
+SDK signing with synthetic keys and fake transport; socket fixtures separately
+prove CONNECT, TLS rejection, framing, decompression and deadlines. Verify Onyx's
+empty-query probe against the pinned SearXNG format-before-missing-query route and
+ordinary retry removal. Require enabled/disabled feature transition evidence and
+both engines' network isolation differences. See [request handling](request_handling.md#optional-x402exa-api-search)
+for the standing payment, cache, deadline, failure, and live qualification contract.

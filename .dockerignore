@@ -1,4 +1,5 @@
 .git
+.x402-wallet
 .env.wrapper
 .env.wrapper.*
 .DS_Store

@@ -14,7 +14,7 @@ apply in every selected mode.
 | --- | --- | --- |
 | `api_server` | Onyx frontend/backend/data services; API-only `obscura-cdp-gateway`; Teep | fixed public and host-capable Onyx bridges; reviewed adapters select the intended route, and the optional stock crawler uses only the public bridge |
 | `background` | Onyx backend/data services; Teep | fixed public and host-capable Onyx bridges; reviewed connector adapters select the intended route |
-| `searxng-core` | SearX service gateway; direct Obscura CDP control | none except browser activity performed by Obscura |
+| `searxng-core` | SearX service gateway; direct Obscura CDP control; optional dedicated Exa bridge | browser activity via Obscura; enabled Exa via the dedicated public-policy bridge |
 | `obscura-cdp-gateway` | API-side control network and Obscura control network | none |
 | `obscura` | CDP control networks and its fixed browser bridge | shared public final-hop policy through `obscura-egress-bridge` |
 | enabled executor child | only the dedicated executor network and its fixed bridge; no controller network or engine socket | shared public final-hop policy through `executor-egress-bridge` |
@@ -662,3 +662,24 @@ only disposable files/sessions, with cleanup in `finally`.
 - The bundled Docker Desktop embedding listener rejects non-loopback peers
   before thread creation, caps and socket-bounds active connections, and drains
   accepted requests before lifecycle shutdown.
+
+## Optional paid-search boundary
+
+Enabled `x402exa` adds SearXNG's dedicated internal API caller network, fixed
+bridge, and dedicated internal upstream network to the shared public final hop.
+It adds no host exception, routing-namespace membership, browser/executor network,
+engine socket, or Tor socket to SearXNG. Docker uses isolated gateway options;
+Podman retains its documented host-reachability residual. A failed selected route
+has no direct fallback. Application restrictions permit only verified HTTPS to
+Exa; after service compromise the proxy still allows general public destinations,
+not only Exa. Python TLS does not inherit browser anti-fingerprinting.
+
+`SEARXNG_HOST` defaults to `127.0.0.1`, including when empty. SearXNG has no Onyx
+caller authentication: local callers or callers exposed by a broader bind/forwarder
+can spend. An external page may induce a search through the operator's browser
+without reading its response. Loopback binding and CORS are not spending
+authorization; browser local-network protections are not a stack guarantee.
+The key is supplied only to SearXNG in the optional layer, but container
+administrators can inspect environment values. Exa links queries to a stable
+wallet; public settlement and funding may reveal additional linkage, including
+over Tor. See [paid-search policy](request_handling.md#optional-x402exa-api-search).
