@@ -1,39 +1,5 @@
 # Internal network security
 
-## Native Tor and onion ingress boundaries
-
-Tor is a trusted route owner only when either role is enabled. Direct mode
-gives Tor `tor-uplink`; no application joins it. Outbound access is admitted
-solely by mounting Tor's Unix SOCKS volume read-only in the public and host
-policy containers. Tor's control socket and cookie live in a mode-0700
-Tor-only tmpfs, remain mode 0600, and are not mounted elsewhere. There is no
-TCP SOCKS/control listener or published Tor port.
-
-For onion ingress, Tor retains `tor-uplink`, additionally joins `tor-ingress`,
-and forwards virtual port 80 to the fixed-address gateway. Tor encryption
-terminates in the Tor container; traffic from Tor to the gateway and nginx is
-plaintext HTTP on the isolated internal container networks, not TLS. Tor never
-joins `onyx-frontend`. The hardened gateway alone spans `tor-ingress` and
-`onyx-frontend` and forwards only to nginx, accepts only a syntactically valid
-v3 onion `Host`, replaces client-supplied forwarding headers, preserves that
-Host, and publishes no host port. Its fixed configuration is the destination
-restriction; bridge attachment is not a sandbox after gateway compromise.
-
-Localhost, Tailscale, and onion frontends may run together. Authentication,
-CSP, and cookies remain application-owned and are not rewritten at an edge.
-Browser state and host-only cookies are separate per hostname, so each needs
-its own login and logout is independent. `WEBUI_CANONICAL_ORIGIN` maps to one
-internal `WEB_DOMAIN`. OAuth/federated callbacks, generated links, voice
-WebSockets, and other origin-sensitive behavior are guaranteed only there.
-The API CORS allowlist is the same single canonical origin; ordinary WebUI API
-requests remain same-origin on every frontend, while other sites cannot read
-even credentialless public API responses through wildcard CORS.
-Its scheme chooses cookie security globally: an HTTPS canonical origin can
-prevent login cookies from working over a secondary HTTP origin, while an HTTP
-canonical origin leaves cookies without `Secure` even on a secondary HTTPS
-Tailscale visit. Onion ingress is public to anyone who learns the address and
-does not compensate for weak credentials.
-
 The stack uses network separation and fixed-destination bridges to limit which
 components can reach CDP, Onyx data services, host-capable destinations, and
 the Internet. The exact routing policy is in
@@ -92,6 +58,40 @@ pass request, redirect, and any restored form POST use only that target's
 existing cookie jar, fingerprint, stealth client, connection pool, and selected
 browser bridge. Token mismatch, interceptor mismatch, deadline expiry, or
 continuation ambiguity closes the provider generation without another route.
+
+### Native Tor and onion ingress boundaries
+
+Tor is a trusted route owner only when either role is enabled. Direct mode
+gives Tor `tor-uplink`; no application joins it. Outbound access is admitted
+solely by mounting Tor's Unix SOCKS volume read-only in the public and host
+policy containers. Tor's control socket and cookie live in a mode-0700
+Tor-only tmpfs, remain mode 0600, and are not mounted elsewhere. There is no
+TCP SOCKS/control listener or published Tor port.
+
+For onion ingress, Tor retains `tor-uplink`, additionally joins `tor-ingress`,
+and forwards virtual port 80 to the fixed-address gateway. Tor encryption
+terminates in the Tor container; traffic from Tor to the gateway and nginx is
+plaintext HTTP on the isolated internal container networks, not TLS. Tor never
+joins `onyx-frontend`. The hardened gateway alone spans `tor-ingress` and
+`onyx-frontend` and forwards only to nginx, accepts only a syntactically valid
+v3 onion `Host`, replaces client-supplied forwarding headers, preserves that
+Host, and publishes no host port. Its fixed configuration is the destination
+restriction; bridge attachment is not a sandbox after gateway compromise.
+
+Localhost, Tailscale, and onion frontends may run together. Authentication,
+CSP, and cookies remain application-owned and are not rewritten at an edge.
+Browser state and host-only cookies are separate per hostname, so each needs
+its own login and logout is independent. `WEBUI_CANONICAL_ORIGIN` maps to one
+internal `WEB_DOMAIN`. OAuth/federated callbacks, generated links, voice
+WebSockets, and other origin-sensitive behavior are guaranteed only there.
+The API CORS allowlist is the same single canonical origin; ordinary WebUI API
+requests remain same-origin on every frontend, while other sites cannot read
+even credentialless public API responses through wildcard CORS.
+Its scheme chooses cookie security globally: an HTTPS canonical origin can
+prevent login cookies from working over a secondary HTTP origin, while an HTTP
+canonical origin leaves cookies without `Secure` even on a secondary HTTPS
+Tailscale visit. Onion ingress is public to anyone who learns the address and
+does not compensate for weak credentials.
 
 ## Destination validation
 

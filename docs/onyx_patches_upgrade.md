@@ -1,34 +1,5 @@
 # Patch and component upgrade checklist
 
-## Tor and canonical-origin contract
-
-When changing the Tor base pin, re-audit its manifest architectures, source
-revision, packaged Tor version, empty image user, entrypoint, UID/GID 101:102,
-GeoIP paths, Python 3, and `/var/lib/tor` volume. Rebuild the minimal derived
-image, run `make test-tor-image` with Docker and Podman, and verify generated
-configs with networking disabled. Reconfirm entrypoint bypass, non-root
-read-only/capability-free operation, private cookie-only control health,
-named-volume ownership, and that the state bind overrides the inherited
-volume.
-
-Reconcile every Tor or canonical-origin change with the
-[Tor change and validation map](native_tor_support.md#change-and-validation-map),
-[Tor security boundaries](internal_network_security.md#native-tor-and-onion-ingress-boundaries),
-[native-Tor final-hop policy](vpn_routing_and_proxies.md#native-tor-final-hop),
-[optional Tor lifecycle](resource_minimization.md#optional-tor-lifecycle),
-[Podman Tor contract](podman_suport.md#native-tor), and
-[request-path behavior](request_handling.md#optional-tor-route). Treat those
-documents as applicability and obsolescence checks, including when only a
-support image or Compose layer changes.
-
-Render all four Tor role models plus engine corrections and retest direct Tor
-egress, unavailable-selector failure, identity persistence, and simultaneous
-localhost/Tailscale/onion authentication and streaming.
-`WEBUI_CANONICAL_ORIGIN` remains one `WEB_DOMAIN`, passed identically to
-backend and web server. Do not infer general multi-origin support: voice,
-OAuth/federated callbacks, email links, and similar consumers remain
-canonical-origin features, and gateways must not rewrite cookie attributes.
-
 Use this checklist whenever changing Onyx, code-interpreter, its Python
 executor, SearXNG,
 Obscura, Teep, support-image pins, runtime Python inputs, or source-shape
@@ -1103,6 +1074,35 @@ saved application route selection from what a compromised dual-homed process
 can reach at the container-network layer. Confirm new APIs, callbacks,
 document delivery, and background clients cannot leak prompts, documents,
 credentials, URLs, or telemetry outside the documented policy.
+
+### Tor and canonical-origin contract
+
+When changing the Tor base pin, re-audit its manifest architectures, source
+revision, packaged Tor version, empty image user, entrypoint, UID/GID 101:102,
+GeoIP paths, Python 3, and `/var/lib/tor` volume. Rebuild the minimal derived
+image, run `make test-tor-image` with Docker and Podman, and verify generated
+configs with networking disabled. Reconfirm entrypoint bypass, non-root
+read-only/capability-free operation, private cookie-only control health,
+named-volume ownership, and that the state bind overrides the inherited
+volume.
+
+Reconcile every Tor or canonical-origin change with the
+[Tor change and validation map](native_tor_support.md#change-and-validation-map),
+[Tor security boundaries](internal_network_security.md#native-tor-and-onion-ingress-boundaries),
+[native-Tor final-hop policy](vpn_routing_and_proxies.md#native-tor-final-hop),
+[optional Tor lifecycle](resource_minimization.md#optional-tor-lifecycle),
+[Podman Tor contract](podman_suport.md#native-tor), and
+[request-path behavior](request_handling.md#optional-tor-route). Treat those
+documents as applicability and obsolescence checks, including when only a
+support image or Compose layer changes.
+
+Render all four Tor role models plus engine corrections and retest direct Tor
+egress, unavailable-selector failure, identity persistence, and simultaneous
+localhost/Tailscale/onion authentication and streaming.
+`WEBUI_CANONICAL_ORIGIN` remains one `WEB_DOMAIN`, passed identically to
+backend and web server. Do not infer general multi-origin support: voice,
+OAuth/federated callbacks, email links, and similar consumers remain
+canonical-origin features, and gateways must not rewrite cookie attributes.
 
 ## OpenSearch single-node policy audit
 

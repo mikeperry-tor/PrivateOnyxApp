@@ -1,54 +1,5 @@
 # Podman support
 
-## Native Tor
-
-Podman uses the same pinned image, config bind, and host state bind as Docker,
-so an engine switch preserves the onion identity. Only Tor gets
-`userns_mode: keep-id:uid=101,gid=102`; do not recursively rewrite its state or
-move it to an engine-specific directory.
-
-Native Docker runs Tor as the invoking host UID/GID, matching the owner of the
-shared mode-0700 state bind. Its transient SOCKS socket uses the separate
-host-owned `docker-data/tor/docker-runtime` bind on Linux. Podman and Docker
-Desktop use engine-local named volumes, so switching engines requires neither
-root ownership nor a privileged state rewrite.
-
-Rootless Docker maps its container root to the invoking Linux user, so Tor runs
-as `0:0` inside that namespace while retaining host-user ownership of the same
-state and transient-runtime binds. The runtime initializer also uses `0:0` and
-does not need a subordinate-ID assumption or persistent-state ownership rewrite.
-
-Docker Desktop reports the shared state bind root as UID/GID `0:0`, so its
-Docker Tor identity is `0:0`; native Docker uses the invoking host UID/GID.
-Docker Desktop also uses the named runtime volume because its host-bind
-transport cannot perform every Unix-socket operation Tor requires. Make
-exports the matching identity and runtime source to the same platform-neutral
-Docker overlays. This is Docker platform translation, not state created
-incorrectly by Podman.
-Docker initializes only that transient runtime mount with a networkless,
-capability-limited one-shot container before Tor starts; persistent state is
-never chowned by this path.
-Rootless Podman continues to map the invoking machine user to Tor's `101:102`
-and does not inherit the Docker process override.
-
-The Podman SOCKS socket uses an engine-local named volume. Tor mounts it read-write
-and the two policy containers mount it read-only; those containers need no
-matching UID, supplemental group, shared user namespace, privilege, or engine
-socket. The Podman overlay translates the private control tmpfs to native
-`U,mode=0700` ownership, constrains `ping_group_range` to the mapped Tor group
-102 for rootless crun, and translates the onion gateway tmpfs to the existing `:U` form.
-Startup health uses `podman/startup_health.py`; Docker is never a fallback.
-Docker's separate preflight requires a stable server version of 25.0.5 or newer
-for internal-network DNS isolation, regardless of ordinary/isolated gateway
-selection. This Docker version floor does not change Podman's capability checks
-or qualify its DNS forwarding behavior.
-
-Qualification covers all four role models, `make tor-onion-address`,
-cookie-authenticated control health, outbound Tor, simultaneous
-localhost/Tailscale/onion sessions, restart and down/up identity persistence,
-and an engine switch. Both engines must be down before adopting shared Onyx
-data ownership; Tor identity state remains the common host bind.
-
 This document is the compatibility and validation authority for running this
 wrapper with rootless Podman on macOS or native Linux and with rootless Docker
 on native Linux. Read it before adding a feature that
@@ -87,6 +38,11 @@ Use Makefile targets rather than assembling a Compose invocation manually.
 The Makefile detects a Podman binary by its basename, exports
 `CONTAINER_BIN`, and appends the Podman overlays to the effective
 `COMPOSE_FILE`.
+
+Docker's separate preflight requires a stable server version of 25.0.5 or newer
+for internal-network DNS isolation, regardless of ordinary/isolated gateway
+selection. This Docker version floor does not change Podman's capability checks
+or qualify its DNS forwarding behavior.
 
 Enabled Tailscale uses the same OS-refreshed Dockerfile and content-derived tag
 under both engines; image preparation builds in the selected engine's store.
@@ -573,6 +529,51 @@ rlimit and otherwise refuses to create the OpenSearch container. Its full-mode
 overlay sets the same 8 MiB soft/hard limit explicitly. OpenSearch emits the
 same memory-not-locked warning and continues; this is a rootless runtime
 constraint, not permission to reduce the JVM heap or other memory safeguards.
+
+### Native Tor
+
+Podman uses the same pinned image, config bind, and host state bind as Docker,
+so an engine switch preserves the onion identity. Only Tor gets
+`userns_mode: keep-id:uid=101,gid=102`; do not recursively rewrite its state or
+move it to an engine-specific directory.
+
+Native Docker runs Tor as the invoking host UID/GID, matching the owner of the
+shared mode-0700 state bind. Its transient SOCKS socket uses the separate
+host-owned `docker-data/tor/docker-runtime` bind on Linux. Podman and Docker
+Desktop use engine-local named volumes, so switching engines requires neither
+root ownership nor a privileged state rewrite.
+
+Rootless Docker maps its container root to the invoking Linux user, so Tor runs
+as `0:0` inside that namespace while retaining host-user ownership of the same
+state and transient-runtime binds. The runtime initializer also uses `0:0` and
+does not need a subordinate-ID assumption or persistent-state ownership rewrite.
+
+Docker Desktop reports the shared state bind root as UID/GID `0:0`, so its
+Docker Tor identity is `0:0`; native Docker uses the invoking host UID/GID.
+Docker Desktop also uses the named runtime volume because its host-bind
+transport cannot perform every Unix-socket operation Tor requires. Make
+exports the matching identity and runtime source to the same platform-neutral
+Docker overlays. This is Docker platform translation, not state created
+incorrectly by Podman.
+Docker initializes only that transient runtime mount with a networkless,
+capability-limited one-shot container before Tor starts; persistent state is
+never chowned by this path.
+Rootless Podman continues to map the invoking machine user to Tor's `101:102`
+and does not inherit the Docker process override.
+
+The Podman SOCKS socket uses an engine-local named volume. Tor mounts it read-write
+and the two policy containers mount it read-only; those containers need no
+matching UID, supplemental group, shared user namespace, privilege, or engine
+socket. The Podman overlay translates the private control tmpfs to native
+`U,mode=0700` ownership, constrains `ping_group_range` to the mapped Tor group
+102 for rootless crun, and translates the onion gateway tmpfs to the existing `:U` form.
+Startup health uses `podman/startup_health.py`; Docker is never a fallback.
+
+Qualification covers all four role models, `make tor-onion-address`,
+cookie-authenticated control health, outbound Tor, simultaneous
+localhost/Tailscale/onion sessions, restart and down/up identity persistence,
+and an engine switch. Both engines must be down before adopting shared Onyx
+data ownership; Tor identity state remains the common host bind.
 
 ### VPN recovery and socket limitations
 

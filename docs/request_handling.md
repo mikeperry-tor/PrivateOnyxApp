@@ -1,24 +1,5 @@
 # Request handling
 
-## Optional Tor route
-
-Native Tor egress changes the selected final route. The public and host
-policy proxies connect through a private Unix SOCKS volume and delegate
-ordinary target-name resolution to Tor. Private-target policy, redirects,
-limits, browser lifecycle, and search-engine selection are unchanged.
-Internal/host/opt-in LAN exceptions remain direct. The one URL-policy addition
-is that `http://` is accepted when the normalized host ends in `.onion` and
-native Tor egress is selected. This does not enable clearnet HTTP.
-
-For Tor and every configured remote-DNS upstream, ordinary target names are
-never looked up by Docker, system, or Myst DNS, and returned address metadata
-is consumed only as protocol framing. It cannot be reused for a later direct
-connection. A missing socket, failed circuit, or malformed SOCKS response
-fails closed. The wrapper does not resolve or pre-validate onion names; it
-passes the complete hostname to Tor, which remains authoritative for onion-name
-validation and connection handling. Onion WebUI ingress is a separate inbound
-role.
-
 This document describes the wrapper-managed `web_search` and built-in Onyx
 Web Crawler `open_url` paths. Search always uses the pinned Obscura browser.
 `open_url` uses the stock Onyx crawler by default and has an explicit direct
@@ -1000,6 +981,25 @@ does not export, import, inspect, count, filter, or persist cookies. State is
 partitioned by provider and SearXNG process, not authenticated user or
 conversation, and never crosses into `open_url`, connectors, or executors.
 This is an intentional single-user deployment boundary.
+
+### Optional Tor route
+
+Native Tor egress changes the selected final route. The public and host
+policy proxies connect through a private Unix SOCKS volume and delegate
+ordinary target-name resolution to Tor. Private-target policy, redirects,
+limits, browser lifecycle, and search-engine selection are unchanged.
+Internal/host/opt-in LAN exceptions remain direct. The one URL-policy addition
+is that `http://` is accepted when the normalized host ends in `.onion` and
+native Tor egress is selected. This does not enable clearnet HTTP.
+
+For Tor and every configured remote-DNS upstream, ordinary target names are
+never looked up by Docker, system, or Myst DNS, and returned address metadata
+is consumed only as protocol framing. It cannot be reused for a later direct
+connection. A missing socket, failed circuit, or malformed SOCKS response
+fails closed. The wrapper does not resolve or pre-validate onion names; it
+passes the complete hostname to Tor, which remains authoritative for onion-name
+validation and connection handling. Onion WebUI ingress is a separate inbound
+role.
 
 ## Diagnostics
 

@@ -1,58 +1,5 @@
 # VPN routing and restricted egress
 
-## Native Tor final hop
-
-`TOR_EGRESS_ENABLED=true` selects the wrapper-owned Tor client as the
-remote-DNS upstream for the existing public and configured-external final-hop
-policies. It conflicts with `EGRESS_UPSTREAM_PROXY_URL`. Tor runs directly on
-its own `tor-uplink`; this phase does not route Tor through Myst. See
-[Native Tor support](native_tor_support.md) for the complete component,
-storage, health, and diagnostic contract.
-
-Tor creates only `unix:/run/tor-egress/socks`. The explicit `tor-runtime`
-volume is writable by Tor and read-only in the public and host policy
-containers. No application, browser, executor, ingress, Myst, Teep, or
-Tailscale container receives it, and there is no TCP SOCKS listener or bridge.
-Ordinary target names are sent as SOCKS `CONNECT` domain names, never resolved
-through Docker, system, or Myst DNS. Bound-address metadata is discarded and
-cannot become input to a direct connection. Socket loss, protocol failure,
-bootstrap failure, or an unavailable selected exit has no direct fallback.
-
-Native Tor egress permits `http://` when the normalized target host ends in
-`.onion`, without enabling general clearnet HTTP. Caller-side `open_url`
-validation receives that capability only from the Tor egress Compose layer,
-and the final-hop proxy independently requires its fixed Tor Unix socket. The
-wrapper passes the complete hostname to Tor without pre-validating the onion
-address, so subdomains remain intact and Tor owns authoritative validation.
-
-Trusted internal targets, permitted exact `host.docker.internal` ports, and
-opt-in validated LAN integration routes retain direct exceptions. Denied host
-ports fail before DNS and never fall through to Tor. Configured
-non-Tor proxy endpoints are classified before connection in VPN and no-VPN
-modes: public names require all-global answers; exact host/RFC1918 exceptions
-stay narrow; operator-local names require complete RFC1918 system-DNS answers.
-Single-label/internal names and blocked or mixed answers fail closed. A
-remote-DNS proxy remains authoritative for the target address and is part of
-the selected trust boundary.
-
-Country and fingerprint `ExitNodes` selectors are mutually exclusive, require
-egress, and add no fallback. Fingerprint selection generally reduces
-reliability and anonymity-set diversity more than country selection.
-Onion-service circuits do not use a clearnet exit selector. Use `make
-health-inventory` and the selected engine's `inspect`/`logs` commands for
-verification; Docker is never an implicit Podman fallback.
-
-The wrapper-owned canonical-origin, configured-upstream-proxy, native-Tor, and
-restart-time embedding URL/model selection settings share one restricted
-single-line parser for Make selection and host-side configuration rendering.
-Values may be unquoted or shell-quoted;
-`$` is literal, an unquoted `#` starts a comment, later definitions win, and
-exported or Make command-line values take precedence. Stack preflight requires
-the selected wrapper env file to exist and applies that restricted syntax to
-every assignment before any stack mutation, including settings not otherwise
-read by the host-side parser. Validation belongs to stack startup and Tor
-address inspection, not shared-data ownership or Myst signup.
-
 This stack keeps application containers off Internet-routed Docker networks.
 Traffic crosses fixed-destination bridges to final-hop policy proxies in the
 trusted `netns-holder` routing namespace. The route owner is Mysterium, a
@@ -103,6 +50,48 @@ classification. It does not extend this capability to public helpers,
 `open_url`, browser activity, or executors. Empty, failed, or mixed local
 answers fail closed. Loopback, link-local metadata, Docker service names, and
 other special-use ranges remain denied.
+
+### Native Tor final hop
+
+`TOR_EGRESS_ENABLED=true` selects the wrapper-owned Tor client as the
+remote-DNS upstream for the existing public and configured-external final-hop
+policies. It conflicts with `EGRESS_UPSTREAM_PROXY_URL`. Tor runs directly on
+its own `tor-uplink`; this phase does not route Tor through Myst. See
+[Native Tor support](native_tor_support.md) for the complete component,
+storage, health, and diagnostic contract.
+
+Tor creates only `unix:/run/tor-egress/socks`. The explicit `tor-runtime`
+volume is writable by Tor and read-only in the public and host policy
+containers. No application, browser, executor, ingress, Myst, Teep, or
+Tailscale container receives it, and there is no TCP SOCKS listener or bridge.
+Ordinary target names are sent as SOCKS `CONNECT` domain names, never resolved
+through Docker, system, or Myst DNS. Bound-address metadata is discarded and
+cannot become input to a direct connection. Socket loss, protocol failure,
+bootstrap failure, or an unavailable selected exit has no direct fallback.
+
+Native Tor egress permits `http://` when the normalized target host ends in
+`.onion`, without enabling general clearnet HTTP. Caller-side `open_url`
+validation receives that capability only from the Tor egress Compose layer,
+and the final-hop proxy independently requires its fixed Tor Unix socket. The
+wrapper passes the complete hostname to Tor without pre-validating the onion
+address, so subdomains remain intact and Tor owns authoritative validation.
+
+Trusted internal targets, permitted exact `host.docker.internal` ports, and
+opt-in validated LAN integration routes retain direct exceptions. Denied host
+ports fail before DNS and never fall through to Tor. Configured
+non-Tor proxy endpoints are classified before connection in VPN and no-VPN
+modes: public names require all-global answers; exact host/RFC1918 exceptions
+stay narrow; operator-local names require complete RFC1918 system-DNS answers.
+Single-label/internal names and blocked or mixed answers fail closed. A
+remote-DNS proxy remains authoritative for the target address and is part of
+the selected trust boundary.
+
+Country and fingerprint `ExitNodes` selectors are mutually exclusive, require
+egress, and add no fallback. Fingerprint selection generally reduces
+reliability and anonymity-set diversity more than country selection.
+Onion-service circuits do not use a clearnet exit selector. Use `make
+health-inventory` and the selected engine's `inspect`/`logs` commands for
+verification; Docker is never an implicit Podman fallback.
 
 ## Direct Obscura path
 
@@ -223,6 +212,17 @@ Server-side connectors, inference, search, release-note refresh, and other
 configured operations continue to use their documented container route class.
 
 ## Optional VPN and default no-VPN lifecycle
+
+The wrapper-owned canonical-origin, configured-upstream-proxy, native-Tor, and
+restart-time embedding URL/model selection settings share one restricted
+single-line parser for Make selection and host-side configuration rendering.
+Values may be unquoted or shell-quoted;
+`$` is literal, an unquoted `#` starts a comment, later definitions win, and
+exported or Make command-line values take precedence. Stack preflight requires
+the selected wrapper env file to exist and applies that restricted syntax to
+every assignment before any stack mutation, including settings not otherwise
+read by the host-side parser. Validation belongs to stack startup and Tor
+address inspection, not shared-data ownership or Myst signup.
 
 `netns-holder` owns the stable namespace used by route-owning processes. Myst
 and the final-hop proxies are trusted co-resident processes; optional Teep or
