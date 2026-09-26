@@ -21,6 +21,7 @@ SECRET_ENV = {
     "TAILSCALE_IMAGE": "local/private-onyx-tailscale:test-model",
     "TOR_IMAGE": "local/private-onyx-tor:test-model",
     "OBSCURA_IMAGE": "local/private-onyx-obscura:test-model",
+    "OBSCURA_CDP_TOKEN": "fixture-browser-control-token-0001",
     "SEARXNG_SECRET": "test",
     "USER_AUTH_SECRET": "test",
     "MINIO_ROOT_USER": "test",
@@ -1158,6 +1159,13 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             self.assertEqual(health["retries"], 1, name)
 
         self.assertIn("/json/version", " ".join(retained["obscura-cdp-gateway"]["test"]))
+        self.assertIn("Host: obscura:9222", " ".join(retained["obscura-cdp-gateway"]["test"]))
+        self.assertIn("401 Unauthorized", " ".join(retained["obscura-cdp-gateway"]["test"]))
+        token_owners = {
+            name for name, service in services.items()
+            if "OBSCURA_CDP_TOKEN" in service.get("environment", {})
+        }
+        self.assertEqual(token_owners, {"obscura", "api_server", "searxng-core"})
         self.assertIn("/health", " ".join(retained["local-embedding-shim"]["test"]))
         self.assertNotIn("/ready", " ".join(retained["local-embedding-shim"]["test"]))
         for gateway, origin in (

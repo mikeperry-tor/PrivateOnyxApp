@@ -42,6 +42,13 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertIn('networks: [onyx-obscura-control, obscura-control]', self.compose)
         self.assertIn('[searxng-api, obscura-control]', self.compose)
 
+    def test_browser_control_token_is_generated_and_required(self):
+        self.assertIn("OBSCURA_CDP_TOKEN := $(strip $(shell openssl rand -hex 32", self.makefile)
+        self.assertIn("export OBSCURA_CDP_TOKEN", self.makefile)
+        self.assertEqual(self.compose.count(
+            "OBSCURA_CDP_TOKEN: ${OBSCURA_CDP_TOKEN:?OBSCURA_CDP_TOKEN must be set}"
+        ), 3)
+
     def test_obscura_is_bounded_and_hardened(self):
         self.assertIn('user: "65534:65534"', self.compose)
         self.assertIn('- "--max-connections"\n      - "15"', self.compose)
@@ -52,14 +59,14 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertNotIn("--storage-dir", self.compose)
         self.assertNotIn("--allow-file-access", self.compose)
 
-    def test_manifest_pins_obscura_0_2_2(self):
+    def test_manifest_pins_obscura_0_2_3(self):
         self.assertIn(
-            "OBSCURA_RELEASE_VERSION=0.2.2",
+            "OBSCURA_RELEASE_VERSION=0.2.3",
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.2"
-            "@sha256:4f915617741d2e7cd5fac6dd03592c10ca2653d37d9ac53c8224a621af874197",
+            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.3"
+            "@sha256:475def3ddf1ec513b3d1bc36e8ad15f0d192538cb15f814c77215aa70c418ca2",
             self.manifest,
         )
         self.assertIn(
@@ -67,12 +74,12 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_SOURCE_REF=a1e09de68c7617b8079fbb1661b0548c501971c1",
+            "OBSCURA_SOURCE_REF=1a3169da276d7720732c7b20535474942917fb83",
             self.manifest,
         )
         self.assertIn(
             "OBSCURA_SOURCE_SHA256="
-            "92e742e3c1f4d030561b0df559c4a0a5707b3f3c977bee1307c38d988404003c",
+            "fca2663c1c5b321d983c95b90625d7e5d176f272e61a741f8047585cf7de2307",
             self.manifest,
         )
         self.assertNotIn("\nOBSCURA_IMAGE=", self.manifest)
@@ -106,8 +113,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         )
         self.assertIn(
             "ARG OBSCURA_UPSTREAM_IMAGE="
-            "docker.io/h4ckf0r0day/obscura:0.2.2"
-            "@sha256:4f915617741d2e7cd5fac6dd03592c10ca2653d37d9ac53c8224a621af874197",
+            "docker.io/h4ckf0r0day/obscura:0.2.3"
+            "@sha256:475def3ddf1ec513b3d1bc36e8ad15f0d192538cb15f814c77215aa70c418ca2",
             self.obscura_dockerfile,
         )
         self.assertIn("obscura/archive/{ref}.tar.gz", self.obscura_fetcher)
@@ -161,7 +168,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             "private_onyx_module_capable_runtime_skips_dynamic_nomodule",
             compatibility,
         )
-        self.assertIn("_windowNamedPropertyNames.delete(name)", compatibility)
+        self.assertNotIn("_windowNamedPropertyNames.delete(name)", compatibility)
         self.assertIn("private_onyx_request_submit_queues", compatibility)
         self.assertIn("private_onyx_location_replace_queues", compatibility)
         self.assertIn("private_onyx_window_named_property_assignment", compatibility)

@@ -99,7 +99,7 @@ def make_model(mode: str, *, engine="docker", gateway="isolated", down=False, **
         "PRIVATE_ONYX_DOCKER_ENGINE_MODE=rootful", f"PRIVATE_ONYX_DOCKER_GATEWAY_MODE={gateway}",
         "DOCKER_SOCK_PATH=/tmp/isolation-fixture.sock", "HOST_OS=Darwin",
         *[f"{key}={SECRET_ENV[key]}" for key in (
-            "SEARXNG_SECRET", "USER_AUTH_SECRET", "MINIO_ROOT_USER",
+            "OBSCURA_CDP_TOKEN", "SEARXNG_SECRET", "USER_AUTH_SECRET", "MINIO_ROOT_USER",
             "MINIO_ROOT_PASSWORD", "S3_AWS_ACCESS_KEY_ID", "S3_AWS_SECRET_ACCESS_KEY",
         )],
         *[f"{key}={value}" for key, value in settings.items()],

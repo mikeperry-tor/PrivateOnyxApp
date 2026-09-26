@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "browser" / "obscura_client"))
@@ -34,6 +35,21 @@ from private_onyx_obscura.client import _validate_anubis_worker_status  # noqa: 
 
 
 class ObscuraClientTests(unittest.TestCase):
+    def setUp(self):
+        auth = patch.dict(os.environ, {"OBSCURA_CDP_TOKEN": "fixture-browser-control-token-0001"})
+        auth.start()
+        self.addCleanup(auth.stop)
+
+    def test_cdp_auth_rejects_missing_short_and_header_injection(self):
+        from private_onyx_obscura.client import cdp_auth_headers
+        for token in ("", "short", "x" * 32 + "\r\nInjected: header", "é" * 32):
+            with patch.dict(os.environ, {"OBSCURA_CDP_TOKEN": token}):
+                with self.assertRaises(ValueError):
+                    cdp_auth_headers()
+        self.assertEqual(cdp_auth_headers(), {
+            "Authorization": "Bearer fixture-browser-control-token-0001",
+        })
+
     @staticmethod
     def _search_spec(method: str = "get") -> SearchInteractionSpec:
         return SearchInteractionSpec(
@@ -48,6 +64,75 @@ class ObscuraClientTests(unittest.TestCase):
             result_terminal_selector=".terminal",
             result_pending_selector=".pending",
         )
+
+    def test_search_guard_rejection_and_deadline_never_navigate(self):
+        async def exercise(blocked):
+            calls = []
+            cancelled = asyncio.Event()
+
+            async def guard():
+                if not blocked:
+                    return False
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+
+            class Cdp:
+                events = []
+
+                async def send(self, method, params=None, **kwargs):
+                    calls.append(method)
+                    if method == "Page.getFrameTree":
+                        return {"frameTree": {"frame": {"id": "frame"}}}
+                    if method == "Target.closeTarget":
+                        return {"success": True}
+                    if method in {
+                        "Network.enable", "Page.enable", "Page.setLifecycleEventsEnabled"
+                    }:
+                        return {}
+                    raise AssertionError(method)
+
+            owner = SearchBrowserSession()
+            owner._target_id = "target"
+            owner._session_id = "session"
+            owner._connection.cdp = Cdp()
+            websocket = AsyncMock()
+            owner._connection.websocket = websocket
+            owner._connection.cdp_url = "ws://obscura.invalid/devtools/browser"
+            owner._connection.max_size = 1 << 30
+            try:
+                with self.assertRaises(ObscuraClientError) as raised:
+                    await submit_search(
+                        "fixture",
+                        spec=self._search_spec(),
+                        fixed_fields=(),
+                        text_entry_mode="instant",
+                        cdp_url=owner._connection.cdp_url,
+                        wait_until="load",
+                        dom_limit=1 << 20,
+                        pre_navigation_guard=guard,
+                        pre_navigation_timeout_seconds=1,
+                        cleanup_command_timeout_seconds=1,
+                        request_timeout_seconds=0.02,
+                        session_owner=owner,
+                    )
+                self.assertEqual(raised.exception.stage, "search-pre-navigation")
+                self.assertEqual(
+                    raised.exception.category,
+                    FetchFailure.PRE_NAVIGATION_TIMEOUT if blocked else FetchFailure.FINALIZED,
+                )
+                self.assertNotIn("Page.navigate", calls)
+                if blocked:
+                    self.assertTrue(cancelled.is_set())
+                    self.assertFalse(owner.generation_active)
+                    websocket.close.assert_awaited_once()
+            finally:
+                await owner.close()
+
+        for blocked in (False, True):
+            with self.subTest(blocked=blocked):
+                asyncio.run(exercise(blocked))
 
     def test_search_spec_validation_is_strict(self):
         spec = SearchInteractionSpec(
@@ -244,7 +329,7 @@ class ObscuraClientTests(unittest.TestCase):
                 cdp_url=owner._connection.cdp_url,
                 wait_until="load",
                 dom_limit=1 << 20,
-                pre_navigation_guard=lambda: True,
+                pre_navigation_guard=AsyncMock(return_value=True),
                 pre_navigation_timeout_seconds=5,
                 cleanup_command_timeout_seconds=1,
                 request_timeout_seconds=10,
@@ -647,7 +732,7 @@ class ObscuraClientTests(unittest.TestCase):
                             loader, "https://search.example/search"
                         )
                     return {"result": {"type": "boolean", "value": True}}
-                if method == "Input.dispatchKeyEvent":
+                if method in {"Input.dispatchKeyEvent", "Input.insertText"}:
                     return {}
                 if method == "Target.closeTarget":
                     return {"success": True}
@@ -692,7 +777,7 @@ class ObscuraClientTests(unittest.TestCase):
                     cdp_url=owner._connection.cdp_url,
                     wait_until="load",
                     dom_limit=1 << 20,
-                    pre_navigation_guard=lambda: True,
+                    pre_navigation_guard=AsyncMock(return_value=True),
                     pre_navigation_timeout_seconds=5,
                     cleanup_command_timeout_seconds=1,
                     request_timeout_seconds=10,
@@ -741,6 +826,10 @@ class ObscuraClientTests(unittest.TestCase):
                 ]
                 self.assertEqual("".join(texts), "abc")
                 self.assertEqual(delays, [0.09])
+                self.assertEqual(
+                    [call[1] for call in cdp.calls if call[0] == "Input.insertText"],
+                    [{"text": ""}, {"text": ""}],
+                )
             await owner.close()
             self.assertEqual(websocket.closed, 1)
             self.assertEqual(

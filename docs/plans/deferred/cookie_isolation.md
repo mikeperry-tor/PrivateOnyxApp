@@ -10,20 +10,18 @@
 > [Request handling](../../request_handling.md) until this plan is implemented,
 > validated, documented, and moved to `docs/plans/implemented/`.
 >
-> **Feasibility with v0.2.2: conditional.** The design is technically feasible
+> **Feasibility with v0.2.3: conditional.** The design is technically feasible
 > through the verified-source image pipeline. It requires the
 > lossless-cookie wrapper patch and black-box gate described below, plus
 > acceptance of the separate service-global/non-per-user privacy limitation.
 >
 > Do not enable the Obscura part of this plan against the currently selected
-> image. Obscura v0.2.2's CDP cookie export/import path still does not preserve
-> whether a cookie is host-only, treats an explicit exact-origin `Domain`
-> attribute as host-only, and still does not use a complete Public Suffix List.
-> Re-importing an exported host-only cookie can therefore widen it to
-> subdomains, while an exact-origin domain cookie cannot be represented
-> faithfully. None of the four current wrapper patches changes that path.
-> Implementation may proceed only after the separately reviewed wrapper-owned
-> Obscura cookie patch makes the capability gate below pass.
+> image. Obscura v0.2.3 preserves host-only URL-based CDP imports, validates
+> domains with a PSL, and distinguishes an explicit exact-origin Domain cookie.
+> CDP export still omits host-only scope and partition provenance. Re-importing
+> an exported host-only cookie with its domain can widen it to subdomains.
+> None of the four current wrapper patches changes that path. Implementation
+> requires a separately reviewed lossless-cookie patch and capability gate.
 
 ## Goal
 
@@ -109,7 +107,7 @@ specified below.
 
 | Component | Consulted version | Why it matters for this plan |
 | --- | --- | --- |
-| Obscura | Derived v0.2.2 image; `reference_repos/obscura` at `v0.2.2`; four wrapper patches | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, context-scoped cookie clearing, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. The current patches preserve stealth GET/POST cookie-jar identity, target fingerprint state, and search-runtime compatibility; navigation ownership uses explicit receiver frame IDs. The patches do not change cookie serialization or CDP transfer. |
+| Obscura | Derived v0.2.3 image; `reference_repos/obscura` at `v0.2.3`; four wrapper patches | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, context-scoped cookie clearing, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. The current patches preserve stealth GET/POST cookie-jar identity, target fingerprint state, and search-runtime compatibility; navigation ownership uses explicit receiver frame IDs. The patches do not change cookie serialization or CDP transfer. |
 | Onyx application | `ONYX_IMAGE_TAG=v4.8.1`; matching `reference_repos/onyx` checkout | Owns `open_url()` orchestration, the stock Requests-first/Playwright-fallback flow, the five-worker stock crawler, the 120-second tool deadline, and the runtime symbols wrapped by both Onyx patches. |
 | Onyx crawler libraries | Requests `2.33.0`, Playwright `1.58.0`, and `publicsuffix2` `2.20191221` in the Onyx `uv.lock` | Determine Requests cookie-jar metadata, Chromium context cookie conversion, and the parser available to runtime patches. The old parser package's implicit PSL data is not accepted as the shared current snapshot proposed here. |
 | Egress identity components | `MYST_IMAGE=local/private-onyx-myst:74d144d4261a-20260812` and `TOR_BASE_IMAGE=docker.io/dockurr/tor:0.4.9.11@sha256:446881b3366cbc2cc5cf8d13a76e3104f60824b7c15343d14defe903ded18f0d` | Myst reconnects and Tor circuit/exit changes can separate a retained cookie from the public IP that established it. Neither currently supplies an authoritative route-generation signal to the cookie store, so this plan deliberately relies on the fixed one-hour ceiling instead of heuristic route coupling. |
@@ -147,19 +145,20 @@ Those capabilities are enough to inject a cookie snapshot into one isolated
 navigation and extract its final cookie state. They are not enough to persist
 that state safely between connections.
 
-### Obscura v0.2.2 feasibility
+### Obscura v0.2.3 feasibility
 
-The v0.2.2 cookie-transfer contract is owned by:
+The v0.2.3 cookie-transfer contract is owned by:
 
 - `crates/obscura-net/src/cookies.rs`;
 - `crates/obscura-cdp/src/cookie_params.rs`; and
 - `crates/obscura-cdp/src/domains/network.rs`.
 
-Obscura tracks `host_only` inside `CookieEntry`, but `CookieInfo` and the CDP
-adapter do not carry that property. `Network.getCookies` therefore cannot
-export it, and `Network.setCookies` imports every cookie with
-`host_only: false`. The same implementation has no partition-key handling or
-complete PSL.
+Obscura tracks `host_only` inside `CookieEntry`, but `CookieInfo` and CDP
+export omit it. Imports use `set_cookies_from_cdp_with_scope()` and preserve
+host-only scope when only a URL is supplied; an explicit domain selects domain
+scope. Exported cookies contain a domain without enough metadata to choose
+between those import forms. Partition provenance is also absent. Native
+domain validation uses the locked `psl` crate.
 
 The native cookie API canonicalizes leading-dot and case variants before
 storing, exporting, or deleting CDP cookies; treats expired and zero-expiry
@@ -176,16 +175,15 @@ binds navigation to the receiver's frame. None changes
 This plan requires one narrow Obscura cookie-transfer patch that preserves an
 explicit host-only bit across the public CDP export/import boundary and enough
 metadata to exclude unsupported partitioned cookies from retention. The
-selected-image gate must prove that contract. The wrapper store remains the sole owner of the complete,
-pinned PSL check; bundling a second PSL implementation into Obscura is
-unnecessary provided untrusted exported domain cookies are filtered before
-retention and every import is constructed only from the validated store. This
+selected-image gate must prove that contract. Native Obscura PSL enforcement
+protects its jar; the proposed shared wrapper store must independently enforce
+its pinned PSL policy across both transports before retention. This
 is a security-critical patch and permanent upgrade obligation. Until it passes
 the gate, the feature remains deferred.
 
-### Native v0.2.2 support and validation boundary
+### Native v0.2.3 support and validation boundary
 
-The selected source is `a1e09de68c7617b8079fbb1661b0548c501971c1`.
+The selected source is `1a3169da276d7720732c7b20535474942917fb83`.
 Its CDP execution contexts belong to their sessions, evaluation handles survive
 tab switches, and target closure detaches the actual attached sessions. The
 explicit navigation-realm patch preserves receiver ownership for form
@@ -199,14 +197,14 @@ page content, not cookie metadata. They cannot recover host-only or partition
 information omitted by `CookieInfo`. `Storage.getCookies` and
 `Storage.setCookies` use the same cookie value and conversion helpers as the
 Network API, so switching domains or using Playwright cookie helpers does not
-avoid the metadata loss. Supplying `url` instead of `domain` on import also
-ends in `set_cookies_from_cdp()` with domain scope.
+avoid the metadata loss. Supplying only `url` on import preserves host-only scope, but the export does
+not reveal which cookies require that form.
 
 The source audit establishes the blockers below. The selected-image upgrade
 gate covers isolated connections, native cookie continuity within a target,
 context-scoped clearing, target reuse, and form navigation. It does not prove
-lossless cross-connection cookie transfer or complete PSL enforcement. Those
-remain required implementation gates, not completed validation. The four
+lossless cross-connection cookie transfer or the proposed shared store's PSL
+filter. Those remain required implementation gates. The four
 current wrapper patches contain no cookie-transfer fix. Official no-render
 stealth release archives do not remove the need for the source build or the
 proposed cookie patch.
@@ -221,25 +219,17 @@ the deferred cookie-continuity design and its additional gates.
 `reference_repos/obscura/crates/obscura-net/src/cookies.rs` tracks
 `host_only` internally when it receives a `Set-Cookie` header or a JavaScript
 cookie. Its exported `CookieInfo` does not carry that property.
-`set_cookies_from_cdp()` consequently imports every cookie with
-`host_only: false`. A host-only cookie exported from one connection and
-imported into another can be sent to a subdomain.
+CDP export includes the canonical domain but not host-only scope. Feeding it
+back as an explicit domain therefore widens an exported host-only cookie to
+subdomains. URL-only import can represent host-only scope, but the caller
+cannot select it faithfully from the exported metadata.
 
-The same file deliberately uses only an incomplete obvious-suffix check rather
-than a complete Public Suffix List. Multi-label suffixes and private suffixes
-such as `co.uk` and `github.io` are not comprehensively covered. A wrapper
-filter can reject cookies before retention, but it cannot reconstruct lost
-host-only metadata after CDP export. Guessing from a leading dot or treating
-every cookie as a domain cookie is not acceptable. Treating every cookie as
-host-only would be safe but would silently break legitimate domain cookies
-and is not the intended browser-compatible feature.
-
-The v0.2.2 `resolve_cookie_domain()` path also treats an explicit
-`Domain=<origin-host>` attribute as host-only. Browser cookie semantics require
-that cookie to remain a domain cookie even though its canonical domain string
-equals the origin host. A lossless patch must therefore preserve whether the
-`Domain` attribute was present, not derive `host_only` from whether the
-canonical domain equals the response host.
+Native `resolve_cookie_domain()` uses the locked `psl` crate and preserves
+explicit exact-origin Domain cookies as domain-scoped. The wrapper should
+rely on these native semantics. The proposed transfer patch must expose the
+existing scope without guessing from a leading dot or equality with the
+origin host. Treating every exported cookie as host-only would silently break
+legitimate domain cookies and is not the intended feature.
 
 Partitioned-cookie rejection is also a capability requirement. The native
 Set-Cookie parser ignores `Partitioned`, and `CookieInfo` and the CDP parser
@@ -285,9 +275,8 @@ leave it unimplemented; do not activate a reduced cookie model.
 An acceptable wrapper-owned Obscura patch must be narrower than the store:
 
 - add `host_only` to the lossless cookie value carried from `CookieEntry`;
-- make the `Set-Cookie` and JavaScript-cookie domain resolver retain
-  `host_only: false` whenever a valid `Domain` attribute is present, including
-  when its canonical value equals the origin host;
+- preserve native domain-resolver semantics, including exact-origin domain
+  cookies and PSL-based rejection;
 - expose it unambiguously from `Network.getCookies` and accept it explicitly
   on the corresponding wrapper import path;
 - preserve it through every `CookieInfo` conversion used by that path;
@@ -798,7 +787,7 @@ Do the work in these bounded phases. Stop if any gate fails.
      partitioned cookies for exclusion.
    - Run it against the selected Obscura image.
    - Add the narrow, reviewed lossless-cookie patch through
-     `browser/obscura_image/patches/series`, rebuild the derived v0.2.2 image,
+     `browser/obscura_image/patches/series`, rebuild the derived v0.2.3 image,
      and require the black-box gate to pass. Never patch
      `reference_repos/obscura/` or waive a failed gate.
 2. **Store**

@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import sys
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from private_onyx_obscura import BodyClassification
 from private_onyx_obscura import FetchFailure
@@ -17,6 +19,7 @@ from private_onyx_obscura import ObscuraSession
 from private_onyx_obscura import SearchBrowserSession
 from private_onyx_obscura import fetch as fetch_async
 from private_onyx_obscura import fetch_sync
+from private_onyx_obscura.client import cdp_auth_headers
 from private_onyx_obscura.client import _RawCdp
 from private_onyx_obscura.client import _SEARCH_FORM_FUNCTION
 from private_onyx_obscura.anubis import worker_preload_source
@@ -59,10 +62,222 @@ def fixture_get(path: str) -> bytes:
         return response.read()
 
 
+async def validate_control_authentication() -> None:
+    from websockets.exceptions import InvalidStatus
+
+    for headers, origin, status in (
+        ({}, None, 401),
+        ({"Authorization": "Bearer " + "x" * 32}, None, 401),
+        (cdp_auth_headers(), "https://untrusted.example", 403),
+    ):
+        try:
+            websocket = await connect(
+                CDP_URL, proxy=None, additional_headers=headers, origin=origin,
+            )
+        except InvalidStatus as exc:
+            assert exc.response.status_code == status, exc.response.status_code
+        else:
+            await websocket.close()
+            raise AssertionError("CDP accepted an unauthorized control connection")
+
+
+async def validate_navigation_cookie_context_and_post_reset() -> None:
+    """Observe real form traffic, including ambiguous resets and redirect hops."""
+    if sys.platform != "linux":
+        raise RuntimeError("the reset fixture requires the Linux validation container")
+    cross = f"http://cross-site.test:{urlsplit(BASE_URL).port}"
+    prefix = "/navigation-security"
+
+    def redirect(origin: str, status: int, target: str) -> str:
+        return f"{origin}{prefix}/redirect?" + urlencode({"status": status, "to": target})
+
+    both = {"strict=secret", "lax=visible"}
+    cases = [
+        ("same-site POST", "POST", BASE_URL + prefix + "/received", [both], ["POST"]),
+        ("cross-site POST", "POST", cross + prefix + "/received", [set()], ["POST"]),
+        ("cross-site GET", "GET", cross + prefix + "/received", [{"lax=visible"}], ["GET"]),
+    ]
+    for status in (301, 302, 303, 307, 308):
+        changed = status in (301, 302, 303)
+        cases.append((
+            f"POST redirect {status}", "POST",
+            redirect(BASE_URL, status, cross + prefix + "/received"),
+            [both, {"lax=visible"} if changed else set()],
+            ["POST", "GET" if changed else "POST"],
+        ))
+    cases.extend([
+        ("cross-site POST return", "POST",
+         redirect(cross, 307, BASE_URL + prefix + "/received"),
+         [set(), set()], ["POST", "POST"]),
+        ("cross-site GET return", "GET",
+         redirect(cross, 302, BASE_URL + prefix + "/received"),
+         [{"lax=visible"}, {"lax=visible"}], ["GET", "GET"]),
+        ("POST reset", "POST", BASE_URL + prefix + "/reset-post", [both], ["POST"]),
+    ])
+    for label, method, action, cookies, methods in cases:
+        fixture_get(prefix + "/reset")
+        async with connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers()) as websocket:
+            cdp = _RawCdp(websocket)
+            target_id, session_id = await create_target(cdp)
+            try:
+                for origin in (BASE_URL, cross):
+                    for name, value, same_site in (
+                        ("strict", "secret", "Strict"), ("lax", "visible", "Lax"),
+                    ):
+                        result = await cdp.send("Network.setCookie", {
+                            "name": name, "value": value, "url": origin + "/",
+                            "sameSite": same_site,
+                        }, session_id=session_id)
+                        assert result == {"success": True}, result
+                await cdp.send("Page.enable", session_id=session_id)
+                source_url = BASE_URL + prefix + "/form?" + urlencode({"action": action, "method": method})
+                await cdp.send("Page.navigate", {
+                    "url": source_url,
+                    "waitUntil": "load",
+                }, session_id=session_id)
+                try:
+                    result = await cdp.send("Runtime.evaluate", {
+                        "expression": "document.querySelector('form').requestSubmit()",
+                    }, session_id=session_id)
+                except ObscuraClientError as exc:
+                    if label != "POST reset":
+                        raise
+                    assert exc.category is FetchFailure.PROTOCOL, exc
+                    assert exc.stage == "cdp-command", exc
+                else:
+                    assert label != "POST reset", "ambiguous POST reset was hidden"
+                    assert "exceptionDetails" not in result, (label, result)
+                # The evaluate reply precedes the server's pending navigation;
+                # this command barrier waits for it (including any reset retry).
+                await cdp.send("Page.getFrameTree", session_id=session_id)
+                observed = json.loads(fixture_get(prefix + "/observations"))
+                assert [row["method"] for row in observed] == methods, (label, observed)
+                assert [set(filter(None, row["cookie"].split("; "))) for row in observed] == cookies, (label, observed)
+                assert [row["body"] for row in observed] == [
+                    "q=fixture" if verb == "POST" else "" for verb in methods
+                ], (label, observed)
+                crossed_origin = False
+                for row in observed:
+                    same_origin = row["host"] == urlsplit(BASE_URL).netloc
+                    crossed_origin |= not same_origin
+                    assert row["referer"] == (BASE_URL + "/" if crossed_origin else source_url), (label, row)
+                    assert row["fetch_site"] == ("cross-site" if crossed_origin else "same-origin"), (label, row)
+            finally:
+                await cdp.send("Target.closeTarget", {"targetId": target_id})
+    print("NAVIGATION_SAMESITE_AND_POST_NO_REPLAY_OK")
+
+
+async def validate_navigation_headers() -> None:
+    """Default forms look normal; explicit privacy policy and redirect taint persist."""
+    prefix = "/navigation-security"
+    cross = f"http://cross-site.test:{urlsplit(BASE_URL).port}"
+    sibling = f"http://sub.fixture.example:{urlsplit(BASE_URL).port}"
+    origin = BASE_URL + "/"
+
+    def redirect(host: str, target: str, policy: str | None = None) -> str:
+        fields = {"status": 302, "to": target}
+        if policy is not None:
+            fields["policy"] = policy
+        return host + prefix + "/redirect?" + urlencode(fields)
+
+    async with connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers()) as websocket:
+        cdp = _RawCdp(websocket)
+        target_id, session_id = await create_target(cdp)
+        try:
+            await cdp.send("Page.enable", session_id=session_id)
+            # Reuse the target to catch accidental inheritance from a previous
+            # document. Header policy and live meta policy are document-owned.
+            for host in (BASE_URL, cross):
+                for name, same_site in (("strict", "Strict"), ("lax", "Lax")):
+                    result = await cdp.send("Network.setCookie", {
+                        "name": name, "value": "fixture", "url": host + "/",
+                        "sameSite": same_site,
+                    }, session_id=session_id)
+                    assert result == {"success": True}, result
+            cases = (
+                ({}, None, ("full", "origin")),
+                ({"policy": "no-referrer"}, None, ("none", "none")),
+                ({"policy": "same-origin"}, None, ("full", "none")),
+                ({"policy": "origin"}, None, ("origin", "origin")),
+                ({"policy": "strict-origin"}, None, ("origin", "origin")),
+                ({"policy": "origin-when-cross-origin"}, None, ("full", "origin")),
+                ({"policy": "strict-origin-when-cross-origin"}, None, ("full", "origin")),
+                ({"policy": "no-referrer-when-downgrade"}, None, ("full", "full")),
+                ({"policy": "unsafe-url"}, None, ("full", "full")),
+                ({"policy": "origin, no-referrer, unknown"}, None, ("none", "none")),
+                ({"policy": "unknown"}, None, ("full", "origin")),
+                ({"meta_policy": "no-referrer"}, None, ("none", "none")),
+                ({"policy": "origin", "meta_policy": "no-referrer"}, None, ("none", "none")),
+                ({"policy": "no-referrer", "meta_policy": "unknown"}, None, ("none", "none")),
+                ({"meta_policy": ["origin", "no-referrer"]}, None, ("none", "none")),
+                ({}, "no-referrer", ("none", "none")),
+                ({}, None, ("full", "origin")),
+            )
+            for method in ("GET", "POST"):
+                for fields, inserted_meta, expected in cases:
+                    for host, expected_kind in zip((BASE_URL, cross), expected):
+                        fixture_get(prefix + "/reset")
+                        source = BASE_URL + prefix + "/form?" + urlencode({
+                            "action": host + prefix + "/received", "method": method,
+                            "private_query": "fixture-sensitive-value", **fields,
+                        }, doseq=True)
+                        await cdp.send("Page.navigate", {"url": source, "waitUntil": "load"}, session_id=session_id)
+                        expression = "document.querySelector('form').requestSubmit()"
+                        if inserted_meta is not None:
+                            expression = (
+                                "const meta = document.createElement('meta');"
+                                "meta.name = 'referrer'; meta.content = " + json.dumps(inserted_meta) + ";"
+                                "document.head.appendChild(meta);" + expression
+                            )
+                        result = await cdp.send("Runtime.evaluate", {"expression": expression}, session_id=session_id)
+                        assert "exceptionDetails" not in result, result
+                        await cdp.send("Page.getFrameTree", session_id=session_id)
+                        rows = json.loads(fixture_get(prefix + "/observations"))
+                        assert len(rows) == 1, rows
+                        expected_referrer = {"full": source, "origin": origin, "none": ""}[expected_kind]
+                        assert rows[0]["referer"] == expected_referrer, (method, fields, inserted_meta, rows)
+                        assert rows[0]["method"] == method, rows
+                        assert rows[0]["fetch_site"] == ("same-origin" if host == BASE_URL else "cross-site"), rows
+                        expected_cookies = (
+                            {"strict=fixture", "lax=fixture"} if host == BASE_URL
+                            else {"lax=fixture"} if method == "GET" else set()
+                        )
+                        assert set(filter(None, rows[0]["cookie"].split("; "))) == expected_cookies, rows
+
+            chains = (
+                (redirect(sibling, BASE_URL + prefix + "/received"), ["same-site", "same-site"], [origin, origin]),
+                (redirect(cross, BASE_URL + prefix + "/received", "unsafe-url"), ["cross-site", "cross-site"], [origin, origin]),
+                (redirect(BASE_URL, cross + prefix + "/received", "no-referrer"), ["same-origin", "cross-site"], ["full", ""]),
+                (redirect(BASE_URL, redirect(cross, BASE_URL + prefix + "/received", "unsafe-url"), "no-referrer"),
+                 ["same-origin", "cross-site", "cross-site"], ["full", "", ""]),
+            )
+            for action, sites, referrers in chains:
+                fixture_get(prefix + "/reset")
+                source = BASE_URL + prefix + "/form?" + urlencode({"action": action, "method": "GET"})
+                await cdp.send("Page.navigate", {"url": source, "waitUntil": "load"}, session_id=session_id)
+                await cdp.send("Runtime.evaluate", {"expression": "document.querySelector('form').requestSubmit()"}, session_id=session_id)
+                await cdp.send("Page.getFrameTree", session_id=session_id)
+                rows = json.loads(fixture_get(prefix + "/observations"))
+                assert [row["fetch_site"] for row in rows] == sites, rows
+                assert [row["referer"] for row in rows] == [source if value == "full" else value for value in referrers], rows
+
+            fixture_get(prefix + "/reset")
+            await cdp.send("Page.navigate", {"url": "about:blank"}, session_id=session_id)
+            await cdp.send("Page.navigate", {
+                "url": redirect(cross, BASE_URL + prefix + "/received"), "waitUntil": "load",
+            }, session_id=session_id)
+            rows = json.loads(fixture_get(prefix + "/observations"))
+            assert [row["fetch_site"] for row in rows] == ["none", "none"], rows
+            assert [row["referer"] for row in rows] == ["", ""], rows
+        finally:
+            await cdp.send("Target.closeTarget", {"targetId": target_id})
+    print("NAVIGATION_REFERRER_POLICY_AND_FETCH_METADATA_OK")
+
+
 async def validate_retained_page_autonomous_work() -> None:
     """Reproduce retained-page work, then prove local parking stops it."""
     fixture_get("/idle-pulse-reset")
-    websocket = await connect(CDP_URL, proxy=None)
+    websocket = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     cdp = _RawCdp(websocket)
     target_id = ""
     try:
@@ -87,7 +302,7 @@ async def validate_retained_page_autonomous_work() -> None:
 
     fixture_get("/idle-pulse-reset")
     owner = SearchBrowserSession()
-    owner._connection.websocket = await connect(CDP_URL, proxy=None)
+    owner._connection.websocket = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     owner._connection.cdp = _RawCdp(owner._connection.websocket)
     try:
         owner._target_id, owner._session_id = await create_target(
@@ -136,7 +351,7 @@ async def validate_playwright_session_attachment() -> None:
     from playwright.async_api import async_playwright
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.connect_over_cdp(CDP_URL)
+        browser = await playwright.chromium.connect_over_cdp(CDP_URL, headers=cdp_auth_headers())
         try:
             context = browser.contexts[0]
             page = await context.new_page()
@@ -181,7 +396,7 @@ async def validate_playwright_session_attachment() -> None:
 
 async def validate_anubis_worker_preload_runtime() -> None:
     """Exercise exact interception and native delegation in the pinned V8 runtime."""
-    websocket = await connect(CDP_URL, proxy=None)
+    websocket = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     cdp = _RawCdp(websocket)
     target_id = ""
     try:
@@ -283,7 +498,7 @@ async def validate_anubis_worker_preload_runtime() -> None:
 
 async def validate_patched_search_runtime() -> None:
     """Exercise retained-target GET/POST and fingerprint contracts."""
-    websocket = await connect(CDP_URL, proxy=None)
+    websocket = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     cdp = _RawCdp(websocket)
     target_id = ""
     try:
@@ -399,7 +614,12 @@ async def validate_patched_search_runtime() -> None:
             if mode == "instant":
                 await form_call("instant", "fixture")
             else:
+                # A challenge may restore a query-filled homepage. Exercise
+                # native replacement with non-ASCII text before timed entry.
+                await form_call("instant", "restored café 🦉")
                 await form_call("timed-prepare", "fixture")
+                await cdp.send("Input.insertText", {"text": ""}, session_id=session_id)
+                assert await evaluate("document.activeElement.value") == ""
                 for character in "fixture":
                     await cdp.send(
                         "Input.dispatchKeyEvent",
@@ -540,8 +760,8 @@ async def validate_patched_search_runtime() -> None:
 
 
 async def validate_connection_isolation() -> None:
-    first_ws = await connect(CDP_URL, proxy=None)
-    second_ws = await connect(CDP_URL, proxy=None)
+    first_ws = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
+    second_ws = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     try:
         first = _RawCdp(first_ws)
         second = _RawCdp(second_ws)
@@ -681,7 +901,7 @@ async def validate_connection_isolation() -> None:
     # The stack supplies no --storage-dir, so a later connection must also
     # start from Obscura's immutable empty template rather than inheriting the
     # completed connection's cookie or target state.
-    third_ws = await connect(CDP_URL, proxy=None)
+    third_ws = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     try:
         third = _RawCdp(third_ws)
         third_target, third_session = await create_target(third)
@@ -713,7 +933,7 @@ async def validate_connection_limit() -> None:
         connections = []
         try:
             for _index in range(15):
-                connection = await connect(CDP_URL, proxy=None)
+                connection = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
                 await _RawCdp(connection).send("Target.getTargets")
                 connections.append(connection)
         except Exception:
@@ -725,7 +945,7 @@ async def validate_connection_limit() -> None:
     connections = await open_used_connections()
     try:
         try:
-            await connect(CDP_URL, proxy=None)
+            await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
         except Exception as exc:
             response = getattr(exc, "response", None)
             status = getattr(response, "status_code", None)
@@ -824,23 +1044,26 @@ async def validate_mixed_retained_and_request_scoped_capacity() -> None:
 
 
 async def validate_cross_realm_navigation_ownership() -> None:
+    # The build-time Rust test also inspects the child's pending URL/method/body.
+    # These CDP checks cover committed-origin and parent-navigation safety;
+    # unchanged URLs alone cannot distinguish a queued navigation from a no-op.
     # Calling a child-owned method from the parent must select the receiver's
     # frame, not the entered caller realm. A fresh document for every case
     # prevents a previous virtual URL from masking a missing navigation op.
     cases = (
         ("child.location = '/static'", "/static"),
-        ("child.document.location = '/static'", "/static"),
+        ("child.document.location = '/static'", "/cross-realm-child"),
         ("child.location.href = '/static'", "/static"),
         ("child.location.assign('/static')", "/static"),
         ("child.location.replace('/static')", "/static"),
         ("child.document.location.replace('/static')", "/static"),
         ("child.location.reload()", "/cross-realm-child"),
-        ("child.document.querySelector('form').requestSubmit()", "/static"),
+        ("child.document.querySelector('form').requestSubmit()", "/cross-realm-child"),
         ("child.document.querySelector('form').method = 'get'; "
          "child.document.querySelector('form').requestSubmit()",
-         "/static?q=child+fixture"),
+         "/cross-realm-child"),
     )
-    websocket = await connect(CDP_URL, proxy=None)
+    websocket = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     cdp = _RawCdp(websocket)
     target_id = ""
     try:
@@ -866,6 +1089,15 @@ async def validate_cross_realm_navigation_ownership() -> None:
             assert result["result"].get("value") == BASE_URL + child_path, (
                 expression, result,
             )
+            # Pending navigation must not change the committed document origin.
+            # v0.2.3 keeps cookie authority on the loaded document until commit.
+            committed = await cdp.send(
+                "Runtime.evaluate",
+                {"expression": "document.querySelector('iframe').contentDocument.URL",
+                 "returnByValue": True},
+                session_id=session_id, timeout_seconds=5,
+            )
+            assert committed["result"].get("value") == BASE_URL + "/cross-realm-child"
             # The command reply can precede navigation processing. A subsequent
             # frame-tree command observes any incorrectly queued parent move.
             tree = await cdp.send(
@@ -980,6 +1212,9 @@ def validate_navigation_contracts() -> None:
 
 
 def main() -> None:
+    asyncio.run(validate_control_authentication())
+    asyncio.run(validate_navigation_cookie_context_and_post_reset())
+    asyncio.run(validate_navigation_headers())
     asyncio.run(validate_retained_page_autonomous_work())
     asyncio.run(validate_playwright_session_attachment())
     asyncio.run(validate_anubis_worker_preload_runtime())

@@ -55,6 +55,10 @@ fallbacks, retries, migrations, or weaker ownership checks.
 - Fixed gateways and publishers validate their complete local boundary. The
   corresponding origin health check is disabled when it would only repeat the
   same path.
+- The CDP gateway checks the native `401 Unauthorized` response through its
+  fixed route using `Host: obscura:9222`. This proves listener reachability
+  and authentication enforcement without giving the gateway the bearer token;
+  it does not prove page execution health.
 - Nginx is the WebUI health boundary. Its root request traverses the frontend,
   so `web_server` has no separate periodic health check. Nginx still waits for
   the API independently because a frontend root response does not prove API
@@ -316,14 +320,17 @@ are owned by [internal network security](internal_network_security.md#docker-gat
   One shared lazy SearXNG event-loop thread owns all five generations and their
   one idle-deadline callback per live provider session. This changes target
   lifetime, not the maximum target, connection, thread, or callback counts.
-- The derived Obscura v0.2.2 binary selects the upstream release variant's
+  Bing's pagination cooldown uses an asynchronous wait on that loop, within
+  the existing browser deadline; it neither blocks other providers nor
+  allocates a worker thread for the delay.
+- The derived Obscura v0.2.3 binary selects the upstream release variant's
   explicit `--no-default-features --features stealth` no-render feature set.
   Search and direct `open_url` consume DOM and response-body CDP surfaces, so
   screenshot, screencast, PDF-export, raster layout, image/font capture, and
   renderer-only resource warmup remain absent. JavaScript, DOM, module,
   charset, compressed-response, and automation compatibility fixes remain
   available in that feature set.
-- The native v0.2.2 runtime clamps deeply nested timers, caps the fetched-URL
+- The native v0.2.3 runtime clamps deeply nested timers, caps the fetched-URL
   bookkeeping list at 16,384 entries, and cancels V8 watchdog threads when
   their owner is dropped. These controls supplement request deadlines and
   idle parking; they do not impose an aggregate browser memory bound.

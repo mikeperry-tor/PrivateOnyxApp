@@ -118,7 +118,9 @@ obscura -> browser-egress -> obscura-egress-bridge
 
 Only `api_server` and `obscura-cdp-gateway` join
 `onyx-obscura-control`. The gateway is not on `onyx-backend`. SearXNG reaches
-Obscura directly on the browser control network. CDP is never host-published.
+Obscura directly on the browser control network. Both clients authenticate
+with the generated native CDP bearer token; the fixed gateway forwards the
+WebSocket bytes without owning the credential. CDP is never host-published.
 Obscura and SearXNG have no direct Internet route.
 
 SearXNG may keep one WebSocket and its provider-specific native browser context

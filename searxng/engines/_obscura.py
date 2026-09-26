@@ -533,7 +533,7 @@ def provider_lease(
         _provider_capacity_changed()
 
 
-def _record_start(state: _ProviderState) -> bool:
+async def _record_start(state: _ProviderState) -> bool:
     while True:
         with state.lock:
             now = time.monotonic()
@@ -544,7 +544,9 @@ def _record_start(state: _ProviderState) -> bool:
         # A single Bing engine attempt can deliberately submit sparse page 2.
         # Recheck at the actual pre-navigation boundary so its second homepage
         # navigation preserves the same exact provider start interval.
-        time.sleep(remaining)
+        # All providers share this event loop. Keep the lease while yielding
+        # the cooldown, and recheck the clock after waking (or stop on cancel).
+        await asyncio.sleep(remaining)
 
 
 def _provider_browser(name: str) -> _ProviderBrowserSession:

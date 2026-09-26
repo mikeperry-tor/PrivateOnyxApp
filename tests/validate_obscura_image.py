@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import subprocess
 import time
 import uuid
@@ -13,6 +14,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TOKEN = secrets.token_hex(32)
 
 
 def run(*args: str) -> str:
@@ -76,7 +78,8 @@ def wait_for_obscura(
                 client_image,
                 "-c",
                 "import json,urllib.request; "
-                f"data=json.load(urllib.request.urlopen('http://{cdp_host}:9222/json/version', timeout=2)); "
+                f"request=urllib.request.Request('http://{cdp_host}:9222/json/version', headers={{'Authorization': 'Bearer {TOKEN}'}}); "
+                "data=json.load(urllib.request.urlopen(request, timeout=2)); "
                 "assert data['Protocol-Version'] == '1.3'",
             ],
             stdout=subprocess.DEVNULL,
@@ -100,7 +103,7 @@ def main() -> int:
         run(args.container_bin, "image", "inspect", args.image)
     )[0]
     assert inspection["Config"]["Entrypoint"] == ["/obscura"]
-    assert inspection["Config"].get("User") == "0"
+    assert inspection["Config"].get("User") == "65532"
 
     suffix = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
     network = f"private-onyx-obscura-contract-{suffix}"
@@ -121,6 +124,10 @@ def main() -> int:
             network,
             "--network-alias",
             fixture_host,
+            "--network-alias",
+            "sub.fixture.example",
+            "--network-alias",
+            "cross-site.test",
             "--read-only",
             "--mount",
             f"type=bind,src={ROOT / 'tests/obscura_fixture_server.py'},"
@@ -150,6 +157,8 @@ def main() -> int:
             "no-new-privileges",
             "--env",
             "OBSCURA_ALLOW_PRIVATE_NETWORK=true",
+            "--env",
+            f"OBSCURA_CDP_TOKEN={TOKEN}",
             "--env",
             "OBSCURA_NAV_TIMEOUT_MS=10000",
             "--env",
@@ -190,6 +199,8 @@ def main() -> int:
                 "--env",
                 "PYTHONPATH=/obscura-client",
                 "--env",
+                f"OBSCURA_CDP_TOKEN={TOKEN}",
+                "--env",
                 f"OBSCURA_TEST_CDP_URL=ws://{cdp_host}:9222/devtools/browser",
                 "--env",
                 f"OBSCURA_TEST_BASE_URL=http://{fixture_host}:8080",
@@ -209,7 +220,7 @@ def main() -> int:
         assert "PINNED_OBSCURA_RUNTIME_CONTRACTS_OK" in output
 
         logs = run(args.container_bin, "logs", obscura)
-        assert "Headless Browser v0.2.2-private-onyx-search-v1" in logs
+        assert "Headless Browser v0.2.3-private-onyx-search-v1" in logs
         assert "Private Onyx patchset: search-submission-v1" in logs
         assert (
             "Stealth mode enabled "

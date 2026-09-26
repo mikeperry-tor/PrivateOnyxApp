@@ -477,6 +477,12 @@ Audit these current Obscura areas:
   series, and zero-fuzz `git apply --check` plus application. Rebase each patch
   against the exact candidate source; do not carry an offset, already-applied
   hunk, or source-shape fallback into a release build;
+- native CDP non-loopback bearer authentication, browser-origin rejection,
+  generated-token delivery only to Obscura/API/SearXNG, and authenticated
+  discovery, raw WebSockets, and Playwright attachments; the token-free gateway
+  health probe must require the native 401 response with the correct port;
+  missing and wrong tokens must fail without weakening the internal control
+  networks;
 - flattened Target attachment/session identifiers, including the distinct
   explicit page-session ID required by Playwright `new_cdp_session(page)`,
   target creation/closure, per-WebSocket context ownership, connection-thread
@@ -510,7 +516,23 @@ Audit these current Obscura areas:
 - identical target-owned stealth transport for initial GET and native form POST,
   including cookies, proxy, TLS-emulation profile, tracker policy, connection
   pool, 301/302/303 versus 307/308 redirect semantics, and final CDP
-  `Network.requestWillBeSent` method reporting. Remove
+  `Network.requestWillBeSent` method reporting. Require wire-level GET/POST
+  cookie continuity and deletion, initiating-document SameSite context, and
+  cross-site redirect history, including a return to the initiating site.
+  Check `Sec-Fetch-Site` independently of cookies: same-site subdomains must be
+  classified with the PSL, redirect history may only reduce the classification's
+  trust, and browser-initiated chains retain `none`. Default form GET/POST must
+  retain normal referrers. Exercise all navigation referrer policies, HTTP
+  fallback lists, live-DOM meta overrides, policy reset on a retained target,
+  redirect-policy changes, and irreversible path/query stripping or omission.
+  Keep credentials/fragments out of referrers and test HTTPS downgrade rules.
+  Re-audit upstream subresource policy and removed-meta history separately;
+  the navigation patch does not supply a complete browser policy container.
+  Exercise Strict/Lax cookies on same-site and cross-site GET/POST, method-changing
+  and method-preserving redirects, and a server that resets after consuming the
+  POST but stays available to detect a replay. Native GET reset recovery must
+  not replay POST. Cookie-jar unit tests and upstream's `send_single` POST test
+  do not cover native form navigation. Remove
   `0001-stealth-native-post.patch` only when upstream provides that complete
   contract without falling back to its ordinary context client;
 - one unpredictable nonzero target seed injected before each new JavaScript
@@ -519,14 +541,14 @@ Audit these current Obscura areas:
   homepage, result, and later-query navigation. Remove
   `0002-target-fingerprint-seed.patch` only when upstream provides target- or
   context-stable fingerprint state with the same provider-session lifetime;
-- writable shadowing of legacy Window named-element properties, the
+- native writable shadowing of legacy Window named-element properties; the
   `PerformanceEntry`/`PerformanceResourceTiming`/`PerformanceNavigationTiming`
   constructor hierarchy, the `SVGAElement` constructor and SVG-anchor wrapper,
   and module-capable `nomodule` suppression for parser-discovered and dynamic
   scripts. Remove
   `0003-search-runtime-compatibility.patch` only when the tagged upstream runtime
-  provides all four contracts and the focused
-  provider fixtures pass without it. Native v0.2.2 `Response.body` must continue
+  provides the timing, SVG, and nomodule contracts and the focused
+  provider fixtures pass without it. Native v0.2.3 `Response.body` must continue
   to pass the retained `pipeThrough()` regression without a wrapper implementation;
 - explicit main- versus child-frame ownership for script-triggered navigation,
   including a top-level `requestSubmit()` POST with its encoded form body and
@@ -537,9 +559,13 @@ Audit these current Obscura areas:
   the receiver's frame rather than inferring the entered caller realm. Require
   parent-to-child location setters, `assign`, `replace`, `reload`, and child
   GET/POST form submission in the selected-image gate, with a subsequent CDP
-  barrier proving the parent did not navigate. Ordinary top-level and
-  child-to-self tests alone do not establish equivalence. Re-audit the separate
-  native pending-child-navigation limitation documented in
+  barrier proving the parent did not navigate. Also require build-time assertions
+  on the child's exact pending URL/method/body and unchanged committed URL,
+  with no parent pending navigation. A no-op child operation must fail those
+  assertions even though it leaves both CDP URLs unchanged. Ordinary top-level
+  and child-to-self tests alone do not establish equivalence. Re-audit
+  native commit-time realm URL/cookie-origin protection and the separate
+  pending-child-navigation limitation documented in
   [request handling](request_handling.md);
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
@@ -601,7 +627,8 @@ passes:
   count, which multiplies the per-entry memory bound.
 - **Connection isolation.** The wrapper relies on Obscura creating an isolated
   browser context and HTTP client for every WebSocket and does not clear
-  cookies. Re-audit the immutable connection template, cookie-delta persistence
+  cookies. Re-audit the immutable connection template, host-only URL-based CDP
+  imports, PSL and SameSite/secure-cookie enforcement, lossy CDP exports, cookie-delta persistence
   behavior, every state-bearing CDP domain, two-client interleavings, repeated
   target cleanup, provider idle expiry, and connection-thread exit before
   retaining this simplification.
@@ -629,7 +656,9 @@ Playwright Python remains pinned to the version supplied by Onyx (1.58.0) for
 compatibility auditing and derived-image validation. The tagged-image gate
 must connect over CDP, create a page, open a public page CDP session, execute a
 command through it, and exercise native `Input.insertText`, label-based Playwright
-`fill()`, and escaped/non-ASCII timed key events before detaching and closing.
+`fill()`, native clearing of selected prefilled controls, and escaped/non-ASCII
+timed key events before detaching and closing. Include an Anubis-restored
+prefilled homepage in timed-entry validation.
 The wrapper's raw transport may be removed only if a replacement preserves
 one-navigation behavior, event ordering, actual-body access, deadlines, redaction, and cleanup.
 
@@ -913,7 +942,9 @@ For every custom engine verify:
   one provider lease held through cleanup, exact monotonic 3.0-second start
   interval, no queued busy-provider thread, no all-unavailable fan-out, and
   visible unresponsive records for pre-execution unavailability, and
-  different-provider concurrency;
+  different-provider concurrency, including progress while Bing awaits its
+  page-two cooldown on the shared loop; cancellation or deadline expiry must
+  stop that wait without a late start stamp or provider request;
 - a busy, reserved, or cooling regular provider prevents last-resort
   selection; zero-result regular attempts advance sequentially; Bing becomes
   eligible only after every non-suspended regular provider has failed in that
@@ -1830,7 +1861,9 @@ multi-architecture manifest digest, release version, exact source revision,
 source-archive SHA-256, and digest-pinned Rust builder image in
 `stack.versions.env`; audit the source archive root, the Dockerfile's
 locked stealth build, and exact patch-series application; then run
-`make obscura-build`.
+`make obscura-build`. Native cookie and CDP cookie-parameter regressions must
+pass alongside the wrapper tests; preserve the upstream host-only, PSL,
+SameSite, and secure-cookie rules when rebasing stealth POST.
 Rebuild the derived SearXNG image only when its embedded shared client changed,
 then run `make check`, `make test-obscura-image`, and
 `make test-patch-images`. The image test must observe Obscura's full

@@ -1,8 +1,8 @@
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index 7b50aaf0f8e0f756917a30fdc553d3fd3f0a76a2..5c51fa8f6320ee87452806b6d73a21e9ea5ad59f 100644
+index 4338342..8424b7b 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -2313,6 +2313,15 @@ impl Page {
+@@ -2288,6 +2288,15 @@ impl Page {
                                  }
                                  _ => continue,
                              };
@@ -18,7 +18,7 @@ index 7b50aaf0f8e0f756917a30fdc553d3fd3f0a76a2..5c51fa8f6320ee87452806b6d73a21e9
 
                              let inline_code = if src.is_none() {
                                  dom.text_content(sid)
-@@ -6301,6 +6310,32 @@ mod tests {
+@@ -6590,6 +6599,32 @@ mod tests {
          page
      }
 
@@ -52,10 +52,10 @@ index 7b50aaf0f8e0f756917a30fdc553d3fd3f0a76a2..5c51fa8f6320ee87452806b6d73a21e9
      async fn module_graph_and_evaluation_share_one_active_budget() {
          use std::io::{Read as _, Write as _};
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index 0056cc16033d9ac588961a9d939af791fe99192e..b079e77181c1ab306bb606a25da5c7e25c43c8d1 100644
+index 5959a6f..2b3d81c 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -1887,6 +1887,9 @@ function __prepareInsertedScript(script) {
+@@ -2048,6 +2048,9 @@ function __prepareInsertedScript(script) {
    const scriptType = (script.getAttribute('type') || '').trim().toLowerCase();
    const isModule = scriptType === 'module';
    const isImportMap = scriptType === 'importmap';
@@ -65,7 +65,7 @@ index 0056cc16033d9ac588961a9d939af791fe99192e..b079e77181c1ab306bb606a25da5c7e2
    if (isImportMap) {
      const src = script.getAttribute('src');
      let error = '';
-@@ -6453,6 +6456,7 @@ function _elementClassFor(nid) {
+@@ -6723,6 +6726,7 @@ function _elementClassFor(nid) {
        && _domParse("namespace_uri", nid) === "http://www.w3.org/2000/svg") {
      if (tag === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
      if (tag === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
@@ -73,7 +73,7 @@ index 0056cc16033d9ac588961a9d939af791fe99192e..b079e77181c1ab306bb606a25da5c7e2
      if (globalThis.SVGElement) return globalThis.SVGElement;
    }
    if (tag === "FORM" && globalThis.HTMLFormElement) return globalThis.HTMLFormElement;
-@@ -6471,6 +6475,7 @@ function _elementClassForKnownName(namespace, qualifiedName) {
+@@ -6747,6 +6751,7 @@ function _elementClassForKnownName(namespace, qualifiedName) {
    if (namespace === "http://www.w3.org/2000/svg") {
      if (localName === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
      if (localName === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
@@ -81,7 +81,7 @@ index 0056cc16033d9ac588961a9d939af791fe99192e..b079e77181c1ab306bb606a25da5c7e2
      if (globalThis.SVGElement) return globalThis.SVGElement;
    }
    if (namespace === "http://www.w3.org/1999/xhtml") {
-@@ -10581,6 +10586,33 @@ globalThis.XMLSerializer = class XMLSerializer {
+@@ -10967,6 +10972,33 @@ globalThis.XMLSerializer = class XMLSerializer {
      return "";
    }
  };
@@ -115,7 +115,7 @@ index 0056cc16033d9ac588961a9d939af791fe99192e..b079e77181c1ab306bb606a25da5c7e2
  globalThis.performance = globalThis.performance || {
    now: (function() {
      // Monotonically non-decreasing: return the wall-clock offset, but never a
-@@ -11697,11 +11729,13 @@ class SVGGraphicsElement extends SVGElement {}
+@@ -12145,11 +12177,13 @@ class SVGGraphicsElement extends SVGElement {}
  class SVGGeometryElement extends SVGGraphicsElement {}
  class SVGPathElement extends SVGGeometryElement {}
  class SVGSVGElement extends SVGGraphicsElement {}
@@ -129,27 +129,11 @@ index 0056cc16033d9ac588961a9d939af791fe99192e..b079e77181c1ab306bb606a25da5c7e2
  globalThis.CharacterData = CharacterData;
  globalThis.Text = Text;
  globalThis.Comment = Comment;
-@@ -11883,6 +11917,15 @@ function _ensureWindowNamedProperty(name) {
-   try {
-     Object.defineProperty(globalThis, name, {
-       get() { return _windowNamedValue(name); },
-+      set(value) {
-+        Object.defineProperty(globalThis, name, {
-+          value,
-+          writable: true,
-+          configurable: true,
-+          enumerable: true,
-+        });
-+        _windowNamedPropertyNames.delete(name);
-+      },
-       configurable: true,
-       enumerable: true,
-     });
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index 6a668b15c002bf63d5093b3bbafc72c863edfe1a..e383a650fab7a95b35fa6d83dcf69c27ba31ce81 100644
+index c6a6067..b90e90a 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -5541,6 +5541,71 @@ mod tests {
+@@ -7081,6 +7081,71 @@ mod tests {
          );
      }
 
@@ -221,7 +205,7 @@ index 6a668b15c002bf63d5093b3bbafc72c863edfe1a..e383a650fab7a95b35fa6d83dcf69c27
      #[test]
      fn window_named_access_tracks_dynamic_ids_and_fragment_parsing() {
          let mut rt = setup_runtime("<html><body><div id='host'></div></body></html>");
-@@ -14279,6 +14344,39 @@ mod tests {
+@@ -15919,6 +15984,39 @@ mod tests {
          );
      }
 
@@ -261,7 +245,7 @@ index 6a668b15c002bf63d5093b3bbafc72c863edfe1a..e383a650fab7a95b35fa6d83dcf69c27
      #[test]
      fn test_location_navigation_coerces_url_objects() {
          let mut rt = setup_runtime("<html><body></body></html>");
-@@ -16541,6 +16639,56 @@ mod tests {
+@@ -18552,6 +18650,39 @@ mod tests {
          );
      }
 
@@ -271,31 +255,15 @@ index 6a668b15c002bf63d5093b3bbafc72c863edfe1a..e383a650fab7a95b35fa6d83dcf69c27
 +        let result = rt
 +            .call_function_on_for_cdp(
 +                r#"async () => {
-+                    const originalFetchOp = Deno.core.ops.op_fetch_url;
-+                    let fetches = 0;
-+                    try {
-+                        Deno.core.ops.op_fetch_url = (url) => {
-+                            fetches++;
-+                            return JSON.stringify({
-+                                status: 200,
-+                                headers: { "content-type": "text/javascript" },
-+                                body: "globalThis.__legacyFallbackRan = true",
-+                                url,
-+                            });
-+                        };
-+                        const script = document.createElement("script");
-+                        script.noModule = true;
-+                        script.src = "/legacy-fallback.js";
-+                        document.head.appendChild(script);
-+                        await new Promise(resolve => setTimeout(resolve, 10));
-+                        return {
-+                            fetches,
-+                            executed: globalThis.__legacyFallbackRan === true,
-+                            pending: globalThis.__obscura_hasPendingDynamicScripts(),
-+                        };
-+                    } finally {
-+                        Deno.core.ops.op_fetch_url = originalFetchOp;
-+                    }
++                    const script = document.createElement("script");
++                    script.noModule = true;
++                    script.src = "data:text/javascript,globalThis.__legacyFallbackRan=true";
++                    document.head.appendChild(script);
++                    await new Promise(resolve => setTimeout(resolve, 10));
++                    return {
++                        executed: globalThis.__legacyFallbackRan === true,
++                        pending: globalThis.__obscura_hasPendingDynamicScripts(),
++                    };
 +                }"#,
 +                None,
 +                &[],
@@ -308,7 +276,6 @@ index 6a668b15c002bf63d5093b3bbafc72c863edfe1a..e383a650fab7a95b35fa6d83dcf69c27
 +        assert_eq!(
 +            result.value.unwrap(),
 +            serde_json::json!({
-+                "fetches": 0,
 +                "executed": false,
 +                "pending": false,
 +            })
@@ -318,7 +285,7 @@ index 6a668b15c002bf63d5093b3bbafc72c863edfe1a..e383a650fab7a95b35fa6d83dcf69c27
      #[tokio::test(flavor = "current_thread")]
      async fn dynamic_classic_scripts_are_async_by_default_but_honor_async_false_order() {
          let mut rt = setup_runtime("<html><head></head><body></body></html>");
-@@ -16623,6 +16771,26 @@ mod tests {
+@@ -18634,6 +18765,26 @@ mod tests {
          );
      }
 

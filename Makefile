@@ -441,6 +441,11 @@ export OBSCURA_WRAPPER_SOURCE_HASH
 export OBSCURA_RETENTION_FLOOR_BYTES
 export OBSCURA_IO_STREAM_MAX_BYTES
 export SEARXNG_IMAGE_TAG
+OBSCURA_CDP_TOKEN := $(strip $(shell openssl rand -hex 32 2>/dev/null))
+ifeq ($(OBSCURA_CDP_TOKEN),)
+$(error openssl is required to generate the ephemeral browser control token)
+endif
+export OBSCURA_CDP_TOKEN
 SEARXNG_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
 USER_AUTH_SECRET := $(strip $(shell openssl rand -hex 32 2>/dev/null))
 MINIO_ROOT_USER := $(strip $(shell openssl rand -hex 16 2>/dev/null))

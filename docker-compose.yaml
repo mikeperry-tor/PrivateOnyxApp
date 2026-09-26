@@ -91,6 +91,7 @@ services:
       # already suspended or unavailable.
       SEARXNG_ROUND_ROBIN: "${SEARXNG_ROUND_ROBIN:-true}"
       SEARXNG_TIMED_TYPING_PROVIDERS: "${SEARXNG_TIMED_TYPING_PROVIDERS:-none}"
+      OBSCURA_CDP_TOKEN: ${OBSCURA_CDP_TOKEN:?OBSCURA_CDP_TOKEN must be set}
       SEARXNG_OBSCURA_CDP_URL: "ws://obscura:9222/devtools/browser"
       OBSCURA_BROWSER_WAIT_UNTIL_SEARCH: "${OBSCURA_BROWSER_WAIT_UNTIL_SEARCH:-networkidle2}"
       EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"
@@ -133,11 +134,12 @@ services:
       # Hard ceiling on a single Page.navigate. Obscura's default is 30s,
       # This leaves headroom for slower VPN or upstream-proxy paths while the
       # caller's independent 120-second invocation budget remains authoritative.
+      OBSCURA_CDP_TOKEN: ${OBSCURA_CDP_TOKEN:?OBSCURA_CDP_TOKEN must be set}
       OBSCURA_NAV_TIMEOUT_MS: "90000"
       # Per-CDP-command deadline. A hung page (runaway Runtime.evaluate,
-      # synchronous DOM op) is terminated after this budget so one bad
-      # session cannot hold the shared V8 lock and stall others. Default
-      # 60s; set to 90000 to accommodate slow Tor page renders.
+      # synchronous DOM op) is terminated after this budget to bound the
+      # affected connection's work. Default 60s; allow 120s for slow Tor
+      # navigation and command processing within caller-owned deadlines.
       OBSCURA_CDP_COMMAND_TIMEOUT_MS: "120000"
       # Request timeout for scripted fetch()/XHR/ES-module loads. Default
       # 30s; bump to 45000 for slow proxy paths.
@@ -260,7 +262,7 @@ services:
     depends_on:
       obscura: {condition: service_started}
     healthcheck:
-      test: ["CMD-SHELL", "printf 'GET /json/version HTTP/1.1\r\nHost: obscura\r\nConnection: close\r\n\r\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:9222,connect-timeout=5 | grep -Eq '^HTTP/1[.][01] 200'"]
+      test: ["CMD-SHELL", "printf 'GET /json/version HTTP/1.1\r\nHost: obscura:9222\r\nConnection: close\r\n\r\n' | socat -T 5 STDIO,ignoreeof TCP:127.0.0.1:9222,connect-timeout=5 | grep -Eq '^HTTP/1[.][01] 401 Unauthorized'"]
       interval: 10m
       start_interval: 5s
       timeout: 5s
@@ -459,6 +461,7 @@ services:
       ONYX_OPEN_URL_MAX_TOTAL_CHARS: "${ONYX_OPEN_URL_MAX_TOTAL_CHARS:-0}"
       ONYX_AGENT_USE_OBSCURA_BROWSER: "${ONYX_AGENT_USE_OBSCURA_BROWSER:-false}"
       ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB: "${ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB:-20}"
+      OBSCURA_CDP_TOKEN: ${OBSCURA_CDP_TOKEN:?OBSCURA_CDP_TOKEN must be set}
       ONYX_OBSCURA_CDP_URL: "ws://obscura-cdp-gateway:9222/devtools/browser"
       OBSCURA_BROWSER_WAIT_UNTIL_WEB: "${OBSCURA_BROWSER_WAIT_UNTIL_WEB:-domcontentloaded}"
       EGRESS_ALLOW_HTTP_URLS: "${EGRESS_ALLOW_HTTP_URLS:-false}"

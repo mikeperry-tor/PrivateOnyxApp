@@ -358,7 +358,7 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
 
         self.assertEqual(state.last_start, float("-inf"))
         with self.module.provider_lease("google2") as record_start:
-            self.assertTrue(record_start())
+            self.assertTrue(asyncio.run(record_start()))
 
         self.assertNotEqual(state.last_start, float("-inf"))
 
@@ -374,12 +374,62 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
         state = self.module._PROVIDERS["bing2"]
 
         with self.module.provider_lease("bing2") as record_start:
-            self.assertTrue(record_start())
-            started = time.monotonic()
-            self.assertTrue(record_start())
-        elapsed = time.monotonic() - started
+            self.assertTrue(asyncio.run(record_start()))
+            started = state.last_start
+            self.assertTrue(asyncio.run(record_start()))
+        elapsed = state.last_start - started
 
-        self.assertGreaterEqual(elapsed, 0.02)
+        self.assertGreaterEqual(elapsed, self.module.MINIMUM_START_INTERVAL)
+
+    def test_pagination_cooldown_yields_to_other_provider_and_cancels_cleanly(self):
+        async def exercise():
+            now = [100.0]
+            sleeping = asyncio.Event()
+            wake = asyncio.Event()
+            waits = []
+
+            async def sleep(delay):
+                waits.append(delay)
+                sleeping.set()
+                await wake.wait()
+                wake.clear()
+
+            with (
+                patch.object(self.module, "time", SimpleNamespace(monotonic=lambda: now[0])),
+                patch.object(self.module.asyncio, "sleep", sleep),
+                self.module.provider_lease("bing2") as bing_guard,
+                self.module.provider_lease("brave2") as brave_guard,
+            ):
+                self.assertTrue(await bing_guard())
+                bing = self.module._PROVIDERS["bing2"]
+                pending = asyncio.create_task(bing_guard())
+                try:
+                    await asyncio.wait_for(sleeping.wait(), timeout=1)
+                    self.assertTrue(await brave_guard())
+                    self.assertFalse(pending.done())
+                    self.assertTrue(bing.active)
+                    self.assertIsNone(self.module.reserve_provider("bing2"))
+                    self.assertEqual(bing.last_start, 100.0)
+
+                    # Early wakes must wait the remainder, not start early.
+                    sleeping.clear()
+                    now[0] = 101.0
+                    wake.set()
+                    await asyncio.wait_for(sleeping.wait(), timeout=1)
+                    self.assertEqual(waits, [3.0, 2.0])
+                    pending.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await pending
+                    now[0] = 104.0
+                    wake.set()
+                    self.assertEqual(bing.last_start, 100.0)
+                finally:
+                    if not pending.done():
+                        pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
+            self.assertFalse(bing.active)
+
+        self.module._PROVIDER_BROWSER_LOOP.submit(exercise()).result(timeout=3)
 
     def test_browser_transaction_is_capped_by_remaining_engine_window(self):
         captured = {}

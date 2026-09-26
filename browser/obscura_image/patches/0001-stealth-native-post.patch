@@ -1,9 +1,60 @@
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index abc9819adf00a56fca0a9f378b2023c0452e45a7..1bd562720b4011d2e11d72c45082613950170a06 100644
+index 0fadfee..4e1f5fb 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -1773,6 +1773,23 @@ impl Page {
-             .fetch_with_callbacks(url, Some(&self.callbacks))
+@@ -6,7 +6,7 @@ use obscura_js::frame::FrameRealm;
+ use obscura_js::runtime::ObscuraJsRuntime;
+ use obscura_net::{
+     CallbackRegistry, ObscuraHttpClient, ObscuraNetError, RequestCallback, ResourceRequest,
+-    ResourceType, Response, ResponseCallback,
++    ReferrerPolicy, ResourceType, Response, ResponseCallback,
+ };
+ use url::Url;
+
+@@ -235,6 +235,7 @@ pub struct Page {
+     /// separate from `url`: direct automation navigations have no referrer,
+     /// while a navigation requested by page script uses the previous document.
+     pub referrer: String,
++    navigation_referrer_policy: ReferrerPolicy,
+     /// CSS viewport used by responsive page JavaScript and CDP screenshots.
+     /// The physical `screen` fingerprint remains independent.
+     pub viewport: (f32, f32),
+@@ -1078,6 +1079,7 @@ impl Page {
+             context,
+             title: String::new(),
+             referrer: String::new(),
++            navigation_referrer_policy: ReferrerPolicy::default(),
+             viewport: (1280.0, 720.0),
+             screen_size_override: None,
+             screen_metrics_emulated: false,
+@@ -1263,7 +1265,7 @@ impl Page {
+             let source = if self.should_block_url(&url) {
+                 None
+             } else if let Ok(parsed) = Url::parse(&url) {
+-                match self.do_fetch(&parsed).await {
++                match self.do_fetch(&parsed, ResourceRequest::navigation()).await {
+                     Ok(response) => Some(String::from_utf8_lossy(&response.body).into_owned()),
+                     Err(error) => {
+                         tracing::warn!("frame script {} failed: {}", url, error);
+@@ -1693,20 +1695,38 @@ impl Page {
+             .unwrap_or([255, 255, 255, 255])
+     }
+
+-    async fn do_fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
++    async fn do_fetch(&self, url: &Url, request: ResourceRequest) -> Result<Response, ObscuraNetError> {
+         #[cfg(feature = "stealth")]
+         if let Some(ref stealth) = self.stealth_client {
+             // Pass the page callbacks so CDP Network events and
+             // page.on('request'/'response') observers fire for stealth-mode
+             // navigations too, matching the non-stealth path below.
+             return stealth
+-                .fetch_with_callbacks(url, Some(&self.callbacks))
++                .fetch_resource_with_callbacks(url, request, Some(&self.callbacks))
+                 .await;
+         }
+         self.http_client
+-            .fetch_with_callbacks(url, Some(&self.callbacks))
++            .fetch_resource_with_callbacks(url, request, Some(&self.callbacks))
              .await
      }
 +
@@ -11,22 +62,23 @@ index abc9819adf00a56fca0a9f378b2023c0452e45a7..1bd562720b4011d2e11d72c450826139
 +        &self,
 +        url: &Url,
 +        body: &str,
++        request: ResourceRequest,
 +    ) -> Result<(Response, String), ObscuraNetError> {
 +        #[cfg(feature = "stealth")]
 +        if let Some(ref stealth) = self.stealth_client {
 +            return stealth
-+                .post_form_with_callbacks(url, body, Some(&self.callbacks))
++                .post_form_with_callbacks(url, body, request, Some(&self.callbacks))
 +                .await;
 +        }
 +        self.http_client
-+            .post_form_with_callbacks(url, body, Some(&self.callbacks))
++            .post_form_with_request(url, body, request, Some(&self.callbacks))
 +            .await
 +            .map(|response| (response, "POST".to_string()))
 +    }
      fn init_js(&mut self) {
          // init_js is also the new-document path.  Only resume_js explicitly
          // takes these IDs out before entering here and restores them after the
-@@ -3164,10 +3181,8 @@ impl Page {
+@@ -3213,10 +3233,8 @@ impl Page {
                      break;
                  }
                  tracing::info!(
@@ -38,7 +90,34 @@ index abc9819adf00a56fca0a9f378b2023c0452e45a7..1bd562720b4011d2e11d72c450826139
                  );
                  document_referrer = self
                      .url
-@@ -3263,6 +3278,7 @@ impl Page {
+@@ -3254,6 +3272,26 @@ impl Page {
+     ) -> Result<(), PageError> {
+         let url = Url::parse(url_str).map_err(|e| PageError::InvalidUrl(e.to_string()))?;
+
++        // Capture the initiating document before replacing self.url. Parking on
++        // about:blank is a fresh browser-initiated navigation, not a web origin.
++        let mut navigation_request = ResourceRequest::navigation();
++        navigation_request.initiator = self.url.clone()
++            .filter(|source| source.as_str() != "about:blank");
++        navigation_request.navigation_referrer_policy = self.with_dom(|dom| {
++            let mut policy = self.navigation_referrer_policy;
++            // Read the live document, including provider-inserted meta elements.
++            for id in dom.descendants(dom.document()) {
++                let Some(node) = dom.get_node(id) else { continue; };
++                if node.as_element().is_some_and(|e| e.local.as_ref() == "meta")
++                    && node.get_attribute("name").is_some_and(|name| name.eq_ignore_ascii_case("referrer")) {
++                    if let Some(value) = node.get_attribute("content").and_then(ReferrerPolicy::parse_token) {
++                        policy = value;
++                    }
++                }
++            }
++            policy
++        }).unwrap_or(self.navigation_referrer_policy);
++
+         // The previous document's background loads end with the document.
+         self.retire_render_resources();
+         self.lifecycle = LifecycleState::Loading;
+@@ -3314,6 +3352,7 @@ impl Page {
              return Ok(());
          }
 
@@ -46,21 +125,32 @@ index abc9819adf00a56fca0a9f378b2023c0452e45a7..1bd562720b4011d2e11d72c450826139
          let response = if url.scheme() == "data" {
              let content_type = url_str
                  .strip_prefix("data:")
-@@ -3283,9 +3299,10 @@ impl Page {
+@@ -3334,24 +3373,29 @@ impl Page {
                  redirected_from: Vec::new(),
              })
          } else if method == "POST" {
 -            self.http_client
 -                .post_form_with_callbacks(&url, body, Some(&self.callbacks))
 -                .await
-+            self.do_post_form(&url, body).await.map(|(response, final_method)| {
++            self.do_post_form(&url, body, navigation_request).await.map(|(response, final_method)| {
 +                document_method = final_method;
 +                response
 +            })
          } else {
-             self.do_fetch(&url).await
+-            self.do_fetch(&url).await
++            self.do_fetch(&url, navigation_request).await
          }
-@@ -3299,8 +3316,8 @@ impl Page {
+         .map_err(|e| {
+             self.lifecycle = LifecycleState::Failed;
+             PageError::NetworkError(e.to_string())
+         })?;
+
++        // A new document starts with its own HTTP policy, never its predecessor's.
++        self.navigation_referrer_policy = response.headers.get("referrer-policy")
++            .and_then(|value| ReferrerPolicy::from_header(value)).unwrap_or_default();
++
+         // Store binary main resources (images, PDFs, octet-stream) base64 so
+         // Network.getResponseBody returns intact bytes. A UTF-8-lossy text store
          // corrupts them (issue #340). Text-like types stay as text.
          let main_is_binary = !is_text_like_content_type(response.content_type());
          self.record_network_event_with_body(
@@ -71,11 +161,19 @@ index abc9819adf00a56fca0a9f378b2023c0452e45a7..1bd562720b4011d2e11d72c450826139
              "Document",
              response.status,
              &response.headers,
+@@ -3601,6 +3645,7 @@ impl Page {
+     }
+
+     pub fn navigate_blank(&mut self) {
++        self.navigation_referrer_policy = ReferrerPolicy::default();
+         self.retire_render_resources();
+         self.pending_frame_work.clear();
+         self.frames.clear();
 diff --git a/crates/obscura-cdp/src/server.rs b/crates/obscura-cdp/src/server.rs
-index d59176340e7217ded7723225e46712f9974d1d4f..8b17e01ed0bfd54800fe0846b923f2ad9e99a1a6 100644
+index a427695..342f28e 100644
 --- a/crates/obscura-cdp/src/server.rs
 +++ b/crates/obscura-cdp/src/server.rs
-@@ -1560,7 +1560,11 @@ async fn process_cdp_message(
+@@ -1845,7 +1845,11 @@ async fn process_cdp_message(
      }
 
      if let Some((nav_url, nav_method, nav_body)) = check_pending_navigation(ctx, &req.session_id) {
@@ -89,10 +187,10 @@ index d59176340e7217ded7723225e46712f9974d1d4f..8b17e01ed0bfd54800fe0846b923f2ad
              id: 0,
              method: "Page.navigate".to_string(),
 diff --git a/crates/obscura-cli/src/main.rs b/crates/obscura-cli/src/main.rs
-index 94a24afbf2617b1e6d9f011fcb9f30764c6dd049..f7269c4fe3c66e57e5aa4166c96ce33ecaf8bc40 100644
+index 7eaafc4..e45a381 100644
 --- a/crates/obscura-cli/src/main.rs
 +++ b/crates/obscura-cli/src/main.rs
-@@ -389,9 +389,12 @@ async fn main() -> anyhow::Result<()> {
+@@ -438,9 +438,12 @@ async fn run_cli() -> anyhow::Result<()> {
              }
              if stealth {
                  #[cfg(feature = "stealth")]
@@ -108,10 +206,373 @@ index 94a24afbf2617b1e6d9f011fcb9f30764c6dd049..f7269c4fe3c66e57e5aa4166c96ce33e
                  #[cfg(not(feature = "stealth"))]
                  tracing::info!("Stealth mode enabled (tracker blocking)");
              }
+diff --git a/crates/obscura-net/src/client.rs b/crates/obscura-net/src/client.rs
+index acf9249..f09cfb4 100644
+--- a/crates/obscura-net/src/client.rs
++++ b/crates/obscura-net/src/client.rs
+@@ -198,6 +198,8 @@ pub struct ResourceRequest {
+     /// but a module dependency is referred by its importing module while its
+     /// credentials mode is still relative to the owning document.
+     pub referrer: Option<Url>,
++    /// Policy of the initiating document for main-resource navigation only.
++    pub navigation_referrer_policy: ReferrerPolicy,
+     pub mode: RequestMode,
+     pub credentials: RequestCredentials,
+     /// Hard limit for the decoded response body retained by this request.
+@@ -211,6 +213,7 @@ impl ResourceRequest {
+             resource_type: ResourceType::Document,
+             initiator: None,
+             referrer: None,
++            navigation_referrer_policy: ReferrerPolicy::default(),
+             mode: RequestMode::Navigate,
+             credentials: RequestCredentials::Include,
+             max_response_bytes: 64 * 1024 * 1024,
+@@ -240,6 +243,7 @@ impl ResourceRequest {
+             resource_type,
+             initiator: Some(initiator.clone()),
+             referrer: Some(initiator.clone()),
++            navigation_referrer_policy: ReferrerPolicy::default(),
+             mode,
+             credentials,
+             max_response_bytes: match resource_type {
+@@ -262,6 +266,7 @@ impl ResourceRequest {
+             resource_type: ResourceType::Script,
+             initiator: Some(initiator.clone()),
+             referrer: Some(referrer.clone()),
++            navigation_referrer_policy: ReferrerPolicy::default(),
+             mode: RequestMode::Cors,
+             credentials: RequestCredentials::SameOrigin,
+             // OBSCURA_FETCH_MAX_BODY_BYTES (the fetch()/XHR override from #581)
+@@ -436,16 +441,126 @@ pub(crate) fn response_too_large(url: &Url, limit: usize) -> ObscuraNetError {
+ }
+
+ pub(crate) fn request_fetch_site(request: &ResourceRequest, target: &Url) -> &'static str {
++    request_fetch_site_with_redirects(request, target, &[])
++}
++
++pub(crate) fn request_fetch_site_with_redirects(
++    request: &ResourceRequest,
++    target: &Url,
++    redirects: &[Url],
++) -> &'static str {
+     let Some(initiator) = request.initiator.as_ref() else {
++        // Browser-initiated navigations retain `none` through redirects.
+         return "none";
+     };
+-    if initiator.origin() == target.origin() {
+-        "same-origin"
+-    } else {
+-        // A public-suffix-aware `same-site` classification will be added with
+-        // the page resource scheduler. Until then, cross-site is the safe
+-        // conservative value; it never overstates ambient trust.
+-        "cross-site"
++    let mut site = "same-origin";
++    for hop in redirects.iter().chain(std::iter::once(target)) {
++        // PSL suffixes describe domain names, not IP literals. Different IPs
++        // must never become same-site merely because their final octets match.
++        let different_ip_hosts = initiator.host() != hop.host()
++            && (!matches!(initiator.host(), Some(url::Host::Domain(_)))
++                || !matches!(hop.host(), Some(url::Host::Domain(_))));
++        if different_ip_hosts || !same_site(initiator, hop) {
++            return "cross-site";
++        }
++        if initiator.origin() != hop.origin() {
++            site = "same-site";
++        }
++    }
++    site
++}
++
++/// Navigation referrer policies are separate from the cookie initiator:
++/// suppressing a referrer must never turn a cross-site POST into same-site.
++#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
++pub enum ReferrerPolicy {
++    NoReferrer,
++    NoReferrerWhenDowngrade,
++    SameOrigin,
++    Origin,
++    StrictOrigin,
++    OriginWhenCrossOrigin,
++    #[default]
++    StrictOriginWhenCrossOrigin,
++    UnsafeUrl,
++}
++
++impl ReferrerPolicy {
++    pub fn parse_token(value: &str) -> Option<Self> {
++        match value.trim().to_ascii_lowercase().as_str() {
++            "no-referrer" => Some(Self::NoReferrer),
++            "no-referrer-when-downgrade" => Some(Self::NoReferrerWhenDowngrade),
++            "same-origin" => Some(Self::SameOrigin),
++            "origin" => Some(Self::Origin),
++            "strict-origin" => Some(Self::StrictOrigin),
++            "origin-when-cross-origin" => Some(Self::OriginWhenCrossOrigin),
++            "strict-origin-when-cross-origin" => Some(Self::StrictOriginWhenCrossOrigin),
++            "unsafe-url" => Some(Self::UnsafeUrl),
++            _ => None,
++        }
++    }
++
++    pub fn from_header(value: &str) -> Option<Self> {
++        // Repeated HTTP fields are comma-folded by merge_response_header.
++        value.split(',').filter_map(Self::parse_token).last()
++    }
++
++    fn referrer(self, source: &Url, target: &Url) -> Option<Url> {
++        if !matches!(source.scheme(), "http" | "https")
++            || !matches!(target.scheme(), "http" | "https") {
++            return None;
++        }
++        let same_origin = source.origin() == target.origin();
++        let downgrade = source.scheme() == "https" && target.scheme() == "http";
++        if self == Self::NoReferrer
++            || (self == Self::SameOrigin && !same_origin)
++            || (downgrade && matches!(self, Self::NoReferrerWhenDowngrade
++                | Self::StrictOrigin | Self::StrictOriginWhenCrossOrigin)) {
++            return None;
++        }
++        let mut value = source.clone();
++        let _ = value.set_username("");
++        let _ = value.set_password(None);
++        value.set_fragment(None);
++        let origin_only = matches!(self, Self::Origin | Self::StrictOrigin)
++            || (!same_origin && matches!(self, Self::OriginWhenCrossOrigin
++                | Self::StrictOriginWhenCrossOrigin))
++            || value.as_str().len() > 4096;
++        if origin_only {
++            value.set_path("/");
++            value.set_query(None);
++        }
++        Some(value)
++    }
++}
++
++pub(crate) struct NavigationReferrer {
++    source: Option<Url>,
++    policy: ReferrerPolicy,
++}
++
++impl NavigationReferrer {
++    pub(crate) fn new(request: &ResourceRequest) -> Self {
++        Self {
++            source: request.referrer.clone().or_else(|| request.initiator.clone()),
++            policy: request.navigation_referrer_policy,
++        }
++    }
++
++    pub(crate) fn header(&mut self, request: &ResourceRequest, target: &Url) -> Option<String> {
++        if request.mode != RequestMode::Navigate {
++            return request_referrer(request, target);
++        }
++        // Fetch reduces the referrer at each hop. A later redirect cannot
++        // recover a stripped path/query or resurrect an omitted referrer.
++        self.source = self.source.as_ref().and_then(|source| self.policy.referrer(source, target));
++        self.source.as_ref().map(ToString::to_string)
++    }
++
++    pub(crate) fn redirect(&mut self, headers: &HashMap<String, String>) {
++        if let Some(policy) = headers.get("referrer-policy").and_then(|v| ReferrerPolicy::from_header(v)) {
++            self.policy = policy;
++        }
+     }
+ }
+
+@@ -466,6 +581,27 @@ pub(crate) fn same_site_context(
+     }
+ }
+
++pub(crate) fn navigation_cookie_context(
++    request: &ResourceRequest,
++    initial_url: &Url,
++    target: &Url,
++    method_is_safe: bool,
++    crossed_site: &mut bool,
++) -> SameSiteContext {
++    if request.mode != RequestMode::Navigate {
++        return same_site_context(request, target, method_is_safe);
++    }
++    let source = request.initiator.as_ref().unwrap_or(initial_url);
++    *crossed_site |= !same_site(source, target);
++    if !*crossed_site {
++        SameSiteContext::SameSite
++    } else if method_is_safe {
++        SameSiteContext::CrossSiteTopLevelSafe
++    } else {
++        SameSiteContext::CrossSite
++    }
++}
++
+ pub(crate) fn request_referrer(request: &ResourceRequest, target: &Url) -> Option<String> {
+     let source = request
+         .referrer
+@@ -1242,6 +1378,17 @@ impl ObscuraHttpClient {
+             .await
+     }
+
++    pub async fn post_form_with_request(
++        &self,
++        url: &Url,
++        body: &str,
++        request: ResourceRequest,
++        callbacks: Option<&CallbackRegistry>,
++    ) -> Result<Response, ObscuraNetError> {
++        self.fetch_with_profile(Method::POST, url, Some(body.as_bytes().to_vec()), callbacks, request)
++            .await
++    }
++
+     pub async fn fetch_with_method(
+         &self,
+         initial_method: Method,
+@@ -1503,6 +1650,8 @@ impl ObscuraHttpClient {
+         }
+
+         let mut current_url = url.clone();
++        let mut crossed_site = false;
++        let mut navigation_referrer = NavigationReferrer::new(&request);
+         let mut redirects = Vec::new();
+         // Follow up to 20 redirects, matching the Fetch spec and the fetch()/XHR
+         // path in obscura-js. `0..=max_redirects` makes max_redirects+1 requests
+@@ -1574,7 +1723,7 @@ impl ObscuraHttpClient {
+             );
+             headers.insert(
+                 HeaderName::from_static("sec-fetch-site"),
+-                HeaderValue::from_static(request_fetch_site(&request, &current_url)),
++                HeaderValue::from_static(request_fetch_site_with_redirects(&request, &current_url, &redirects)),
+             );
+             headers.insert(
+                 HeaderName::from_static("sec-fetch-mode"),
+@@ -1587,7 +1736,7 @@ impl ObscuraHttpClient {
+                 HeaderName::from_static("sec-fetch-dest"),
+                 HeaderValue::from_static(request.destination()),
+             );
+-            if let Some(referer) = request_referrer(&request, &current_url) {
++            if let Some(referer) = navigation_referrer.header(&request, &current_url) {
+                 if let Ok(value) = HeaderValue::from_str(&referer) {
+                     headers.insert(reqwest::header::REFERER, value);
+                 }
+@@ -1603,10 +1752,12 @@ impl ObscuraHttpClient {
+             let cookie_header = if request.sends_credentials_to(&current_url) {
+                 self.cookie_jar.get_cookie_header_in_context(
+                     &current_url,
+-                    same_site_context(
++                    navigation_cookie_context(
+                         &request,
++                        url,
+                         &current_url,
+                         matches!(method, Method::GET | Method::HEAD),
++                        &mut crossed_site,
+                     ),
+                 )
+             } else {
+@@ -1704,6 +1855,7 @@ impl ObscuraHttpClient {
+             }
+
+             if status.is_redirection() {
++                navigation_referrer.redirect(&response_headers);
+                 if let Some(location) = resp.headers().get(reqwest::header::LOCATION) {
+                     let location_str = location.to_str().map_err(|_| {
+                         ObscuraNetError::Network("Invalid redirect Location header".into())
+@@ -1820,6 +1972,72 @@ mod ssrf_tests {
+         IpAddr::from_str(s).unwrap()
+     }
+
++    #[test]
++    fn private_onyx_stealth_navigation_referrer_policies() {
++        use super::{NavigationReferrer, ReferrerPolicy};
++        let source = Url::parse("https://user:password@example.com/private?q=secret#fragment").unwrap();
++        let same = Url::parse("https://example.com/result").unwrap();
++        let cross = Url::parse("https://other.test/result").unwrap();
++        let downgrade = Url::parse("http://other.test/result").unwrap();
++        let full = "https://example.com/private?q=secret";
++        let origin = "https://example.com/";
++        for (name, expected) in [
++            ("no-referrer", [None, None, None]),
++            ("no-referrer-when-downgrade", [Some(full), Some(full), None]),
++            ("same-origin", [Some(full), None, None]),
++            ("origin", [Some(origin), Some(origin), Some(origin)]),
++            ("strict-origin", [Some(origin), Some(origin), None]),
++            ("origin-when-cross-origin", [Some(full), Some(origin), Some(origin)]),
++            ("strict-origin-when-cross-origin", [Some(full), Some(origin), None]),
++            ("unsafe-url", [Some(full), Some(full), Some(full)]),
++        ] {
++            for (target, expected) in [&same, &cross, &downgrade].into_iter().zip(expected) {
++                let mut request = ResourceRequest::navigation();
++                request.initiator = Some(source.clone());
++                request.navigation_referrer_policy = ReferrerPolicy::parse_token(name).unwrap();
++                assert_eq!(NavigationReferrer::new(&request).header(&request, target).as_deref(), expected, "{name}: {target}");
++            }
++        }
++        assert_eq!(ReferrerPolicy::from_header("invalid, no-referrer, ORIGIN, unknown"), Some(ReferrerPolicy::Origin));
++        assert_eq!(ReferrerPolicy::from_header("unknown"), None);
++        let mut request = ResourceRequest::navigation();
++        request.initiator = Some(source.clone());
++        let mut state = NavigationReferrer::new(&request);
++        assert_eq!(state.header(&request, &cross).as_deref(), Some(origin));
++        assert_eq!(state.header(&request, &same).as_deref(), Some(origin));
++        state.redirect(&std::collections::HashMap::from([("referrer-policy".into(), "no-referrer".into())]));
++        assert_eq!(state.header(&request, &same), None);
++        state.redirect(&std::collections::HashMap::from([("referrer-policy".into(), "unsafe-url".into())]));
++        assert_eq!(state.header(&request, &same), None);
++        request.initiator = None;
++        assert_eq!(NavigationReferrer::new(&request).header(&request, &same), None);
++        let long = Url::parse(&format!("https://example.com/{}", "x".repeat(4100))).unwrap();
++        assert_eq!(ReferrerPolicy::UnsafeUrl.referrer(&long, &same).unwrap().as_str(), origin);
++    }
++
++    #[test]
++    fn private_onyx_stealth_navigation_fetch_site_keeps_redirect_history() {
++        use super::request_fetch_site_with_redirects;
++        let same = Url::parse("https://example.com/result").unwrap();
++        let subdomain = Url::parse("https://sub.example.com/result").unwrap();
++        let cross = Url::parse("https://other.test/result").unwrap();
++        let downgrade = Url::parse("http://example.com/result").unwrap();
++        let mut request = ResourceRequest::navigation();
++        assert_eq!(request_fetch_site_with_redirects(&request, &same, &[cross.clone()]), "none");
++        request.initiator = Some(same.clone());
++        assert_eq!(request_fetch_site_with_redirects(&request, &same, &[]), "same-origin");
++        assert_eq!(request_fetch_site_with_redirects(&request, &same, &[subdomain.clone()]), "same-site");
++        assert_eq!(request_fetch_site_with_redirects(&request, &same, &[subdomain, cross]), "cross-site");
++        assert_eq!(request_fetch_site_with_redirects(&request, &same, &[downgrade]), "cross-site");
++        request.initiator = Some(Url::parse("https://1.1.1.1/source").unwrap());
++        assert_eq!(request_fetch_site_with_redirects(
++            &request, &Url::parse("https://8.8.1.1/result").unwrap(), &[],
++        ), "cross-site");
++        assert_eq!(request_fetch_site_with_redirects(
++            &request, &Url::parse("https://1.1.1.1:8443/result").unwrap(), &[],
++        ), "same-site");
++    }
++
+     // A response that repeats a header name (Link, Via, WWW-Authenticate, ...)
+     // must not lose all but the last line. See #913.
+     #[test]
+diff --git a/crates/obscura-net/src/lib.rs b/crates/obscura-net/src/lib.rs
+index 2b8c18f..8efee97 100644
+--- a/crates/obscura-net/src/lib.rs
++++ b/crates/obscura-net/src/lib.rs
+@@ -10,7 +10,7 @@ pub mod wreq_client;
+ pub use client::{
+     env_allows_private_network, is_forbidden_ip, CallbackRegistry, ObscuraHttpClient,
+     ObscuraNetError, RequestCallback, RequestCredentials, RequestInfo, RequestMode,
+-    ResourceRequest, ResourceType, Response, ResponseCallback, SsrfGuardResolver,
++    ReferrerPolicy, ResourceRequest, ResourceType, Response, ResponseCallback, SsrfGuardResolver,
+ };
+ pub use cookies::{
+     canonical_domain, default_cookie_path, same_site, CookieInfo, CookieJar, SameSiteContext,
 diff --git a/crates/obscura-net/src/wreq_client.rs b/crates/obscura-net/src/wreq_client.rs
-index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921e01fd3a8 100644
+index 550dd18..72b9dcd 100644
 --- a/crates/obscura-net/src/wreq_client.rs
 +++ b/crates/obscura-net/src/wreq_client.rs
+@@ -17,8 +17,8 @@ use url::Url;
+ #[cfg(feature = "stealth")]
+ use crate::client::{
+     cors_required, env_allows_private_network, fetch_file_url, is_forbidden_ip,
+-    redirect_taints_origin, request_fetch_site, request_referrer, response_too_large,
+-    same_site_context, serialized_request_origin, validate_cors_response, validate_request_mode,
++    redirect_taints_origin, request_fetch_site_with_redirects, NavigationReferrer, response_too_large,
++    navigation_cookie_context, serialized_request_origin, validate_cors_response, validate_request_mode,
+     validate_url, CallbackRegistry, InFlightGuard, ObscuraNetError, RequestInfo, RequestMode,
+     ResourceRequest, Response, SsrfGuardResolver,
+ };
 @@ -72,6 +72,19 @@ pub const STEALTH_UA_PLATFORM: &str = "Windows";
  #[cfg(feature = "stealth")]
  pub const STEALTH_UA_PLATFORM_VERSION: &str = "15.0.0";
@@ -130,9 +591,9 @@ index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921
 +}
 +
  #[cfg(feature = "stealth")]
- fn wreq_response_header_value<'a>(
-     headers: &'a wreq::header::HeaderMap,
-@@ -265,8 +278,32 @@ impl StealthHttpClient {
+ fn tracker_blocking_enabled(value: Option<&str>) -> bool {
+     !matches!(
+@@ -282,8 +295,33 @@ impl StealthHttpClient {
          url: &Url,
          callbacks: Option<&CallbackRegistry>,
      ) -> Result<Response, ObscuraNetError> {
@@ -153,13 +614,14 @@ index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921
 +        &self,
 +        url: &Url,
 +        body: &str,
++        request: ResourceRequest,
 +        callbacks: Option<&CallbackRegistry>,
 +    ) -> Result<(Response, String), ObscuraNetError> {
 +        self.navigate_with_profile(
 +            url,
 +            wreq::Method::POST,
 +            Some(body.as_bytes().to_vec()),
-+            ResourceRequest::navigation(),
++            request,
 +            callbacks,
 +        )
 +        .await
@@ -167,7 +629,7 @@ index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921
      }
 
      pub async fn fetch_resource_with_callbacks(
-@@ -275,33 +312,41 @@ impl StealthHttpClient {
+@@ -292,32 +330,41 @@ impl StealthHttpClient {
          request: ResourceRequest,
          callbacks: Option<&CallbackRegistry>,
      ) -> Result<Response, ObscuraNetError> {
@@ -191,31 +653,31 @@ index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921
          validate_request_mode(&request, url)?;
          if url.scheme() == "file" {
 -            return fetch_file_url(url, request.max_response_bytes).await;
-+            return fetch_file_url(url, request.max_response_bytes)
-+                .await
++            return fetch_file_url(url, request.max_response_bytes).await
 +                .map(|response| (response, initial_method));
          }
 
          let mut current_url = url.clone();
++        let mut crossed_site = false;
++        let mut navigation_referrer = NavigationReferrer::new(&request);
 +        let mut method = initial_method;
 +        let mut body = initial_body;
 
-         if let Some(host) = current_url.host_str() {
-             if crate::blocklist::is_blocked(host) {
-                 tracing::debug!("Blocked tracker: {}", current_url);
--                return Ok(Response {
-+                return Ok((Response {
-                     status: 0,
-                     url: current_url,
-                     headers: HashMap::new(),
-                     body: Vec::new(),
-                     redirected_from: Vec::new(),
--                });
-+                }, method));
-             }
+         if is_tracker_blocked(&current_url, self.block_trackers) {
+             tracing::debug!("Blocked tracker: {}", current_url);
+-            return Ok(Response {
++            return Ok((Response {
+                 status: 0,
+                 url: current_url,
+                 headers: HashMap::new(),
+                 body: Vec::new(),
+                 redirected_from: Vec::new(),
+-            });
++            }, method));
          }
 
-@@ -313,7 +358,7 @@ impl StealthHttpClient {
+         let mut redirects = Vec::new();
+@@ -328,11 +375,11 @@ impl StealthHttpClient {
          // 21 requests, so the 20th hop is followed and only the 21st fails.
          for _ in 0..=20 {
              validate_request_mode(&request, &current_url)?;
@@ -224,7 +686,36 @@ index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921
 
              req = req
                  .header("accept", request.accept())
-@@ -348,10 +393,19 @@ impl StealthHttpClient {
+-                .header("sec-fetch-site", request_fetch_site(&request, &current_url))
++                .header("sec-fetch-site", request_fetch_site_with_redirects(&request, &current_url, &redirects))
+                 .header("sec-fetch-mode", request.mode.header_value())
+                 .header("sec-fetch-dest", request.destination());
+             if request.mode == RequestMode::Navigate {
+@@ -340,7 +387,7 @@ impl StealthHttpClient {
+                     .header("upgrade-insecure-requests", "1")
+                     .header("sec-fetch-user", "?1");
+             }
+-            if let Some(referer) = request_referrer(&request, &current_url) {
++            if let Some(referer) = navigation_referrer.header(&request, &current_url) {
+                 req = req.header("referer", referer);
+             }
+             let request_origin = serialized_request_origin(&request, redirect_tainted);
+@@ -348,10 +395,12 @@ impl StealthHttpClient {
+             let cookie_header = if request.sends_credentials_to(&current_url) {
+                 self.cookie_jar.get_cookie_header_in_context(
+                     &current_url,
+-                    same_site_context(
++                    navigation_cookie_context(
+                         &request,
++                        url,
+                         &current_url,
+-                        request.mode == crate::RequestMode::Navigate,
++                        method == wreq::Method::GET,
++                        &mut crossed_site,
+                     ),
+                 )
+             } else {
+@@ -370,10 +419,19 @@ impl StealthHttpClient {
              if cors_required(&request, &current_url) {
                  req = req.header("origin", &request_origin);
              }
@@ -245,7 +736,33 @@ index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921
                  headers: self.extra_headers.read().await.clone(),
                  resource_type: request.resource_type,
              };
-@@ -410,6 +464,11 @@ impl StealthHttpClient {
+@@ -385,9 +443,14 @@ impl StealthHttpClient {
+             }
+
+             let in_flight = InFlightGuard::new(&self.in_flight);
+-            let resp = send_get_with_connection_reset_retry(req, &current_url)
+-                .await
+-                .map_err(|e| {
++            // Only idempotent GETs may use upstream's reset recovery. A reset
++            // after sending a form is ambiguous: never replay its POST body.
++            let sent = if method == wreq::Method::GET {
++                send_get_with_connection_reset_retry(req, &current_url).await
++            } else {
++                req.send().await
++            };
++            let resp = sent.map_err(|e| {
+                     ObscuraNetError::Network(format!(
+                         "{}: {} (source: {:?})",
+                         current_url,
+@@ -422,6 +485,7 @@ impl StealthHttpClient {
+             }
+
+             if status.is_redirection() {
++                navigation_referrer.redirect(&response_headers);
+                 if let Some(location) = resp.headers().get("location") {
+                     let location_str = location.to_str().map_err(|_| {
+                         ObscuraNetError::Network("Invalid redirect Location".into())
+@@ -435,6 +499,11 @@ impl StealthHttpClient {
                          redirect_taints_origin(&request, &current_url, &next_url);
                      redirects.push(current_url.clone());
                      current_url = next_url;
@@ -257,7 +774,7 @@ index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921
                      continue;
                  }
              }
-@@ -428,7 +487,7 @@ impl StealthHttpClient {
+@@ -453,7 +522,7 @@ impl StealthHttpClient {
              if let Some(callbacks) = callbacks {
                  callbacks.fire_response(&request_info, &response).await;
              }
@@ -266,19 +783,16 @@ index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921
          }
 
          Err(ObscuraNetError::TooManyRedirects(url.to_string()))
-@@ -532,7 +591,10 @@ mod tests {
+@@ -577,7 +646,7 @@ mod tests {
      use tokio::io::{AsyncReadExt, AsyncWriteExt};
      use url::Url;
 
--    use super::{StealthHttpClient, send_get_with_connection_reset_retry};
-+    use super::{
-+        StealthHttpClient, redirected_navigation_method,
-+        send_get_with_connection_reset_retry,
-+    };
-     use crate::client::{ObscuraNetError, SsrfGuardResolver};
-     use crate::cookies::CookieJar;
-     use wreq::dns::{Name, Resolve};
-@@ -707,4 +769,36 @@ mod tests {
+-    use super::{
++    use super::{redirected_navigation_method,
+         StealthHttpClient, is_tracker_blocked, send_get_with_connection_reset_retry,
+         tracker_blocking_enabled,
+     };
+@@ -868,4 +937,83 @@ mod tests {
              .expect("loopback hostname must be reachable with the opt-in");
          assert_eq!(resp.status, 200);
      }
@@ -306,12 +820,59 @@ index 7786116013e2201ee387d3f73ecb88cde28c0403..5b5e70a4e199233f3a71d77257e14921
 +        }
 +    }
 +
-+    #[test]
-+    fn private_onyx_stealth_get_and_post_share_client_and_cookie_jar() {
++    #[tokio::test]
++    async fn private_onyx_stealth_get_and_post_share_client_and_cookie_jar() {
++        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
++        let server = tokio::spawn(async move {
++            let mut observed = Vec::new();
++            for cookie in ["sid=first; Path=/", "sid=second; Path=/", "sid=; Max-Age=0; Path=/"] {
++                let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
++                    .await.unwrap().unwrap();
++                let mut bytes = Vec::new();
++                loop {
++                    let mut buf = [0; 1024];
++                    let count = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf))
++                        .await.unwrap().unwrap();
++                    assert_ne!(count, 0);
++                    bytes.extend_from_slice(&buf[..count]);
++                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
++                        let head = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
++                        let length = head.lines().find_map(|line| line.strip_prefix("content-length:"))
++                            .map(|value| value.trim().parse::<usize>().unwrap()).unwrap_or(0);
++                        if bytes.len() >= end + 4 + length { break; }
++                    }
++                }
++                observed.push(String::from_utf8(bytes).unwrap());
++                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nSet-Cookie: {cookie}\r\nConnection: close\r\n\r\nok").as_bytes())
++                    .await.unwrap();
++            }
++            observed
++        });
 +        let jar = Arc::new(CookieJar::new());
-+        let client = StealthHttpClient::new(jar.clone());
-+        assert!(Arc::ptr_eq(&client.cookie_jar, &jar));
++        let client = StealthHttpClient {
++            client: wreq::Client::builder().no_proxy().build().unwrap(),
++            allow_private_network: true,
++            block_trackers: false,
++            cookie_jar: jar.clone(),
++            extra_headers: tokio::sync::RwLock::new(std::collections::HashMap::new()),
++            in_flight: Arc::new(std::sync::atomic::AtomicU32::new(0)),
++        };
++        client.fetch_with_callbacks(&url, None).await.unwrap();
++        let (_, method) = client.post_form_with_callbacks(
++            &url, "q=fixture", crate::ResourceRequest::navigation(), None,
++        ).await.unwrap();
++        assert_eq!(method, "POST");
++        client.fetch_with_callbacks(&url, None).await.unwrap();
++        let observed = server.await.unwrap();
++        assert!(observed[0].starts_with("GET / HTTP/1.1\r\n"));
++        assert!(!observed[0].to_ascii_lowercase().contains("\r\ncookie:"));
++        assert!(observed[1].starts_with("POST / HTTP/1.1\r\n"));
++        assert!(observed[1].ends_with("\r\n\r\nq=fixture"));
++        assert!(observed[1].to_ascii_lowercase().contains("\r\ncookie: sid=first\r\n"));
++        assert!(observed[2].starts_with("GET / HTTP/1.1\r\n"));
++        assert!(observed[2].to_ascii_lowercase().contains("\r\ncookie: sid=second\r\n"));
++        assert!(jar.get_all_cookies().is_empty());
 +        assert_eq!(client.active_requests(), 0);
-+
 +    }
  }

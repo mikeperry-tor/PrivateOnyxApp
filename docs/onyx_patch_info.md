@@ -269,7 +269,7 @@ retained-body, deadline, redaction, and cleanup contracts directly. Tagged-image
 validation separately proves Playwright's public page-session attachment path.
 
 The Obscura image is built from the digest-verified archive for exact commit
-`a1e09de68c7617b8079fbb1661b0548c501971c1`, using a digest-pinned Rust/Debian
+`1a3169da276d7720732c7b20535474942917fb83`, using a digest-pinned Rust/Debian
 builder and the upstream locked dependency graph. The build applies exactly
 four ordered patches with `git apply --check` before compiling both runtime
 binaries with the no-render `stealth` feature set:
@@ -277,9 +277,15 @@ binaries with the no-render `stealth` feature set:
 - `0001-stealth-native-post.patch` routes native form POST through the
   target-owned stealth client used by GET, preserves its cookies, proxy,
   TLS-emulation profile and pool, implements browser-style redirect method
-  changes, records the final request method after redirects, removes the
-  submitted URL/body from form-navigation diagnostics, and adds a static
-  patchset marker.
+  changes, supplies the initiating document for navigation SameSite filtering,
+  retains cross-site redirect history for cookies and fetch metadata, and
+  prevents POST reset replay while preserving native GET reset recovery.
+  Main-document GET/POST keeps normal form referrers while honoring HTTP and
+  live-DOM meta referrer policies; redirect policies cannot recover previously
+  removed referrer information. Each new document resets its policy ownership.
+  It records the final request method
+  after redirects, removes the submitted URL/body from form-navigation
+  diagnostics, and adds a static patchset marker.
 - `0002-target-fingerprint-seed.patch` generates one nonzero random seed when
   a target is created and injects it through a one-shot private setter before
   every top-level and child-frame realm initialization, so seed-derived
@@ -287,26 +293,30 @@ binaries with the no-render `stealth` feature set:
   exposing the seed to page code or CDP. Injection uses the runtime's scoped
   accessor so the owning V8 isolate is entered. Profile-owned hardware and memory
   values remain stable too.
-- `0003-search-runtime-compatibility.patch` lets assignment shadow a legacy
-  getter-backed Window named element, exposes the navigation-timing constructor
+- `0003-search-runtime-compatibility.patch` exposes the navigation-timing constructor
   hierarchy and SVG anchor constructor used by provider scripts, and suppresses
   parser-discovered and dynamic `nomodule` scripts in the module-capable runtime.
-  Native v0.2.2 `Response.body` supplies the readable stream used by provider
+  Native writable Window named properties need no wrapper implementation.
+  Native v0.2.3 `Response.body` supplies the readable stream used by provider
   hydration; the wrapper carries only its `pipeThrough()` regression test.
 - `0004-explicit-navigation-realm.patch` passes the receiver's bootstrap frame
   ID into form GET/POST and every document/window/global `location` operation.
-  Native v0.2.2 instead infers the entered caller realm, which incorrectly
+  Native v0.2.3 instead infers the entered caller realm, which incorrectly
   navigates the parent when it calls a child's location method or submits the
   child's form. The patch preserves top-level submission and binds cross-realm
   navigation to the receiver. Selected-image tests cover location setters,
   `assign`, `replace`, `reload`, and child GET/POST submission from the parent.
+  Build-time Rust tests additionally assert the child's exact pending URL,
+  method, and body, the unchanged committed document URL, and the absence of
+  pending parent navigation; unchanged CDP URLs alone cannot prove submission.
 
-Pending child-frame navigation does not load a new child document; see
+Pending navigation preserves the committed realm URL and cookie origin until
+commit. Pending child-frame navigation does not load a new child document; see
 [request handling](request_handling.md). Receiver ownership and child-document
 loading are separate contracts. The existing top-level POST-body and
 location-replacement regression tests remain in the compatibility patch.
 
-The v0.2.2 release supplies no-render stealth archives as well as render-enabled
+The v0.2.3 release supplies no-render stealth archives as well as render-enabled
 archives; its container image builds with rendering and without stealth.
 The wrapper still needs a source build for the four patches above. This stack
 does not expose screenshot, screencast, or PDF-export features. Its derived
@@ -316,9 +326,10 @@ still includes the release's JavaScript, DOM, module, charset, compressed
 stealth-response, and CDP compatibility improvements used by these paths.
 
 The selected runtime also provides child-frame realms and `postMessage`,
-context-scoped `Storage.clearCookies`, cookie-domain canonicalization and
-expiry/deletion fixes, stealth ES-module transport, and a stealth-client DNS
-SSRF resolver guard. Tagged-image tests cover the frame-message path and prove
+context-scoped `Storage.clearCookies`, host-only URL-based CDP cookie import,
+PSL-based cookie-domain validation, SameSite and secure/HttpOnly protection,
+cookie expiry/deletion handling, stealth ES-module transport, and a
+stealth-client DNS SSRF resolver guard. Tagged-image tests cover the frame-message path and prove
 that a child frame observes its parent's seed-derived fingerprint and that
 clearing one connection context does not affect another. The wrapper does
 not use cookie clearing for isolation, and CDP cookie export/import still loses
@@ -326,8 +337,11 @@ the host-only bit, so these capabilities do not justify persistent
 cross-connection cookie transfer or removal of any selected patch.
 
 Source, patches, compiler, Cargo cache, and build tools remain in builder
-stages. The final image retains the audited upstream hardened runtime base and
-only replaces its two binaries. Remove any patch only at its separate
+stages. The upstream runtime image defaults to UID 65532; Compose explicitly
+runs it as UID/GID 65534 with the existing read-only containment. Native CDP bearer
+authentication uses the stack-generated token described in
+[request handling](request_handling.md). The final image retains the audited
+upstream hardened runtime base and only replaces its two binaries. Remove any patch only at its separate
 upgrade gate in [the patch checklist](onyx_patches_upgrade.md).
 
 `google2`, `brave2`, `duckduckgo2`, `startpage2`, and `bing2` are offline
@@ -1359,7 +1373,7 @@ background supervisor, so neither setting creates a bot process there.
 
 The base wrapper adds the hardened single-process Obscura service, direct
 control networks, API-only CDP gateway, derived SearXNG service, distinct fixed
-egress bridges, and shared public/host final-hop policies. Obscura v0.2.2
+egress bridges, and shared public/host final-hop policies. Obscura v0.2.3
 isolates every live WebSocket browser context and rejects connections above the
 aggregate capacity of 15. Direct `open_url` connections remain request-scoped;
 each SearXNG provider instead lazily retains one connection for one hour after

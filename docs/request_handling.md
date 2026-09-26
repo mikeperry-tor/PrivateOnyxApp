@@ -130,8 +130,14 @@ implementation from `browser/obscura_client`. SearXNG connects on
 `obscura-control`; the API can
 connect only through `obscura-cdp-gateway` on `onyx-obscura-control`. CDP is
 not published on the host or attached to an Onyx data/backend network.
+Obscura requires native bearer authentication on its non-loopback listener.
+The Makefile generates one ephemeral 256-bit `OBSCURA_CDP_TOKEN` per invocation
+and supplies it only to Obscura, SearXNG, and the API. Both shared-client
+connection paths send it as an Authorization header, never in a URL. Missing
+or malformed credentials fail closed; browser-origin handshakes are rejected.
+The token grants shared browser control, not per-provider or per-user authority.
 
-Obscura v0.2.2 gives every WebSocket connection its own browser context, HTTP
+Obscura v0.2.3 gives every WebSocket connection its own browser context, HTTP
 client, cookie jar, targets, headers, User-Agent state, OS thread, and V8
 isolates. Direct `open_url` uses one fresh connection and target per navigation.
 SearXNG instead gives each of its five providers one lazy connection and one
@@ -145,6 +151,34 @@ the target-owned state above. A pending Startpage proof is the sole exception:
 its challenge document remains live only until resume or abort. Neither path
 issues `Network.clearBrowserCookies` or `Storage.clearCookies`; connection and
 provider ownership, not a mutable clear operation, define the state boundary.
+Native v0.2.3 cookie handling applies host-only scope, PSL-based domain
+validation, and secure/HttpOnly write protection. Its SameSite filtering needs
+the caller's navigation context. The wrapper source patch captures the initiating
+document before changing the page URL and supplies that context for main-document
+GET and POST. Cross-site navigation excludes Strict cookies; unsafe POST also
+excludes Lax cookies. Redirects preserve cross-site history even when returning
+to the initiating site, while 301/302/303 conversion to GET permits Lax cookies.
+The navigation request profile derives `Sec-Fetch-Site` from the initiator and
+the entire redirect chain. Same-site subdomains use `same-site`; a cross-site
+hop keeps every later hop `cross-site`, including a return to the initiating
+origin. Browser-initiated navigation retains `none` through redirects.
+Form submissions normally send `Referer`. The default
+`strict-origin-when-cross-origin` policy retains the source path/query for
+same-origin requests, sends only its origin across origins, and omits the
+referrer on HTTPS-to-HTTP downgrades. Navigation honors the initiating document's
+HTTP `Referrer-Policy` and valid referrer meta elements in its live DOM, including
+provider-inserted elements. A valid meta policy overrides the HTTP policy;
+invalid values do not replace a valid policy. Redirect response policies apply
+to subsequent hops, but cannot restore an already stripped path/query or an
+omitted referrer. Credentials and fragments are always excluded. These policy
+controls affect referrer disclosure, not the cookie initiator or SameSite checks.
+The policy handling described here applies to main-document GET/POST navigation;
+subresource policy and removed-meta history remain upstream limitations.
+A fresh target or locally parked `about:blank` starts browser-initiated navigation;
+its redirect chain still tracks site changes. URL-based
+CDP imports preserve host-only scope, but CDP export still omits that scope
+and partition metadata; the wrapper therefore retains live native jars and
+does not transfer cookies between connections.
 The tagged-image gate separately proves that `Storage.clearCookies` clears only
 the selected connection context and cannot clear a second live connection's
 cookies.
@@ -158,7 +192,7 @@ receive HTTP 503 instead of entering a server queue as a fail-closed guard
 against a changed worker/process model or another unexpected CDP caller; normal
 Onyx tool execution is expected to remain within the 15-slot composition.
 
-In the stealth-feature build, upstream v0.2.2 accepts
+In the stealth-feature build, upstream v0.2.3 accepts
 `Network.setExtraHTTPHeaders` and `Network.setUserAgentOverride` but applies
 them to the ordinary context HTTP client while navigation uses its separate
 wreq client, so those overrides do not reach the wire. The wrapper does not
@@ -171,16 +205,19 @@ page/frame `postMessage`; the tagged-image gate exercises that path because
 provider hydration can depend on frame messaging. The explicit navigation-realm
 patch binds form submission and `location` operations to the receiver's frame,
 including when the parent calls a child's method or setter. Native caller-realm
-inference would move the parent instead. Child navigation records the request
-on that frame without moving the parent, but the native runtime does not consume the child's pending navigation to load a new
-document. The search contract requires main-frame forms and results. Its
-stealth transport also
-applies the upstream DNS SSRF resolver guard and redirect validation, including
-embedded-IPv4 IPv6, CGNAT, and special-purpose address denial. The
+inference would move the parent instead. Pending navigation preserves the
+committed realm URL and cookie origin until commit. Child navigation records
+the request on that frame without moving the parent, but the native runtime
+does not consume the child's pending navigation to load a new document. The
+search contract requires main-frame forms and results. Its stealth transport
+also applies the upstream DNS SSRF resolver guard and redirect validation,
+including embedded-IPv4 IPv6, CGNAT, and special-purpose address denial. The
 `--allow-private-network` setting reaches both URL validation and the stealth
-DNS resolver; the production browser leaves it disabled. These are
-defense-in-depth beneath the stack's fixed final-hop destination policy; they
-do not authorize a direct route or weaken fail-closed bridge/proxy handling.
+DNS resolver; production sets `OBSCURA_ALLOW_PRIVATE_NETWORK=true` so the
+native resolver can reach the private fixed proxy address. Destination
+restrictions are therefore enforced by the final-hop policy, not by Obscura's private-address
+guard. Internal-only browser networks prevent direct public egress, and a
+failed bridge or selected proxy has no direct fallback.
 
 The client uses flattened CDP messages over the pinned WebSocket transport so
 it can own event correlation, retained-body streaming, deadlines, redaction,
@@ -218,6 +255,9 @@ The client does not issue `HEAD`, `GET`, range, MIME-probe, CLI, normal
 SearXNG HTTP-client, or retry requests. It does not reconnect after a CDP
 failure. Redirects and browser subresources are part of the single browser
 navigation; they are not wrapper refetches.
+The native HTTP transport retains upstream's single GET recovery after a
+connection reset. Form POST never enters that recovery path: a reset after
+submission is an ambiguous failure, not permission to replay the body.
 
 Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `networkidle2`) so
 JavaScript result payloads have time to hydrate after the page load event.
@@ -666,8 +706,9 @@ ordering is required because concurrent search requests can otherwise reserve
 a provider in the interval after CDP cleanup releases it but before SearXNG
 records a CAPTCHA, access denial, or 429 suspension. Provider admission,
 round-robin rotation, and suspension remain SearXNG responsibilities. The
-shared CDP client accepts only a caller-supplied pre-navigation guard and owns
-no provider names, reservations, cooldowns, suspension state, or rotation.
+shared CDP search client accepts only a caller-supplied asynchronous
+pre-navigation guard and owns no provider names, reservations, cooldowns,
+suspension state, or rotation.
 
 One lazy process-local event-loop thread owns all five independent provider
 connection/target generations. Each exact provider retains at most one
@@ -719,11 +760,15 @@ standard `application/x-www-form-urlencoded` default; any explicit different
 encoding remains a policy failure.
 
 Instant query entry is the default. It uses the control prototype's native
-value setter followed by one bubbling `input` and `change` event. Obscura v0.2.2
+value setter followed by one bubbling `input` and `change` event. Obscura v0.2.3
 also supports native `Input.insertText` and Playwright label-based `fill()`.
 The wrapper retains its atomic instant-entry form validation and explicit
 change event; the CDP command alone neither enforces that policy nor emits
-that change event. Timed key events use upstream JSON-safe key/text handling.
+that change event. Timed entry selects the validated control's complete value
+and clears it with native `Input.insertText` before sending JSON-safe key/text events. This handles
+provider-restored query text after an Anubis pass without appending to it;
+selection, clearing, typing, and final value verification share the existing
+transaction deadline.
 `SEARXNG_TIMED_TYPING_PROVIDERS` accepts exact provider names, `none`, or `all`
 and selects timed CDP key events without changing any navigation or submission
 path. Timed entry adds 45–135 ms after each code point except the last and can
@@ -778,8 +823,12 @@ carried from one provider rotation into another:
 - Provider reservation, active-lease, and the initial exact three-second
   cooldown wait happen before the selected provider's engine clock starts.
   They can extend the SearXNG HTTP request but do not consume a partial provider
-  budget. Bing's second homepage navigation is different: its pre-navigation
-  guard enforces the same interval inside the already-running engine window.
+  budget. Bing's second homepage navigation is different: its asynchronous
+  pre-navigation guard enforces the same interval inside the already-running
+  engine window and browser pre-navigation deadline. It yields the shared
+  event loop while retaining the provider lease, so other providers and idle
+  cleanup can progress. Deadline expiry cancels the wait before navigation;
+  cancellation does not stamp a deferred start or issue a request later.
 - Every selected provider receives a fresh SearXNG 60-second engine window.
   Rotation never gives a later provider the earlier provider's remainder. The
   custom offline engines' explicit `timeout: 60.0` entries are authoritative;
@@ -925,7 +974,7 @@ for wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
 fingerprint seed, stealth-native form POST, and focused provider JavaScript
 runtime-compatibility contracts. The stack
 consumes DOM and response-body CDP surfaces, not screenshots, screencasts, or PDF
-export, so it does not compile the v0.2.2 raster renderer or incur its image,
+export, so it does not compile the v0.2.3 raster renderer or incur its image,
 font, layout, and capture resource work. JavaScript, DOM, module, charset, and
 compressed-stealth-response improvements remain present in the no-render
 build.

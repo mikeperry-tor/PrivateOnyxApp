@@ -56,12 +56,15 @@ apply in every selected mode.
 | optional `tor` | `tor-ingress` only when onion ingress is enabled; private control tmpfs and optional SOCKS runtime volume are mounts, not networks | dedicated `tor-uplink`; applications never join it |
 | optional `tor-frontend-gateway` | spans only `tor-ingress` and `onyx-frontend`, with fixed nginx forwarding | none |
 
-CDP is powerful browser authority. Obscura v0.2.2 gives every WebSocket its
+CDP is powerful browser authority. Obscura v0.2.3 gives every WebSocket its
 own browser context, HTTP client, cookie jar, targets, headers, User-Agent
 state, thread, and V8 isolates. The API and SearXNG therefore do not share
 browser state across their request connections, but they still share one
 process, one CDP endpoint, one 15-connection resource cap, and one failure
-domain. Connection isolation is not caller authentication. The narrow API
+domain. The native non-loopback listener requires a stack-generated bearer token,
+shared only by Obscura, API, and SearXNG. It rejects absent/wrong tokens and
+browser-origin requests. This shared credential does not distinguish the two
+intended callers or their provider sessions. The narrow API
 gateway prevents unrelated Onyx backend peers from gaining CDP reachability,
 but it is not an authorization protocol between the two intended callers.
 The selected-image gate also proves `Storage.clearCookies` cannot clear a

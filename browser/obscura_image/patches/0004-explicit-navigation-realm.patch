@@ -1,71 +1,72 @@
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
+index 2b3d81c..660a7e7 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -4506,10 +4506,10 @@
- 
+@@ -4734,10 +4734,10 @@ class Element extends Node {
+
      const encoded = pairs.join('&');
      if (method === 'POST') {
--      Deno.core.ops.op_navigate(targetUrl, 'POST', encoded);
-+      Deno.core.ops.op_navigate(targetUrl, 'POST', encoded, _realmFrameId);
+-      __obscuraCore.ops.op_navigate(targetUrl, 'POST', encoded);
++      __obscuraCore.ops.op_navigate(targetUrl, 'POST', encoded, _realmFrameId);
      } else {
        const sep = targetUrl.includes('?') ? '&' : '?';
--      Deno.core.ops.op_navigate(targetUrl + (encoded ? sep + encoded : ''), 'GET', '');
-+      Deno.core.ops.op_navigate(targetUrl + (encoded ? sep + encoded : ''), 'GET', '', _realmFrameId);
+-      __obscuraCore.ops.op_navigate(targetUrl + (encoded ? sep + encoded : ''), 'GET', '');
++      __obscuraCore.ops.op_navigate(targetUrl + (encoded ? sep + encoded : ''), 'GET', '', _realmFrameId);
      }
    }
    reset() {
-@@ -5288,7 +5288,7 @@
+@@ -5560,7 +5560,7 @@ class Document extends Node {
    }
    get referrer() { return _domParse("document_referrer") ?? ""; }
    get location() { return globalThis.location; }
--  set location(url) { Deno.core.ops.op_navigate(_resolveUrl(String(url)), 'GET', ''); }
-+  set location(url) { Deno.core.ops.op_navigate(_resolveUrl(String(url)), 'GET', '', _realmFrameId); }
+-  set location(url) { __obscuraCore.ops.op_navigate(_resolveUrl(String(url)), 'GET', ''); }
++  set location(url) { __obscuraCore.ops.op_navigate(_resolveUrl(String(url)), 'GET', '', _realmFrameId); }
    get defaultView() { return globalThis; }
    get nodeType() { return 9; }
    get nodeName() { return "#document"; }
-@@ -6534,7 +6534,7 @@
+@@ -6811,7 +6811,7 @@ function __currentUrl() {
  }
  globalThis.location = {
    get href() { return __currentUrl(); },
--  set href(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
-+  set href(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
+-  set href(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', ''); },
++  set href(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', '', _realmFrameId); },
    get origin() { try { return new URL(this.href).origin; } catch { return ""; } },
    get protocol() { try { return new URL(this.href).protocol; } catch { return ""; } },
    get host() { try { return new URL(this.href).host; } catch { return ""; } },
-@@ -6544,14 +6544,14 @@
+@@ -6821,14 +6821,14 @@ globalThis.location = {
    get hash() { try { return new URL(this.href).hash; } catch { return ""; } },
    get port() { try { return new URL(this.href).port; } catch { return ""; } },
    toString() { return this.href; },
--  assign(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
--  reload() { var r = _resolveUrl(this.href); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
--  replace(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
-+  assign(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
-+  reload() { var r = _resolveUrl(this.href); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
-+  replace(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
+-  assign(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', ''); },
+-  reload() { var r = _resolveUrl(this.href); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', ''); },
+-  replace(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', ''); },
++  assign(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', '', _realmFrameId); },
++  reload() { var r = _resolveUrl(this.href); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', '', _realmFrameId); },
++  replace(url) { var r = _resolveUrl(url); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', '', _realmFrameId); },
  };
  const _locationObj = globalThis.location;
  Object.defineProperty(globalThis, 'location', {
    get() { return _locationObj; },
--  set(url) { var r = _resolveUrl(String(url)); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', ''); },
-+  set(url) { var r = _resolveUrl(String(url)); globalThis.__virtualUrl = r; Deno.core.ops.op_navigate(r, 'GET', '', _realmFrameId); },
+-  set(url) { var r = _resolveUrl(String(url)); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', ''); },
++  set(url) { var r = _resolveUrl(String(url)); globalThis.__virtualUrl = r; __obscuraCore.ops.op_navigate(r, 'GET', '', _realmFrameId); },
    configurable: false,
    enumerable: true,
  });
 diff --git a/crates/obscura-js/src/ops.rs b/crates/obscura-js/src/ops.rs
+index 18564d2..97b0b7b 100644
 --- a/crates/obscura-js/src/ops.rs
 +++ b/crates/obscura-js/src/ops.rs
-@@ -3923,17 +3923,18 @@
+@@ -5048,17 +5048,17 @@ fn op_set_cookie(scope: &mut v8::PinScope, state: &OpState, #[string] cookie_str
      jar.set_cookie_from_js(cookie_str, &url);
  }
- 
+
 -// A frame that navigates itself must not move the top document. Recording the
 -// navigation against the calling realm keeps it inside that frame.
-+// Bind navigation to the receiver's realm, including when a parent calls a
-+// child's location method or submits its form. The entered caller context can
-+// belong to a different frame and must not select the navigation owner.
++// Bind navigation to the receiver realm, even when a parent calls a child
++// location method or submits its form. Preserve commit-time URL ownership.
  #[op2(fast)]
  fn op_navigate(
--    scope: &mut v8::HandleScope,
+-    scope: &mut v8::PinScope,
      state: &OpState,
      #[string] url: &str,
      #[string] method: &str,
@@ -75,5 +76,51 @@ diff --git a/crates/obscura-js/src/ops.rs b/crates/obscura-js/src/ops.rs
 -    let gs = realm_state(scope, state);
 +    let gs = frame_state(state, frame_id);
      let mut gs = gs.borrow_mut();
-     gs.url = url.to_string();
-     gs.pending_navigation = Some((url.to_string(), method.to_string(), body.to_string()));
+     // Only queue the navigation — do NOT change the realm URL here. The URL is
+     // updated on commit via `set_url` once the navigation is actually performed.
+diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
+index b90e90a..76ff4b5 100644
+--- a/crates/obscura-js/src/runtime.rs
++++ b/crates/obscura-js/src/runtime.rs
+@@ -15984,6 +15984,41 @@ mod tests {
+         );
+     }
+
++    #[test]
++    fn private_onyx_parent_calls_queue_navigation_on_receiver_frame() {
++        let cases = [
++            ("child.location = '/next'", "/next", "GET", ""),
++            ("child.document.location = '/next'", "/next", "GET", ""),
++            ("child.location.href = '/next'", "/next", "GET", ""),
++            ("child.location.assign('/next')", "/next", "GET", ""),
++            ("child.location.replace('/next')", "/next", "GET", ""),
++            ("child.document.location.replace('/next')", "/next", "GET", ""),
++            ("child.location.reload()", "/child", "GET", ""),
++            ("child.document.querySelector('form').requestSubmit()", "/next", "POST", "q=child+fixture"),
++            ("child.document.querySelector('form').method='get'; child.document.querySelector('form').requestSubmit()",
++             "/next?q=child+fixture", "GET", ""),
++        ];
++        for (expression, path, method, body) in cases {
++            let mut parent = setup_runtime("<html><body></body></html>");
++            let _frame = crate::frame::FrameRealm::new(
++                &mut parent, 1, 0, "http://example.com/child",
++                "<html><body><form action='/next' method='post'><input name='q' value='child fixture'></form></body></html>",
++            ).unwrap();
++            parent.evaluate(&format!(
++                "(() => {{ const child = globalThis.__obscura_frameObjects[1].window; {expression}; return true; }})()",
++            )).unwrap();
++            assert_eq!(parent.take_pending_navigation(), None, "{expression}");
++            let child_state = crate::ops::frame_state(&parent.js_runtime.op_state().borrow(), 1);
++            assert!(!std::rc::Rc::ptr_eq(&child_state, &parent.state));
++            let child_state = child_state.borrow();
++            assert_eq!(child_state.pending_navigation, Some((
++                format!("http://example.com{path}"), method.to_string(), body.to_string(),
++            )), "{expression}");
++            assert_eq!(child_state.url, "http://example.com/child", "{expression}");
++            assert_eq!(parent.state.borrow().url, "http://example.com/test", "{expression}");
++        }
++    }
++
+     #[test]
+     fn private_onyx_request_submit_queues_top_level_post_navigation() {
+         let mut rt = setup_runtime(

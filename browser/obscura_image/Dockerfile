@@ -1,5 +1,5 @@
-ARG OBSCURA_BUILDER_IMAGE=docker.io/library/rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0
-ARG OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.2@sha256:4f915617741d2e7cd5fac6dd03592c10ca2653d37d9ac53c8224a621af874197
+ARG OBSCURA_BUILDER_IMAGE=docker.io/library/rust:1.94.0-bookworm@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f
+ARG OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.3@sha256:475def3ddf1ec513b3d1bc36e8ad15f0d192538cb15f814c77215aa70c418ca2
 
 FROM ${OBSCURA_BUILDER_IMAGE} AS builder
 
@@ -53,8 +53,14 @@ RUN cargo test --locked --no-default-features --features stealth \
 RUN cargo test --locked --no-default-features --features stealth \
         -p obscura-net stealth_resolver_
 
+RUN cargo test --locked --no-default-features --features stealth \
+        -p obscura-net cookies::tests
+
 RUN cargo test --locked --no-default-features \
         -p obscura-cdp clear_cookies_
+
+RUN cargo test --locked --no-default-features \
+        -p obscura-cdp cookie_params::tests
 
 RUN cargo test --locked --no-default-features --features stealth \
         -p obscura-js private_onyx_

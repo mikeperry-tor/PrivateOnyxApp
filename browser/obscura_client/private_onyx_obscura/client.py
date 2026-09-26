@@ -13,6 +13,7 @@ import ipaddress
 import json
 import logging
 import math
+import os
 import re
 import secrets
 import socket
@@ -21,7 +22,7 @@ import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from html.parser import HTMLParser
-from typing import Callable, Literal, Mapping
+from typing import Awaitable, Callable, Literal, Mapping
 from urllib.parse import SplitResult, parse_qsl, unquote, urljoin, urlsplit, urlunsplit
 
 from .anubis import (
@@ -807,6 +808,13 @@ class _RawCdp:
         return await asyncio.wait_for(_wait(), timeout=timeout)
 
 
+def cdp_auth_headers() -> dict[str, str]:
+    token = os.environ.get("OBSCURA_CDP_TOKEN", "")
+    if len(token.encode("utf-8")) < 32 or any(ord(c) < 33 or ord(c) > 126 for c in token):
+        raise ValueError("OBSCURA_CDP_TOKEN must contain at least 32 printable ASCII bytes")
+    return {"Authorization": f"Bearer {token}"}
+
+
 class ObscuraSession:
     """One reusable, connection-isolated Obscura browser context.
 
@@ -842,6 +850,7 @@ class ObscuraSession:
 
         websocket = await connect(
             cdp_url,
+            additional_headers=cdp_auth_headers(),
             proxy=None,
             open_timeout=open_timeout,
             close_timeout=close_timeout,
@@ -1102,6 +1111,7 @@ async def fetch(
 
                 websocket = await connect(
                     cdp_url,
+                    additional_headers=cdp_auth_headers(),
                     proxy=None,
                     open_timeout=min(10.0, _setup_remaining("connect")),
                     close_timeout=cleanup_command_timeout_seconds,
@@ -1581,8 +1591,12 @@ function(operation, selector, fieldName, fixedFields, query, expectedPolicy) {
     state.control.dispatchEvent(new Event("input", {bubbles: true}));
     state.control.dispatchEvent(new Event("change", {bubbles: true}));
   } else if (operation === "timed-prepare") {
-    if (state.control.value !== "") throw new Error("control-not-empty");
     state.control.focus();
+    state.control.select();
+    if (state.control.selectionStart !== 0 ||
+        state.control.selectionEnd !== state.control.value.length) {
+      throw new Error("control-selection");
+    }
     if (document.activeElement !== state.control) throw new Error("focus");
   }
   state = inspect();
@@ -2055,6 +2069,15 @@ async def _enter_search_query(
         remaining=remaining,
         stage="timed-entry-prepare",
     )
+    # Native insertion replaces the selected value, including a provider-restored
+    # query after a challenge. Keep clearing inside the existing attempt budget.
+    await session.send(
+        "Input.insertText",
+        {"text": ""},
+        timeout_seconds=remaining("timed-entry-clear", FetchFailure.POST_NAVIGATION_TIMEOUT),
+        timeout_category=FetchFailure.POST_NAVIGATION_TIMEOUT,
+        timeout_stage="timed-entry-clear",
+    )
     random_source = timing_random or secrets.SystemRandom()
     for index, character in enumerate(query):
         for event_type in ("keyDown", "keyUp"):
@@ -2219,7 +2242,7 @@ async def submit_search(
     cdp_url: str,
     wait_until: str,
     dom_limit: int,
-    pre_navigation_guard: Callable[[], bool],
+    pre_navigation_guard: Callable[[], Awaitable[bool]],
     pre_navigation_timeout_seconds: float,
     cleanup_command_timeout_seconds: float,
     request_timeout_seconds: float,
@@ -2423,7 +2446,19 @@ async def submit_search(
                     "Obscura did not acknowledge the Anubis preload",
                 )
 
-        if not pre_navigation_guard():
+        try:
+            guard_timeout = remaining(
+                "search-pre-navigation", FetchFailure.PRE_NAVIGATION_TIMEOUT
+            )
+            async with asyncio.timeout(guard_timeout):
+                permitted = await pre_navigation_guard()
+        except asyncio.TimeoutError as exc:
+            raise ObscuraClientError(
+                FetchFailure.PRE_NAVIGATION_TIMEOUT,
+                "search-pre-navigation",
+                "search admission did not complete before its deadline",
+            ) from exc
+        if not permitted:
             raise ObscuraClientError(
                 FetchFailure.FINALIZED,
                 "search-pre-navigation",

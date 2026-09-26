@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import gzip
+import html
+import json
+import socket
+import struct
 import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 _COUNTS: dict[str, int] = {}
@@ -21,6 +25,7 @@ _CAPACITY = threading.Condition()
 _CAPACITY_ACTIVE = 0
 _CONNECTION_IDS: dict[int, int] = {}
 _NEXT_CONNECTION_ID = 0
+_NAVIGATION_REQUESTS: list[dict[str, str]] = []
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -28,6 +33,63 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
+
+    def _navigation_security(self, body: bytes = b"") -> bool:
+        parsed = urlsplit(self.path)
+        if not parsed.path.startswith("/navigation-security/"):
+            return False
+        query = parse_qs(parsed.query)
+        if parsed.path.endswith("/reset"):
+            with _COUNTS_LOCK:
+                _NAVIGATION_REQUESTS.clear()
+            self._send(b"ok", content_type="text/plain")
+        elif parsed.path.endswith("/observations"):
+            with _COUNTS_LOCK:
+                data = json.dumps(_NAVIGATION_REQUESTS).encode()
+            self._send(data, content_type="application/json")
+        elif parsed.path.endswith("/form"):
+            action = html.escape(query["action"][0], quote=True)
+            method = html.escape(query["method"][0], quote=True)
+            meta = "".join(
+                f'<meta name="referrer" content="{html.escape(value, quote=True)}">'
+                for value in query.get("meta_policy", [])
+            )
+            self._send(
+                (f"<html><head>{meta}</head><body><form action='{action}' method='{method}'>"
+                 "<input name='q' value='fixture'></form></body></html>").encode(),
+                content_type="text/html",
+                headers={"Referrer-Policy": query["policy"][0]} if "policy" in query else None,
+            )
+        else:
+            with _COUNTS_LOCK:
+                _NAVIGATION_REQUESTS.append({
+                    "method": self.command, "body": body.decode("utf-8"),
+                    "host": self.headers["Host"], "path": parsed.path,
+                    "cookie": self.headers.get("Cookie", ""),
+                    "referer": self.headers.get("Referer", ""),
+                    "fetch_site": self.headers.get("Sec-Fetch-Site", ""),
+                })
+                count = len(_NAVIGATION_REQUESTS)
+            if parsed.path.endswith("/reset-post") and count == 1:
+                # Linux-container fixture: reset after consuming the whole POST.
+                # Keep listening so a replay can succeed and be observed.
+                self.connection.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0),
+                )
+                self.connection.close()
+                self.close_connection = True
+            elif parsed.path.endswith("/redirect"):
+                self._send(
+                    b"", content_type="text/plain",
+                    status=HTTPStatus(int(query["status"][0])),
+                    headers={
+                        "Location": query["to"][0],
+                        **({"Referrer-Policy": query["policy"][0]} if "policy" in query else {}),
+                    },
+                )
+            else:
+                self._send(b"<html><body>received</body></html>", content_type="text/html")
+        return True
 
     def _send(
         self,
@@ -81,6 +143,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         global _BARRIER_ACTIVE, _CAPACITY_ACTIVE, _STRESS_ACTIVE
 
+        if self._navigation_security():
+            return
         path = urlsplit(self.path).path
         if path == "/health":
             self._send(b"ok", content_type="text/plain")
@@ -428,8 +492,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = urlsplit(self.path).path
         length = int(self.headers.get("Content-Length", "0"))
-        if length:
-            self.rfile.read(length)
+        body = self.rfile.read(length) if length else b""
+        if self._navigation_security(body):
+            return
         if path == "/search-post-result":
             self._search_result(method="POST")
             return
