@@ -26,9 +26,10 @@ the independent final-hop destination policy.
 | Public Onyx | generic helpers, saved public MCP/Web Connector traffic (including MCP OAuth discovery/token exchange), optional stock `open_url` requests/local Chromium | `onyx-public-egress-bridge` | public destinations only |
 | Browser | Obscura | `obscura-egress-bridge` | same public listener and destination policy |
 | Executor | enabled code-interpreter pods | `executor-egress-bridge` | same public listener and destination policy |
+| Paid search | enabled SearXNG Exa engine | `searxng-x402-egress-bridge` | same public listener and destination policy |
 | Host-capable Onyx | explicitly selected saved-level host routes, configured inference, embedding shim | `onyx-host-egress-bridge` | public plus exact documented host/RFC1918 exceptions |
 
-The three public callers share one final-hop proxy process and listener policy,
+The four public caller classes share one final-hop proxy process and listener policy,
 but retain distinct caller networks, fixed bridges, and peer-source checks.
 They cannot select the host listener or route through one another. Executor
 search-host denial was deliberately removed: enabled executors may receive the

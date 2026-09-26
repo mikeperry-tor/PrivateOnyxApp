@@ -68,9 +68,18 @@ def process(processor, query, params, container, start_time, timeout_limit):
         with admission.ownership(token) as record_start:
             if processor.extend_container_if_suspended(container):
                 return
+            deadline = min(time.monotonic() + 55, start_time + timeout_limit - 1)
+            # Scheduler reservations bypass wait(); native waiters can also
+            # expire between reservation and dispatch. Neither is a provider
+            # failure. Check the native timeout marker at the same boundary.
+            try:
+                payment.check_deadline(deadline)
+            except TimeoutError:
+                processor.handle_exception(container, "api_admission_expired", suspend=False)
+                return
             outcome = payment.Outcome()
             params["_wrapper_x402_outcome"] = outcome
-            params["_wrapper_x402_deadline"] = min(time.monotonic() + 55, start_time + timeout_limit - 1)
+            params["_wrapper_x402_deadline"] = deadline
             params["_wrapper_x402_start"] = record_start
             try:
                 results = processor.engine.search(query, params)

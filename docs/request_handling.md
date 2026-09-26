@@ -1082,8 +1082,11 @@ after admission and the actual processor deadline minus one second, including
 shorter query/configuration limits. Async HTTPX I/O uses that absolute deadline;
 synchronous parsing/signing checks it before and afterward and before dispatch.
 Timeout markers prevent late signing/submission; already-submitted payments can settle.
-Native admission checks expiry before reserving capacity on every wakeup. An
-expired waiter cannot start an attempt or suspend the provider for other callers.
+Native admission checks expiry before reserving capacity on every wakeup. Both
+native and scheduler-reserved requests recheck the deadline and native timeout
+marker under ownership before engine dispatch. An expired request releases its
+reservation and reports request-local admission expiry without invoking the engine
+or suspending the provider for other callers.
 
 The fixed endpoint is `https://api.exa.ai/search`, using verified Python TLS through
 `http://searxng-x402-egress-bridge:3128`. No ambient proxy, netrc, NO_PROXY bypass,

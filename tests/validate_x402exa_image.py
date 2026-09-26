@@ -173,6 +173,45 @@ with patch.object(processor.engine, "search", side_effect=AssertionError("expire
         assert not _x402_admission._active and _x402_admission._token is None
     search.assert_not_called()
 
+# Scheduler reservations bypass native wait(), so short budgets and delayed
+# engine-thread dispatch must also expire without poisoning shared availability.
+dispatch = processor.search
+def delayed_dispatch(query, params, container, start_time, timeout_limit):
+    # Simulate a delayed engine-thread entry while retaining the real caller's
+    # join budget, so assertions cannot race the processor's cleanup.
+    return dispatch(query, params, container, start_time - timeout_limit, timeout_limit)
+
+for timeout, send in ((0.5, dispatch), (60, delayed_dispatch)):
+    _x402_admission._last_start = float("-inf")
+    with patch.object(processor.engine, "search", side_effect=AssertionError("expired reservation dispatched")) as search, \
+            patch.object(processor, "search", send), app.test_request_context("/"):
+        result = searx.search.Search(SearchQuery(
+            "expired fixture", [EngineRef("x402exa", "general")], timeout_limit=timeout,
+        )).search()
+        search.assert_not_called()
+        assert any(e.error_type == "api_admission_expired" for e in result.unresponsive_engines)
+    assert not processor.suspended_status.is_suspended
+    assert not _x402_admission._active and _x402_admission._token is None
+    # A subsequent caller can immediately use the real engine and SDK path.
+    before = len(calls)
+    with patch.object(_x402_payment, "exchange", fake_exchange), app.test_request_context("/"):
+        assert searx.search.Search(SearchQuery(
+            "healthy fixture", [EngineRef("x402exa", "general")],
+        )).search().main_results_map
+    assert len(calls) == before + 1
+
+# The native timeout marker is authoritative even before the numeric deadline.
+_x402_admission._last_start = float("-inf")
+token = _x402_admission.reserve(lambda: True)
+assert token is not None
+with patch.object(threading.current_thread(), "_timeout", True, create=True), \
+        patch.object(processor.engine, "search", side_effect=AssertionError("timed-out owner dispatched")) as search:
+    processor.search("fixture", {_x402_admission.RESERVATION_PARAM: token},
+                     searx.results.ResultContainer(), time.monotonic(), 60)
+    search.assert_not_called()
+assert not processor.suspended_status.is_suspended
+assert not _x402_admission._active and _x402_admission._token is None
+
 # Competing real searches with duplicate paid-provider names must wait on API
 # admission. The one worker-local cache needs only one discovery; every paid
 # exchange still gets a fresh authorization. Keep the real three-second clock.
