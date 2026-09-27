@@ -77,14 +77,25 @@ with patch.object(_x402_payment, "exchange", fake_exchange):
             assert not searx.search.Search(query).search().main_results_map
     assert len(calls) == 2
 
-    # A time-filtered query skips all current browser engines before admission.
+    # All engines, including Exa, reject time filters before admission/payment.
     with _x402_admission._condition:
         _x402_admission._last_start = float("-inf")
     attempts.clear()
+    for names in (list(searx.search.PROCESSORS), ["x402exa"]):
+        with app.test_request_context("/"):
+            query = SearchQuery("synthetic time", [EngineRef(n, "general") for n in names], time_range="day")
+            assert not searx.search.Search(query).search().main_results_map
+    assert not attempts and len(calls) == 2
+    assert not _x402_admission._active and _x402_admission._token is None
+
+    # Capability declarations and request behavior agree even for explicit
+    # SafeSearch input: Exa never enables moderation.
+    engine = searx.search.PROCESSORS["x402exa"].engine
+    assert engine.safesearch is False and engine.time_range_support is False
     with app.test_request_context("/"):
-        query = SearchQuery("synthetic time", [EngineRef(n, "general") for n in searx.search.PROCESSORS], time_range="day")
+        query = SearchQuery("synthetic safe", [EngineRef("x402exa", "general")], safesearch=2)
         assert searx.search.Search(query).search().main_results_map
-    assert attempts == ["x402exa"] and len(calls) == 3
+    assert len(calls) == 3 and json.loads(calls[-1].content)["moderation"] is False
 
     # Unexpected parser errors go through native suspension before release.
     processor = searx.search.PROCESSORS["x402exa"]
@@ -132,6 +143,9 @@ assert all(c.get_ordered_results() is c._main_results_sorted for c in containers
 import searx.webapp as webapp
 with patch.object(searx.search.Search, "search", side_effect=AssertionError("probe executed search")):
     with webapp.app.test_client() as client:
+        config = client.get("/config").get_json()
+        exa = next(e for e in config["engines"] if e["name"] == "x402exa")
+        assert exa["safesearch"] is False and exa["time_range_support"] is False
         response = client.post("/search", data={"format": "json", "q": ""})
         assert response.status_code == 400 and response.json == {"error": "No query"}
         with patch.dict(searx.settings["search"], {"formats": ["html"]}):

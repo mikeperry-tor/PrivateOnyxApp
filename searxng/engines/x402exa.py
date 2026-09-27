@@ -6,9 +6,9 @@ import time
 engine_type = "offline"
 categories = ["general"]
 paging = False
-time_range_support = True
+time_range_support = False
 language_support = False
-safesearch = True
+safesearch = False
 about = {
     "website": "https://exa.ai", "official_api_documentation": "https://exa.ai/docs/reference/search",
     "use_official_api": True, "require_api_key": False, "results": "JSON",
@@ -24,7 +24,7 @@ def search(query, params):
     deadline = params["_wrapper_x402_deadline"]
     outcome = params["_wrapper_x402_outcome"]
     payment.check_deadline(deadline)
-    body = payment.request_body(query, params)
+    body = payment.request_body(query)
     data = asyncio.run(payment.exchange(
         payment_client(), body, deadline, outcome, params["_wrapper_x402_start"],
     ))

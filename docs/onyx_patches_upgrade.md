@@ -1964,7 +1964,10 @@ canonical settings identity, qualify real parent/worker fatal startup, resource
 tracker exclusion, native selected-locale propagation, once-per-candidate params,
 free/Bing/Exa ordering and concurrent scoring without shared globals. Exercise real
 SDK signing with synthetic keys and fake transport; socket fixtures separately
-prove CONNECT, TLS rejection, framing, decompression and deadlines. Verify Onyx's
+prove CONNECT, TLS rejection, framing, decompression and deadlines. Verify the
+Exa capability contract: SafeSearch and time-range declarations remain false,
+time-filtered pool and Exa-only requests cannot pay, and explicit SafeSearch input
+cannot enable API moderation. Verify Onyx's
 empty-query probe against the pinned SearXNG format-before-missing-query route and
 ordinary retry removal. Require enabled/disabled feature transition evidence and
 both engines' network isolation differences. Cover empty/nonempty Make command-line

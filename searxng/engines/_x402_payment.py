@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 ENDPOINT = "https://api.exa.ai/search"
@@ -95,17 +95,12 @@ def check_deadline(deadline):
         raise TimeoutError("engine_deadline")
 
 
-def request_body(query, params):
+def request_body(query):
     body = {
         "query": query, "type": "auto", "numResults": 10,
         "contents": {"text": False, "highlights": True},
-        "moderation": params["safesearch"] != 0,
+        "moderation": False,
     }
-    if params.get("time_range"):
-        days = {"day": 1, "week": 7, "month": 30, "year": 365}[params["time_range"]]
-        now = datetime.now(timezone.utc)
-        body.update(startPublishedDate=(now - timedelta(days=days)).isoformat(),
-                    endPublishedDate=now.isoformat())
     return json.dumps(body, ensure_ascii=False).encode("utf-8")
 
 

@@ -1067,10 +1067,13 @@ running Exa alongside free engines. Explicit Exa-only selection can pay immediat
 Exa buys one fixed `auto` search with at most ten results, highlights, text off,
 no summary, and no extra content request. Page > 1 and concrete requested languages
 are ineligible before admission. Language provenance comes from native
-`selected_locale`, not the resolved automatic locale. Time ranges mean the preceding
-1/7/30/365 days, captured once for both exchanges. Time-filtered default requests
-skip every current browser engine. SafeSearch 0 disables moderation; 1 and 2 enable
-it. Query operators remain text; equivalent structured filtering is not promised.
+`selected_locale`, not the resolved automatic locale. Like the browser engines,
+Exa declares SafeSearch and time-range support false. Native capability filtering
+skips all current engines for explicit time-range requests, including Exa-only
+requests, before admission or payment. Exa always sends `moderation: false` and
+no publication-date filters, regardless of a caller's SafeSearch value. Onyx sends
+neither setting. Query operators remain text; equivalent structured filtering is
+not promised.
 
 One worker-local API reservation admits one active attempt, with at least three
 seconds between first HTTP request starts. No browser lease/context is allocated.
@@ -1111,7 +1114,7 @@ or extension payloads are used or echoed. A server requiring extension
 participation can reject the normal payment; that does not authorize a retry.
 
 One demand-driven worker-local entry reuses validated requirements across queries,
-filters, exits, and expired prior authorizations. Exa specifies no reuse lifetime;
+exits, and expired prior authorizations. Exa specifies no reuse lifetime;
 the accepted policy is unbounded reuse until rejection, not a guarantee of acceptance.
 A signed 402 or decoded negative settlement invalidates terms, optionally retaining
 validated replacement terms for a later search. Other failures retain usable terms.

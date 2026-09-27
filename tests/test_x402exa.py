@@ -45,13 +45,14 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             enabled(KEY, "false")
 
-    def test_request_product_and_time_bounds(self):
-        body = json.loads(payment.request_body("site:example.org a", {"safesearch": 2, "time_range": "day"}))
+    def test_request_product_and_retry_bounds(self):
+        body = json.loads(payment.request_body("site:example.org a"))
         self.assertEqual(body["query"], "site:example.org a")
         self.assertEqual(body["contents"], {"text": False, "highlights": True})
         self.assertEqual(body["type"], "auto")
-        self.assertTrue(body["moderation"])
-        self.assertIn("startPublishedDate", body)
+        self.assertFalse(body["moderation"])
+        self.assertNotIn("startPublishedDate", body)
+        self.assertNotIn("endPublishedDate", body)
         self.assertEqual(payment.retry_after("99999"), 3600)
         self.assertEqual(payment.retry_after("nonsense"), 60)
 

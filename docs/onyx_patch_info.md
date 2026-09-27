@@ -1421,6 +1421,10 @@ Settings paths and auxiliary lookup directories stay unchanged. Pure support
 modules are inert. The exact resource-tracker exclusion bypasses all application
 work; other bootstrap failures exit 78 instead of CPython suppressing them.
 
+Exa declares SafeSearch and time-range support false, matching the browser
+engines. Native SearXNG capability filtering excludes time-filtered requests;
+the fixed API product disables moderation and includes no publication-date filters.
+
 Scheduling carries once-per-candidate native params into dispatch, uses separate
 browser/API admission, and retains classification-before-release. Exa stays outside
 the browser registry. Provider overrides are deduplicated in order before tier
