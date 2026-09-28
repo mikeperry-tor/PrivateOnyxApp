@@ -26,6 +26,7 @@ def _install() -> None:
     from onyx_wrapper_patches.api.deep_research import apply_deep_research_output_limit_patch
     from onyx_wrapper_patches.api.model_limits import apply_llm_max_tokens_override_patch
     from onyx_wrapper_patches.api.mcp_egress import apply_mcp_egress_proxy_patch
+    from onyx_wrapper_patches.api.mcp_results import install as install_mcp_results
     from onyx_wrapper_patches.api.inference_continuation import apply_midstream_inference_continuation_patch
     from onyx_wrapper_patches.api.reasoning import apply_native_reasoning_detection_override_patch
     from onyx_wrapper_patches.api.tool_calls import apply_native_tool_calls_only_patch
@@ -61,6 +62,9 @@ def _install() -> None:
     apply_configured_inference_proxy_patch()
     install_model_display_names()
     apply_mcp_egress_proxy_patch()
+    # The MCP factory resolves process_mcp_result through client globals at call
+    # time; keep the existing call_mcp_tool binding and selected egress adapter.
+    install_mcp_results()
     apply_playwright_helper_proxy_patch()
     install_github_egress()
     apply_internal_search_context_patches()

@@ -1345,6 +1345,33 @@ Podman Compose mounts and command. A generated `onyx/onyx_data` refresh must not
 remove the tracked binds or modify the generated source files; zero or multiple
 template/runner markers must fail before nginx starts.
 
+## MCP result contract audit
+
+Re-audit `api/mcp_results.py` against MCP `process_mcp_result`, the async tool
+factory, the synchronous client entrypoint, `MCPTool.run`, and historical
+`create_custom_tool_packets` null rendering. Prefer native payload handling and
+remove this patch when upstream preserves these contracts.
+Keep the result rewrite isolated from credential resolution, OAuth, session
+initialization, selected egress, transport failures, and metric finalization.
+Validate both already-imported and subsequently resolved client references;
+the factory must resolve the patched processor through its module globals.
+
+Run `make check` and `make test-patch-images`. The selected-image API validation
+must execute the installed tool through the real MCP SDK result types and Onyx
+packet/summary models with a fake session and no network. Require bare JSON
+objects/arrays, plain text, empty structured objects, JSON scalar/null display,
+one-time JSON decoding, preserved server-owned `tool_result` fields,
+structured/text duplicate suppression, supplementary content, and `isError`
+metrics. Reconstruct packets from serialized rich summaries and compare their
+display data with live packets, including JSON null. Deterministic tests also
+retain annotated and non-text block data, multiple-block order,
+invalid/ambiguous JSON text, and fatal contract drift.
+Verify transport and authentication errors still use upstream handling.
+For live qualification, invoke a configured MCP JSON tool and text tool in the
+WebUI, inspect their output, and reload the chat to check persisted display.
+Report unavailable live qualification separately from offline image validation.
+See [MCP result payloads](onyx_patch_info.md#mcp-result-payloads).
+
 ## Runtime patch contract audit
 
 Automatic startup is exercised by `tests/patch_activation_probe.py` through the

@@ -1667,6 +1667,8 @@ if __name__ == "__main__":
     _validate_new_network_surface_contract()
     _validate_native_output_and_file_policy()
     _validate_model_display_names()
+    from validate_mcp_results import validate as validate_mcp_results
+    validate_mcp_results()
     _validate_github_egress()
     _validate_python_tool_identity()
     _validate_python_tool_generated_id_identity()

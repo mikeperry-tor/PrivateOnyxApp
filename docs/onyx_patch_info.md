@@ -479,6 +479,37 @@ raises in strict mode, including missing/empty values. Its ContextVar accepts
 only exact public/host URLs and `None` for the default helper proxy; empty
 selection fails before state mutation. See [routing](vpn_routing_and_proxies.md#route-classes).
 
+## MCP result payloads
+
+`onyx_wrapper_patches/api/mcp_results.py` replaces the pinned MCP client's
+lossy text flattening and the tool's synthetic `tool_result` wrapper. Structured
+results reach the WebUI and saved rich summary as JSON values and the model as
+JSON serialized once. A single unannotated text block is decoded once when it
+is valid JSON; ordinary text remains verbatim. Duplicate object keys,
+non-finite numbers, and invalid JSON remain text rather than losing data.
+Server-owned fields named `tool_result` are preserved without recursive decoding.
+
+Structured content with no text, or with a single equivalent JSON text block,
+is emitted directly. Supplementary text, annotated blocks, multiple blocks,
+resources, images, and audio retain the MCP `content`/`structuredContent`
+envelope and block order. Binary blocks remain serialized data; this patch does
+not add native image/audio rendering or resource fetching. Top-level MCP `_meta`
+is not sent to the model. Empty structured objects remain `{}`; empty content
+remains an explicit `content: []`. JSON null is displayed as `null` text because
+the pinned WebUI otherwise hides it, while the saved summary retains null.
+The historical custom-tool packet builder applies the same null display rule
+on chat reload, including JSON-null results from custom HTTP tools; absent
+text, file, and error payloads keep their existing behavior.
+
+MCP `isError: true` retains its content and structured details, appears explicitly
+in the displayed/model payload, and records an error metric rather than success.
+Transport exceptions and authentication failures keep upstream handling.
+Installation validates callable signatures/defaults, client bindings, and exact
+source markers before replacing result processing. The API bootstrap installs
+it after MCP egress; existing authentication, routing, timeouts, and session
+lifecycle remain upstream-owned. Only new calls receive normalized results;
+existing saved chat results are not migrated.
+
 ## OpenAI-compatible model labels
 
 `onyx_wrapper_patches/api/model_display_name_patch.py` formats discovered and
