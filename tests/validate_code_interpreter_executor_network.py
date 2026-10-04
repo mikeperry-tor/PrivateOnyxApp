@@ -161,8 +161,11 @@ if __name__ == "__main__":
     from unittest.mock import AsyncMock, patch
     from app import main
 
-    assert main.SERVICE_VERSION == "0.4.7"
+    assert main.SERVICE_VERSION == "0.4.9"
     assert main.PYTHON_EXECUTOR_DOCKER_IMAGE_WATCHDOG_INTERVAL_SEC == 0
+    assert main.HEALTH_CHECK_INTERVAL_SEC == 600
+    assert main.MAX_CONCURRENT_EXECUTIONS == 16
+    assert main.EXECUTION_QUEUE_TIMEOUT_SEC == 5
 
     async def validate_lifespan() -> None:
         # Exercise native task ownership without a Docker socket or registry.
@@ -170,13 +173,64 @@ if __name__ == "__main__":
             patch.object(main, "_ensure_docker_image_available") as prepare,
             patch.object(main, "_reap_expired_sessions_once", new_callable=AsyncMock),
             patch.object(main, "_session_reaper_loop", new_callable=AsyncMock) as reaper,
+            patch.object(main, "_refresh_backend_health", new_callable=AsyncMock) as refresh,
+            patch.object(main, "_backend_health_loop", new_callable=AsyncMock) as health_loop,
             patch.object(main, "_image_watchdog_loop", new_callable=AsyncMock) as watchdog,
         ):
             async with main.lifespan(main.create_app()):
                 await asyncio.sleep(0)
             prepare.assert_called_once()
             reaper.assert_awaited_once()
+            refresh.assert_awaited_once()
+            health_loop.assert_awaited_once()
             watchdog.assert_not_called()
 
     asyncio.run(validate_lifespan())
+
+    async def validate_health_and_admission() -> None:
+        import httpx
+        from app.services.admission import ExecutionLimiter
+        from app.services.executor_base import HealthCheck
+
+        app = main.create_app()
+        app.state.backend_health = HealthCheck(status="error", message="fixture backend unavailable")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
+            # Liveness remains cheap; the Compose probe must inspect its body.
+            with patch.object(main, "get_executor") as executor:
+                response = await client.get("/health")
+                assert response.status_code == 200 and response.json()["status"] == "error"
+                executor.assert_not_called()
+            with patch.object(main, "_refresh_backend_health", new_callable=AsyncMock,
+                              return_value=app.state.backend_health) as refresh:
+                response = await client.get("/ready")
+                assert response.status_code == 503 and response.json()["status"] == "error"
+                refresh.assert_awaited_once_with(app)
+            app.state.backend_monitor.last_completed_at -= main.checker_stale_after_sec() + 1
+            response = await client.get("/health")
+            assert response.status_code == 503
+
+            limiter = ExecutionLimiter(limit=1, queue_timeout_sec=0)
+            app.state.execution_limiter = limiter
+            slot = await limiter.acquire("execute")
+            assert slot is not None
+            try:
+                for path, payload in (
+                    ("/v1/execute", {"code": "print(42)"}),
+                    ("/v1/execute/stream", {"code": "print(42)"}),
+                    ("/v1/sessions", {}),
+                ):
+                    response = await client.post(path, json=payload)
+                    assert response.status_code == 429, (path, response.text)
+                    assert response.headers["Retry-After"] == "2"
+                    assert limiter.active == 1
+            finally:
+                slot.release()
+                slot.release()
+            assert limiter.active == 0
+            replacement = await limiter.acquire("execute")
+            assert replacement is not None
+            replacement.release()
+
+    asyncio.run(validate_health_and_admission())
+    print("PINNED_CONTROLLER_HEALTH_ADMISSION_OK")
     print("PINNED_EXECUTOR_NATIVE_NETWORK_CONTRACT_OK")

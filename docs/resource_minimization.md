@@ -202,6 +202,11 @@ are not duplicate enforcement.
 
 ### Onyx API
 
+- The WebUI polls only its tracked pending file IDs, including newly attached
+  recent/project files still processing or indexing. Terminal and missing IDs
+  leave tracking; files attached during an in-flight poll remain tracked.
+  Chat hydration no longer fetches a separate project token count.
+
 - LiteLLM uses its packaged model map with telemetry disabled. Native Onyx
   disables per-chunk LiteLLM streaming logging because its own tracing and cost
   accounting own those records, avoiding unused callback tasks and event loops.
@@ -261,6 +266,20 @@ are not duplicate enforcement.
   offline, and expire with the four-hour tab marker.
 
 ### Executor lifetime and cleanup
+
+The controller's native backend monitor checks the local Docker daemon and
+selected executor image once at startup and every ten minutes. Its two-thread
+health pool keeps a blocked check single-flight. `/health` returns cached
+backend status; the Compose probe requires both successful HTTP and `status=ok`,
+so a backend failure cannot pass merely because liveness returns HTTP 200.
+`/ready` performs a fresh bounded check and returns 503 for backend failure.
+The controller admits at most 16 concurrent Python executions, session creations,
+or session Bash calls. Session creation holds capacity only during setup, rather
+than for the session lifetime. It waits at most five seconds for capacity,
+and returns 429 with `Retry-After`
+when saturated. This wait fits beneath Onyx's ten-second client headroom.
+Native execution threads retain 24 additional slots for non-execution work;
+metrics are local and have no periodic exporter.
 
 `PYTHON_EXECUTOR_DOCKER_IMAGE_WATCHDOG_INTERVAL_SEC=0` disables the native
 periodic image inspection and registry re-pull loop. The Makefile prepares the

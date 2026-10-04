@@ -1303,6 +1303,15 @@ accept another LLM-facing name. Pinned-image validation confirms the class,
 constant, built-in map, saved-row remapping, prompt, relative-link helper, and
 run wrapper after every patch is installed.
 
+Native controller admission bounds Python execution, session creation, and
+session Bash calls to 16 active requests with a five-second capacity wait and
+explicit 429 responses. Backend
+health is refreshed locally at startup and every ten minutes; container health
+checks inspect the cached status rather than treating HTTP 200 alone as
+readiness. Selected-image validation covers failed cached health, fresh
+readiness failure, a wedged monitor, saturation, and slot release alongside
+native task ownership. See [resource policy](resource_minimization.md#executor-lifetime-and-cleanup).
+
 Both the Python function description and stable Python guidance explain that
 each call has a fresh sandbox: files, variables, imports, and background
 processes do not survive between calls. Dependent downloads and processing

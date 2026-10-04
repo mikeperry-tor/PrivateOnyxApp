@@ -277,7 +277,7 @@ def _validate_production_bootstrap() -> None:
     assert oauth_flow.mcp_oauth_challenge_httpx_client_factory is mcp_ssrf.mcp_oauth_challenge_httpx_client_factory
     from importlib.metadata import version
     from onyx.llm.litellm_singleton import litellm
-    assert version("litellm") == "1.93.0"
+    assert version("litellm") == "1.93.2"
     assert litellm.telemetry is False
     assert litellm.disable_streaming_logging is True
     from onyx_wrapper_patches.api.config import use_obscura_browser
@@ -506,7 +506,11 @@ def _validate_native_get_pinning() -> None:
 def _validate_native_output_and_file_policy() -> None:
     from unittest.mock import patch
     from onyx.chat import token_budget
-    from onyx.file_store.serving import resolve_inline_disposition
+    from onyx.file_store.serving import (
+        ATTACHMENT_SAFE_MIME_TYPES, build_content_disposition,
+        ensure_filename_extension, resolve_inline_disposition,
+    )
+    from onyx.file_processing.file_types import guess_mime_type
 
     # Native chat budgets continue to enforce packaged model output metadata;
     # the wrapper's input override and research allowance must not erase it.
@@ -541,6 +545,60 @@ def _validate_native_output_and_file_policy() -> None:
         assert headers["Content-Disposition"] == "attachment"
         assert headers["X-Content-Type-Options"] == "nosniff"
         assert headers["Content-Security-Policy"] == "sandbox"
+
+    for filename, media_type in (
+        ("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ("macro.xlsm", "application/vnd.ms-excel.sheet.macroenabled.12"),
+        ("document.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ("slides.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    ):
+        assert guess_mime_type(filename.upper()) == media_type
+        served, headers = resolve_inline_disposition(
+            media_type, filename=filename, attachment_types=ATTACHMENT_SAFE_MIME_TYPES,
+        )
+        assert served == media_type and headers["Content-Disposition"].startswith("attachment;")
+        assert headers["X-Content-Type-Options"] == "nosniff"
+        assert headers["Content-Security-Policy"] == "sandbox"
+    served, headers = resolve_inline_disposition(
+        "text/html", filename='unsafe.html', attachment_types=ATTACHMENT_SAFE_MIME_TYPES,
+    )
+    assert served == "application/octet-stream" and headers["Content-Disposition"].startswith("attachment;")
+    disposition = build_content_disposition("attachment", 'résumé/unsafe\\name"\r\n.pdf')
+    assert "\r" not in disposition and "\n" not in disposition
+    assert "filename*=UTF-8''r%C3%A9sum%C3%A9_unsafe_name___.pdf" in disposition
+    assert ensure_filename_extension("report", "application/pdf") == "report.pdf"
+    assert ensure_filename_extension("report.csv", "application/pdf") == "report.csv"
+    print("PINNED_NATIVE_GENERATED_FILE_HEADERS_OK")
+
+
+def _validate_native_opensearch_access_updates() -> None:
+    from unittest.mock import Mock
+    from onyx.access.models import DocumentAccess
+    from onyx.document_index.interfaces_new import TenantState
+    from onyx.document_index.opensearch.opensearch_document_index import OpenSearchDocumentIndex
+    from onyx.document_index.opensearch.schema import PUBLIC_FIELD_NAME, ACCESS_CONTROL_LIST_FIELD_NAME
+
+    index = object.__new__(OpenSearchDocumentIndex)
+    index._index_name = "validation"
+    index._tenant_state = TenantState(tenant_id="", multitenant=False)
+    index._client = Mock()
+    # Permission changes must update both fields: stale public=true bypasses
+    # the restricted ACL even when the ACL itself was updated correctly.
+    for public in (False, True, False):
+        access = DocumentAccess.build(
+            user_emails=["fixture@example.com"], user_groups=[],
+            external_user_emails=[], external_user_group_ids=[], is_public=public,
+        )
+        request = SimpleNamespace(
+            access=access, document_ids=["fixture"], doc_id_to_chunk_cnt={"fixture": 1},
+            document_sets=None, boost=None, hidden=None, project_ids=None,
+            persona_ids=None, created_at=None,
+        )
+        index.update([request])
+        properties = index._client.bulk_update_documents.call_args.kwargs["properties_to_update"]
+        assert properties[PUBLIC_FIELD_NAME] is public
+        assert properties[ACCESS_CONTROL_LIST_FIELD_NAME]
+    print("PINNED_NATIVE_OPENSEARCH_ACCESS_UPDATES_OK")
 
 
 def _validate_new_network_surface_contract() -> None:
@@ -978,7 +1036,7 @@ def _validate_litellm_contract() -> None:
     from onyx.llm.multi_llm import LitellmLLM
     from onyx.llm.models import AssistantMessage
 
-    assert version("litellm") == "1.93.0"
+    assert version("litellm") == "1.93.2"
     assert version("pydantic") == "2.12.5"
     assert get_model_cost_map_source_info() == {
         "source": "local",
@@ -1666,6 +1724,7 @@ if __name__ == "__main__":
     _validate_native_get_pinning()
     _validate_new_network_surface_contract()
     _validate_native_output_and_file_policy()
+    _validate_native_opensearch_access_updates()
     _validate_model_display_names()
     from validate_mcp_results import validate as validate_mcp_results
     validate_mcp_results()

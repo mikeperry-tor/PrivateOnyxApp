@@ -58,11 +58,11 @@ class ImmutableComponentPinTests(unittest.TestCase):
         executor_tag = self.value("PYTHON_EXECUTOR_IMAGE_TAG")
         self.assertRegex(executor_tag, r"^\d+\.\d+\.\d+$")
         self.assertNotEqual(executor_tag, "latest")
-        self.assertEqual(self.value("CODE_INTERPRETER_IMAGE_TAG"), "0.4.7")
-        self.assertEqual(executor_tag, "0.4.7")
+        self.assertEqual(self.value("CODE_INTERPRETER_IMAGE_TAG"), "0.4.9")
+        self.assertEqual(executor_tag, "0.4.9")
         self.assertRegex(
             self.value("PYTHON_EXECUTOR_UPSTREAM_IMAGE"),
-            r"^docker\.io/onyxdotapp/python-executor-sci:0\.4\.7@sha256:[0-9a-f]{64}$",
+            r"^docker\.io/onyxdotapp/python-executor-sci:0\.4\.9@sha256:[0-9a-f]{64}$",
         )
         self.assertIn(
             "PYTHON_EXECUTOR_UPSTREAM_IMAGE ?= $(call env_value,PYTHON_EXECUTOR_UPSTREAM_IMAGE)",

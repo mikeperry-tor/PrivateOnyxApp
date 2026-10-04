@@ -605,7 +605,7 @@ services:
       nginx: {condition: service_healthy}
 
   code-interpreter:
-    # Retain the native executor-readiness probe at the wrapper idle cadence.
+    # Inspect the native cached backend status at the wrapper idle cadence.
     healthcheck:
       interval: 10m
       start_interval: 5s
@@ -624,6 +624,11 @@ services:
       PYTHON_EXECUTOR_DOCKER_IMAGE: "${PYTHON_EXECUTOR_IMAGE:?PYTHON_EXECUTOR_IMAGE must be set by the Makefile}"
       # The Makefile owns the local derived image; never periodically pull it.
       PYTHON_EXECUTOR_DOCKER_IMAGE_WATCHDOG_INTERVAL_SEC: "0"
+      # Native backend checks are local and retain the low-idle cadence.
+      HEALTH_CHECK_INTERVAL_SEC: "600"
+      # Keep admission waiting below Onyx's ten-second client headroom.
+      MAX_CONCURRENT_EXECUTIONS: "16"
+      EXECUTION_QUEUE_TIMEOUT_SEC: "5"
       # Executor pod resource limits (defaults are tight: 256MB RAM, 5s CPU,
       # 1MB output). Raise them for data analysis / matplotlib workloads.
       MEMORY_LIMIT_MB: "${ONYX_CODE_INTERPRETER_MEMORY_LIMIT_MB:-512}"

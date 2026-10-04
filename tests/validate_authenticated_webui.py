@@ -154,7 +154,10 @@ def validate(credential_file: Path) -> None:
                     assert loaded, 'same-origin uploaded image did not render'
                 else:
                     assert response.headers['content-type'].startswith('application/octet-stream')
-                    assert response.headers['content-disposition'] == 'attachment'
+                    disposition = response.headers['content-disposition']
+                    assert disposition.startswith('attachment;')
+                    assert 'filename="validation.svg"' in disposition
+                    assert "filename*=UTF-8''validation.svg" in disposition
                     assert 'sandbox' in response.headers['content-security-policy']
             print('AUTHENTICATED_UPLOAD_STORAGE_AND_CSP_OK', flush=True)
         finally:

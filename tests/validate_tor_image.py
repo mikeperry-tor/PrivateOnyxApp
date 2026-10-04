@@ -319,7 +319,7 @@ test -x /usr/bin/python3
 tor --version | head -n 1
 """,
     )
-    assert "Tor version 0.4.9.11" in output
+    assert "Tor version 0.4.9.13" in output
 
     with tempfile.TemporaryDirectory(prefix="private-onyx-tor-image-") as directory:
         torrc = Path(directory, "torrc")

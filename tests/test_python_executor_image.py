@@ -31,7 +31,7 @@ class PythonExecutorImageTests(unittest.TestCase):
 
     def test_executor_uses_hash_locked_sympy_layer(self) -> None:
         self.assertIn(
-            "ARG PYTHON_EXECUTOR_UPSTREAM_IMAGE=docker.io/onyxdotapp/python-executor-sci:0.4.7@sha256:94dda93e6cb56847cfc5a250db0519eb2972def88791e85aeef04989906bb4bf",
+            "ARG PYTHON_EXECUTOR_UPSTREAM_IMAGE=docker.io/onyxdotapp/python-executor-sci:0.4.9@sha256:2c605c21ca26f2e25cd1a6d563ca7a3d6ca061b86dec9db0aa0abfd049b06ce9",
             self.dockerfile,
         )
         self.assertIn("FROM ${PYTHON_EXECUTOR_UPSTREAM_IMAGE}", self.dockerfile)

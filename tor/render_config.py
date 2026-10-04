@@ -251,7 +251,7 @@ def render_text(
             [
                 "HiddenServiceDir /var/lib/tor/onion-service",
                 "HiddenServiceVersion 3",
-                # Tor 0.4.9.11 accepts only an IP/port or Unix target here; it
+                # Tor accepts only an IP/port or Unix target here; it
                 # does not resolve Compose service names in HiddenServicePort.
                 "HiddenServicePort 80 10.253.247.3:8080",
             ]

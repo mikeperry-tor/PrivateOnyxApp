@@ -67,8 +67,13 @@ containers mount it read-only. Applications, browsers, executors, ingress
 gateways, Myst, Teep, and Tailscale receive neither the volume nor a Tor
 network. Ordinary target names remain unresolved until the shared SOCKS state
 machine sends a domain-form `CONNECT`; socket, circuit, selector, and protocol
-failures have no direct fallback. Exact internal destinations, permitted host
-ports, the exact configured local embedding authority, and explicitly allowed
+failures have no direct fallback.
+The selected policy hop allows up to 90 seconds per connection/handshake wait
+for Tor circuit and onion rendezvous setup; callers retain their independent
+request deadlines. This replaces the ordinary 15-second policy-hop budget
+only when Tor egress is enabled.
+Exact internal destinations, permitted host ports, the exact configured local
+embedding authority, and explicitly allowed
 LAN integration routes retain direct semantics. An unlisted
 `host.docker.internal` port is denied before DNS and never falls through to
 Tor.

@@ -325,7 +325,7 @@ $(error TOR_WRAPPER_IMAGE_REPOSITORY is not set in $(VERSION_FILE))
 endif
 TOR_DOCKERFILE := tor/Dockerfile
 TOR_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(sys.argv[1].encode()+b"\0"); h.update(pathlib.Path(sys.argv[2]).read_bytes()); print(h.hexdigest()[:12])' '$(TOR_BASE_IMAGE)' '$(TOR_DOCKERFILE)')
-TOR_IMAGE ?= $(TOR_WRAPPER_IMAGE_REPOSITORY):0.4.9.11-$(TOR_WRAPPER_SOURCE_HASH)
+TOR_IMAGE ?= $(TOR_WRAPPER_IMAGE_REPOSITORY):0.4.9.13-$(TOR_WRAPPER_SOURCE_HASH)
 TOR_IMAGE := $(TOR_IMAGE)
 export TOR_IMAGE
 

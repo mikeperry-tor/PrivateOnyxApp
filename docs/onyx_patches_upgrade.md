@@ -1947,6 +1947,11 @@ the deterministic and topology evidence.
 
 Controller caller separation and Docker gateway selection are native Compose
 configuration, not runtime patches; see [internal network security](internal_network_security.md#docker-gateway-and-controller-boundary).
+Controller upgrades must validate cached `/health` body failures, fresh `/ready`
+failures, wedged-monitor liveness, admission rejection and slot release, and
+the ten-minute native backend-check interval. Keep the five-second admission
+wait below Onyx's ten-second client headroom; inspect stream setup and teardown
+before accepting changes to slot ownership.
 Selected-image validation must retain native background Python/Bash/Coding Agent
 unavailability with the explicitly empty URL, persona tool exclusion, API
 availability with a healthy controller fixture, and Slack/Discord request

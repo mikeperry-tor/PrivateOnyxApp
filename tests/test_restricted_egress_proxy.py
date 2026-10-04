@@ -1311,7 +1311,10 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_native_tor_uses_unix_socket_and_common_socks_state_machine(self) -> None:
         module = _load_module(
-            env_overrides={"EGRESS_TOR_SOCKS_UNIX_PATH": "/run/tor-egress/socks"}
+            env_overrides={
+                "EGRESS_TOR_SOCKS_UNIX_PATH": "/run/tor-egress/socks",
+                "EGRESS_CONNECT_TIMEOUT": "90",
+            }
         )
         reader = module.asyncio.StreamReader()
         reader.feed_data(
@@ -1321,10 +1324,14 @@ class RestrictedEgressProxyTests(unittest.IsolatedAsyncioTestCase):
         reader.feed_eof()
         writer = self._Writer()
         unix_open = AsyncMock(return_value=(reader, writer))
-        with patch.object(module.asyncio, "open_unix_connection", unix_open):
+        with patch.object(module.asyncio, "open_unix_connection", unix_open), patch.object(
+            module.asyncio, "wait_for", wraps=module.asyncio.wait_for
+        ) as bounded_wait:
             result = await module._connect_via_upstream("target.example", 443)
         self.assertEqual(result, (reader, writer))
         unix_open.assert_awaited_once_with("/run/tor-egress/socks")
+        self.assertTrue(bounded_wait.call_args_list)
+        self.assertTrue(all(call.kwargs["timeout"] == 90 for call in bounded_wait.call_args_list))
         self.assertIn(b"\x05\x01\x00\x03\x0etarget.example\x01\xbb", writer.data)
 
     async def test_native_tor_socket_failure_has_no_direct_fallback(self) -> None:

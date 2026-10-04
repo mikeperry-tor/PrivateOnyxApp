@@ -534,6 +534,10 @@ as HTML, SVG, and JavaScript are served as octet-stream attachments rather than
 inline active content; allowed image/document previews retain their native
 policy. These response controls complement the wrapper CSP and do not remove
 the requirement for file authorization.
+Office documents retain their stored MIME type only as attachments. Native
+Content-Disposition generation sanitizes control characters and path separators
+and supplies an ASCII fallback plus a UTF-8 filename; the WebUI uses the
+returned filename and MIME type for local previews and downloads.
 
 The end-user browser is outside these container networks. As defense in depth,
 nginx supplies a separate restrictive CSP that limits external scripts to

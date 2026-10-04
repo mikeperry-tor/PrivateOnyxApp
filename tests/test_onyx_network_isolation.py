@@ -476,6 +476,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
                 "EGRESS_TOR_SOCKS_UNIX_PATH",
                 onion["services"][proxy]["environment"],
             )
+            self.assertNotIn("EGRESS_CONNECT_TIMEOUT", onion["services"][proxy]["environment"])
 
         combined = _compose_model(
             "lite",
@@ -520,6 +521,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
             {"tor", "onyx-public-egress-proxy", "onyx-host-egress-proxy"},
         )
         for proxy in ("onyx-public-egress-proxy", "onyx-host-egress-proxy"):
+            self.assertEqual(combined["services"][proxy]["environment"]["EGRESS_CONNECT_TIMEOUT"], "90")
             runtime = next(
                 volume
                 for volume in combined["services"][proxy]["volumes"]
@@ -1161,6 +1163,11 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         self.assertEqual(retained["myst-client"]["interval"], "1m0s")
         self.assertEqual(retained["myst-client"]["start_interval"], "5s")
         self.assertEqual(retained["myst-client"]["retries"], 2)
+        controller = services["code-interpreter"]
+        self.assertEqual(controller["environment"]["HEALTH_CHECK_INTERVAL_SEC"], "600")
+        self.assertEqual(controller["environment"]["MAX_CONCURRENT_EXECUTIONS"], "16")
+        self.assertEqual(controller["environment"]["EXECUTION_QUEUE_TIMEOUT_SEC"], "5")
+        self.assertIn("r['status'] == 'ok'", " ".join(retained["code-interpreter"]["test"]))
         for name, health in retained.items():
             if name == "myst-client":
                 continue

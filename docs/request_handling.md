@@ -993,6 +993,10 @@ Internal/host/opt-in LAN exceptions remain direct. The one URL-policy addition
 is that `http://` is accepted when the normalized host ends in `.onion` and
 native Tor egress is selected. This does not enable clearnet HTTP.
 
+The Tor policy hop allows 90 seconds per connection/handshake wait for circuit
+and onion rendezvous setup. Caller-owned invocation and request deadlines still
+bound the complete operation; a slow or failed Tor path has no direct fallback.
+
 For Tor and every configured remote-DNS upstream, ordinary target names are
 never looked up by Docker, system, or Myst DNS, and returned address metadata
 is consumed only as protocol framing. It cannot be reused for a later direct
