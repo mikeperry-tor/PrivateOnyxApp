@@ -219,8 +219,38 @@ def main() -> int:
         assert "RETAINED_PAGE_AUTONOMOUS_WORK_REPRODUCED_AND_PARKED" in output
         assert "PINNED_OBSCURA_RUNTIME_CONTRACTS_OK" in output
 
+        # v0.2.4 owns separate renderer and socket-I/O threads per connection.
+        # Inspect only thread names in the disposable server PID namespace.
+        if inspection.get("Os") == "linux":
+            thread_check = """
+import sys, time
+from pathlib import Path
+assert sys.platform == 'linux'
+deadline = time.monotonic() + 10
+while True:
+    names = []
+    for task in Path('/proc/1/task').iterdir():
+        try:
+            names.append((task / 'comm').read_text().strip())
+        except FileNotFoundError:
+            pass  # The observed thread exited between enumeration and read.
+    # Linux comm truncates thread names to fifteen bytes.
+    remaining = [n for n in names if n in {'obscura-cdp-con', 'obscura-cdp-io'}]
+    if not remaining:
+        break
+    assert time.monotonic() < deadline, remaining
+    time.sleep(0.1)
+print('PINNED_OBSCURA_CONNECTION_THREADS_CLEANED_UP')
+"""
+            print(run(
+                args.container_bin, "run", "--rm", "--network", "none",
+                "--pid", f"container:{obscura}", "--read-only",
+                "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                args.fixture_image, "python3", "-c", thread_check,
+            ).rstrip())
+
         logs = run(args.container_bin, "logs", obscura)
-        assert "Headless Browser v0.2.3-private-onyx-search-v1" in logs
+        assert "Headless Browser v0.2.4-private-onyx-search-v1" in logs
         assert "Private Onyx patchset: search-submission-v1" in logs
         assert (
             "Stealth mode enabled "

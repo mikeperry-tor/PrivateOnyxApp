@@ -22,6 +22,7 @@ from private_onyx_obscura import fetch_sync
 from private_onyx_obscura.client import cdp_auth_headers
 from private_onyx_obscura.client import _RawCdp
 from private_onyx_obscura.client import _SEARCH_FORM_FUNCTION
+from private_onyx_obscura.client import _wait_for_distinct_search_document
 from private_onyx_obscura.anubis import worker_preload_source
 from websockets.asyncio.client import connect
 
@@ -131,25 +132,32 @@ async def validate_navigation_cookie_context_and_post_reset() -> None:
                         assert result == {"success": True}, result
                 await cdp.send("Page.enable", session_id=session_id)
                 source_url = BASE_URL + prefix + "/form?" + urlencode({"action": action, "method": method})
-                await cdp.send("Page.navigate", {
+                navigation = await cdp.send("Page.navigate", {
                     "url": source_url,
                     "waitUntil": "load",
                 }, session_id=session_id)
-                try:
-                    result = await cdp.send("Runtime.evaluate", {
-                        "expression": "document.querySelector('form').requestSubmit()",
-                    }, session_id=session_id)
-                except ObscuraClientError as exc:
-                    if label != "POST reset":
-                        raise
-                    assert exc.category is FetchFailure.PROTOCOL, exc
-                    assert exc.stage == "cdp-command", exc
-                else:
-                    assert label != "POST reset", "ambiguous POST reset was hidden"
-                    assert "exceptionDetails" not in result, (label, result)
-                # The evaluate reply precedes the server's pending navigation;
-                # this command barrier waits for it (including any reset retry).
+                event_start = len(cdp.events)
+                result = await cdp.send("Runtime.evaluate", {
+                    "expression": "document.querySelector('form').requestSubmit()",
+                }, session_id=session_id)
+                assert "exceptionDetails" not in result, (label, result)
+                # Evaluation acknowledges submission before its asynchronous
+                # navigation. A reset must fail the document-completion contract,
+                # not require a transport error on a successful JS evaluation.
                 await cdp.send("Page.getFrameTree", session_id=session_id)
+                if label == "POST reset":
+                    try:
+                        await _wait_for_distinct_search_document(
+                            cdp, frame_id=navigation["frameId"],
+                            previous_loader=navigation["loaderId"],
+                            start_index=event_start, remaining=lambda *_: 0.5,
+                            stage_prefix="result",
+                        )
+                    except ObscuraClientError as exc:
+                        assert exc.category is FetchFailure.POST_NAVIGATION_TIMEOUT, exc
+                        assert exc.stage == "result-navigation", exc
+                    else:
+                        raise AssertionError("ambiguous POST reset produced a successful document")
                 observed = json.loads(fixture_get(prefix + "/observations"))
                 assert [row["method"] for row in observed] == methods, (label, observed)
                 assert [set(filter(None, row["cookie"].split("; "))) for row in observed] == cookies, (label, observed)
@@ -557,8 +565,9 @@ async def validate_patched_search_runtime() -> None:
                 and event.get("params", {}).get("type") == "Document"
                 and event.get("params", {}).get("frameId") == frame_id
                 and event.get("params", {}).get("loaderId") == loader_id
+                and event.get("params", {}).get("requestId") == loader_id
             ]
-            assert len(documents) == 1
+            assert len(documents) == 1, (loader_id, cdp.events[event_start:])
             connection_id = int(
                 await evaluate(
                     "document.querySelector('main').dataset.connection"
@@ -643,6 +652,8 @@ async def validate_patched_search_runtime() -> None:
                 lambda event: (
                     event.get("type") == "Document"
                     and event.get("frameId") == frame_id
+                    and bool(event.get("loaderId"))
+                    and event.get("requestId") == event.get("loaderId")
                 ),
                 10,
                 start_index=event_start,
@@ -661,8 +672,9 @@ async def validate_patched_search_runtime() -> None:
                 and event.get("params", {}).get("type") == "Document"
                 and event.get("params", {}).get("frameId") == frame_id
                 and event.get("params", {}).get("loaderId") == loader_id
+                and event.get("params", {}).get("requestId") == loader_id
             ]
-            assert len(documents) == 1
+            assert len(documents) == 1, (loader_id, cdp.events[event_start:])
             request_methods = [
                 event["params"]["request"]["method"]
                 for event in cdp.events[event_start:]
@@ -670,6 +682,7 @@ async def validate_patched_search_runtime() -> None:
                 and event.get("params", {}).get("type") == "Document"
                 and event.get("params", {}).get("frameId") == frame_id
                 and event.get("params", {}).get("loaderId") == loader_id
+                and event.get("params", {}).get("requestId") == loader_id
             ]
             assert request_methods == [expected_method], request_methods
             observed_method = await evaluate(
@@ -1090,7 +1103,7 @@ async def validate_cross_realm_navigation_ownership() -> None:
                 expression, result,
             )
             # Pending navigation must not change the committed document origin.
-            # v0.2.3 keeps cookie authority on the loaded document until commit.
+            # v0.2.4 keeps cookie authority on the loaded document until commit.
             committed = await cdp.send(
                 "Runtime.evaluate",
                 {"expression": "document.querySelector('iframe').contentDocument.URL",
@@ -1149,6 +1162,7 @@ def validate_navigation_contracts() -> None:
     assert 'id="named-state">named-shadow<' in modern_html, modern_html
     assert 'id="timing-state">function<' in modern_html, modern_html
     assert 'id="svg-state">true<' in modern_html, modern_html
+    assert 'id="user-timing-state">true<' in modern_html, modern_html
     assert 'id="stream-state">streamed<' in modern_html, modern_html
     assert 'id="module-state">module-graph<' in modern_html, modern_html
 
@@ -1162,6 +1176,10 @@ def validate_navigation_contracts() -> None:
     redirected = fetch("/redirect")
     assert redirected.final_url == f"{BASE_URL}/final"
     assert b"redirect terminal" in (redirected.body or b"")
+
+    script_redirected = fetch("/javascript-redirect")
+    assert script_redirected.final_url == f"{BASE_URL}/final"
+    assert b"redirect terminal" in (script_redirected.body or b"")
 
     pdf = fetch("/document.pdf", want="body")
     assert pdf.body_classification is BodyClassification.BINARY

@@ -1,8 +1,8 @@
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index 4338342..8424b7b 100644
+index 669be2d..2bf40a0 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -2288,6 +2288,15 @@ impl Page {
+@@ -2335,6 +2335,15 @@ impl Page {
                                  }
                                  _ => continue,
                              };
@@ -18,7 +18,7 @@ index 4338342..8424b7b 100644
 
                              let inline_code = if src.is_none() {
                                  dom.text_content(sid)
-@@ -6590,6 +6599,32 @@ mod tests {
+@@ -7295,6 +7304,32 @@ mod tests {
          page
      }
 
@@ -52,10 +52,10 @@ index 4338342..8424b7b 100644
      async fn module_graph_and_evaluation_share_one_active_budget() {
          use std::io::{Read as _, Write as _};
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index 5959a6f..2b3d81c 100644
+index 25bce0e..a84f8ca 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -2048,6 +2048,9 @@ function __prepareInsertedScript(script) {
+@@ -2163,6 +2163,9 @@ function __prepareInsertedScript(script) {
    const scriptType = (script.getAttribute('type') || '').trim().toLowerCase();
    const isModule = scriptType === 'module';
    const isImportMap = scriptType === 'importmap';
@@ -65,78 +65,26 @@ index 5959a6f..2b3d81c 100644
    if (isImportMap) {
      const src = script.getAttribute('src');
      let error = '';
-@@ -6723,6 +6726,7 @@ function _elementClassFor(nid) {
-       && _domParse("namespace_uri", nid) === "http://www.w3.org/2000/svg") {
-     if (tag === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
-     if (tag === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
-+    if (tag === "a" && globalThis.SVGAElement) return globalThis.SVGAElement;
-     if (globalThis.SVGElement) return globalThis.SVGElement;
+@@ -11971,6 +11974,11 @@ globalThis.performance = globalThis.performance || {
    }
-   if (tag === "FORM" && globalThis.HTMLFormElement) return globalThis.HTMLFormElement;
-@@ -6747,6 +6751,7 @@ function _elementClassForKnownName(namespace, qualifiedName) {
-   if (namespace === "http://www.w3.org/2000/svg") {
-     if (localName === "path" && globalThis.SVGPathElement) return globalThis.SVGPathElement;
-     if (localName === "svg" && globalThis.SVGSVGElement) return globalThis.SVGSVGElement;
-+    if (localName === "a" && globalThis.SVGAElement) return globalThis.SVGAElement;
-     if (globalThis.SVGElement) return globalThis.SVGElement;
-   }
-   if (namespace === "http://www.w3.org/1999/xhtml") {
-@@ -10967,6 +10972,33 @@ globalThis.XMLSerializer = class XMLSerializer {
-     return "";
-   }
- };
-+const _performanceEntryConstructionKey = {};
-+globalThis.PerformanceEntry = class PerformanceEntry {
-+  constructor(key, name = "", entryType = "", startTime = 0, duration = 0) {
-+    if (key !== _performanceEntryConstructionKey) throw new TypeError("Illegal constructor");
-+    this.name = String(name);
-+    this.entryType = String(entryType);
-+    this.startTime = Number(startTime) || 0;
-+    this.duration = Number(duration) || 0;
-+  }
-+  toJSON() {
-+    return { name: this.name, entryType: this.entryType,
-+      startTime: this.startTime, duration: this.duration };
-+  }
-+};
-+globalThis.PerformanceResourceTiming = class PerformanceResourceTiming extends PerformanceEntry {
-+  constructor(key, name = "", entryType = "resource", startTime = 0, duration = 0) {
-+    super(key, name, entryType, startTime, duration);
-+    this.initiatorType = "other";
-+  }
-+};
-+globalThis.PerformanceNavigationTiming = class PerformanceNavigationTiming extends PerformanceResourceTiming {
-+  constructor(key, name = "", startTime = 0, duration = 0) {
-+    super(key, name, "navigation", startTime, duration);
-+    this.type = "navigate";
-+    this.redirectCount = 0;
-+  }
-+};
- globalThis.performance = globalThis.performance || {
-   now: (function() {
-     // Monotonically non-decreasing: return the wall-clock offset, but never a
-@@ -12145,11 +12177,13 @@ class SVGGraphicsElement extends SVGElement {}
- class SVGGeometryElement extends SVGGraphicsElement {}
- class SVGPathElement extends SVGGeometryElement {}
- class SVGSVGElement extends SVGGraphicsElement {}
-+class SVGAElement extends SVGGraphicsElement {}
- globalThis.SVGElement = SVGElement;
- globalThis.SVGGraphicsElement = SVGGraphicsElement;
- globalThis.SVGGeometryElement = SVGGeometryElement;
- globalThis.SVGPathElement = SVGPathElement;
- globalThis.SVGSVGElement = SVGSVGElement;
-+globalThis.SVGAElement = SVGAElement;
- globalThis.CharacterData = CharacterData;
- globalThis.Text = Text;
- globalThis.Comment = Comment;
+ })();
+
++// Provider feature detection needs the navigation timing hierarchy. Reuse
++// native PerformanceEntry without replacing its User Timing implementation.
++globalThis.PerformanceResourceTiming = class PerformanceResourceTiming extends PerformanceEntry {};
++globalThis.PerformanceNavigationTiming = class PerformanceNavigationTiming extends PerformanceResourceTiming {};
++
+ var _commonFonts = [
+   'Arial', 'Arial Black', 'Arial Narrow',
+   'Baskerville', 'Book Antiqua',
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index c6a6067..b90e90a 100644
+index 649bd17..5f4ee95 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -7081,6 +7081,71 @@ mod tests {
-         );
-     }
+@@ -4476,6 +4476,73 @@ impl Default for ObscuraJsRuntime {
 
+ #[cfg(test)]
+ mod tests {
 +    #[test]
 +    fn private_onyx_window_named_property_assignment_shadows_the_element_alias() {
 +        let mut rt = setup_runtime(
@@ -170,6 +118,8 @@ index c6a6067..b90e90a 100644
 +                try { new PerformanceNavigationTiming(); }
 +                catch (error) { illegalConstructor = error instanceof TypeError; }
 +                return [
++                    performance.mark("wrapper-mark") instanceof PerformanceEntry,
++                    performance.measure("wrapper-measure") instanceof PerformanceEntry,
 +                    typeof PerformanceNavigationTiming,
 +                    PerformanceNavigationTiming.prototype instanceof PerformanceResourceTiming,
 +                    PerformanceResourceTiming.prototype instanceof PerformanceEntry,
@@ -180,7 +130,7 @@ index c6a6067..b90e90a 100644
 +            .unwrap();
 +        assert_eq!(
 +            result,
-+            serde_json::json!(["function", true, true, true])
++            serde_json::json!([true, true, "function", true, true, true])
 +        );
 +    }
 +
@@ -203,9 +153,9 @@ index c6a6067..b90e90a 100644
 +    }
 +
      #[test]
-     fn window_named_access_tracks_dynamic_ids_and_fragment_parsing() {
-         let mut rt = setup_runtime("<html><body><div id='host'></div></body></html>");
-@@ -15919,6 +15984,39 @@ mod tests {
+     fn classic_code_cache_reuses_compilation_not_page_state() {
+         use std::sync::atomic::Ordering;
+@@ -18013,6 +18080,39 @@ mod tests {
          );
      }
 
@@ -245,7 +195,7 @@ index c6a6067..b90e90a 100644
      #[test]
      fn test_location_navigation_coerces_url_objects() {
          let mut rt = setup_runtime("<html><body></body></html>");
-@@ -18552,6 +18650,39 @@ mod tests {
+@@ -21909,6 +22009,39 @@ mod tests {
          );
      }
 
@@ -285,7 +235,7 @@ index c6a6067..b90e90a 100644
      #[tokio::test(flavor = "current_thread")]
      async fn dynamic_classic_scripts_are_async_by_default_but_honor_async_false_order() {
          let mut rt = setup_runtime("<html><head></head><body></body></html>");
-@@ -18634,6 +18765,26 @@ mod tests {
+@@ -21991,6 +22124,26 @@ mod tests {
          );
      }
 

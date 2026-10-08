@@ -118,9 +118,9 @@ connection paths send it as an Authorization header, never in a URL. Missing
 or malformed credentials fail closed; browser-origin handshakes are rejected.
 The token grants shared browser control, not per-provider or per-user authority.
 
-Obscura v0.2.3 gives every WebSocket connection its own browser context, HTTP
-client, cookie jar, targets, headers, User-Agent state, OS thread, and V8
-isolates. Direct `open_url` uses one fresh connection and target per navigation.
+Obscura v0.2.4 gives every WebSocket connection its own browser context, HTTP
+client, cookie jar, targets, headers, User-Agent state, renderer and socket-I/O
+threads, and V8 isolates. Direct `open_url` uses one fresh connection and target per navigation.
 SearXNG instead gives each of its five providers one lazy connection and one
 target retained together until the provider has been idle for one hour. Later
 queries reuse that target, its native cookie jar, selected profile,
@@ -132,7 +132,7 @@ the target-owned state above. A pending Startpage proof is the sole exception:
 its challenge document remains live only until resume or abort. Neither path
 issues `Network.clearBrowserCookies` or `Storage.clearCookies`; connection and
 provider ownership, not a mutable clear operation, define the state boundary.
-Native v0.2.3 cookie handling applies host-only scope, PSL-based domain
+Native v0.2.4 cookie handling applies host-only scope, PSL-based domain
 validation, and secure/HttpOnly write protection. Its SameSite filtering needs
 the caller's navigation context. The wrapper source patch captures the initiating
 document before changing the page URL and supplies that context for main-document
@@ -173,13 +173,20 @@ receive HTTP 503 instead of entering a server queue as a fail-closed guard
 against a changed worker/process model or another unexpected CDP caller; normal
 Onyx tool execution is expected to remain within the 15-slot composition.
 
-In the stealth-feature build, upstream v0.2.3 accepts
+In the stealth-feature build, upstream v0.2.4 accepts
 `Network.setExtraHTTPHeaders` and `Network.setUserAgentOverride` but applies
 them to the ordinary context HTTP client while navigation uses its separate
 wreq client, so those overrides do not reach the wire. The wrapper does not
 call either command; its isolation contract therefore covers the cookie jar,
 targets, contexts, V8 state, and connection cleanup actually used by this
 stack. Re-audit this upstream split before depending on either override.
+
+Obscura v0.2.4 supplies native SVG interfaces, User Timing, fetch/XHR
+cancellation, and frame teardown. The compatibility patch extends native
+`PerformanceEntry` with resource/navigation timing constructors and suppresses
+`nomodule` scripts; it does not replace native marks, measures, or observers.
+Fetch resolves at headers, but response bodies remain buffered. Network-idle
+counters and lifecycle events do not replace the provider DOM readiness checks.
 
 The selected no-render runtime executes same-origin child-frame scripts and
 page/frame `postMessage`; the tagged-image gate exercises that path because
@@ -224,7 +231,8 @@ For each accepted target the shared client:
 3. runs the caller's pre-navigation finalization guard;
 4. sends exactly one raw `Page.navigate`;
 5. waits for the matching main-frame completion event;
-6. identifies the terminal main-frame Document request across redirects and
+6. identifies the terminal main-frame Document request by its matching frame,
+   loader, and main-request alias (`requestId == loaderId`) across redirects and
    JavaScript navigation, retaining its actual request id, status, headers,
    final frame URL, and challenge state;
 7. obtains rendered DOM and, when Obscura retained it, that same navigation's
@@ -239,6 +247,12 @@ navigation; they are not wrapper refetches.
 The native HTTP transport retains upstream's single GET recovery after a
 connection reset. Form POST never enters that recovery path: a reset after
 submission is an ambiguous failure, not permission to replay the body.
+Script evaluation acknowledges submission before its asynchronous navigation.
+That acknowledgement is not success: search requires a distinct completed
+Document response. Iframe Document events can carry the parent's frame/loader
+labels, so only the main-request alias can satisfy that requirement. A reset
+that produces no main Document response expires at the
+existing result-navigation deadline and discards the provider generation.
 
 Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `networkidle2`) so
 JavaScript result payloads have time to hydrate after the page load event.
@@ -353,9 +367,10 @@ Existing Onyx character budgets apply after parsing. Increasing the document
 limit increases potential memory use across ten simultaneous direct API
 fetches and concurrent search connections.
 
-These limits do not bound Obscura's initial response or DOM allocation. The
-pinned server can read a complete response before applying retained-body
-limits. Its network retention limit is per body and may be amplified by entry
+These limits do not bound Obscura's initial response or DOM allocation. Native
+main-document navigation separately caps its buffered response at 64 MiB;
+increasing the wrapper document limit does not raise that native ceiling.
+The server buffers the response before applying retained-body limits. Its network retention limit is per body and may be amplified by entry
 count, base64 representation, and request/loader aliases. Every isolated
 connection has one IO stream slot sized to the retention floor because the
 wrapper opens at most one stream on that connection. Neither limit is an
@@ -741,7 +756,7 @@ standard `application/x-www-form-urlencoded` default; any explicit different
 encoding remains a policy failure.
 
 Instant query entry is the default. It uses the control prototype's native
-value setter followed by one bubbling `input` and `change` event. Obscura v0.2.3
+value setter followed by one bubbling `input` and `change` event. Obscura v0.2.4
 also supports native `Input.insertText` and Playwright label-based `fill()`.
 The wrapper retains its atomic instant-entry form validation and explicit
 change event; the CDP command alone neither enforces that policy nor emits
@@ -956,7 +971,7 @@ for wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
 fingerprint seed, stealth-native form POST, and focused provider JavaScript
 runtime-compatibility contracts. The stack
 consumes DOM and response-body CDP surfaces, not screenshots, screencasts, or PDF
-export, so it does not compile the v0.2.3 raster renderer or incur its image,
+export, so it does not compile the v0.2.4 raster renderer or incur its image,
 font, layout, and capture resource work. JavaScript, DOM, module, charset, and
 compressed-stealth-response improvements remain present in the no-render
 build.

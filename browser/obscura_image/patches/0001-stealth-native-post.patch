@@ -1,8 +1,8 @@
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index 0fadfee..4e1f5fb 100644
+index fbdc129..ab96fe0 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -6,7 +6,7 @@ use obscura_js::frame::FrameRealm;
+@@ -7,7 +7,7 @@ use obscura_js::ops::{max_live_frames, NavigationTiming};
  use obscura_js::runtime::ObscuraJsRuntime;
  use obscura_net::{
      CallbackRegistry, ObscuraHttpClient, ObscuraNetError, RequestCallback, ResourceRequest,
@@ -11,7 +11,7 @@ index 0fadfee..4e1f5fb 100644
  };
  use url::Url;
 
-@@ -235,6 +235,7 @@ pub struct Page {
+@@ -254,6 +254,7 @@ pub struct Page {
      /// separate from `url`: direct automation navigations have no referrer,
      /// while a navigation requested by page script uses the previous document.
      pub referrer: String,
@@ -19,7 +19,7 @@ index 0fadfee..4e1f5fb 100644
      /// CSS viewport used by responsive page JavaScript and CDP screenshots.
      /// The physical `screen` fingerprint remains independent.
      pub viewport: (f32, f32),
-@@ -1078,6 +1079,7 @@ impl Page {
+@@ -1104,6 +1105,7 @@ impl Page {
              context,
              title: String::new(),
              referrer: String::new(),
@@ -27,7 +27,7 @@ index 0fadfee..4e1f5fb 100644
              viewport: (1280.0, 720.0),
              screen_size_override: None,
              screen_metrics_emulated: false,
-@@ -1263,7 +1265,7 @@ impl Page {
+@@ -1285,7 +1287,7 @@ impl Page {
              let source = if self.should_block_url(&url) {
                  None
              } else if let Ok(parsed) = Url::parse(&url) {
@@ -36,7 +36,7 @@ index 0fadfee..4e1f5fb 100644
                      Ok(response) => Some(String::from_utf8_lossy(&response.body).into_owned()),
                      Err(error) => {
                          tracing::warn!("frame script {} failed: {}", url, error);
-@@ -1693,20 +1695,38 @@ impl Page {
+@@ -1732,20 +1734,38 @@ impl Page {
              .unwrap_or([255, 255, 255, 255])
      }
 
@@ -78,7 +78,7 @@ index 0fadfee..4e1f5fb 100644
      fn init_js(&mut self) {
          // init_js is also the new-document path.  Only resume_js explicitly
          // takes these IDs out before entering here and restores them after the
-@@ -3213,10 +3233,8 @@ impl Page {
+@@ -3338,10 +3358,8 @@ impl Page {
                      break;
                  }
                  tracing::info!(
@@ -90,9 +90,9 @@ index 0fadfee..4e1f5fb 100644
                  );
                  document_referrer = self
                      .url
-@@ -3254,6 +3272,26 @@ impl Page {
-     ) -> Result<(), PageError> {
+@@ -3380,6 +3398,26 @@ impl Page {
          let url = Url::parse(url_str).map_err(|e| PageError::InvalidUrl(e.to_string()))?;
+         self.navigation_timing = NavigationTiming::default();
 
 +        // Capture the initiating document before replacing self.url. Parking on
 +        // about:blank is a fresh browser-initiated navigation, not a web origin.
@@ -117,15 +117,15 @@ index 0fadfee..4e1f5fb 100644
          // The previous document's background loads end with the document.
          self.retire_render_resources();
          self.lifecycle = LifecycleState::Loading;
-@@ -3314,6 +3352,7 @@ impl Page {
-             return Ok(());
+@@ -3441,6 +3479,7 @@ impl Page {
          }
 
+         self.navigation_timing.record("fetchStart");
 +        let mut document_method = method.to_string();
          let response = if url.scheme() == "data" {
              let content_type = url_str
                  .strip_prefix("data:")
-@@ -3334,24 +3373,29 @@ impl Page {
+@@ -3461,17 +3500,21 @@ impl Page {
                  redirected_from: Vec::new(),
              })
          } else if method == "POST" {
@@ -144,53 +144,35 @@ index 0fadfee..4e1f5fb 100644
              self.lifecycle = LifecycleState::Failed;
              PageError::NetworkError(e.to_string())
          })?;
-
-+        // A new document starts with its own HTTP policy, never its predecessor's.
+         self.navigation_timing.record("responseEnd");
++        // Each committed document owns its HTTP referrer policy.
 +        self.navigation_referrer_policy = response.headers.get("referrer-policy")
 +            .and_then(|value| ReferrerPolicy::from_header(value)).unwrap_or_default();
-+
+
          // Store binary main resources (images, PDFs, octet-stream) base64 so
          // Network.getResponseBody returns intact bytes. A UTF-8-lossy text store
-         // corrupts them (issue #340). Text-like types stay as text.
+@@ -3479,7 +3522,7 @@ impl Page {
          let main_is_binary = !is_text_like_content_type(response.content_type());
          self.record_network_event_with_body(
--            url.as_str(),
+             response.url.as_str(),
 -            "GET",
-+            response.url.as_str(),
 +            &document_method,
              "Document",
              response.status,
              &response.headers,
-@@ -3601,6 +3645,7 @@ impl Page {
+@@ -3749,6 +3792,7 @@ impl Page {
      }
 
      pub fn navigate_blank(&mut self) {
 +        self.navigation_referrer_policy = ReferrerPolicy::default();
+         self.navigation_timing = NavigationTiming::default();
          self.retire_render_resources();
          self.pending_frame_work.clear();
-         self.frames.clear();
-diff --git a/crates/obscura-cdp/src/server.rs b/crates/obscura-cdp/src/server.rs
-index a427695..342f28e 100644
---- a/crates/obscura-cdp/src/server.rs
-+++ b/crates/obscura-cdp/src/server.rs
-@@ -1845,7 +1845,11 @@ async fn process_cdp_message(
-     }
-
-     if let Some((nav_url, nav_method, nav_body)) = check_pending_navigation(ctx, &req.session_id) {
--        tracing::info!("JS-triggered nav: {} {} (body: {} bytes)", nav_method, nav_url, nav_body.len());
-+        tracing::info!(
-+            "JS-triggered nav: method={} body_bytes={}",
-+            nav_method,
-+            nav_body.len(),
-+        );
-         let nav_req = CdpRequest {
-             id: 0,
-             method: "Page.navigate".to_string(),
 diff --git a/crates/obscura-cli/src/main.rs b/crates/obscura-cli/src/main.rs
-index 7eaafc4..e45a381 100644
+index fd19f24..5cec459 100644
 --- a/crates/obscura-cli/src/main.rs
 +++ b/crates/obscura-cli/src/main.rs
-@@ -438,9 +438,12 @@ async fn run_cli() -> anyhow::Result<()> {
+@@ -456,9 +456,12 @@ async fn run_cli() -> anyhow::Result<()> {
              }
              if stealth {
                  #[cfg(feature = "stealth")]
@@ -207,7 +189,7 @@ index 7eaafc4..e45a381 100644
                  tracing::info!("Stealth mode enabled (tracker blocking)");
              }
 diff --git a/crates/obscura-net/src/client.rs b/crates/obscura-net/src/client.rs
-index acf9249..f09cfb4 100644
+index 86295e3..be730a7 100644
 --- a/crates/obscura-net/src/client.rs
 +++ b/crates/obscura-net/src/client.rs
 @@ -198,6 +198,8 @@ pub struct ResourceRequest {
@@ -405,7 +387,7 @@ index acf9249..f09cfb4 100644
  pub(crate) fn request_referrer(request: &ResourceRequest, target: &Url) -> Option<String> {
      let source = request
          .referrer
-@@ -1242,6 +1378,17 @@ impl ObscuraHttpClient {
+@@ -1142,6 +1278,17 @@ impl ObscuraHttpClient {
              .await
      }
 
@@ -423,7 +405,7 @@ index acf9249..f09cfb4 100644
      pub async fn fetch_with_method(
          &self,
          initial_method: Method,
-@@ -1503,6 +1650,8 @@ impl ObscuraHttpClient {
+@@ -1403,6 +1550,8 @@ impl ObscuraHttpClient {
          }
 
          let mut current_url = url.clone();
@@ -432,7 +414,7 @@ index acf9249..f09cfb4 100644
          let mut redirects = Vec::new();
          // Follow up to 20 redirects, matching the Fetch spec and the fetch()/XHR
          // path in obscura-js. `0..=max_redirects` makes max_redirects+1 requests
-@@ -1574,7 +1723,7 @@ impl ObscuraHttpClient {
+@@ -1474,7 +1623,7 @@ impl ObscuraHttpClient {
              );
              headers.insert(
                  HeaderName::from_static("sec-fetch-site"),
@@ -441,7 +423,7 @@ index acf9249..f09cfb4 100644
              );
              headers.insert(
                  HeaderName::from_static("sec-fetch-mode"),
-@@ -1587,7 +1736,7 @@ impl ObscuraHttpClient {
+@@ -1487,7 +1636,7 @@ impl ObscuraHttpClient {
                  HeaderName::from_static("sec-fetch-dest"),
                  HeaderValue::from_static(request.destination()),
              );
@@ -450,7 +432,7 @@ index acf9249..f09cfb4 100644
                  if let Ok(value) = HeaderValue::from_str(&referer) {
                      headers.insert(reqwest::header::REFERER, value);
                  }
-@@ -1603,10 +1752,12 @@ impl ObscuraHttpClient {
+@@ -1503,10 +1652,12 @@ impl ObscuraHttpClient {
              let cookie_header = if request.sends_credentials_to(&current_url) {
                  self.cookie_jar.get_cookie_header_in_context(
                      &current_url,
@@ -464,7 +446,7 @@ index acf9249..f09cfb4 100644
                      ),
                  )
              } else {
-@@ -1704,6 +1855,7 @@ impl ObscuraHttpClient {
+@@ -1604,6 +1755,7 @@ impl ObscuraHttpClient {
              }
 
              if status.is_redirection() {
@@ -472,7 +454,7 @@ index acf9249..f09cfb4 100644
                  if let Some(location) = resp.headers().get(reqwest::header::LOCATION) {
                      let location_str = location.to_str().map_err(|_| {
                          ObscuraNetError::Network("Invalid redirect Location header".into())
-@@ -1820,6 +1972,72 @@ mod ssrf_tests {
+@@ -1720,6 +1872,72 @@ mod ssrf_tests {
          IpAddr::from_str(s).unwrap()
      }
 
@@ -546,7 +528,7 @@ index acf9249..f09cfb4 100644
      // must not lose all but the last line. See #913.
      #[test]
 diff --git a/crates/obscura-net/src/lib.rs b/crates/obscura-net/src/lib.rs
-index 2b8c18f..8efee97 100644
+index 75661e5..0d7dd7d 100644
 --- a/crates/obscura-net/src/lib.rs
 +++ b/crates/obscura-net/src/lib.rs
 @@ -10,7 +10,7 @@ pub mod wreq_client;
@@ -559,7 +541,7 @@ index 2b8c18f..8efee97 100644
  pub use cookies::{
      canonical_domain, default_cookie_path, same_site, CookieInfo, CookieJar, SameSiteContext,
 diff --git a/crates/obscura-net/src/wreq_client.rs b/crates/obscura-net/src/wreq_client.rs
-index 550dd18..72b9dcd 100644
+index b0ab86f..fb9720e 100644
 --- a/crates/obscura-net/src/wreq_client.rs
 +++ b/crates/obscura-net/src/wreq_client.rs
 @@ -17,8 +17,8 @@ use url::Url;
@@ -593,7 +575,7 @@ index 550dd18..72b9dcd 100644
  #[cfg(feature = "stealth")]
  fn tracker_blocking_enabled(value: Option<&str>) -> bool {
      !matches!(
-@@ -282,8 +295,33 @@ impl StealthHttpClient {
+@@ -298,8 +311,33 @@ impl StealthHttpClient {
          url: &Url,
          callbacks: Option<&CallbackRegistry>,
      ) -> Result<Response, ObscuraNetError> {
@@ -629,7 +611,7 @@ index 550dd18..72b9dcd 100644
      }
 
      pub async fn fetch_resource_with_callbacks(
-@@ -292,32 +330,41 @@ impl StealthHttpClient {
+@@ -308,32 +346,41 @@ impl StealthHttpClient {
          request: ResourceRequest,
          callbacks: Option<&CallbackRegistry>,
      ) -> Result<Response, ObscuraNetError> {
@@ -677,7 +659,7 @@ index 550dd18..72b9dcd 100644
          }
 
          let mut redirects = Vec::new();
-@@ -328,11 +375,11 @@ impl StealthHttpClient {
+@@ -344,11 +391,11 @@ impl StealthHttpClient {
          // 21 requests, so the 20th hop is followed and only the 21st fails.
          for _ in 0..=20 {
              validate_request_mode(&request, &current_url)?;
@@ -691,7 +673,7 @@ index 550dd18..72b9dcd 100644
                  .header("sec-fetch-mode", request.mode.header_value())
                  .header("sec-fetch-dest", request.destination());
              if request.mode == RequestMode::Navigate {
-@@ -340,7 +387,7 @@ impl StealthHttpClient {
+@@ -356,7 +403,7 @@ impl StealthHttpClient {
                      .header("upgrade-insecure-requests", "1")
                      .header("sec-fetch-user", "?1");
              }
@@ -700,7 +682,7 @@ index 550dd18..72b9dcd 100644
                  req = req.header("referer", referer);
              }
              let request_origin = serialized_request_origin(&request, redirect_tainted);
-@@ -348,10 +395,12 @@ impl StealthHttpClient {
+@@ -364,10 +411,12 @@ impl StealthHttpClient {
              let cookie_header = if request.sends_credentials_to(&current_url) {
                  self.cookie_jar.get_cookie_header_in_context(
                      &current_url,
@@ -715,7 +697,7 @@ index 550dd18..72b9dcd 100644
                      ),
                  )
              } else {
-@@ -370,10 +419,19 @@ impl StealthHttpClient {
+@@ -386,10 +435,19 @@ impl StealthHttpClient {
              if cors_required(&request, &current_url) {
                  req = req.header("origin", &request_origin);
              }
@@ -736,7 +718,7 @@ index 550dd18..72b9dcd 100644
                  headers: self.extra_headers.read().await.clone(),
                  resource_type: request.resource_type,
              };
-@@ -385,9 +443,14 @@ impl StealthHttpClient {
+@@ -401,9 +459,14 @@ impl StealthHttpClient {
              }
 
              let in_flight = InFlightGuard::new(&self.in_flight);
@@ -754,7 +736,7 @@ index 550dd18..72b9dcd 100644
                      ObscuraNetError::Network(format!(
                          "{}: {} (source: {:?})",
                          current_url,
-@@ -422,6 +485,7 @@ impl StealthHttpClient {
+@@ -438,6 +501,7 @@ impl StealthHttpClient {
              }
 
              if status.is_redirection() {
@@ -762,7 +744,7 @@ index 550dd18..72b9dcd 100644
                  if let Some(location) = resp.headers().get("location") {
                      let location_str = location.to_str().map_err(|_| {
                          ObscuraNetError::Network("Invalid redirect Location".into())
-@@ -435,6 +499,11 @@ impl StealthHttpClient {
+@@ -451,6 +515,11 @@ impl StealthHttpClient {
                          redirect_taints_origin(&request, &current_url, &next_url);
                      redirects.push(current_url.clone());
                      current_url = next_url;
@@ -774,7 +756,7 @@ index 550dd18..72b9dcd 100644
                      continue;
                  }
              }
-@@ -453,7 +522,7 @@ impl StealthHttpClient {
+@@ -469,7 +538,7 @@ impl StealthHttpClient {
              if let Some(callbacks) = callbacks {
                  callbacks.fire_response(&request_info, &response).await;
              }
@@ -783,7 +765,7 @@ index 550dd18..72b9dcd 100644
          }
 
          Err(ObscuraNetError::TooManyRedirects(url.to_string()))
-@@ -577,7 +646,7 @@ mod tests {
+@@ -610,7 +679,7 @@ mod tests {
      use tokio::io::{AsyncReadExt, AsyncWriteExt};
      use url::Url;
 
@@ -792,7 +774,7 @@ index 550dd18..72b9dcd 100644
          StealthHttpClient, is_tracker_blocked, send_get_with_connection_reset_retry,
          tracker_blocking_enabled,
      };
-@@ -868,4 +937,83 @@ mod tests {
+@@ -926,4 +995,83 @@ mod tests {
              .expect("loopback hostname must be reachable with the opt-in");
          assert_eq!(resp.status, 200);
      }

@@ -1,8 +1,8 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 797985c..7b3a0a9 100644
+index 24bc347..cbf4f4f 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -1964,6 +1964,7 @@ dependencies = [
+@@ -1997,6 +1997,7 @@ dependencies = [
   "tokio",
   "tracing",
   "url",
@@ -11,19 +11,22 @@ index 797985c..7b3a0a9 100644
 
  [[package]]
 diff --git a/crates/obscura-browser/Cargo.toml b/crates/obscura-browser/Cargo.toml
-index e2869e4..5524f05 100644
+index 20d4828..7484882 100644
 --- a/crates/obscura-browser/Cargo.toml
 +++ b/crates/obscura-browser/Cargo.toml
-@@ -23,3 +23,4 @@ anyhow = { workspace = true }
+@@ -23,6 +23,7 @@ anyhow = { workspace = true }
  serde_json = { workspace = true }
  base64 = { workspace = true }
  image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
 +uuid = { workspace = true }
+
+ [dev-dependencies]
+ tokio = { workspace = true, features = ["test-util"] }
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index 4e1f5fb..4338342 100644
+index ab96fe0..669be2d 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -308,6 +308,7 @@ pub struct Page {
+@@ -342,6 +342,7 @@ pub struct Page {
      callbacks: Arc<CallbackRegistry>,
      #[cfg(feature = "stealth")]
      pub stealth_client: Option<Arc<StealthHttpClient>>,
@@ -31,7 +34,7 @@ index 4e1f5fb..4338342 100644
  }
 
  const MAX_STYLESHEET_IMPORT_DEPTH: u8 = 4;
-@@ -1066,6 +1067,13 @@ impl Page {
+@@ -1092,6 +1093,13 @@ impl Page {
          } else {
              None
          };
@@ -45,7 +48,7 @@ index 4e1f5fb..4338342 100644
 
          Page {
              id,
-@@ -1109,6 +1117,7 @@ impl Page {
+@@ -1141,6 +1149,7 @@ impl Page {
              callbacks: Arc::new(CallbackRegistry::new()),
              #[cfg(feature = "stealth")]
              stealth_client,
@@ -53,16 +56,16 @@ index 4e1f5fb..4338342 100644
          }
      }
 
-@@ -1828,6 +1837,7 @@ impl Page {
-             rt.set_dom(dom);
+@@ -1874,6 +1883,7 @@ impl Page {
          }
 
+         rt.set_navigation_timing(self.navigation_timing.clone());
 +        rt.set_fingerprint_seed(self.fingerprint_seed);
          rt.run_page_init();
+         rt.set_reduced_motion(self.reduced_motion);
          let _ = rt.execute_script(
-             "<device-metrics>",
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index e18d4da..5959a6f 100644
+index be457da..25bce0e 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
 @@ -21,7 +21,8 @@ const __obscuraCore = globalThis.Deno.core;
@@ -72,10 +75,10 @@ index e18d4da..5959a6f 100644
 -    '__obscura_stealth', '__obscura_markTrusted', '__obscura_core_handoff',
 +    '__obscura_stealth', '__obscura_markTrusted', '__obscura_set_fingerprint_seed',
 +    '__obscura_core_handoff',
-     '__obscura_frameId', '__obscura_parentFrameId', '__obscura_frameWindows',
-     '__obscura_frameObjects', '__obscura_frameElements', '__obscura_deliverMessage',
-     '__obscura_liveFrameIds', '__obscura_forgetFrame',
-@@ -249,6 +250,9 @@ if (_origStackDesc && _origStackDesc.get) {
+     // Created by later evaluation, input and emulation paths. Register them
+     // before the snapshot hide list is captured, just like the other internals.
+     '__obscura_await_rejected', '__obscura_click_target',
+@@ -293,6 +294,9 @@ if (_origStackDesc && _origStackDesc.get) {
  }
 
  let _fpSeed = 0;
@@ -85,8 +88,8 @@ index e18d4da..5959a6f 100644
  // Dynamic module/in-order script queue. Module evaluation remains serialized
  // to prevent a re-entrant RefCell panic in deno_core's
  // futures_unordered_driver when SPAs insert multiple <script type=module>
-@@ -15633,7 +15637,6 @@ globalThis.__obscura_init = function() {
-   _realmFrameId = globalThis.__obscura_frameId >>> 0;
+@@ -17227,7 +17231,6 @@ globalThis.__obscura_init = function() {
+     _realmFrameId);
    _browserPostedTaskWakePending = false;
    for (const queue of _browserPostedTaskQueues) _browserPostedTaskDiscardQueue(queue);
 -  _fpSeed = Date.now() ^ (Math.random() * 0xFFFFFFFF >>> 0);
@@ -94,10 +97,10 @@ index e18d4da..5959a6f 100644
    // A real navigation just completed (this runs after set_url), so drop any
    // URL a location setter previewed synchronously and let document_url drive
 diff --git a/crates/obscura-js/src/frame.rs b/crates/obscura-js/src/frame.rs
-index 335e57e..7626211 100644
+index 1a07a32..4b62263 100644
 --- a/crates/obscura-js/src/frame.rs
 +++ b/crates/obscura-js/src/frame.rs
-@@ -104,11 +104,14 @@ impl FrameRealm {
+@@ -122,11 +122,14 @@ impl FrameRealm {
          // Both ids before init, not after: init is what installs `parent` and
          // `top`, and a document that runs even one script believing it is
          // top-level has already taken the wrong branch.
@@ -113,7 +116,7 @@ index 335e57e..7626211 100644
                       globalThis.__obscura_parentFrameId = {parent_frame_id};\
                       globalThis.__obscura_init();"
                  ),
-@@ -511,6 +514,40 @@ mod tests {
+@@ -693,6 +696,40 @@ mod tests {
          );
      }
 
@@ -155,10 +158,10 @@ index 335e57e..7626211 100644
      /// frame's document run, in order, against the frame's own DOM.
      #[test]
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index 0346a10..c6a6067 100644
+index 462153a..649bd17 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -197,6 +197,7 @@ pub struct CdpObjectState {
+@@ -246,6 +246,7 @@ pub struct CdpObjectState {
 
  pub struct ObscuraJsRuntime {
      state: Rc<RefCell<ObscuraState>>,
@@ -166,7 +169,7 @@ index 0346a10..c6a6067 100644
      object_store: HashMap<String, String>,
      evaluation_recipes: HashMap<String, String>,
      object_counter: u64,
-@@ -614,6 +615,7 @@ impl ObscuraJsRuntime {
+@@ -638,6 +639,7 @@ impl ObscuraJsRuntime {
 
          let mut instance = ObscuraJsRuntime {
              state,
@@ -174,7 +177,7 @@ index 0346a10..c6a6067 100644
              object_store: HashMap::new(),
              evaluation_recipes: HashMap::new(),
              object_counter: 0,
-@@ -1495,6 +1497,23 @@ impl ObscuraJsRuntime {
+@@ -1494,6 +1496,23 @@ impl ObscuraJsRuntime {
          let _ = self.execute_runtime_script("<set-screen-size>", script);
      }
 
@@ -198,7 +201,7 @@ index 0346a10..c6a6067 100644
      /// Current clamped root scroll offset shared by CSSOM geometry and paint.
      #[cfg(feature = "render")]
      pub fn scroll_offset(&self) -> (f32, f32) {
-@@ -4709,6 +4728,31 @@ mod tests {
+@@ -4971,6 +4990,31 @@ mod tests {
          );
      }
 

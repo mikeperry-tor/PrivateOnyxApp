@@ -243,7 +243,7 @@ class ObscuraClientTests(unittest.TestCase):
                                     "type": "Document",
                                     "frameId": "frame",
                                     "loaderId": "homepage",
-                                    "requestId": "request-homepage",
+                                    "requestId": "homepage",
                                     "response": {
                                         "url": "https://www.startpage.com/",
                                         "status": 200,
@@ -263,7 +263,7 @@ class ObscuraClientTests(unittest.TestCase):
                             },
                             {
                                 "method": "Network.loadingFinished",
-                                "params": {"requestId": "request-homepage"},
+                                "params": {"requestId": "homepage"},
                             },
                             {
                                 "method": "Page.frameStoppedLoading",
@@ -627,7 +627,7 @@ class ObscuraClientTests(unittest.TestCase):
                 self.current_document = "homepage"
 
             def document_events(self, loader, url):
-                request = f"request-{loader}"
+                request = loader
                 self.events.extend(
                     [
                         {
@@ -1081,16 +1081,23 @@ class ObscuraClientTests(unittest.TestCase):
                     result = {"success": True}
                 self.pending.append(json.dumps({"id": command["id"], "result": result}))
                 if method == "Page.navigate":
+                    # An iframe can share the parent frame/loader labels but
+                    # must never supply the main response or its status.
+                    self.event("Network.responseReceived", {
+                        "type": "Document", "frameId": "frame",
+                        "loaderId": "navigation", "requestId": "fetch-child",
+                        "response": {"status": 403, "headers": {}},
+                    })
                     # The navigation reply precedes its completion events.
                     self.event("Network.responseReceived", {
-                        "type": "Document", "frameId": "frame", "requestId": "request",
+                        "type": "Document", "frameId": "frame", "requestId": "navigation", "loaderId": "navigation",
                         "response": {"status": 200, "headers": {"content-type": "text/html"}},
                     })
                     self.event("Page.frameNavigated", {
                         "frame": {"id": "frame", "url": "https://example.com/"},
                     })
                     self.event("Network.loadingFinished", {
-                        "requestId": "request", "encodedDataLength": 29,
+                        "requestId": "navigation", "encodedDataLength": 29,
                     })
                     self.event("Page.frameStoppedLoading", {"frameId": "frame"})
 
@@ -1113,6 +1120,34 @@ class ObscuraClientTests(unittest.TestCase):
         ))
         self.assertEqual(result.rendered_html, "<html>requested document</html>")
         self.assertEqual(websocket.navigations, 1)
+        self.assertEqual(result.status, 200)
+
+    def test_search_document_requires_main_request_alias(self):
+        from types import SimpleNamespace
+        from private_onyx_obscura.client import _search_event_document
+        child = {"method": "Network.responseReceived", "params": {
+            "type": "Document", "frameId": "frame", "loaderId": "loader",
+            "requestId": "fetch-child", "response": {"status": 403},
+        }}
+        main = {"method": "Network.responseReceived", "params": {
+            "type": "Document", "frameId": "frame", "loaderId": "loader",
+            "requestId": "loader", "response": {"status": 200},
+        }}
+        events = [child, main,
+            {"method": "Page.frameNavigated", "params": {"frame": {
+                "id": "frame", "loaderId": "loader", "url": "https://example.com/",
+            }}},
+            {"method": "Network.loadingFinished", "params": {"requestId": "loader"}},
+        ]
+        cdp = SimpleNamespace(events=events)
+        kwargs = dict(start_index=0, frame_id="frame", loader_id="loader", stage="result")
+        self.assertEqual(_search_event_document(cdp, **kwargs)[1], 200)
+        cdp.events = [e for e in events if e is not main]
+        with self.assertRaises(ObscuraClientError):
+            _search_event_document(cdp, **kwargs)
+        cdp.events = events + [main]
+        with self.assertRaises(ObscuraClientError):
+            _search_event_document(cdp, **kwargs)
 
     def test_reusable_session_is_explicit_and_disables_idle_pings(self):
         from private_onyx_obscura import fetch

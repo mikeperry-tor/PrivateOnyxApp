@@ -283,6 +283,7 @@ class Handler(BaseHTTPRequestHandler):
                 b"<main id='state'>initial</main>"
                 b"<main id='named-state'>initial</main>"
                 b"<main id='timing-state'>initial</main>"
+                b"<main id='user-timing-state'>initial</main>"
                 b"<main id='svg-state'>initial</main>"
                 b"<main id='stream-state'>initial</main>"
                 b"<main id='module-state'>initial</main><script>"
@@ -291,6 +292,13 @@ class Handler(BaseHTTPRequestHandler):
                 b"document.getElementById('named-state').textContent=window.__NEXT_DATA__.ready;"
                 b"document.getElementById('timing-state').textContent="
                 b"typeof PerformanceNavigationTiming;"
+                b"const mark=performance.mark('fixture-mark');"
+                b"const measure=performance.measure('fixture-measure');"
+                b"document.getElementById('user-timing-state').textContent=String("
+                b"mark instanceof PerformanceEntry && measure instanceof PerformanceEntry && "
+                b"mark.name==='fixture-mark' && measure.entryType==='measure' && "
+                b"PerformanceNavigationTiming.prototype instanceof PerformanceResourceTiming && "
+                b"PerformanceResourceTiming.prototype instanceof PerformanceEntry);"
                 b"const svgAnchor=document.createElementNS('http://www.w3.org/2000/svg','a');"
                 b"document.getElementById('svg-state').textContent="
                 b"String(svgAnchor instanceof SVGAElement);"
@@ -384,6 +392,12 @@ class Handler(BaseHTTPRequestHandler):
                 (
                     f"<html><body><main id='session'>{state}</main></body></html>"
                 ).encode(),
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/javascript-redirect":
+            self._send(
+                b"<html><body><script>location.replace('/final')</script></body></html>",
                 content_type="text/html; charset=utf-8",
             )
             return

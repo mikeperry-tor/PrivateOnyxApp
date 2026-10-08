@@ -329,7 +329,10 @@ are owned by [internal network security](internal_network_security.md#docker-gat
 - Provider admission remains atomic before worker dispatch, with the existing
   per-provider concurrency/cooldown policy.
 - Obscura uses one process with isolated per-WebSocket browser state instead of
-  a process worker pool. Each search provider lazily retains one independently
+  a process worker pool. Each live connection owns one renderer thread and one
+  socket-I/O thread; closing the connection stops and joins its I/O thread.
+  The fifteen-connection limit bounds these pairs, not all process threads.
+  Each search provider lazily retains one independently
   leased connection and target, then closes the target and connection after one
   hour without a query. After terminal DOM capture, that same target navigates
   to local `about:blank`; provider JavaScript, timers, subresources, and
@@ -342,14 +345,14 @@ are owned by [internal network security](internal_network_security.md#docker-gat
   Bing's pagination cooldown uses an asynchronous wait on that loop, within
   the existing browser deadline; it neither blocks other providers nor
   allocates a worker thread for the delay.
-- The derived Obscura v0.2.3 binary selects the upstream release variant's
+- The derived Obscura v0.2.4 binary selects the upstream release variant's
   explicit `--no-default-features --features stealth` no-render feature set.
   Search and direct `open_url` consume DOM and response-body CDP surfaces, so
   screenshot, screencast, PDF-export, raster layout, image/font capture, and
   renderer-only resource warmup remain absent. JavaScript, DOM, module,
   charset, compressed-response, and automation compatibility fixes remain
   available in that feature set.
-- The native v0.2.3 runtime clamps deeply nested timers, caps the fetched-URL
+- The native v0.2.4 runtime clamps deeply nested timers, caps the fetched-URL
   bookkeeping list at 16,384 entries, and cancels V8 watchdog threads when
   their owner is dropped. These controls supplement request deadlines and
   idle parking; they do not impose an aggregate browser memory bound.

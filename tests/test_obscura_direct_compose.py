@@ -59,14 +59,14 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertNotIn("--storage-dir", self.compose)
         self.assertNotIn("--allow-file-access", self.compose)
 
-    def test_manifest_pins_obscura_0_2_3(self):
+    def test_manifest_pins_obscura_0_2_4(self):
         self.assertIn(
-            "OBSCURA_RELEASE_VERSION=0.2.3",
+            "OBSCURA_RELEASE_VERSION=0.2.4",
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.3"
-            "@sha256:475def3ddf1ec513b3d1bc36e8ad15f0d192538cb15f814c77215aa70c418ca2",
+            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.4"
+            "@sha256:772cf3bada266e81bc0fae0304074f4971a551e3766f412417f006273e202f0e",
             self.manifest,
         )
         self.assertIn(
@@ -74,12 +74,12 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_SOURCE_REF=1a3169da276d7720732c7b20535474942917fb83",
+            "OBSCURA_SOURCE_REF=1fccab2c1ecd0f7eadc16d7a520ba227f9e7f782",
             self.manifest,
         )
         self.assertIn(
             "OBSCURA_SOURCE_SHA256="
-            "fca2663c1c5b321d983c95b90625d7e5d176f272e61a741f8047585cf7de2307",
+            "ec8b425ccd223360554e95c7b9b16afbd67626aa25bfb3ea517489625e72e290",
             self.manifest,
         )
         self.assertNotIn("\nOBSCURA_IMAGE=", self.manifest)
@@ -113,8 +113,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         )
         self.assertIn(
             "ARG OBSCURA_UPSTREAM_IMAGE="
-            "docker.io/h4ckf0r0day/obscura:0.2.3"
-            "@sha256:475def3ddf1ec513b3d1bc36e8ad15f0d192538cb15f814c77215aa70c418ca2",
+            "docker.io/h4ckf0r0day/obscura:0.2.4"
+            "@sha256:772cf3bada266e81bc0fae0304074f4971a551e3766f412417f006273e202f0e",
             self.obscura_dockerfile,
         )
         self.assertIn("obscura/archive/{ref}.tar.gz", self.obscura_fetcher)
@@ -158,7 +158,9 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             "0003-search-runtime-compatibility.patch"
         ]
         self.assertIn("PerformanceNavigationTiming", compatibility)
-        self.assertIn("SVGAElement", compatibility)
+        self.assertNotIn("+class SVGAElement", compatibility)
+        self.assertNotIn("+globalThis.PerformanceEntry =", compatibility)
+        self.assertIn("extends PerformanceEntry", compatibility)
         self.assertIn("nomodule", compatibility)
         self.assertIn(
             "private_onyx_module_capable_runtime_skips_parser_nomodule",

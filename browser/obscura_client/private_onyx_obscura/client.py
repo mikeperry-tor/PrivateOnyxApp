@@ -1237,6 +1237,8 @@ async def fetch(
             if event.get("method") == "Network.responseReceived"
             and event.get("params", {}).get("type") == "Document"
             and event.get("params", {}).get("frameId") == frame_id
+            and event.get("params", {}).get("loaderId") == loader_id
+            and event.get("params", {}).get("requestId") == loader_id
         ]
         if len(documents) != 1:
             raise ObscuraClientError(
@@ -1673,6 +1675,7 @@ def _search_event_document(
         and event.get("params", {}).get("type") == "Document"
         and event.get("params", {}).get("frameId") == frame_id
         and event.get("params", {}).get("loaderId") == loader_id
+        and event.get("params", {}).get("requestId") == loader_id
     ]
     if len(documents) != 1:
         raise ObscuraClientError(
@@ -2132,6 +2135,8 @@ async def _wait_for_distinct_search_document(
                 event.get("type") == "Document"
                 and event.get("frameId") == frame_id
                 and event.get("loaderId") != previous_loader
+                and bool(event.get("loaderId"))
+                and event.get("requestId") == event.get("loaderId")
             ),
             remaining(
                 f"{stage_prefix}-navigation", FetchFailure.POST_NAVIGATION_TIMEOUT

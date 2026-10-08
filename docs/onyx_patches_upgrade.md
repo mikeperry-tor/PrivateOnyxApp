@@ -454,14 +454,19 @@ Audit these current Obscura areas:
   networks;
 - flattened Target attachment/session identifiers, including the distinct
   explicit page-session ID required by Playwright `new_cdp_session(page)`,
-  target creation/closure, per-WebSocket context ownership, connection-thread
-  cleanup, and the atomic live-connection cap;
+  target creation/closure, per-WebSocket context ownership, renderer and
+  socket-I/O thread cleanup, and the atomic live-connection cap. The Linux
+  selected-image gate must observe both connection-thread types exit after
+  its client workload;
 - `Page.navigate` command-response/event ordering and lifecycle wait values;
   discard the initial `Page.enable` about:blank lifecycle only after the setup
   command barrier, so it cannot complete a later navigation wait;
 - Network request/response/loading events, redirect collapse, main-frame
-  Document selection, JavaScript navigation, request-id/loader-id aliases,
-  challenges, and terminal frame URL;
+  Document selection by frame/loader plus the native main-request alias
+  (`requestId == loaderId`), JavaScript navigation, request-id/loader-id aliases.
+  Iframe Document events must neither supply the main status/body nor satisfy
+  completion; missing and duplicate main responses must still fail. Audit
+  challenges and the terminal frame URL;
 - `Fetch.takeResponseBodyAsStream`, plain/base64 `IO.read`, `IO.close`, body
   eviction, content-type predicate, compressed/chunked/false-length behavior;
 - per-body network retention, entry/alias/base64 amplification, per-connection
@@ -499,7 +504,10 @@ Audit these current Obscura areas:
   the navigation patch does not supply a complete browser policy container.
   Exercise Strict/Lax cookies on same-site and cross-site GET/POST, method-changing
   and method-preserving redirects, and a server that resets after consuming the
-  POST but stays available to detect a replay. Native GET reset recovery must
+  POST but stays available to detect a replay. A successful evaluation
+  acknowledgement must not count as navigation success: require the wrapper's
+  distinct-document wait to fail on the reset without replaying the POST.
+  Native GET reset recovery must
   not replay POST. Cookie-jar unit tests and upstream's `send_single` POST test
   do not cover native form navigation. Remove
   `0001-stealth-native-post.patch` only when upstream provides that complete
@@ -512,12 +520,13 @@ Audit these current Obscura areas:
   context-stable fingerprint state with the same provider-session lifetime;
 - native writable shadowing of legacy Window named-element properties; the
   `PerformanceEntry`/`PerformanceResourceTiming`/`PerformanceNavigationTiming`
-  constructor hierarchy, the `SVGAElement` constructor and SVG-anchor wrapper,
-  and module-capable `nomodule` suppression for parser-discovered and dynamic
-  scripts. Remove
+  constructor hierarchy extending native `PerformanceEntry` without replacing
+  User Timing marks, measures, or observers; native `SVGAElement` and its
+  SVG-anchor wrapper; and module-capable `nomodule` suppression for
+  parser-discovered and dynamic scripts. Remove
   `0003-search-runtime-compatibility.patch` only when the tagged upstream runtime
   provides the timing, SVG, and nomodule contracts and the focused
-  provider fixtures pass without it. Native v0.2.3 `Response.body` must continue
+  provider fixtures pass without it. Native v0.2.4 `Response.body` must continue
   to pass the retained `pipeThrough()` regression without a wrapper implementation;
 - explicit main- versus child-frame ownership for script-triggered navigation,
   including a top-level `requestSubmit()` POST with its encoded form body and
@@ -607,7 +616,8 @@ passes:
   stages, and warning-level typed failures provide the wrapper boundary.
   Re-test a permanently blocked command, target/connection cleanup, server-log
   visibility, and URL redaction before removing any deadline or diagnostic.
-- **Body-memory and classification gaps.** The server fully allocates a
+- **Body-memory and classification gaps.** Native main-document navigation has
+  a separate 64 MiB buffered-body ceiling. The server materializes the accepted
   response before retention checks; the network byte limit is per entry and is
   amplified by entry count, base64, and aliases; each connection's IO store is
   separately bounded; and the stream API does not expose the internal
@@ -867,8 +877,8 @@ For every custom browser engine verify:
   parser mismatch, exact terminal hosts, and shared block markers;
 - DuckDuckGo No-AI query construction (`noai.duckduckgo.com`, `ia=web`),
   semantic organic-row/title/snippet selectors, the `networkidle2` search
-  default, and unfinished deep-result preloads mapping to verification
-  suspension;
+  default, and unfinished deep-result preloads mapping to unresponsive
+  parser/runtime failure;
 - complete result query/fragment preservation; DuckDuckGo `uddg` wrapper
   admission only for relative or recognized DuckDuckGo `/l/` links and
   decoding exactly once without decoding nested URL values, signatures, or
@@ -1856,7 +1866,7 @@ redirect, PDF/raw/binary handling, main-body eviction behavior, full
 TLS-impersonating stealth startup, public Playwright page-session attachment,
 and cleanup. The separate Tor and OpenSearch
 targets validate their own image families.
-`make test-all-images` aggregates all four focused image targets, and
+`make test-all-images` aggregates all five focused image targets, and
 `make check-upgrade` runs `make check` followed by that aggregate. Use the
 focused target for a focused upgrade; reserve the aggregate gates for broad
 `make upgrade`, multi-family changes, or release validation. None of these

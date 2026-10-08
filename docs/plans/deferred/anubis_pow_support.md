@@ -13,7 +13,7 @@
 > **Decision rule:** implement exactly one worker execution approach. Prefer an
 > upstream Obscura release with bounded real workers (Approach A). If the
 > selected pin has no suitable implementation, use the narrow upstreamable
-> Obscura worker patch (Approach B). Obscura v0.2.1 does not pass the dedicated-
+> Obscura worker patch (Approach B). Obscura v0.2.4 does not pass the dedicated-
 > worker gate, so implementation against the current pin requires Approach B.
 > Remove the implemented stack solver in the same change; never ship it as a
 > fallback for worker execution.
@@ -82,7 +82,7 @@ It does not:
 
 This plan targets:
 
-- the derived Obscura v0.2.1 image and matching
+- the derived Obscura v0.2.4 image and matching
   `reference_repos/obscura` checkout;
 - SearXNG `2026.7.15-7b2199ecd` and the five custom offline engines;
 - Startpage's Anubis v1.25.0 homepage challenge using algorithm `fast`,
@@ -135,12 +135,12 @@ Treat maintenance as two separate obligations:
    worker suppression or execution, pass fields/path, cookie and redirect
    behavior, and post-pass form/result continuation.
 
-The proof primitive does not justify accepting unknown Anubis releases. Keep
-the exact version allowlist and fail closed on a new version until its protocol
-profile is audited. A version update requires a fixture and protocol-profile
-review; it changes the proof loop only when an explicitly different algorithm
-is admitted. Maintenance follows versions served by Startpage rather than
-unrelated upstream tags.
+The version string remains bounded metadata, not an admission allowlist.
+Admission validates the challenge structure and supported algorithm described
+in [Request handling](../../request_handling.md). Worker execution additionally
+requires fixture-backed protocol profiles for source loading, messaging, and
+continuation; a new worker protocol requires review even when the proof
+primitive is unchanged.
 
 Do not rely on the displayed version string alone. At implementation time,
 capture sanitized fixture copies or independently generated equivalent pages
@@ -151,13 +151,13 @@ provider identifier that is unique to an observed request.
 
 ## Current Failure and Why Readiness Alone Is Insufficient
 
-Obscura v0.2.1 has `crypto.subtle.digest`, Blob objects, blob URL bookkeeping,
+Obscura v0.2.4 has `crypto.subtle.digest`, Blob objects, blob URL bookkeeping,
 and a `Worker` compatibility object. Its Worker implementation fetches or reads
 the source and evaluates it cooperatively in the page's V8 isolate. It does not
-create an independently scheduled worker isolate. v0.2.1 synchronously records
+create an independently scheduled worker isolate. v0.2.4 synchronously records
 source bytes for its native Blob objects before a Blob-backed Worker is
-constructed, which removes an earlier source-registration race but does not
-change the cooperative execution or resource-ownership failure.
+constructed. Execution remains cooperative and lacks independent worker
+resource ownership.
 
 The Startpage challenge launches four SHA-256 loops. Adding its marker as a
 pending readiness selector leaves those loops on the page isolate, prevents the
@@ -172,7 +172,7 @@ isolate from servicing CDP inspection, and consumes the transaction deadline at
 
 Anubis also creates a new main-document navigation through its pass endpoint.
 The existing readiness helper is intentionally a same-document DOM hydration
-wait and does not own new loader correlation. The selected v0.2.1 wrapper's
+wait and does not own new loader correlation. The selected v0.2.4 wrapper's
 explicit-navigation-realm patch makes top-level `location.replace()` reach the
 owning navigation realm, but it does not supply the transaction state machine
 or loader correlation. Finally, the original Startpage search is a POST while

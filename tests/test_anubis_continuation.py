@@ -100,7 +100,7 @@ class _ContinuationCdp:
         self.pass_request_url = ""
 
     def _document(self, loader: str, url: str, html: str) -> None:
-        request_id = f"request-{loader}"
+        request_id = loader
         self.current_html = html
         self.events.extend(
             [

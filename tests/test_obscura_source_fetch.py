@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 FETCHER_PATH = ROOT / "browser/obscura_image/fetch_source.py"
-SOURCE_REF = "1a3169da276d7720732c7b20535474942917fb83"
+SOURCE_REF = "1fccab2c1ecd0f7eadc16d7a520ba227f9e7f782"
 ARCHIVE_ROOT = f"obscura-{SOURCE_REF}"
 
 

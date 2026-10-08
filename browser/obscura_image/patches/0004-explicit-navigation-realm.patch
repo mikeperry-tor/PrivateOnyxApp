@@ -1,8 +1,8 @@
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index 2b3d81c..660a7e7 100644
+index a84f8ca..8c45d30 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -4734,10 +4734,10 @@ class Element extends Node {
+@@ -4927,10 +4927,10 @@ class Element extends Node {
 
      const encoded = pairs.join('&');
      if (method === 'POST') {
@@ -15,16 +15,16 @@ index 2b3d81c..660a7e7 100644
      }
    }
    reset() {
-@@ -5560,7 +5560,7 @@ class Document extends Node {
+@@ -5819,7 +5819,7 @@ class Document extends Node {
    }
    get referrer() { return _domParse("document_referrer") ?? ""; }
    get location() { return globalThis.location; }
 -  set location(url) { __obscuraCore.ops.op_navigate(_resolveUrl(String(url)), 'GET', ''); }
 +  set location(url) { __obscuraCore.ops.op_navigate(_resolveUrl(String(url)), 'GET', '', _realmFrameId); }
-   get defaultView() { return globalThis; }
-   get nodeType() { return 9; }
-   get nodeName() { return "#document"; }
-@@ -6811,7 +6811,7 @@ function __currentUrl() {
+   get defaultView() {
+     const get = _documentRealmMember(this, 'defaultView');
+     return get ? Reflect.apply(get, this, []) : globalThis;
+@@ -7154,7 +7154,7 @@ function __currentUrl() {
  }
  globalThis.location = {
    get href() { return __currentUrl(); },
@@ -33,7 +33,7 @@ index 2b3d81c..660a7e7 100644
    get origin() { try { return new URL(this.href).origin; } catch { return ""; } },
    get protocol() { try { return new URL(this.href).protocol; } catch { return ""; } },
    get host() { try { return new URL(this.href).host; } catch { return ""; } },
-@@ -6821,14 +6821,14 @@ globalThis.location = {
+@@ -7164,14 +7164,14 @@ globalThis.location = {
    get hash() { try { return new URL(this.href).hash; } catch { return ""; } },
    get port() { try { return new URL(this.href).port; } catch { return ""; } },
    toString() { return this.href; },
@@ -53,17 +53,17 @@ index 2b3d81c..660a7e7 100644
    enumerable: true,
  });
 diff --git a/crates/obscura-js/src/ops.rs b/crates/obscura-js/src/ops.rs
-index 18564d2..97b0b7b 100644
+index d186368..c1dfd31 100644
 --- a/crates/obscura-js/src/ops.rs
 +++ b/crates/obscura-js/src/ops.rs
-@@ -5048,17 +5048,17 @@ fn op_set_cookie(scope: &mut v8::PinScope, state: &OpState, #[string] cookie_str
-     jar.set_cookie_from_js(cookie_str, &url);
+@@ -5685,17 +5685,17 @@ fn op_history_traverse(scope: &mut v8::PinScope, state: &OpState, index: u32) ->
+     true
  }
 
 -// A frame that navigates itself must not move the top document. Recording the
 -// navigation against the calling realm keeps it inside that frame.
-+// Bind navigation to the receiver realm, even when a parent calls a child
-+// location method or submits its form. Preserve commit-time URL ownership.
++// Bind navigation to the receiver realm, including parent-to-child calls.
++// Preserve the committed realm URL and cookie origin until navigation commits.
  #[op2(fast)]
  fn op_navigate(
 -    scope: &mut v8::PinScope,
@@ -79,10 +79,10 @@ index 18564d2..97b0b7b 100644
      // Only queue the navigation — do NOT change the realm URL here. The URL is
      // updated on commit via `set_url` once the navigation is actually performed.
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index b90e90a..76ff4b5 100644
+index 5f4ee95..4ec74a7 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -15984,6 +15984,41 @@ mod tests {
+@@ -18080,6 +18080,41 @@ mod tests {
          );
      }
 
