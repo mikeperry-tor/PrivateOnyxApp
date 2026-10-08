@@ -352,10 +352,17 @@ are owned by [internal network security](internal_network_security.md#docker-gat
   renderer-only resource warmup remain absent. JavaScript, DOM, module,
   charset, compressed-response, and automation compatibility fixes remain
   available in that feature set.
-- The native v0.2.4 runtime clamps deeply nested timers, caps the fetched-URL
-  bookkeeping list at 16,384 entries, and cancels V8 watchdog threads when
-  their owner is dropped. These controls supplement request deadlines and
-  idle parking; they do not impose an aggregate browser memory bound.
+- The native v0.2.4 runtime clamps deeply nested timers and caps the fetched-URL
+  bookkeeping list at 16,384 entries. V8 deadlines use one lazily started,
+  process-long watchdog thread; dropping a command's watchdog token disarms
+  its slot, rather than terminating a per-command thread.
+- The process-wide classic-script compilation cache holds at most 64 entries
+  and 32 MiB of accounted origin, name, source, and compiled data, with FIFO
+  eviction. Eligible HTTP(S) scripts are keyed by document origin, script name,
+  and exact source. Entries survive target and connection closure until eviction
+  or process exit; cached compilation does not retain live page globals.
+  These controls supplement request deadlines and idle parking; they do not
+  impose an aggregate browser memory bound.
 - Homepage-first search adds one provider main document and its subresources,
   one independently bounded homepage DOM serialization, form execution, and
   optional timed-entry delay/autocomplete traffic. Homepage DOM text is

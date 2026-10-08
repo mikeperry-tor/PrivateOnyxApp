@@ -2952,9 +2952,12 @@ async def resume_anubis_pow(
             remaining=remaining,
         )
         submission_seconds = pending.submission_navigation_seconds
+        # Result pages also have search forms; URL changes do not imply a homepage.
         should_submit = pending.boundary == "homepage" or (
             pending.boundary == "result"
-            and final_url != pending.challenged_url
+            and urlsplit(final_url).hostname in pending.spec.allowed_homepage_hosts
+            and (urlsplit(final_url).path or "/")
+            == (urlsplit(pending.spec.homepage_url).path or "/")
             and has_form
         )
         if should_submit:

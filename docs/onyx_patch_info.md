@@ -312,6 +312,12 @@ binaries with the no-render `stealth` feature set:
   Build-time Rust tests additionally assert the child's exact pending URL,
   method, and body, the unchanged committed document URL, and the absence of
   pending parent navigation; unchanged CDP URLs alone cannot prove submission.
+  The patch also marks synchronous initial iframe creation as reentrant:
+  its JavaScript initializer invokes native realm-registration operations.
+  The native cross-realm AbortSignal regression runs in the debug build gate,
+  where deno_core enforces this contract. The gate additionally covers native
+  fetch cancellation/streaming, compilation-cache page-state isolation, and
+  shared-watchdog cancellation and recovery.
 
 Pending navigation preserves the committed realm URL and cookie origin until
 commit. Pending child-frame navigation does not load a new child document; see

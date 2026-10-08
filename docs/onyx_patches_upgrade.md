@@ -534,7 +534,11 @@ Audit these current Obscura areas:
   top-level `location.replace()` regression because the Startpage Anubis pass
   uses it.
   Keep `0004-explicit-navigation-realm.patch` until upstream binds navigation to
-  the receiver's frame rather than inferring the entered caller realm. Require
+  the receiver's frame rather than inferring the entered caller realm and marks
+  synchronous initial iframe creation as reentrant. Require the native
+  `fetch_abort_accepts_cross_realm_signals_but_rejects_forged_prototypes`
+  debug test to pass without skipping it: iframe initialization calls back into
+  native realm registration. Require
   parent-to-child location setters, `assign`, `replace`, `reload`, and child
   GET/POST form submission in the selected-image gate, with a subsequent CDP
   barrier proving the parent did not navigate. Also require build-time assertions
@@ -545,6 +549,16 @@ Audit these current Obscura areas:
   native commit-time realm URL/cookie-origin protection and the separate
   pending-child-navigation limitation documented in
   [request handling](request_handling.md);
+- process-wide classic-script compilation-cache partitioning and lifetime:
+  retain the native `classic_code_cache_reuses_compilation_not_page_state`
+  build gate, verify exact-source and document-origin matching, and distinguish
+  compiled-byte/source retention from live page globals and HTTP/cookie state.
+  Retain native watchdog cancellation/recovery and fetch abort/streaming build
+  gates; audit the shared watchdog's slots independently of connection threads;
+- Startpage result-challenge redirects with a changed result URL and an existing
+  search form must not submit a second search. Only an allowed homepage host
+  and declared homepage path can restore a result-boundary POST; retain both
+  positive homepage and negative result/unknown-path continuation fixtures;
 - the cumulative 45-second pre-navigation deadline across connect, target
   creation, attachment, and domain setup; the separate bounded
   cleanup commands; typed stage-specific expiry; and URL-free correlation logs;

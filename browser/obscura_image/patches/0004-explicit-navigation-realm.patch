@@ -78,6 +78,13 @@ index d186368..c1dfd31 100644
      let mut gs = gs.borrow_mut();
      // Only queue the navigation — do NOT change the realm URL here. The URL is
      // updated on commit via `set_url` once the navigation is actually performed.
+@@ -5910,5 +5910,5 @@ pub fn max_live_frames() -> usize {
+ /// An initial about:blank needs its own realm before the next JS statement.
+-#[op2(nofast)]
++#[op2(nofast, reentrant)]
+ fn op_initial_frame(
+     scope: &mut v8::PinScope,
+     state: &OpState,
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
 index 5f4ee95..4ec74a7 100644
 --- a/crates/obscura-js/src/runtime.rs

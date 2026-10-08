@@ -341,6 +341,25 @@ class AnubisContinuationTests(unittest.TestCase):
         self.assertEqual(cdp.form_operations, [])
         self.assertTrue(owner.generation_active)
 
+    def test_result_challenge_with_changed_url_and_search_form_does_not_resubmit(self):
+        for url in (
+            RESULT_URL,
+            RESULT_URL + "&query=fixture",
+            "https://startpage.com/sp/search?query=fixture",
+            "https://www.startpage.com/unknown?query=fixture",
+        ):
+            with self.subTest(url=url):
+                cdp = _ContinuationCdp(
+                    pass_url=url, pass_html=RESULT_HTML, pass_has_form=True,
+                )
+                owner, _websocket, solution = _owner(cdp, boundary="result")
+                result = asyncio.run(resume_anubis_pow(
+                    "continuation-token", solution, session_owner=owner,
+                ))
+                self.assertEqual(result.final_url, url)
+                self.assertNotIn("submit", cdp.form_operations)
+                self.assertTrue(owner.generation_active)
+
     def test_result_challenge_restores_at_most_one_post_from_homepage(self):
         cdp = _ContinuationCdp(
             pass_url=HOMEPAGE_URL,

@@ -116,14 +116,13 @@ specified below.
 
 ### Current Obscura capabilities that are useful
 
-Obscura gives each CDP WebSocket connection an isolated live browser
-context, cookie jar, HTTP client, target set, OS thread with its own
-current-thread Tokio runtime, and V8 state. The
-wrapper's client already opens one WebSocket per navigation, and the
-direct-Obscura crawler permits up to ten concurrent `open_url()` fetches
-against Obscura's fifteen-connection limit. This removes the need for the
-wrapper to allocate browser-context IDs or maintain a worker pool to isolate
-simultaneous navigations.
+The current connection, provider-session, and cookie lifetimes are specified in
+[request handling](../../request_handling.md), with the process-wide compilation
+cache exception documented in [internal network security](../../internal_network_security.md).
+Direct `open_url()` uses fresh connections and permits ten concurrent fetches
+against Obscura's fifteen-connection limit; SearXNG retains a separate connection
+per provider. Native connection ownership removes the need for wrapper-allocated
+browser-context IDs or a worker pool to isolate simultaneous navigations.
 
 The relevant pinned source is under `reference_repos/obscura/`:
 

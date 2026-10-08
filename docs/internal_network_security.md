@@ -24,10 +24,15 @@ apply in every selected mode.
 
 CDP is powerful browser authority. Obscura v0.2.4 gives every WebSocket its
 own browser context, HTTP client, cookie jar, targets, headers, User-Agent
-state, renderer and socket-I/O threads, and V8 isolates. The API and SearXNG therefore do not share
-browser state across their request connections, but they still share one
-process, one CDP endpoint, one 15-connection resource cap, and one failure
-domain. The native non-loopback listener requires a stack-generated bearer token,
+state, renderer and socket-I/O threads, and V8 isolates. Mutable page state,
+HTTP caches, and cookies are isolated across request connections. A process-wide
+classic-script compilation cache retains script source and compiled bytes,
+keyed by document origin, script name, and exact source. It does not reuse live
+JavaScript globals, but its entries survive connection closure until eviction
+or process exit; connection isolation does not eliminate compilation timing
+sharing for matching scripts. The API and SearXNG still share one process, one
+CDP endpoint, one 15-connection resource cap, and one failure domain. The native
+non-loopback listener requires a stack-generated bearer token,
 shared only by Obscura, API, and SearXNG. It rejects absent/wrong tokens and
 browser-origin requests. This shared credential does not distinguish the two
 intended callers or their provider sessions. The narrow API

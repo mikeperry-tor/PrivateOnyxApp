@@ -120,7 +120,12 @@ The token grants shared browser control, not per-provider or per-user authority.
 
 Obscura v0.2.4 gives every WebSocket connection its own browser context, HTTP
 client, cookie jar, targets, headers, User-Agent state, renderer and socket-I/O
-threads, and V8 isolates. Direct `open_url` uses one fresh connection and target per navigation.
+threads, and V8 isolates. A process-wide classic-script compilation cache is
+an exception: it retains source and compiled bytes across connection closure,
+keyed by document origin, script name, and exact source, without sharing live
+JavaScript globals, cookies, or HTTP response caches. Its bounds and lifetime
+are described in [resource minimization](resource_minimization.md).
+Direct `open_url` uses one fresh connection and target per navigation.
 SearXNG instead gives each of its five providers one lazy connection and one
 target retained together until the provider has been idle for one hour. Later
 queries reuse that target, its native cookie jar, selected profile,
@@ -636,7 +641,10 @@ method, origin, path, loader, and exact fields are validated, while the exact
 client-built navigation and distinct terminal loader remain authoritative when
 it is omitted. A homepage challenge then restores and submits the declared
 Startpage POST once. A result challenge accepts the redirected result directly,
-or restores that POST once only when the redirect returns a homepage form.
+or restores that POST once only when the redirect returns a form on an allowed
+homepage host at the declared homepage path. A changed result URL or a search
+box on a result page does not authorize another submission. Other terminal
+paths are passed to normal result parsing without a speculative POST.
 There is no constructed result URL, same-engine retry, alternate browser, or
 route fallback. After terminal classification it verifies Worker-wrapper
 removal and termination of any intercepted workers. Rejection or a renewed

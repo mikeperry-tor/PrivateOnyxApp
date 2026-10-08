@@ -65,6 +65,16 @@ RUN cargo test --locked --no-default-features \
 RUN cargo test --locked --no-default-features --features stealth \
         -p obscura-js private_onyx_
 
+# Native upgrade contracts are not selected by the wrapper's private_onyx_ filter.
+RUN set -eu; for check in \
+        classic_code_cache_reuses_compilation_not_page_state \
+        watchdog fetch_abort \
+        fetch_resolves_headers_before_the_response_body_finishes \
+        repeated_fetch_clone_cancellation cancelling_all_fetch_clones; do \
+        cargo test --locked --no-default-features --features stealth \
+            -p obscura-js "$check"; \
+    done
+
 RUN cargo test --locked --no-default-features --features stealth \
         -p obscura-browser private_onyx_
 
