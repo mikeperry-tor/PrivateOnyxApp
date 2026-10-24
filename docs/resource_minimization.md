@@ -345,14 +345,30 @@ are owned by [internal network security](internal_network_security.md#docker-gat
   Bing's pagination cooldown uses an asynchronous wait on that loop, within
   the existing browser deadline; it neither blocks other providers nor
   allocates a worker thread for the delay.
-- The derived Obscura v0.2.4 binary selects the upstream release variant's
+- The derived Obscura v0.2.5 binary selects the upstream release variant's
   explicit `--no-default-features --features stealth` no-render feature set.
   Search and direct `open_url` consume DOM and response-body CDP surfaces, so
   screenshot, screencast, PDF-export, raster layout, image/font capture, and
   renderer-only resource warmup remain absent. JavaScript, DOM, module,
   charset, compressed-response, and automation compatibility fixes remain
   available in that feature set.
-- The native v0.2.4 runtime clamps deeply nested timers and caps the fetched-URL
+- Native origin-separated localStorage and sessionStorage each have a 5 MiB
+  per-origin, 32 MiB per-store, and 256-origin ceiling. localStorage and
+  IndexedDB belong to the connection context; sessionStorage belongs to the
+  target. IndexedDB bounds retained records and staged writes to 64 MiB and
+  bounds its handle tables. These in-memory stores survive parking and are
+  released with the provider generation; no profile directory is configured.
+  ES-module response bodies also consume the page's shared retained-body
+  entry/byte budgets. Neither storage quotas nor response limits constitute
+  an aggregate browser memory ceiling.
+- The single-process service does not enable multiworker recycling. Native
+  recycling requires multiple worker processes and adds supervisor checks and
+  draining lifetimes; it is outside the fifteen-connection capacity model.
+  On Linux/glibc, native connection teardown trims freed heap even while other
+  connections remain live, coordinated to at most once per five seconds while
+  busy; the last connection always permits trimming. This needs no wrapper
+  recycler or periodic timer and does not release live provider storage.
+- The native v0.2.5 runtime clamps deeply nested timers and caps the fetched-URL
   bookkeeping list at 16,384 entries. V8 deadlines use one lazily started,
   process-long watchdog thread; dropping a command's watchdog token disarms
   its slot, rather than terminating a per-command thread.

@@ -1,8 +1,8 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 24bc347..cbf4f4f 100644
+index bca5da4..b7d7a50 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -1997,6 +1997,7 @@ dependencies = [
+@@ -1998,6 +1998,7 @@ dependencies = [
   "tokio",
   "tracing",
   "url",
@@ -11,10 +11,10 @@ index 24bc347..cbf4f4f 100644
 
  [[package]]
 diff --git a/crates/obscura-browser/Cargo.toml b/crates/obscura-browser/Cargo.toml
-index 20d4828..7484882 100644
+index 05bf742..35cc3e1 100644
 --- a/crates/obscura-browser/Cargo.toml
 +++ b/crates/obscura-browser/Cargo.toml
-@@ -23,6 +23,7 @@ anyhow = { workspace = true }
+@@ -24,6 +24,7 @@ serde = { workspace = true }
  serde_json = { workspace = true }
  base64 = { workspace = true }
  image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
@@ -23,10 +23,10 @@ index 20d4828..7484882 100644
  [dev-dependencies]
  tokio = { workspace = true, features = ["test-util"] }
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
-index ab96fe0..669be2d 100644
+index ce22409..755ead1 100644
 --- a/crates/obscura-browser/src/page.rs
 +++ b/crates/obscura-browser/src/page.rs
-@@ -342,6 +342,7 @@ pub struct Page {
+@@ -352,6 +352,7 @@ pub struct Page {
      callbacks: Arc<CallbackRegistry>,
      #[cfg(feature = "stealth")]
      pub stealth_client: Option<Arc<StealthHttpClient>>,
@@ -34,7 +34,7 @@ index ab96fe0..669be2d 100644
  }
 
  const MAX_STYLESHEET_IMPORT_DEPTH: u8 = 4;
-@@ -1092,6 +1093,13 @@ impl Page {
+@@ -1102,6 +1103,13 @@ impl Page {
          } else {
              None
          };
@@ -48,7 +48,7 @@ index ab96fe0..669be2d 100644
 
          Page {
              id,
-@@ -1141,6 +1149,7 @@ impl Page {
+@@ -1154,6 +1162,7 @@ impl Page {
              callbacks: Arc::new(CallbackRegistry::new()),
              #[cfg(feature = "stealth")]
              stealth_client,
@@ -56,29 +56,29 @@ index ab96fe0..669be2d 100644
          }
      }
 
-@@ -1874,6 +1883,7 @@ impl Page {
+@@ -1917,6 +1926,7 @@ impl Page {
          }
 
          rt.set_navigation_timing(self.navigation_timing.clone());
 +        rt.set_fingerprint_seed(self.fingerprint_seed);
          rt.run_page_init();
-         rt.set_reduced_motion(self.reduced_motion);
+         rt.set_media_preferences(self.reduced_motion, self.dark_color_scheme);
          let _ = rt.execute_script(
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index be457da..25bce0e 100644
+index 9d45822..4cb2a8f 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
 @@ -21,7 +21,8 @@ const __obscuraCore = globalThis.Deno.core;
      '__obscura_errors', '__obscura_init', '__obscura_hide_list',
      '__obscura_objects', '__obscura_oid', '__obscura_ua',
      '__obscura_platform', '__obscura_ua_platform', '__obscura_ua_platform_version',
--    '__obscura_stealth', '__obscura_markTrusted', '__obscura_core_handoff',
-+    '__obscura_stealth', '__obscura_markTrusted', '__obscura_set_fingerprint_seed',
-+    '__obscura_core_handoff',
+-    '__obscura_stealth', '__obscura_markTrusted', '__obscura_fireBeforeUnload', '__obscura_core_handoff',
++    '__obscura_stealth', '__obscura_markTrusted', '__obscura_fireBeforeUnload',
++    '__obscura_set_fingerprint_seed', '__obscura_core_handoff',
      // Created by later evaluation, input and emulation paths. Register them
      // before the snapshot hide list is captured, just like the other internals.
      '__obscura_await_rejected', '__obscura_click_target',
-@@ -293,6 +294,9 @@ if (_origStackDesc && _origStackDesc.get) {
+@@ -295,6 +296,9 @@ if (_origStackDesc && _origStackDesc.get) {
  }
 
  let _fpSeed = 0;
@@ -88,7 +88,16 @@ index be457da..25bce0e 100644
  // Dynamic module/in-order script queue. Module evaluation remains serialized
  // to prevent a re-entrant RefCell panic in deno_core's
  // futures_unordered_driver when SPAs insert multiple <script type=module>
-@@ -17227,7 +17231,6 @@ globalThis.__obscura_init = function() {
+@@ -15320,6 +15324,8 @@ function _ensureInitialFrameRealm(element, srcdoc) {
+                        '__obscura_geo_lat', '__obscura_geo_lon']) {
+       if (globalThis[name] !== undefined) child[name] = globalThis[name];
+     }
++    child.__obscura_set_fingerprint_seed(_fpSeed);
++    delete child.__obscura_set_fingerprint_seed;
+     child.__obscura_frameId = id;
+     child.__obscura_parentFrameId = _realmFrameId;
+     child.__obscura_init();
+@@ -18198,7 +18204,6 @@ globalThis.__obscura_init = function() {
      _realmFrameId);
    _browserPostedTaskWakePending = false;
    for (const queue of _browserPostedTaskQueues) _browserPostedTaskDiscardQueue(queue);
@@ -97,10 +106,10 @@ index be457da..25bce0e 100644
    // A real navigation just completed (this runs after set_url), so drop any
    // URL a location setter previewed synchronously and let document_url drive
 diff --git a/crates/obscura-js/src/frame.rs b/crates/obscura-js/src/frame.rs
-index 1a07a32..4b62263 100644
+index 31b7049..73e8889 100644
 --- a/crates/obscura-js/src/frame.rs
 +++ b/crates/obscura-js/src/frame.rs
-@@ -122,11 +122,14 @@ impl FrameRealm {
+@@ -130,11 +130,14 @@ impl FrameRealm {
          // Both ids before init, not after: init is what installs `parent` and
          // `top`, and a document that runs even one script believing it is
          // top-level has already taken the wrong branch.
@@ -116,7 +125,7 @@ index 1a07a32..4b62263 100644
                       globalThis.__obscura_parentFrameId = {parent_frame_id};\
                       globalThis.__obscura_init();"
                  ),
-@@ -693,6 +696,40 @@ mod tests {
+@@ -727,6 +730,40 @@ mod tests {
          );
      }
 
@@ -158,10 +167,10 @@ index 1a07a32..4b62263 100644
      /// frame's document run, in order, against the frame's own DOM.
      #[test]
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index 462153a..649bd17 100644
+index 114dc7c..7b6fc39 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -246,6 +246,7 @@ pub struct CdpObjectState {
+@@ -260,6 +260,7 @@ pub struct CdpObjectState {
 
  pub struct ObscuraJsRuntime {
      state: Rc<RefCell<ObscuraState>>,
@@ -169,7 +178,7 @@ index 462153a..649bd17 100644
      object_store: HashMap<String, String>,
      evaluation_recipes: HashMap<String, String>,
      object_counter: u64,
-@@ -638,6 +639,7 @@ impl ObscuraJsRuntime {
+@@ -677,6 +678,7 @@ impl ObscuraJsRuntime {
 
          let mut instance = ObscuraJsRuntime {
              state,
@@ -177,7 +186,7 @@ index 462153a..649bd17 100644
              object_store: HashMap::new(),
              evaluation_recipes: HashMap::new(),
              object_counter: 0,
-@@ -1494,6 +1496,23 @@ impl ObscuraJsRuntime {
+@@ -1616,6 +1618,23 @@ impl ObscuraJsRuntime {
          let _ = self.execute_runtime_script("<set-screen-size>", script);
      }
 
@@ -201,10 +210,31 @@ index 462153a..649bd17 100644
      /// Current clamped root scroll offset shared by CSSOM geometry and paint.
      #[cfg(feature = "render")]
      pub fn scroll_offset(&self) -> (f32, f32) {
-@@ -4971,6 +4990,31 @@ mod tests {
+@@ -5186,6 +5205,52 @@ mod tests {
          );
      }
 
++    #[test]
++    fn private_onyx_initial_frame_inherits_target_fingerprint_seed() {
++        let mut rt = ObscuraJsRuntime::new();
++        rt.set_dom(parse_html("<html><body></body></html>"));
++        rt.set_url("https://parent.example/");
++        rt.set_fingerprint_seed(0x1020_3040);
++        rt.run_page_init();
++        let value = rt.evaluate(r#"(() => {
++            const iframe = document.createElement('iframe');
++            iframe.srcdoc = '<html><body>child</body></html>';
++            document.body.appendChild(iframe);
++            const child = iframe.contentWindow;
++            const parentAudio = new AudioContext();
++            const childAudio = new child.AudioContext();
++            return [parentAudio.sampleRate === childAudio.sampleRate,
++                    parentAudio.baseLatency === childAudio.baseLatency,
++                    typeof child.__obscura_set_fingerprint_seed];
++        })()"#).unwrap();
++        assert_eq!(value, serde_json::json!([true, true, "undefined"]));
++    }
++
 +    #[test]
 +    fn private_onyx_target_seed_is_stable_across_realms() {
 +        fn bundle(seed: u32) -> serde_json::Value {

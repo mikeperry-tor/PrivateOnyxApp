@@ -330,6 +330,30 @@ class Handler(BaseHTTPRequestHandler):
                 content_type="application/javascript; charset=utf-8",
             )
             return
+        if path == "/srcdoc":
+            self._send(
+                b"<html><body><main id='srcdoc-state'>pending</main><script>"
+                b"const frame=document.createElement('iframe');"
+                b"frame.srcdoc=\"<script>globalThis.ready=true;<\\/script>\";"
+                b"frame.onload=()=>{const child=frame.contentWindow;"
+                b"const a=new AudioContext(),b=new child.AudioContext();"
+                b"document.getElementById('srcdoc-state').textContent="
+                b"String(child.ready===true && "
+                b"a.sampleRate===b.sampleRate && a.baseLatency===b.baseLatency && "
+                b"navigator.hardwareConcurrency===child.navigator.hardwareConcurrency && "
+                b"navigator.deviceMemory===child.navigator.deviceMemory && "
+                b"screen.width===child.screen.width && screen.height===child.screen.height && "
+                b"typeof child.__obscura_set_fingerprint_seed==='undefined');};"
+                b"document.body.appendChild(frame);</script></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            return
+        if path == "/literal.md":
+            self._send(
+                b"\n<script>throw new Error('must stay literal')</script>\n# fixture\n",
+                content_type="text/markdown; charset=utf-8",
+            )
+            return
         if path == "/connection-state/cache-page":
             self._send(
                 b"<html><body>"

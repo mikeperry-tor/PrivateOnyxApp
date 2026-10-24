@@ -1,8 +1,8 @@
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index a84f8ca..8c45d30 100644
+index d283a00..fd288da 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
-@@ -4927,10 +4927,10 @@ class Element extends Node {
+@@ -5380,10 +5380,10 @@ class Element extends Node {
 
      const encoded = pairs.join('&');
      if (method === 'POST') {
@@ -15,16 +15,16 @@ index a84f8ca..8c45d30 100644
      }
    }
    reset() {
-@@ -5819,7 +5819,7 @@ class Document extends Node {
+@@ -6288,7 +6288,7 @@ class Document extends Node {
+   get location() { return this._detached ? null : globalThis.location; }
+   set location(url) {
+     if (this._detached) return;
+-    __obscuraCore.ops.op_navigate(_resolveUrl(String(url)), 'GET', '');
++    __obscuraCore.ops.op_navigate(_resolveUrl(String(url)), 'GET', '', _realmFrameId);
    }
-   get referrer() { return _domParse("document_referrer") ?? ""; }
-   get location() { return globalThis.location; }
--  set location(url) { __obscuraCore.ops.op_navigate(_resolveUrl(String(url)), 'GET', ''); }
-+  set location(url) { __obscuraCore.ops.op_navigate(_resolveUrl(String(url)), 'GET', '', _realmFrameId); }
    get defaultView() {
-     const get = _documentRealmMember(this, 'defaultView');
-     return get ? Reflect.apply(get, this, []) : globalThis;
-@@ -7154,7 +7154,7 @@ function __currentUrl() {
+     if (this._detached) return null;
+@@ -7670,7 +7670,7 @@ function __currentUrl() {
  }
  globalThis.location = {
    get href() { return __currentUrl(); },
@@ -33,7 +33,7 @@ index a84f8ca..8c45d30 100644
    get origin() { try { return new URL(this.href).origin; } catch { return ""; } },
    get protocol() { try { return new URL(this.href).protocol; } catch { return ""; } },
    get host() { try { return new URL(this.href).host; } catch { return ""; } },
-@@ -7164,14 +7164,14 @@ globalThis.location = {
+@@ -7680,14 +7680,14 @@ globalThis.location = {
    get hash() { try { return new URL(this.href).hash; } catch { return ""; } },
    get port() { try { return new URL(this.href).port; } catch { return ""; } },
    toString() { return this.href; },
@@ -53,10 +53,10 @@ index a84f8ca..8c45d30 100644
    enumerable: true,
  });
 diff --git a/crates/obscura-js/src/ops.rs b/crates/obscura-js/src/ops.rs
-index d186368..c1dfd31 100644
+index 0152ad8..e20dbdc 100644
 --- a/crates/obscura-js/src/ops.rs
 +++ b/crates/obscura-js/src/ops.rs
-@@ -5685,17 +5685,17 @@ fn op_history_traverse(scope: &mut v8::PinScope, state: &OpState, index: u32) ->
+@@ -6384,17 +6384,17 @@ fn op_history_traverse(scope: &mut v8::PinScope, state: &OpState, index: u32) ->
      true
  }
 
@@ -78,18 +78,20 @@ index d186368..c1dfd31 100644
      let mut gs = gs.borrow_mut();
      // Only queue the navigation — do NOT change the realm URL here. The URL is
      // updated on commit via `set_url` once the navigation is actually performed.
-@@ -5910,5 +5910,5 @@ pub fn max_live_frames() -> usize {
- /// An initial about:blank needs its own realm before the next JS statement.
--#[op2(nofast)]
-+#[op2(nofast, reentrant)]
+@@ -6607,7 +6607,7 @@ pub fn max_live_frames() -> usize {
+ }
+
+ /// Initial blank and srcdoc documents share their creator's realm setup.
+-#[op2]
++#[op2(reentrant)]
  fn op_initial_frame(
      scope: &mut v8::PinScope,
      state: &OpState,
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index 5f4ee95..4ec74a7 100644
+index 7caf2ad..b59c8eb 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -18080,6 +18080,41 @@ mod tests {
+@@ -18981,6 +18981,41 @@ mod tests {
          );
      }
 

@@ -219,7 +219,7 @@ def main() -> int:
         assert "RETAINED_PAGE_AUTONOMOUS_WORK_REPRODUCED_AND_PARKED" in output
         assert "PINNED_OBSCURA_RUNTIME_CONTRACTS_OK" in output
 
-        # v0.2.4 owns separate renderer and socket-I/O threads per connection.
+        # v0.2.5 owns separate renderer and socket-I/O threads per connection.
         # Inspect only thread names in the disposable server PID namespace.
         if inspection.get("Os") == "linux":
             thread_check = """
@@ -250,7 +250,7 @@ print('PINNED_OBSCURA_CONNECTION_THREADS_CLEANED_UP')
             ).rstrip())
 
         logs = run(args.container_bin, "logs", obscura)
-        assert "Headless Browser v0.2.4-private-onyx-search-v1" in logs
+        assert "Headless Browser v0.2.5-private-onyx-search-v1" in logs
         assert "Private Onyx patchset: search-submission-v1" in logs
         assert (
             "Stealth mode enabled "

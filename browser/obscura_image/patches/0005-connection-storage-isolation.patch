@@ -1,0 +1,15 @@
+diff --git a/crates/obscura-cdp/src/server.rs b/crates/obscura-cdp/src/server.rs
+index 93fd8f8..611719e 100644
+--- a/crates/obscura-cdp/src/server.rs
++++ b/crates/obscura-cdp/src/server.rs
+@@ -827,7 +827,9 @@ fn run_connection(
+         .spawn(move || {
+             let mut slot_guard = SlotGuard(Some(slot));
+             let default_context = Arc::new(
+-                context_template.isolated_copy("default".to_string(), true),
++                // Connections are disposable privacy boundaries, not profile
++                // copies: native persistent copies share localStorage/IndexedDB.
++                context_template.isolated_copy("default".to_string(), false),
+             );
+             let initial_cookies = default_context.cookie_jar.get_all_cookies();
+             let persisted_context = default_context.clone();

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -772,6 +773,127 @@ async def validate_patched_search_runtime() -> None:
         await websocket.close()
 
 
+async def validate_storage_and_module_retention() -> None:
+    """Qualify native storage ownership, parking, and module body recording."""
+    async def evaluate(cdp, session, expression):
+        result = await cdp.send(
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True, "awaitPromise": True},
+            session_id=session, timeout_seconds=15,
+        )
+        assert "exceptionDetails" not in result, result
+        return result["result"].get("value")
+
+    async def navigate(cdp, session, url):
+        await cdp.send(
+            "Page.navigate", {"url": url, "waitUntil": "load"},
+            session_id=session, timeout_seconds=15,
+        )
+
+    # Every evaluation closes its database handle. Aborted writes must not
+    # replace committed state, including after the document is parked.
+    database = """async (write) => {
+        const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open('private-onyx-storage', 1);
+            request.onupgradeneeded = () => request.result.createObjectStore('items');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+        try {
+            if (write) {
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction('items', 'readwrite');
+                    tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+                    tx.objectStore('items').put('retained', 'key');
+                });
+                await new Promise(resolve => {
+                    const tx = db.transaction('items', 'readwrite');
+                    tx.onabort = resolve;
+                    tx.objectStore('items').put('aborted', 'key');
+                    tx.abort();
+                });
+            }
+            return await new Promise((resolve, reject) => {
+                const request = db.transaction('items').objectStore('items').get('key');
+                request.onsuccess = () => resolve(request.result ?? null);
+                request.onerror = () => reject(request.error);
+            });
+        } finally { db.close(); }
+    }"""
+    read_storage = (
+        "(async()=>[localStorage.getItem('fixture'),sessionStorage.getItem('fixture'),"
+        f"await ({database})(false),typeof globalThis.documentMarker])()"
+    )
+    sockets = []
+    try:
+        for index in range(3):
+            websocket = await connect(
+                CDP_URL, proxy=None, additional_headers=cdp_auth_headers(),
+            )
+            sockets.append(websocket)
+            cdp = _RawCdp(websocket)
+            target, session = await create_target(cdp)
+            await cdp.send("Page.enable", session_id=session)
+            await cdp.send("Network.enable", session_id=session)
+            await navigate(cdp, session, BASE_URL + "/static")
+            assert await evaluate(cdp, session, read_storage) == [None, None, None, "undefined"]
+            if index:
+                await cdp.send("Target.closeTarget", {"targetId": target})
+                if index == 1:
+                    await first_cdp.send("Target.closeTarget", {"targetId": first_target})
+                    await sockets[0].close()
+                continue
+            await evaluate(cdp, session,
+                "localStorage.setItem('fixture','local');"
+                "sessionStorage.setItem('fixture','session');"
+                "globalThis.documentMarker=true; true")
+            assert await evaluate(cdp, session, f"({database})(true)") == "retained"
+            await navigate(cdp, session, "about:blank")
+            await navigate(cdp, session, BASE_URL + "/static")
+            assert await evaluate(cdp, session, read_storage) == ["local", "session", "retained", "undefined"]
+
+            sibling, sibling_session = await create_target(cdp)
+            await cdp.send("Page.enable", session_id=sibling_session)
+            await navigate(cdp, sibling_session, BASE_URL + "/static")
+            assert await evaluate(cdp, sibling_session, read_storage) == ["local", None, "retained", "undefined"]
+            await cdp.send("Target.closeTarget", {"targetId": sibling})
+
+            cross = f"http://cross-site.test:{urlsplit(BASE_URL).port}/static"
+            await navigate(cdp, session, cross)
+            assert await evaluate(cdp, session, read_storage) == [None, None, None, "undefined"]
+            await navigate(cdp, session, BASE_URL + "/static")
+            assert await evaluate(cdp, session, read_storage) == ["local", "session", "retained", "undefined"]
+
+            cdp.events.clear()
+            await navigate(cdp, session, BASE_URL + "/modern-javascript")
+            for path, expected in (
+                ("/search-module.js", "import {value}"),
+                ("/search-module-dependency.js", "export const value"),
+            ):
+                await cdp.wait_for_event(
+                    "Network.responseReceived",
+                    lambda event: event.get("response", {}).get("url") == BASE_URL + path,
+                    5,
+                )
+                responses = [event["params"] for event in cdp.events
+                    if event.get("method") == "Network.responseReceived"
+                    and event.get("params", {}).get("response", {}).get("url") == BASE_URL + path]
+                assert len(responses) == 1, (path, responses)
+                response = await cdp.send("Network.getResponseBody",
+                    {"requestId": responses[0]["requestId"]}, session_id=session)
+                body = response["body"]
+                if response.get("base64Encoded"):
+                    body = base64.b64decode(body).decode()
+                assert expected in body, (path, response)
+            # Keep this first connection alive while proving isolation, then
+            # close it before the third connection proves disposal.
+            if index == 0:
+                first_cdp, first_target = cdp, target
+    finally:
+        for websocket in sockets:
+            await websocket.close()
+
+
 async def validate_connection_isolation() -> None:
     first_ws = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     second_ws = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
@@ -1075,6 +1197,8 @@ async def validate_cross_realm_navigation_ownership() -> None:
         ("child.document.querySelector('form').method = 'get'; "
          "child.document.querySelector('form').requestSubmit()",
          "/cross-realm-child"),
+        ("new DOMParser().parseFromString('<html><body>inert</body></html>', "
+         "'text/html').location = '/static'", "/cross-realm-child"),
     )
     websocket = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     cdp = _RawCdp(websocket)
@@ -1103,7 +1227,7 @@ async def validate_cross_realm_navigation_ownership() -> None:
                 expression, result,
             )
             # Pending navigation must not change the committed document origin.
-            # v0.2.4 keeps cookie authority on the loaded document until commit.
+            # v0.2.5 keeps cookie authority on the loaded document until commit.
             committed = await cdp.send(
                 "Runtime.evaluate",
                 {"expression": "document.querySelector('iframe').contentDocument.URL",
@@ -1154,6 +1278,9 @@ def validate_navigation_contracts() -> None:
         child_navigation.rendered_html or ""
     )
 
+    srcdoc = fetch("/srcdoc", want="dom")
+    assert 'id="srcdoc-state">true<' in (srcdoc.rendered_html or "")
+
     modern_javascript = fetch("/modern-javascript", want="dom")
     modern_html = modern_javascript.rendered_html or ""
     assert "custom-event" in modern_html, modern_html
@@ -1190,6 +1317,11 @@ def validate_navigation_contracts() -> None:
     assert raw.body_classification is BodyClassification.TEXT
     assert raw.lossy_conversion_possible is True
     assert raw.body == b"raw text fixture\n"
+
+    markdown = fetch("/literal.md")
+    assert markdown.body == b"\n<script>throw new Error('must stay literal')</script>\n# fixture\n"
+    assert "&lt;script&gt;" in (markdown.rendered_html or "")
+    assert "<script>" not in (markdown.rendered_html or "")
 
     unsupported = fetch("/unsupported.bin", want="body")
     assert unsupported.body_classification is BodyClassification.BINARY
@@ -1237,6 +1369,7 @@ def main() -> None:
     asyncio.run(validate_playwright_session_attachment())
     asyncio.run(validate_anubis_worker_preload_runtime())
     asyncio.run(validate_patched_search_runtime())
+    asyncio.run(validate_storage_and_module_retention())
     asyncio.run(validate_connection_isolation())
     asyncio.run(validate_connection_limit())
     asyncio.run(validate_reusable_provider_session())

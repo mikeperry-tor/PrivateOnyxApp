@@ -22,9 +22,9 @@ apply in every selected mode.
 | optional `tor` | `tor-ingress` only when onion ingress is enabled; private control tmpfs and optional SOCKS runtime volume are mounts, not networks | dedicated `tor-uplink`; applications never join it |
 | optional `tor-frontend-gateway` | spans only `tor-ingress` and `onyx-frontend`, with fixed nginx forwarding | none |
 
-CDP is powerful browser authority. Obscura v0.2.4 gives every WebSocket its
-own browser context, HTTP client, cookie jar, targets, headers, User-Agent
-state, renderer and socket-I/O threads, and V8 isolates. Mutable page state,
+CDP is powerful browser authority. The derived Obscura v0.2.5 runtime gives
+every WebSocket its own browser context, HTTP client, cookie jar, targets,
+headers, User-Agent state, renderer and socket-I/O threads, and V8 isolates. Mutable page state,
 HTTP caches, and cookies are isolated across request connections. A process-wide
 classic-script compilation cache retains script source and compiled bytes,
 keyed by document origin, script name, and exact source. It does not reuse live
@@ -54,6 +54,15 @@ no cookie-clear race to claim as an isolation mechanism. A cleanup or
 protocol ambiguity discards the affected generation and remains an
 availability/resource event, not a safe retry signal. Clients do not
 reconnect or replay an in-flight attempt.
+
+The connection-storage patch uses native nonpersistent isolated contexts
+because upstream persistent copies share Web Storage/IndexedDB backing stores.
+Origin-separated localStorage and IndexedDB survive navigation within the
+connection context; origin-separated sessionStorage survives within its target.
+Parking does not clear those stores. Their lifetime is bounded by the provider
+generation, and the selected-image gate proves separation across origins and
+simultaneous or replacement connections. The runtime has no persistent profile
+directory. Cookie clearing alone would not dispose of this state.
 
 Startpage's supported Anubis continuation does not widen CDP or network
 authority. Its opaque token and validated challenge remain inside the SearXNG

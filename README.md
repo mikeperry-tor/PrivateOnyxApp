@@ -237,8 +237,8 @@ The stock Onyx Web Crawler is the default reliability-oriented path, but you can
 
 SearXNG's five free engines use Obscura. Each of these engines keeps its own browser session
 for up to one hour after its last query, preserving provider cookies,
-profile/fingerprint state, and connection continuity without sharing state with
-another provider. `SEARXNG_TIMED_TYPING_PROVIDERS` can opt selected providers
+origin-scoped browser storage, profile/fingerprint state, and connection
+continuity without sharing state with another provider. `SEARXNG_TIMED_TYPING_PROVIDERS` can opt selected providers
 into experimental timed key-entry simulation of search input.
 
 In either case, Docker Compose network-namespace routing restricts egress to the selected final hop (Tor exit, VPN, or proxy). This is the case for all search traffic as well. For the request flows, distinct browser navigation contracts, limits, and failure behavior, see [`docs/request_handling.md`](docs/request_handling.md).
@@ -348,7 +348,8 @@ configuration profile.  `open_url()` transports remain request-scoped and do not
 preserve browser state between calls. SearXNG is the narrow exception: it
 retains one native browser connection and target per search provider for up to
 one hour after the last query, without sharing that state with other providers
-or browser paths.
+or browser paths. Provider cookies and origin-scoped browser storage stay in
+memory and are discarded when that session expires or closes.
 
 ### The Anti-Bot Landscape is also Anti-Privacy
 

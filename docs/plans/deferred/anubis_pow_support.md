@@ -13,7 +13,7 @@
 > **Decision rule:** implement exactly one worker execution approach. Prefer an
 > upstream Obscura release with bounded real workers (Approach A). If the
 > selected pin has no suitable implementation, use the narrow upstreamable
-> Obscura worker patch (Approach B). Obscura v0.2.4 does not pass the dedicated-
+> Obscura worker patch (Approach B). Obscura v0.2.5 does not pass the dedicated-
 > worker gate, so implementation against the current pin requires Approach B.
 > Remove the implemented stack solver in the same change; never ship it as a
 > fallback for worker execution.
@@ -82,7 +82,7 @@ It does not:
 
 This plan targets:
 
-- the derived Obscura v0.2.4 image and matching
+- the derived Obscura v0.2.5 image and matching
   `reference_repos/obscura` checkout;
 - SearXNG `2026.7.15-7b2199ecd` and the five custom offline engines;
 - Startpage's Anubis v1.25.0 homepage challenge using algorithm `fast`,
@@ -151,10 +151,10 @@ provider identifier that is unique to an observed request.
 
 ## Current Failure and Why Readiness Alone Is Insufficient
 
-Obscura v0.2.4 has `crypto.subtle.digest`, Blob objects, blob URL bookkeeping,
+Obscura v0.2.5 has `crypto.subtle.digest`, Blob objects, blob URL bookkeeping,
 and a `Worker` compatibility object. Its Worker implementation fetches or reads
 the source and evaluates it cooperatively in the page's V8 isolate. It does not
-create an independently scheduled worker isolate. v0.2.4 synchronously records
+create an independently scheduled worker isolate. v0.2.5 synchronously records
 source bytes for its native Blob objects before a Blob-backed Worker is
 constructed. Execution remains cooperative and lacks independent worker
 resource ownership.
@@ -172,7 +172,7 @@ isolate from servicing CDP inspection, and consumes the transaction deadline at
 
 Anubis also creates a new main-document navigation through its pass endpoint.
 The existing readiness helper is intentionally a same-document DOM hydration
-wait and does not own new loader correlation. The selected v0.2.4 wrapper's
+wait and does not own new loader correlation. The selected v0.2.5 wrapper's
 explicit-navigation-realm patch makes top-level `location.replace()` reach the
 owning navigation realm, but it does not supply the transaction state machine
 or loader correlation. Finally, the original Startpage search is a POST while

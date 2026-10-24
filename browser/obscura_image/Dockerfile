@@ -1,5 +1,5 @@
 ARG OBSCURA_BUILDER_IMAGE=docker.io/library/rust:1.94.0-bookworm@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f
-ARG OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.4@sha256:772cf3bada266e81bc0fae0304074f4971a551e3766f412417f006273e202f0e
+ARG OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.5@sha256:354c3d2a0fa2dd2939debe6903aa26c35d121329245dfa42aa7d1c292a209814
 
 FROM ${OBSCURA_BUILDER_IMAGE} AS builder
 
@@ -29,17 +29,19 @@ RUN set -eu; \
         --ref "${OBSCURA_SOURCE_REF}" \
         --sha256 "${OBSCURA_SOURCE_SHA256}" \
         --output-dir /build \
-    && test "$(cat /wrapper/patches/series)" = "$(printf '%s\n%s\n%s\n%s' \
+    && test "$(cat /wrapper/patches/series)" = "$(printf '%s\n%s\n%s\n%s\n%s' \
         0001-stealth-native-post.patch \
         0002-target-fingerprint-seed.patch \
         0003-search-runtime-compatibility.patch \
-        0004-explicit-navigation-realm.patch)" \
+        0004-explicit-navigation-realm.patch \
+        0005-connection-storage-isolation.patch)" \
     && test "$(find /wrapper/patches -maxdepth 1 -type f -name '*.patch' \
-        -exec basename {} \; | LC_ALL=C sort)" = "$(printf '%s\n%s\n%s\n%s' \
+        -exec basename {} \; | LC_ALL=C sort)" = "$(printf '%s\n%s\n%s\n%s\n%s' \
         0001-stealth-native-post.patch \
         0002-target-fingerprint-seed.patch \
         0003-search-runtime-compatibility.patch \
-        0004-explicit-navigation-realm.patch)" \
+        0004-explicit-navigation-realm.patch \
+        0005-connection-storage-isolation.patch)" \
     && while IFS= read -r patch; do \
         git -C /build apply --check "/wrapper/patches/${patch}"; \
         git -C /build apply "/wrapper/patches/${patch}"; \
@@ -68,6 +70,7 @@ RUN cargo test --locked --no-default-features --features stealth \
 # Native upgrade contracts are not selected by the wrapper's private_onyx_ filter.
 RUN set -eu; for check in \
         classic_code_cache_reuses_compilation_not_page_state \
+        indexed_db::tests indexeddb_ origin_storage_ web_storage_ \
         watchdog fetch_abort \
         fetch_resolves_headers_before_the_response_body_finishes \
         repeated_fetch_clone_cancellation cancelling_all_fetch_clones; do \

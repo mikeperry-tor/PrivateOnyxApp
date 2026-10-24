@@ -59,14 +59,14 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertNotIn("--storage-dir", self.compose)
         self.assertNotIn("--allow-file-access", self.compose)
 
-    def test_manifest_pins_obscura_0_2_4(self):
+    def test_manifest_pins_obscura_0_2_5(self):
         self.assertIn(
-            "OBSCURA_RELEASE_VERSION=0.2.4",
+            "OBSCURA_RELEASE_VERSION=0.2.5",
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.4"
-            "@sha256:772cf3bada266e81bc0fae0304074f4971a551e3766f412417f006273e202f0e",
+            "OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.5"
+            "@sha256:354c3d2a0fa2dd2939debe6903aa26c35d121329245dfa42aa7d1c292a209814",
             self.manifest,
         )
         self.assertIn(
@@ -74,12 +74,12 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             self.manifest,
         )
         self.assertIn(
-            "OBSCURA_SOURCE_REF=1fccab2c1ecd0f7eadc16d7a520ba227f9e7f782",
+            "OBSCURA_SOURCE_REF=bd9529418b7fa975b50eabeac415cfaaa865a588",
             self.manifest,
         )
         self.assertIn(
             "OBSCURA_SOURCE_SHA256="
-            "ec8b425ccd223360554e95c7b9b16afbd67626aa25bfb3ea517489625e72e290",
+            "ec5a2862c003f7db16a933447a863047e3b94f7f55804f6c1b8db93fe2cf1995",
             self.manifest,
         )
         self.assertNotIn("\nOBSCURA_IMAGE=", self.manifest)
@@ -113,8 +113,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         )
         self.assertIn(
             "ARG OBSCURA_UPSTREAM_IMAGE="
-            "docker.io/h4ckf0r0day/obscura:0.2.4"
-            "@sha256:772cf3bada266e81bc0fae0304074f4971a551e3766f412417f006273e202f0e",
+            "docker.io/h4ckf0r0day/obscura:0.2.5"
+            "@sha256:354c3d2a0fa2dd2939debe6903aa26c35d121329245dfa42aa7d1c292a209814",
             self.obscura_dockerfile,
         )
         self.assertIn("obscura/archive/{ref}.tar.gz", self.obscura_fetcher)
@@ -131,6 +131,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
                 "0002-target-fingerprint-seed.patch",
                 "0003-search-runtime-compatibility.patch",
                 "0004-explicit-navigation-realm.patch",
+                "0005-connection-storage-isolation.patch",
             ],
         )
         self.assertIn(

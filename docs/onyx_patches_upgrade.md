@@ -518,6 +518,25 @@ Audit these current Obscura areas:
   homepage, result, and later-query navigation. Remove
   `0002-target-fingerprint-seed.patch` only when upstream provides target- or
   context-stable fingerprint state with the same provider-session lifetime;
+- synchronous blank/`srcdoc` child initialization inheriting the creator's
+  target seed before author code, with the private setter removed; fetched
+  iframe author scripts finishing before load, inherited base URLs, and sandbox
+  origin restrictions. Preserve detached-document location inertness when
+  rebasing receiver-frame navigation;
+- native localStorage and IndexedDB context ownership, sessionStorage target
+  ownership, origin separation, transaction commit/abort, and same-target
+  continuity through `about:blank`. Prove another live connection and a fresh
+  replacement cannot read those stores, and a sibling target shares only
+  context-owned state. Parking must still stop provider autonomous work;
+  retain the native IndexedDB transaction/quota/teardown and Web Storage
+  origin/quota debug-build gates alongside these selected-image checks;
+  `0005-connection-storage-isolation.patch` selects native nonpersistent copies
+  for the connection default context. Remove it only when upstream CDP
+  connections isolate localStorage and IndexedDB without sharing the mutable
+  startup template, and the selected-image storage gates pass unpatched;
+- real ES-module root/dependency response metadata and retrievable bodies,
+  including their shared response-store entry pressure. Retain the heavy-page
+  main-body eviction fixture and exact main Document identity checks;
 - native writable shadowing of legacy Window named-element properties; the
   `PerformanceEntry`/`PerformanceResourceTiming`/`PerformanceNavigationTiming`
   constructor hierarchy extending native `PerformanceEntry` without replacing
@@ -526,7 +545,7 @@ Audit these current Obscura areas:
   parser-discovered and dynamic scripts. Remove
   `0003-search-runtime-compatibility.patch` only when the tagged upstream runtime
   provides the timing, SVG, and nomodule contracts and the focused
-  provider fixtures pass without it. Native v0.2.4 `Response.body` must continue
+  provider fixtures pass without it. Native v0.2.5 `Response.body` must continue
   to pass the retained `pipeThrough()` regression without a wrapper implementation;
 - explicit main- versus child-frame ownership for script-triggered navigation,
   including a top-level `requestSubmit()` POST with its encoded form body and
@@ -617,9 +636,10 @@ passes:
   configured entry count. Remove the HTML exception when the tagged image
   proves the main body remains retrievable. Do not substitute a larger entry
   count, which multiplies the per-entry memory bound.
-- **Connection isolation.** The wrapper relies on Obscura creating an isolated
-  browser context and HTTP client for every WebSocket and does not clear
-  cookies. Re-audit the immutable connection template, host-only URL-based CDP
+- **Connection isolation.** The connection-storage patch selects a native
+  nonpersistent isolated browser context and HTTP client for every WebSocket;
+  persistent copies share localStorage and IndexedDB backing stores. The wrapper
+  does not clear cookies. Re-audit the immutable connection template, host-only URL-based CDP
   imports, PSL and SameSite/secure-cookie enforcement, lossy CDP exports, cookie-delta persistence
   behavior, every state-bearing CDP domain, two-client interleavings, repeated
   target cleanup, provider idle expiry, and connection-thread exit before

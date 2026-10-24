@@ -118,8 +118,8 @@ connection paths send it as an Authorization header, never in a URL. Missing
 or malformed credentials fail closed; browser-origin handshakes are rejected.
 The token grants shared browser control, not per-provider or per-user authority.
 
-Obscura v0.2.4 gives every WebSocket connection its own browser context, HTTP
-client, cookie jar, targets, headers, User-Agent state, renderer and socket-I/O
+The derived Obscura v0.2.5 runtime gives every WebSocket connection its own
+browser context, HTTP client, cookie jar, targets, headers, User-Agent state, renderer and socket-I/O
 threads, and V8 isolates. A process-wide classic-script compilation cache is
 an exception: it retains source and compiled bytes across connection closure,
 keyed by document origin, script name, and exact source, without sharing live
@@ -137,7 +137,18 @@ the target-owned state above. A pending Startpage proof is the sole exception:
 its challenge document remains live only until resume or abort. Neither path
 issues `Network.clearBrowserCookies` or `Storage.clearCookies`; connection and
 provider ownership, not a mutable clear operation, define the state boundary.
-Native v0.2.4 cookie handling applies host-only scope, PSL-based domain
+
+The connection-storage patch selects native nonpersistent isolated contexts;
+upstream persistent copies share localStorage and IndexedDB backing stores
+even without a storage directory. Native localStorage and IndexedDB belong to
+the selected connection's browser context; sessionStorage belongs to its target. All three are origin-separated and survive
+same-origin navigation, including a round trip through local `about:blank`.
+Parking releases page execution, not these backing stores. They remain inside
+the owning provider generation and disappear when its connection closes;
+fresh `open_url` connections do not inherit them. No `--storage-dir` is enabled.
+IndexedDB commits transactions atomically and rolls back aborted writes.
+
+Native v0.2.5 cookie handling applies host-only scope, PSL-based domain
 validation, and secure/HttpOnly write protection. Its SameSite filtering needs
 the caller's navigation context. The wrapper source patch captures the initiating
 document before changing the page URL and supplies that context for main-document
@@ -178,7 +189,7 @@ receive HTTP 503 instead of entering a server queue as a fail-closed guard
 against a changed worker/process model or another unexpected CDP caller; normal
 Onyx tool execution is expected to remain within the 15-slot composition.
 
-In the stealth-feature build, upstream v0.2.4 accepts
+In the stealth-feature build, upstream v0.2.5 accepts
 `Network.setExtraHTTPHeaders` and `Network.setUserAgentOverride` but applies
 them to the ordinary context HTTP client while navigation uses its separate
 wreq client, so those overrides do not reach the wire. The wrapper does not
@@ -186,7 +197,7 @@ call either command; its isolation contract therefore covers the cookie jar,
 targets, contexts, V8 state, and connection cleanup actually used by this
 stack. Re-audit this upstream split before depending on either override.
 
-Obscura v0.2.4 supplies native SVG interfaces, User Timing, fetch/XHR
+Obscura v0.2.5 supplies native SVG interfaces, User Timing, fetch/XHR
 cancellation, and frame teardown. The compatibility patch extends native
 `PerformanceEntry` with resource/navigation timing constructors and suppresses
 `nomodule` scripts; it does not replace native marks, measures, or observers.
@@ -195,7 +206,11 @@ counters and lifecycle events do not replace the provider DOM readiness checks.
 
 The selected no-render runtime executes same-origin child-frame scripts and
 page/frame `postMessage`; the tagged-image gate exercises that path because
-provider hydration can depend on frame messaging. The explicit navigation-realm
+provider hydration can depend on frame messaging. Native `srcdoc` documents
+inherit the creator's base URL and honor sandbox restrictions; their author
+scripts finish before the iframe load event. The fingerprint patch seeds both
+fetched frame realms and synchronously created blank/`srcdoc` realms before
+initialization. The explicit navigation-realm
 patch binds form submission and `location` operations to the receiver's frame,
 including when the parent calls a child's method or setter. Native caller-realm
 inference would move the parent instead. Pending navigation preserves the
@@ -382,6 +397,11 @@ wrapper opens at most one stream on that connection. Neither limit is an
 aggregate browser process-memory bound. In-process PDF parsing also has no
 complete CPU, transient-memory, or parser wall-time bound beyond the outer
 invocation.
+
+ES-module roots, dependencies, and dynamic imports record real response
+metadata and bounded bodies in the same page response store. Module-heavy
+pages therefore also consume its entry and byte budgets; module records must
+not be mistaken for the terminal main Document.
 
 ## Onyx `open_url`: Obscura mode
 
@@ -764,7 +784,7 @@ standard `application/x-www-form-urlencoded` default; any explicit different
 encoding remains a policy failure.
 
 Instant query entry is the default. It uses the control prototype's native
-value setter followed by one bubbling `input` and `change` event. Obscura v0.2.4
+value setter followed by one bubbling `input` and `change` event. Obscura v0.2.5
 also supports native `Input.insertText` and Playwright label-based `fill()`.
 The wrapper retains its atomic instant-entry form validation and explicit
 change event; the CDP command alone neither enforces that policy nor emits
@@ -979,7 +999,7 @@ for wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
 fingerprint seed, stealth-native form POST, and focused provider JavaScript
 runtime-compatibility contracts. The stack
 consumes DOM and response-body CDP surfaces, not screenshots, screencasts, or PDF
-export, so it does not compile the v0.2.4 raster renderer or incur its image,
+export, so it does not compile the v0.2.5 raster renderer or incur its image,
 font, layout, and capture resource work. JavaScript, DOM, module, charset, and
 compressed-stealth-response improvements remain present in the no-render
 build.

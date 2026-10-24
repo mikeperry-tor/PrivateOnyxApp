@@ -33,6 +33,7 @@ We carry several patches to SearXNG and Obscura Browser to improve search engine
 - A browser tab keeps a stable fingerprint across page loads and child frames, helping search providers see a consistent browser throughout a search session.
 - Search form submissions preserve the browser's cookies, proxy route, and browser-like connection profile through redirects. This keeps form-based searches consistent with the session that loaded the search page.
 - Browser compatibility fixes help modern search scripts run correctly and prevent conflicting modern and legacy scripts from loading together. Frame navigation fixes also ensure that a form or link targets its intended frame.
+- Search providers retain their own browser storage during a session. Storage remains isolated from other providers and fresh `open_url` requests and is discarded when the session closes.
 
 ## Onyx Patches
 
