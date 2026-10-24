@@ -7,18 +7,32 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const factories = new Map();
+
+// Next's runtime registers an optional leading shared group before the
+// remaining module IDs/factories. Preserve its first-registered identity.
+function registerModules(items) {
+  let start = 0;
+  if (Array.isArray(items[0])) {
+    registerModules(items[0]);
+    start = 1;
+  }
+  let ids = [];
+  for (const item of items.slice(start)) {
+    if (Number.isSafeInteger(item)) ids.push(item);
+    else if (typeof item === "function") {
+      assert.ok(ids.length, "Module factory has no IDs");
+      const factory = ids.map((id) => factories.get(id)).find(Boolean) || item;
+      for (const id of ids) if (!factories.has(id)) factories.set(id, factory);
+      ids = [];
+    } else throw new Error("Unexpected shipped module registration");
+  }
+  assert.equal(ids.length, 0, "Module IDs have no factory");
+}
+
 const context = vm.createContext({
   TURBOPACK: {
     push(chunk) {
-      let ids = [];
-      for (const item of chunk.slice(1)) {
-        if (typeof item === "number") ids.push(item);
-        else if (typeof item === "function") {
-          for (const id of ids) factories.set(id, item);
-          ids = [];
-        } else throw new Error("Unexpected shipped module registration");
-      }
-      assert.equal(ids.length, 0);
+      registerModules(chunk.slice(1));
     },
   },
 });
@@ -38,11 +52,11 @@ function visit(directory) {
 }
 visit("/app/.next/static/chunks");
 
-function findFactory(exportName) {
+function findFactory(name, markers) {
   const matches = [...new Set(factories.values())].filter((factory) =>
-    factory.toString().includes(`"${exportName}",0`)
+    markers.every((marker) => factory.toString().includes(marker))
   );
-  assert.equal(matches.length, 1, `Expected one ${exportName} module`);
+  assert.equal(matches.length, 1, `Expected one ${name} module`);
   return matches[0];
 }
 
@@ -64,8 +78,10 @@ function execute(factory, imports = new Map()) {
   return exports;
 }
 
-const fetcher = execute(findFactory("FetchError"));
-const hookFactory = findFactory("useSettings");
+// Export names are mangled in the selected image. Locate unique factories by
+// their audited semantics, then require their exact current export/import keys.
+const fetcher = execute(findFactory("FetchError", ["extends Error", "this.status=", "this.info=", "errorRetryCount"]));
+const hookFactory = findFactory("useSettings", ["enterpriseSettings", "shouldRetryOnError", "application_name"]);
 const dependencies = [...hookFactory.toString().matchAll(/\w+\.i\((\d+)\)/g)]
   .map((match) => Number(match[1]));
 assert.equal(dependencies.length, 9, "Settings dependency shape drifted");
@@ -73,27 +89,27 @@ let pathname, core, enterprise, calls;
 const settingsKey = "/api/settings";
 const enterpriseKey = "/api/enterprise-settings";
 const importedValues = [
-  { default(key, _fetcher, options) {
+  { U(key, _fetcher, options) {
     calls.push({ key, options });
     return key === settingsKey ? core : key === enterpriseKey ? enterprise : {};
   } },
   { useMemo: (fn) => fn() },
   { usePathname: () => pathname },
-  { default() { throw new Error("CE login must not load connectors"); } },
+  { f() { throw new Error("CE login must not load connectors"); } },
   fetcher,
-  { SWR_KEYS: { settings: settingsKey, enterpriseSettings: enterpriseKey } },
-  { isAuthPath: (value) => value.startsWith("/auth/") },
-  { ApplicationStatus: { ACTIVE: "active" }, QueryHistoryType: { NORMAL: "normal" } },
-  { EE_ENABLED: false },
+  { f: { settings: settingsKey, enterpriseSettings: enterpriseKey } },
+  { V: (value) => value.startsWith("/auth/") },
+  { E: { ACTIVE: "active" }, a: { NORMAL: "normal" } },
+  { C: false },
 ];
-const { useSettings } = execute(hookFactory,
+const { s: useSettings } = execute(hookFactory,
   new Map(dependencies.map((id, index) => [id, importedValues[index]])));
 
 for (pathname of ["/auth/login", "/app"]) {
   for (const status of [404, 401, 403, 429, 500]) {
     calls = [];
     core = {};
-    const error = new fetcher.FetchError("fixture", status, {});
+    const error = new fetcher.t("fixture", status, {});
     enterprise = { error };
     const result = useSettings();
     assert.equal(result.error, status === 404 ? undefined : error);
@@ -109,8 +125,8 @@ for (pathname of ["/auth/login", "/app"]) {
 pathname = "/app";
 for (const status of [404, 500]) {
   calls = [];
-  core = { error: new fetcher.FetchError("core failure", status, {}) };
-  enterprise = { error: new fetcher.FetchError("optional missing", 404, {}) };
+  core = { error: new fetcher.t("core failure", status, {}) };
+  enterprise = { error: new fetcher.t("optional missing", 404, {}) };
   assert.equal(useSettings().error, core.error);
 }
 console.log("PINNED_WEBUI_CE_SETTINGS_CONTRACT_OK");

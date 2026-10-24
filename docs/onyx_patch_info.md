@@ -1093,11 +1093,14 @@ synthetic individual tool results.
 
 ## Reasoning, tool history, and coding finalization
 
-Native provider request policy remains authoritative: GPT-5.4+ tool requests
-using chat completions send explicit `reasoning_effort=none`, including aliases
-recognized by model name or a provider rejection. The retry ladder retains
-that required value while removing other rejected tuning parameters. Responses
-routes and non-GPT models retain their native reasoning policy. The wrapper's
+Native provider request policy remains authoritative. GPT-5.4+ tool requests
+that LiteLLM bridges to Responses retain reasoning, including OpenAI-compatible
+gateway calls initially configured for chat completions. Onyx supplies the
+required `reasoning_effort` bridge field so LiteLLM selects that path. Calls
+that remain on chat completions use `reasoning_effort=none` when their model
+policy or a provider rejection requires it. The retry ladder retains a
+provider-required value while removing other rejected tuning parameters. Explicit
+Responses routes and non-GPT models retain their native reasoning policy. The wrapper's
 reasoning capability override and history preservation do not override this
 transport requirement or force fresh reasoning from such a request.
 

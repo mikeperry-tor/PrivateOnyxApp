@@ -217,6 +217,12 @@ prefix/request/retry/normalization contracts, and OpenSearch query/index
 compatibility. Audit new ingestion and query paths as well as wrapped symbols,
 and run the owning document's full validation matrix. Prefer equivalent native
 Onyx behavior and remove superseded shims without a compatibility path.
+Require the native tabular migration to remain disabled and absent from the
+materialized schedule. Validate bounded workbook profiles and small-sheet row
+retention, per-document retry after a failed batch (including the prepared-row
+gate bypass), stop-signal propagation, and non-replayed document-push failures
+against the selected image. The current behavior is documented in
+[local RAG](local_docs_rag_search.md#indexing-enrichment-and-accounting).
 
 #### Resource ownership and minimization audit
 
@@ -1527,8 +1533,10 @@ wrappers.
   bootstrap. Require disabled persona tools to remain unavailable even with an
   explicit whitelist, metadata guidance to name only the actual selected
   retrieval tools, and stable translated prefixes with file metadata present.
-  Verify explicit GPT chat-completions `reasoning_effort=none` survives tuning
-  retries, opaque aliases learn it from the provider rejection, and Responses
+  Verify GPT tool turns eligible for LiteLLM's Responses bridge retain reasoning
+  and its required bridge field. For calls that remain on chat completions,
+  verify provider-required `reasoning_effort=none` survives tuning retries and
+  opaque aliases learn it from the provider rejection. Explicit Responses
   and non-GPT requests retain their reasoning settings. Incognito policy fields,
   tools, tool choice, and messages must survive those retries unchanged.
 - **Reasoning and saved history:** re-audit the structured-message builder,

@@ -629,6 +629,25 @@ startup stops before creating a new API/background tier.
 
 ## Indexing enrichment and accounting
 
+Spreadsheet and CSV indexing uses native bounded workbook chunks. Small sheets
+retain their rows when they fit within three chunks. Larger sheets contribute
+profiles, aggregates, sample rows, and up to two frequent-value chunks per
+sheet, with at most 24 ordinary chunks per workbook before optional multipass
+large chunks. The original file remains in the file store; the searchable
+representation does not contain every large-sheet row. Existing indexed
+spreadsheets are not automatically migrated: native `TABULAR_RECHUNK_ENABLED`
+defaults to false, and the wrapper does not enable its periodic migration.
+
+When an indexing batch raises, native Onyx retries each document separately so
+one failing document does not discard successful siblings. Documents already
+prepared by the failed batch bypass timestamp and content-hash gates on that
+retry. Ordinary unchanged documents still use both gates, and secondary-index
+porting still bypasses the content-hash gate. Chunk counts are committed only
+for successful embedding and index writes. An exception escaping the document-
+push boundary is reported without per-document replay after the index write
+has committed; the disabled config-driven sink retains its own logged-error
+handling.
+
 Before running optional contextual RAG or image summarization, native Onyx checks
 any enabled global token and cost budgets. Documents requiring enrichment fail
 explicitly when a budget is exhausted; documents that do not require enrichment
@@ -648,6 +667,8 @@ is enabled. See [resource policy](resource_minimization.md#onyx-background-work)
 Enrichment traces use metadata-only content mode. Configuring an external trace
 provider still exports usage and model metadata; ordinary chat tracing retains
 its separate content policy. The wrapper leaves external tracing disabled.
+Contextual document-summary and chunk-context failures propagate into indexing
+failure handling rather than silently indexing without the requested enrichment.
 
 Internal search uses a doubled candidate-selection token budget before relevance
 selection and context expansion. The optional wrapper content caps remain at

@@ -21,7 +21,7 @@ bundled Docker CLI will continue to use its upstream `docker` executor backend;
 Podman's Docker-compatible API will create, inspect, execute in, and remove the
 short-lived executor containers.
 
-The completed feature must support both code-tool forms used by Onyx v4.8.4:
+The completed feature must support both code-tool forms used by Onyx v4.8.8:
 
 - `run_python`, including streamed execution, staged input files, generated
   files, download, deletion, timeouts, resource limits, and optional restricted
@@ -50,7 +50,7 @@ The initial implementation targets this exact component set:
 
 | Component | Pinned contract |
 | --- | --- |
-| Onyx | `v4.8.4` |
+| Onyx | `v4.8.8` |
 | code-interpreter API | `0.4.9` |
 | upstream Python executor | `0.4.9`, pinned by digest |
 | derived executor | the Makefile-derived tag from the upstream digest, `executor/Dockerfile`, and hashed dependency lock |

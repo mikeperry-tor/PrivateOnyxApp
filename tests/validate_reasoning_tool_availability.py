@@ -18,7 +18,7 @@ def validate_reasoning_requests() -> None:
         "name": "fixture", "parameters": {"type": "object", "properties": {}},
     }}]
     prompt = [UserMessage(content="fixture")]
-    for mode, model, offered, requires_none in (
+    for mode, model, offered, bridged_tool_turn in (
         (BIFROST_API_MODE_CHAT_COMPLETIONS, "openai/gpt-5.6-sol", tools, True),
         (BIFROST_API_MODE_CHAT_COMPLETIONS, "openai/gpt-5.6-sol", None, False),
         (BIFROST_API_MODE_RESPONSES, "openai/gpt-5.6-sol", tools, False),
@@ -37,11 +37,11 @@ def validate_reasoning_requests() -> None:
                             reasoning_effort=ReasoningEffort.HIGH)
         sent = completion.call_args.kwargs
         assert sent["tools"] == offered
-        assert (sent.get("reasoning_effort") == "none") is requires_none
-        if requires_none:
+        assert sent.get("reasoning_effort") != "none"
+        assert set(sent) & multi_llm._REASONING_KWARG_KEYS
+        if bridged_tool_turn:
+            assert "reasoning_effort" in sent
             assert "reasoning" not in sent
-        else:
-            assert set(sent) & multi_llm._REASONING_KWARG_KEYS
 
     # Unknown aliases learn the provider-required value once. Neither retry
     # may strip tools, preserved history, or incognito retention controls.
@@ -64,7 +64,7 @@ def validate_reasoning_requests() -> None:
             assert llm._completion(prompt=prompt, tools=tools, tool_choice="auto",
                                    stream=False, parallel_tool_calls=False,
                                    reasoning_effort=ReasoningEffort.HIGH) == "ok"
-        assert len(calls) == (2 if model.startswith("gpt-") else 3)
+        assert len(calls) == 3
         for sent in calls:
             assert sent["tools"] == tools and sent["tool_choice"] == "auto"
             assert sent["messages"] == calls[0]["messages"]
@@ -158,7 +158,7 @@ def validate_context_override() -> None:
     from onyx.llm.models import ReasoningEffort
     model = SimpleNamespace(name="fixture", max_input_tokens=4096,
                             temperature_default=0.3, reasoning_effort_default=ReasoningEffort.HIGH,
-                            reasoning_effort_max=ReasoningEffort.HIGH)
+                            reasoning_effort_max=ReasoningEffort.HIGH, supports_reasoning=True)
     provider = SimpleNamespace(model_configurations=[model], provider="openai",
         deployment_name=None, api_key="fixture", api_base=None, api_version=None, custom_config={})
     with patch.object(factory, "get_llm") as construct:
@@ -167,6 +167,7 @@ def validate_context_override() -> None:
     assert construct.call_args.kwargs["temperature"] == 0.3
     assert construct.call_args.kwargs["reasoning_effort_default"] == ReasoningEffort.HIGH
     assert construct.call_args.kwargs["reasoning_effort_max"] == ReasoningEffort.HIGH
+    assert construct.call_args.kwargs["supports_reasoning"] is True
     assert model.max_input_tokens == 4096
     assert utils.get_max_input_tokens_from_llm_provider(None, None) == GEN_AI_MAX_TOKENS
 

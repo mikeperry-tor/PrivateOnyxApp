@@ -73,6 +73,9 @@ def _validate_schedules(background_patch) -> None:
         "emit-version-telemetry",
     }
     assert not removed.intersection(effective)
+    from onyx.configs.app_configs import TABULAR_RECHUNK_ENABLED
+    assert TABULAR_RECHUNK_ENABLED is False
+    assert "tabular-rechunk" not in effective
     assert effective["check-for-incognito-file-cleanup"]["schedule"] == timedelta(
         minutes=10
     )
@@ -336,6 +339,121 @@ def _validate_disabled_usage_recording() -> None:
     print("PINNED_DISABLED_USAGE_RECORDING_OK")
 
 
+def _validate_tabular_chunking() -> None:
+    from onyx.configs import app_configs
+    from onyx.indexing.chunking.tabular_section_chunker.models import SheetSource
+    from onyx.indexing.chunking.tabular_section_chunker.workbook_chunks import build_workbook_chunks
+    from onyx.natural_language_processing.utils import BaseTokenizer
+
+    class CharTokenizer(BaseTokenizer):
+        def encode(self, text):
+            return list(map(ord, text))
+
+        def decode(self, tokens):
+            return "".join(map(chr, tokens))
+
+        def tokenize(self, text):
+            return list(text)
+
+    assert app_configs.TABULAR_FULL_ROWS_MAX_CHUNKS == 3
+    assert app_configs.TABULAR_VALUE_CHUNKS_PER_SHEET == 2
+    assert app_configs.TABULAR_MAX_CHUNKS_PER_WORKBOOK == 24
+    small = [["Region", "Total"], ["West", "10"], ["East", "20"]]
+    large = [["OrderID", "Region", "AmountUSD"]] + [
+        [f"ORD-{i}", "West" if i % 2 else "East", "10"]
+        for i in range(1, 5001)
+    ]
+    def chunks(name, rows, cap=24):
+        return build_workbook_chunks(
+            file_name="fixture.xlsx",
+            sheets=[SheetSource(name=name, open_rows=lambda: iter(rows))],
+            tokenizer=CharTokenizer(), max_tokens=500,
+            full_rows_max_chunks=3, value_chunks_per_sheet=2, max_chunks=cap,
+        )
+
+    text = "\n".join(chunks("Summary", small))
+    assert "Region=West, Total=10" in text and "Region=East, Total=20" in text
+    profiled = chunks("Orders", large)
+    assert 0 < len(profiled) <= 24 and all(len(chunk) <= 500 for chunk in profiled)
+    assert "5000 rows" in "\n".join(profiled)
+    assert "ORD-5000" in "\n".join(profiled)
+    assert 0 < len(chunks("Orders", large, cap=1)) <= 1
+    print("PINNED_BOUNDED_TABULAR_CHUNKING_OK")
+
+
+def _validate_indexing_batch_failures() -> None:
+    from unittest.mock import patch
+    from onyx.configs.constants import DocumentSource
+    from onyx.connectors.models import ConnectorStopSignal, Document, TextSection
+    from onyx.indexing import indexing_pipeline as pipeline
+
+    documents = [Document(
+        id=f"https://fixture.invalid/{name}", source=DocumentSource.WEB,
+        semantic_identifier=name, sections=[TextSection(text=name)], metadata={},
+    ) for name in ("first", "second")]
+    calls = []
+
+    def index(**kwargs):
+        calls.append(kwargs)
+        batch = kwargs["document_batch"]
+        if len(batch) == 2:
+            kwargs["on_prepared"]({documents[0].id})
+            raise ValueError("synthetic batch failure")
+        return pipeline.IndexingPipelineResult(
+            new_docs=1, total_docs=1, total_chunks=1, failures=[],
+        )
+
+    kwargs = dict(chunker=None, embedder=None, document_indices=[],
+                  document_batch=documents, request_id="fixture", tenant_id="public",
+                  adapter=None)
+    with patch.object(pipeline, "index_doc_batch", side_effect=index):
+        result = pipeline.index_doc_batch_with_handler(**kwargs)
+    assert result.total_docs == 2 and result.total_chunks == 2 and not result.failures
+    assert [call["force_update"] for call in calls] == [False, True, False]
+    for error in (pipeline.DocumentPushFailure("synthetic push failure"), ConnectorStopSignal()):
+        with patch.object(pipeline, "index_doc_batch", side_effect=error) as write:
+            try:
+                result = pipeline.index_doc_batch_with_handler(**kwargs)
+            except ConnectorStopSignal:
+                assert isinstance(error, ConnectorStopSignal)
+            else:
+                assert len(result.failures) == 2
+            assert write.call_count == 1
+    print("PINNED_INDEXING_BATCH_FAILURE_CONTRACT_OK")
+
+
+def _validate_enrichment_failures() -> None:
+    from unittest.mock import MagicMock, patch
+    from onyx.indexing import indexing_pipeline as pipeline
+    from onyx.llm.prompt_cache import processor
+
+    failure = RuntimeError("synthetic enrichment failure")
+    llm = MagicMock()
+    llm.invoke.side_effect = failure
+    chunk = SimpleNamespace(
+        contextual_rag_reserved_tokens=100, doc_summary="", chunk_context="",
+        content="synthetic chunk", source_document=SimpleNamespace(
+            get_text_content=lambda: "synthetic document",
+        ),
+    )
+    tokenizer = SimpleNamespace(encode=lambda text: list(text), decode=lambda tokens: "".join(tokens))
+    for summarize in (
+        lambda: pipeline.add_document_summaries([chunk], llm, tokenizer, 100),
+        lambda: pipeline.add_chunk_summaries([chunk], llm, tokenizer, 100, None),
+    ):
+        with patch.object(pipeline, "llm_generation_span"), patch.object(
+            processor, "process_with_prompt_cache", return_value=("synthetic prompt", None)
+        ):
+            try:
+                summarize()
+            except RuntimeError as error:
+                assert error is failure
+            else:
+                raise AssertionError("requested enrichment silently succeeded after LLM failure")
+        assert chunk.doc_summary == chunk.chunk_context == ""
+    print("PINNED_ENRICHMENT_FAILURE_PROPAGATION_OK")
+
+
 def main() -> None:
     from patch_activation_probe import assert_activation
     assert_activation()
@@ -343,6 +461,9 @@ def main() -> None:
     _validate_schedules(background_patch)
     _validate_scheduler_reload()
     _validate_disabled_usage_recording()
+    _validate_tabular_chunking()
+    _validate_indexing_batch_failures()
+    _validate_enrichment_failures()
     _validate_native_connector_entry(background_patch)
     _validate_supervisor()
     from validate_native_bot_tools import validate_native_tools, validate_bot_requests

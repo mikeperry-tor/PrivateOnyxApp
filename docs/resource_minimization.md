@@ -154,6 +154,10 @@ The fixed onion gateway follows the same low-idle local health cadence.
 - Only one secondary-index port attempt may run concurrently. This preserves
   one of the two doc-processing slots for ordinary indexing while a migration
   is active; the discovery task does not create a second simultaneous attempt.
+- Native tabular re-chunk migration remains disabled by default. It contributes
+  no Beat producer or periodic scan. New spreadsheet indexing uses bounded
+  workbook chunks; see [local RAG](local_docs_rag_search.md#indexing-enrichment-and-accounting)
+  for the retrieval tradeoff and indexing-failure behavior.
 - Retained Celery workers run without event heartbeat or gossip. Their upstream
   file-liveness bootstep is disabled.
 - Native local usage recording is disabled in both API and background services
