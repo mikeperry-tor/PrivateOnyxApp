@@ -262,7 +262,7 @@ This stack protects private research, document contents, browsing behavior, infe
   - Runtime startup must not install packages, regenerate dependency locks, or
     download browsers. Change dependency inputs deliberately, regenerate hashed
     locks with `make upgrade-python-deps`, and include the resulting lock files
-    in the change. Create a Git commit only when the user requests one.
+    in the change. Follow the Git workflow below for commits and reviewed fixups.
 - Untracked stack files:
   - Stack startup generates ephemeral local secrets, including SearXNG, Onyx
     auth, and MinIO credentials. Do not move them or other ephemeral secrets
@@ -314,8 +314,95 @@ This stack protects private research, document contents, browsing behavior, infe
   - If a relevant check cannot be run safely, state exactly what was omitted
     and why.
 
+### Independent subagent workflows
+
+Use independent subagents for substantive design, audits, and review as a normal
+part of the workflow; do not wait for a separate delegation request each time.
+Scale the work to the change. Small documentation edits do not require an
+implementation plan, architecture gates, or image validation.
+
+- Before substantive implementation, have an independent design reviewer
+  challenge the approach, necessity of checks, and opportunities to remove
+  responsibilities. Resolve material findings before building on the decision.
+- For audits, assign distinct concerns that can be investigated independently.
+  Inspect relevant consumers, failure paths, and tests, not only changed lines.
+  Report concrete findings and evidence, including where no issue was found.
+- Independently review each exact committed SHA and its relevant consumers;
+  the reviewer must not be the author. For work not yet committed, review an
+  identified working-tree snapshot/diff including new files, then review the
+  exact resulting SHA. Record scope and validation; later changes need renewed
+  review.
+- Address findings with `git commit --fixup=<introducing-SHA>` and independently
+  review each fixup. Preserve unsquashed history through final integration
+  review and the user's branch review before push.
+- At meaningful architecture gates, independently review the accumulated work
+  and complete affected call chains, especially privacy routing, patch startup,
+  concurrency, engine-specific lifecycle, and documentation handoffs. Include
+  prior fixes/fixups and surrounding code. Analyze repeated assumptions and
+  testing gaps; add applicable regression coverage and decide whether a wider
+  audit, simplification, or design change is needed. Per-change approval does
+  not replace review of the combined implementation.
+- Review complexity in substantive refactors and architecture gates across
+  Python, shell, Make, and Compose: compare the baseline with changed functions
+  and complete call chains, including unchanged high-risk consumers. Evaluate
+  simpler state, ownership, and control flow before retaining a hotspot.
+  Existing relevant complexity metrics are advisory evidence, not acceptance
+  thresholds. Do not add a mandatory tool dependency or extract helpers merely
+  to lower a score. Passing tests alone do not establish a simple design.
+- Give reviewers the user intent, scope, baseline, and validation evidence.
+  Ask them to verify claims and question unnecessary enforcement. The
+  coordinating agent integrates findings and owns completion.
+- Keep review/audit agents read-only by default. Parallelize independent
+  analysis; coordinate edits with explicit file ownership and serialize builds
+  and live checks sharing an engine or stack. Do not change reviewed sources
+  during validation. Do not impose a fixed reviewer count or duplicate checks
+  without a concrete reason. Delegation does not expand authority to access
+  private data or mutate external services. The coordinating agent owns commits
+  unless explicitly delegating edits and commits within the authorized scope.
+
+Resolve material findings before declaring completion. If subagent tooling is
+unavailable, disclose the limitation and perform available checks without
+claiming that independent review occurred.
+
+#### Implementation plan structure
+
+When creating or revising an implementation plan:
+
+- State user intent, scope, starting baseline, preserved invariants, and owning
+  guides. Distinguish proposed behavior from current implementation.
+- Define ordered commit-sized phases with stable identifiers, coherent
+  behavior, relevant consumers, and acceptance evidence. Include applicable
+  tests and permanent documentation in each phase; do not defer them all to a
+  final phase. Keep removal and its necessary replacement/recovery together.
+  Follow the Git workflow below when creating phase commits and fixups.
+- Name wider review gates at specified phase boundaries, with combined scope
+  and exit criteria. Include a final integration gate. Scale phases and gates
+  to actual ownership/architecture boundaries rather than a fixed count.
+- Require each gate to examine all prior plan changes and fixes/fixups with
+  complete affected call chains. Analyze recurring causes, hazards, and test
+  gaps for wider audit, regression coverage, simplification, or design changes.
+  Earlier approvals do not exempt code from accumulated review.
+- Specify review ordering and evidence: design before dependent work, exact
+  SHA or identified snapshot and fixes, applicable complexity review, then
+  integration. Material later changes reopen affected gates and validation.
+  Do not build on unresolved material findings. Record unavailable validation
+  precisely; review does not substitute for required subsystem checks.
+- Name permanent documentation destinations and necessary AGENTS.md links for
+  enduring rules. Verify the handoff during final review. Preserve this repo's
+  frozen `docs/plans/implemented/` accepted-design records; do not import a
+  completed-plan deletion policy. If the accepted plan is moved there, review
+  that exact final snapshot and resulting commit and the combined changes.
+
+These requirements structure a plan when one is needed or requested; they do
+not require a plan or redundant review stages for every small change.
+
 ### Git Workflow
 
 - Stage only files you intentionally changed. Do not use `git add .` or `git add -A`.
 - Do not revert user changes or generated local state unless explicitly asked.
-- For multi-phase plans, use one commit per phase when the user asks you to commit.
+- Create local commits for completed, scoped work without requesting separate
+  permission. For multi-phase plans, use one commit per phase and independently
+  reviewed fixup commits for findings. Preserve unsquashed history through final
+  review; do not rewrite existing commits unless the user requests it.
+- Leave the branch available for the user's review before push. Do not push,
+  merge, or publish without explicit user instructions.

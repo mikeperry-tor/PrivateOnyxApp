@@ -2,6 +2,11 @@
 
 Status: proposed; implementation has not started.
 
+Starting baseline: `90f07188cc9da0ffdef9a0bd428c6073450de7ac`. The initial
+plan is already present at that baseline; the changes below are proposed.
+Use the current tree and selected images during implementation, and record
+any intervening changes that affect the baseline evidence.
+
 ## Objective and accepted policy
 
 Make reviewed component updates reach installations following the existing
@@ -47,7 +52,44 @@ tags. Myst and Teep image selection does not currently cover every local build
 input. Generated Onyx deployment readiness is tied to the application tag,
 which cannot represent every configuration refresh.
 
-## Phase 1: dependency ownership and maintainer synchronization
+## Review sequence and commit boundaries
+
+Follow [independent workflows and plan structure](../../AGENTS.md#independent-subagent-workflows).
+The coordinating agent owns implementation and integration. Independent
+reviewers remain read-only, verify evidence, and challenge unnecessary
+responsibilities. Delegate distinct concerns when useful: version authority
+and build inputs; startup ordering and engine behavior; privacy and validation.
+Do not require a separate agent for each concern or duplicate identical reviews.
+Serialize builds/live checks using shared engines or data.
+
+| ID | Ordered commit-sized phase | Independent review boundary |
+| --- | --- | --- |
+| C1 | Ownership, upstream synchronization, and refresh policy | Review exact phase snapshot/SHA before dependent work |
+| C2 | Complete local image and generated configuration identities | G1: combined authority and artifact selection |
+| C3 | Ordered delivery through normal startup | G2: complete end-user upgrade/lifecycle path |
+| C4 | Online freshness reporting and final integration acceptance | G3: accumulated implementation and documentation handoff |
+
+Each phase includes its tests and owning documentation and produces a local
+commit without a separate permission request. Review each exact SHA and each
+introducing-SHA fixup; preserve unsquashed history through G3 and the user's
+branch review before push. For preliminary working-tree reviews, identify
+snapshots using diffs and file hashes including new files, then review the exact
+resulting commit. Reviewer identity, scope, baseline, test results, findings,
+and resolutions form the consolidated acceptance evidence. Pushing, merging,
+or publishing requires explicit user instructions.
+
+### G0: independent design review before C1
+
+Challenge the ownership inventory, synchronization authority, cache semantics,
+configuration identity, and need for persistent preparation state. Resolve
+the design choices below before implementing dependent behavior, especially
+moving tags versus reviewed digests before choosing completion records. Review
+failure/retry behavior and Docker/Podman selection without assuming engine
+equivalence. Exit when material design findings are resolved and acceptance
+criteria are concrete; do not introduce a workflow framework merely to track
+refreshes.
+
+## C1: dependency ownership and maintainer synchronization
 
 Introduce a small structured inventory used by upgrade tooling and checks.
 Prefer a narrow extension of existing configuration over a second independent
@@ -85,7 +127,18 @@ update batch before deriving build identities. Enforce bumps for component
 changes made outside that workflow through a check against an explicit review
 base. Ordinary startup, build, and test targets must not bump it.
 
-## Phase 2: complete identities for local builds and generated files
+Acceptance: structured fixtures cover changed, unchanged, missing, ambiguous,
+and added/removed owner contracts; verify inherited values, all nginx consumers,
+MinIO metadata, revision bumps, and unchanged committed inputs on startup.
+Resolve the controller authority discrepancy with recorded source evidence.
+Run `make check`, inspect affected effective Compose models, and run affected
+image contracts if selected artifacts change. Update
+[the upgrade procedure](../onyx_patches_upgrade.md) and applicable
+[AGENTS.md workflow guidance](../../AGENTS.md) in this phase; update README only
+for lasting user-facing consequences. Independently review C1's exact snapshot
+and resulting commit before building on its authority decisions.
+
+## C2: complete identities for local builds and generated files
 
 Include source selection, relevant Dockerfiles, copied files, base selections,
 and applicable refresh revision in every derived image identity. Extend the
@@ -103,7 +156,27 @@ without relying only on the application tag. Download and validate the complete
 required set before installation; record completion only after installation and
 required synchronization succeed. Preserve existing local secrets.
 
-## Phase 3: deliver reviewed updates through normal startup
+Acceptance: fixtures change each relevant build input independently and prove
+that selection changes; unchanged inputs remain reusable. Exercise base-pull
+and package-cache policy, explicit overrides, same-Onyx-version configuration
+refresh, missing files, and failed/partial preparation. Run `make check` and
+affected focused image gates against the selected artifacts. Update
+[the upgrade checklist](../onyx_patches_upgrade.md),
+[Podman image preparation](../podman_suport.md), and
+[resource policy](../resource_minimization.md) with implemented behavior.
+
+### G1: authority and artifact selection after C2
+
+Independently review C1-C2 and every fix/fixup together, from owner selection
+through generated configuration and complete image build inputs. Check all
+consumers, explicit overrides, package versus bundled-library ownership, and
+both engines. Review complexity of parsing, Make re-evaluation, and fingerprint
+state against the baseline; prefer existing native image identities over
+additional tracking. Exit when selected identities represent the intended
+refresh and failure paths cannot mark stale/partial work complete. Resolve
+material findings before C3.
+
+## C3: deliver reviewed updates through normal startup
 
 Add one ordered image-preparation path to both `make up-*` flows, after engine
 and configuration validation and before any container creation/start that can
@@ -131,7 +204,32 @@ lite preparation. Serialize conflicting preparation, write records atomically,
 and never mark a partial pull/build failure complete. Fail startup visibly on
 required refresh failure, including when an older cached tag remains available.
 
-## Phase 4: freshness reporting and regression protection
+Acceptance: fake engine/registry tests exercise the actual Make entrypoints
+from populated old stores, including unchanged moving tags, refresh revisions,
+mode/feature transitions, explicit overrides, pruning, failures/retries, and
+parallel-Make ordering. Verify no registry pulls target local derived images
+and no disabled/Docker-only artifacts are prepared on inapplicable paths.
+Run `make check`, render the affected matrix, and exercise available cached-image
+lite/full startups with health and targeted logs. Update
+[README upgrade instructions](../../README.md#upgrading-the-stack),
+[the upgrade checklist](../onyx_patches_upgrade.md),
+[Podman lifecycle](../podman_suport.md), and
+[resource policy](../resource_minimization.md) in this phase. Update other
+owning guides whenever implementation changes their contracts.
+
+### G2: end-user delivery and lifecycle after C3
+
+Independently review C1-C3 and all fixes/fixups along the complete
+`down -> git pull -> up` path, including first install, engine preflight,
+generated files, registry pulls, local builds, stopped-container creation,
+Podman health translation, and full-mode readiness staging. Assess concurrency,
+state complexity, privacy routing, secret boundaries, and accumulated test gaps.
+Exit when cached installations receive required artifacts, failures remain
+visible without stale fallback, unchanged starts reuse matching work, and the
+documented Docker/Podman contracts hold. Missing live evidence must remain
+explicit; do not present model rendering as engine qualification.
+
+## C4: freshness reporting and final integration acceptance
 
 Provide an explicit online maintainer audit reporting owner-selected versions,
 resolved registry digests, available updates, advisories, and unresolved
@@ -149,6 +247,34 @@ a populated old image store. Cover changed/unchanged tags, source/build changes,
 OS revision changes, retries after failures, missing images despite completion
 records, mode/feature transitions, engine/store switches, caller overrides,
 configuration refresh with unchanged Onyx version, and preparation ordering.
+This consolidates the phase-local coverage; it does not postpone C1-C3 tests.
+
+Acceptance: use recorded upstream/registry/advisory fixtures to test the online
+audit's report and error behavior without Internet in deterministic checks.
+Distinguish unavailable evidence from a clean audit and upstream-pending
+findings from authorized version changes. Keep audit output free of secrets.
+Run `make check` and complete the applicable integration matrix below. Update
+[the upgrade checklist](../onyx_patches_upgrade.md) with the audit's standing
+usage and validation, and `make help` only if adding a user-facing workflow or
+key diagnostic.
+
+### G3: final accumulated review and documentation handoff
+
+Independently review C1-C4 and all fixes/fixups against the baseline, including
+complete consumers and call chains rather than just final diffs. Analyze fix
+causes and recurring assumptions for wider audit, simplification, and regression
+coverage; revisit parsing/control-flow/state complexity without adding a new
+metrics dependency. Verify evidence matches the exact reviewed source and
+selected artifacts. Later material changes reopen affected gates and checks.
+
+Exit when material findings are resolved, required available checks pass,
+unavailable checks and residual risks are recorded, README's unchanged workflow
+matches implemented delivery, and permanent behavior resides in owning guides
+with necessary AGENTS.md links. A blocked required gate remains incomplete.
+Replace implemented detail in this plan with canonical links before acceptance.
+After review/merge, preserve the accepted plan under `docs/plans/implemented/`
+according to repository policy; review the final move snapshot and resulting
+commit and combined changes as well. Do not edit earlier frozen plans.
 
 ## Design choices to resolve before implementation
 
@@ -188,6 +314,7 @@ configuration refresh with unchanged Onyx version, and preparation ordering.
   invariants change. Do not modify frozen implemented plans.
 
 No independent Onyx dependency upgrades, storage migrations, scheduled updater,
-runtime package manager, broad cache deletion, or Git commits are authorized by
-this plan. Implementation and validation results should be reviewed before
-marking phases complete.
+runtime package manager, or broad cache deletion are authorized by this plan.
+Local phase and fixup commits follow AGENTS.md; remote publication remains a
+separate user decision. Implementation and validation results should be reviewed
+before marking phases complete.
