@@ -127,10 +127,67 @@ update batch before deriving build identities. Enforce bumps for component
 changes made outside that workflow through a check against an explicit review
 base. Ordinary startup, build, and test targets must not bump it.
 
+### Initial image and library reconciliation
+
+C1 must reconcile the findings that prompted this plan, alongside the recurring
+ownership checks. The table below is the investigation starting point, not a
+fresh security assessment or a list of approved upgrades. All rows are pending
+verification against the implementation-time selected sources and artifacts.
+Do not infer installed package versions from a tag, a revision date, or a
+passing historical image gate.
+
+| ID | Finding at planning time | Owner and required disposition |
+| --- | --- | --- |
+| R1 | nginx `1.25.5-alpine`, including two hard-coded frontend gateways | Onyx owns the version. Compare all three consumers with the selected release, synchronize duplicates, and assess advisories against actual modules/configuration. Retain an affected owner-selected version as upstream-pending. |
+| R2 | PostgreSQL `15.2-alpine`, inherited in lite/full | Onyx owns the version. Verify the inherited effective selection and advisory applicability; do not independently advance it or change the storage major version. |
+| R3 | Redis moving tag `7.4-alpine` in full mode | Onyx owns the tag. Establish its reviewed digest/package version and applicability, including cluster-only findings versus this deployment. C3 must deliver the selected refresh even when the tag text is unchanged. |
+| R4 | OpenSearch `3.6.0`, with newer releases available | Onyx owns the version. Verify release alignment and concrete advisory applicability. Newer releases alone do not establish exposure or authorize an independent upgrade. |
+| R5 | MinIO Onyx mirror of `RELEASE.2025-07-23T15-54-02Z-cpuv1` | Onyx owns the image. Verify mirror digest/source identity and published affected ranges, including signature-bypass findings. Distinguish community and AIStor fixes; do not silently migrate product, license, or storage. Record unresolved owner-selected exposure. |
+| R6 | Namespace-holder Alpine `3.20` support status | Wrapper owns the base. Verify support and retained executable/package needs, select a supported base deliberately, and qualify namespace/readiness behavior on each engine. |
+| R7 | Shared moving Python `3.12-slim-bookworm` / `3.12-alpine` images | Wrapper owns the bases. Establish Python, distribution, and package versions/digests; enumerate all consumers. Qualify refreshes through C2-C3 without implying a Python major/minor or distribution migration. |
+| R8 | socat `1.8.0.3`, with newer published images | Wrapper owns the image. Verify application/base-package advisories and candidate image provenance; qualify any selected refresh across fixed bridges, health commands, and engine-specific consumers. |
+| R9 | Tailscale `1.102.3` plus derived Alpine packages | Tailscale owns the application release; wrapper owns its OS refresh. Check current bulletins against configured Funnel/Serve use separately from optional SSH features. Review static Go dependencies and system trust/package updates independently. |
+| R10 | OS refresh revision `20261004` and historical package floors | Wrapper owns the refresh. Inspect actual selected controller/executor/Tailscale package evidence and repositories, publish a revision bump with the applicable C1-C2 work, and qualify new artifacts. A newer label alone is not security evidence. |
+| R11 | Executor cryptography `50.0.1` / bundled OpenSSL `4.0.2` and fixed image assertions | Executor Python dependencies have a separate owner from Debian OpenSSL. Verify advisory applicability and a suitable wheel/library update, regenerate the affected hashed lock through the supported flow, and deliberately update assertions only alongside validated artifacts. OS upgrades cannot replace the bundled copy. |
+| R12 | Controller/executor `0.4.9` versus Onyx Compose default `0.4.7` | Resolve release authority and compatibility from exact upstream sources, as required above; neither a silent downgrade nor a permanent unexplained override closes the row. |
+| R13 | Other pinned source/runtime/build artifacts: SearXNG, Obscura/Rust, Tor, Myst, Teep | Check owner-selected pins, support/advisory status, bundled dependencies, and build-input coverage. No specific vulnerability was established for every artifact in the initial discussion; do not turn missing evidence into a clean bill of health or an automatic upgrade. |
+
+For each row, record the exact owner release/source, selected tag and resolved
+digest or package/library version, primary advisory/support evidence with its
+verification date, actual applicability, decision and rationale, responsible
+phase, required checks, and validation result or limitation. Use one consolidated
+acceptance table in this active plan during implementation; do not introduce a
+permanent vulnerability database or duplicate inventory solely for this batch.
+
+C1 establishes a disposition for every row: validated/no applicable finding,
+upstream-pending with residual risk, wrapper remediation assigned to C1-C3,
+or unresolved with a named next action. The inventory is incomplete while a
+row is missing or unassessed. An unresolved material authority/design issue
+blocks dependent work; an upstream-pending advisory does not by itself
+authorize divergence from the agreed version policy.
+
+C2-C3 complete assigned remediation and delivery evidence; C4 verifies the
+final dispositions. A row requiring a new owner-approved version must be
+reassessed at that owner's next update. Do not mark remediation complete on
+the strength of new update machinery, changed test assertions, or planned
+validation. Carry upstream-pending findings and unavailable evidence into the
+final handoff without describing them as fixed.
+
+Add the standing reconciliation requirements to
+[the upgrade checklist](../onyx_patches_upgrade.md) in C1: owner/version
+alignment, advisory applicability, distribution support, system versus bundled
+libraries, and residual-risk reporting. Update its OS/package/library floors
+and component-specific review instructions alongside the relevant C1-C3
+implementation. Keep transient findings and batch results in the active plan
+and final review evidence, rather than turning the owning guide into a security
+incident history. Tests and focused image gates accompany actual changes.
+
 Acceptance: structured fixtures cover changed, unchanged, missing, ambiguous,
 and added/removed owner contracts; verify inherited values, all nginx consumers,
 MinIO metadata, revision bumps, and unchanged committed inputs on startup.
 Resolve the controller authority discrepancy with recorded source evidence.
+Establish the per-row reconciliation dispositions and evidence above; recurring
+upgrade tooling alone does not satisfy this initial acceptance requirement.
 Run `make check`, inspect affected effective Compose models, and run affected
 image contracts if selected artifacts change. Update
 [the upgrade procedure](../onyx_patches_upgrade.md) and applicable
@@ -174,7 +231,8 @@ both engines. Review complexity of parsing, Make re-evaluation, and fingerprint
 state against the baseline; prefer existing native image identities over
 additional tracking. Exit when selected identities represent the intended
 refresh and failure paths cannot mark stale/partial work complete. Resolve
-material findings before C3.
+material findings before C3. Check the initial reconciliation dispositions,
+assigned remediation, and accompanying upgrade-checklist changes together.
 
 ## C3: deliver reviewed updates through normal startup
 
@@ -266,6 +324,10 @@ causes and recurring assumptions for wider audit, simplification, and regression
 coverage; revisit parsing/control-flow/state complexity without adding a new
 metrics dependency. Verify evidence matches the exact reviewed source and
 selected artifacts. Later material changes reopen affected gates and checks.
+Verify every initial reconciliation row has a final disposition and evidence,
+with outstanding upstream exposure and omitted validation explicitly carried
+forward. Do not equate completion of the delivery tooling with fixing every
+reported vulnerability.
 
 Exit when material findings are resolved, required available checks pass,
 unavailable checks and residual risks are recorded, README's unchanged workflow
