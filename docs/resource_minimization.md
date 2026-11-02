@@ -28,11 +28,13 @@ fallbacks, retries, migrations, or weaker ownership checks.
 
 ### Container health and startup
 
-- Executor, controller, and enabled Tailscale image preparation reuses matching
-  content-derived tags. OS security refreshes happen only during builds, with a
-  committed refresh revision selecting new tags for normal repository upgrades.
-  There is no runtime package updater or periodic rebuild. See the
-  [OS security refresh procedure](onyx_patches_upgrade.md#os-security-refreshes).
+- All eight local component images use complete input-derived identities and a
+  committed refresh generation. Matching image-ready checks reuse local
+  artifacts; explicit builds refresh bases and package layers. No service
+  updater, periodic rebuild, or timer is added. Generated Onyx configuration has
+  a separate input/artifact fingerprint and is prepared only when stale or
+  explicitly forced. Preparation never starts the upstream installer or a
+  stock stack. See [image and configuration identities](onyx_patches_upgrade.md#image-and-generated-configuration-identities).
 
 - Retained local health checks poll every five seconds during startup and every
   ten minutes in steady state. Myst remains once per minute because its same

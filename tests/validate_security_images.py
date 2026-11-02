@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -27,10 +28,10 @@ def main() -> None:
             script = """
 set -eu
 for package in libssl3 libcrypto3; do
-    apk info --installed "$package>=3.5.8-r0"
+    apk info --installed "$package>=3.5.9-r0"
 done
 tailscaled --version
-test "$(tailscale version | head -n 1)" = 1.102.3
+test "$(tailscale version | head -n 1)" = 1.104.4
 test -x /usr/local/bin/containerboot
 """
         else:
@@ -38,7 +39,7 @@ test -x /usr/local/bin/containerboot
 set -eu
 for package in openssl libssl3t64 openssl-provider-legacy; do
     version=$(dpkg-query -W -f='${Version}' "$package")
-    dpkg --compare-versions "$version" ge '3.5.7-1~deb13u2'
+    dpkg --compare-versions "$version" ge '3.5.7-1~deb13u3'
 done
 python -c 'import ssl; print(ssl.OPENSSL_VERSION)'
 """
@@ -55,8 +56,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pypdf import PdfReader, PdfWriter
 from pdfminer.high_level import extract_text
 from reportlab.pdfgen import canvas
-assert cryptography.__version__ == '50.0.1'
-assert backend.openssl_version_text().startswith('OpenSSL 4.0.2 ')
+assert cryptography.__version__ == '50.0.2'
+assert backend.openssl_version_text().startswith('OpenSSL 4.0.3 ')
 cipher = AESGCM(AESGCM.generate_key(bit_length=128))
 nonce = b'0' * 12
 assert cipher.decrypt(nonce, cipher.encrypt(nonce, b'evidence', None), None) == b'evidence'
@@ -79,9 +80,12 @@ assert 'security fixture' in reader.pages[0].extract_text()
 print(cryptography.__version__, backend.openssl_version_text())
 PY
 """
-        print(run("run", "--rm", "--pull", "never", "--network", "none",
-                  "--entrypoint", "sh", image, "-c", script), end="")
+        output = run("run", "--rm", "--pull", "never", "--network", "none",
+                     "--entrypoint", "sh", image, "-c", script)
+        print(output, end="")
         if kind == "tailscale":
+            compiler = re.search(r"go version:\s+go(\d+)\.(\d+)\.(\d+)(?:\s|$)", output)
+            assert compiler and tuple(map(int, compiler.groups())) >= (1, 27, 3), "Tailscale must include the reviewed Go certificate distrust"
             linkage = run("run", "--rm", "--pull", "never", "--network", "none",
                           "--entrypoint", "scanelf", image, "-n", "-B",
                           "/usr/local/bin/tailscaled").split()

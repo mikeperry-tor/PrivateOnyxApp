@@ -11,6 +11,12 @@ installation failure because CPython otherwise reports and suppresses ordinary
 deterministic tests cover the wrapper-owned behavior; the upgrade checklist
 also requires installation against the pinned images.
 
+Wrapper startup prepares the selected generated configuration and reviewed
+image artifacts before creating application containers. Local build identities
+include the selected sources, copied inputs and published refresh generation.
+The [component upgrade checklist](onyx_patches_upgrade.md#image-and-generated-configuration-identities)
+owns image/configuration identity, acquisition ordering and maintainer validation.
+
 ## Bootstrap ownership
 
 `sitecustomize_api_server` owns API startup in lite and full modes;
@@ -1291,10 +1297,10 @@ code-interpreter API image. Its local tag is coupled to the pinned upstream
 `executor/requirements.txt` lock. The upstream executor supplies ReportLab and
 svglib for PDF/SVG generation, and the derived image adds SymPy 1.14.0 plus its
 locked `mpmath` dependency to the scientific environment. It also replaces the
-inherited cryptography package with hash-locked 50.0.1, whose Linux wheel bundles
-OpenSSL 4.0.2; OS package updates alone cannot update that bundled library.
+inherited cryptography package with hash-locked 50.0.2, whose Linux wheel bundles
+OpenSSL 4.0.3; OS package updates alone cannot update that bundled library.
 Docker-mode
-startup builds the exact selected image before the API starts, and Compose sets
+startup prepares the exact selected image before the API starts, and Compose sets
 `PYTHON_EXECUTOR_DOCKER_IMAGE` explicitly; the upstream bare reference cannot
 resolve to or pull mutable `latest` during API startup.
 

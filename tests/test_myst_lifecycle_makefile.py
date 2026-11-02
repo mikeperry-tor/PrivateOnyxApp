@@ -228,6 +228,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             cwd=ROOT,
             env={
                 "PATH": os.environ["PATH"],
+                "MYST_IMAGE": "local/private-onyx-myst:test-signup-model",
                 "MYST_SETUP_ONLY": "true",
                 "MYST_AUTO_CONNECT": "false",
                 "MYST_RESTART_POLICY": "no",

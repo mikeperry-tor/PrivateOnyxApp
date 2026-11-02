@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tor.render_config import render_text
+
+
+def expected_tor_release(base_image: str) -> str:
+    repository_segment = base_image.split("@", 1)[0].rsplit("/", 1)[-1]
+    name, separator, release = repository_segment.rpartition(":")
+    if not name or not separator or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", release):
+        raise ValueError("Tor image validation requires an explicit four-part base release tag")
+    return release
+
+
+def assert_tor_release(output: str, expected: str) -> None:
+    first_line = output.splitlines()[0] if output.splitlines() else ""
+    prefix = "Tor version "
+    words = first_line[len(prefix):].split() if first_line.startswith(prefix) else []
+    actual = words[0] if words else ""
+    if actual.endswith("."):
+        actual = actual[:-1]
+    if actual != expected:
+        raise AssertionError(f"Expected Tor release {expected}; binary reported {actual!r}")
 
 
 def run(*args: str) -> str:
@@ -279,6 +299,7 @@ def main() -> int:
     parser.add_argument("--image", required=True)
     parser.add_argument("--base-image", required=True)
     args = parser.parse_args()
+    expected_release = expected_tor_release(args.base_image)
 
     inspection = json.loads(run(args.engine, "image", "inspect", args.image))[0]
     config = inspection["Config"]
@@ -319,7 +340,7 @@ test -x /usr/bin/python3
 tor --version | head -n 1
 """,
     )
-    assert "Tor version 0.4.9.13" in output
+    assert_tor_release(output, expected_release)
 
     with tempfile.TemporaryDirectory(prefix="private-onyx-tor-image-") as directory:
         torrc = Path(directory, "torrc")

@@ -29,6 +29,7 @@ TOR_DOCKER_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-docker.yml
 TOR_EGRESS_DOCKER_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.tor-egress-docker.yml
 
 env_value = $(strip $(shell for f in "$(ENV_FILE)" "$(VERSION_FILE)"; do [ -f "$$f" ] || continue; sed -n 's/^$(1)=//p' "$$f" | head -1 | sed 's/^"//; s/"$$//'; done | head -1))
+version_value = $(strip $(shell sed -n 's/^$(1)=//p' "$(VERSION_FILE)" | head -1))
 wrapper_setting = $(strip $(shell python3 tor/render_config.py get --settings-file "$(ENV_FILE)" --name "$(1)"))
 COMPOSE_ENV_FILES = --env-file "$(VERSION_FILE)" --env-file "$(ENV_FILE)"
 ONYX_COMPOSE_ENV_FILES = $(COMPOSE_ENV_FILES) --env-file "$(ONYX_ENV_FILE)"
@@ -39,10 +40,6 @@ ifeq ($(strip $(MYST_NODE_REF)),)
 $(error MYST_NODE_REF is not set in $(VERSION_FILE))
 endif
 MYST_DOCKERFILE ?= myst/build/Dockerfile
-MYST_IMAGE ?= $(call env_value,MYST_IMAGE)
-ifeq ($(strip $(MYST_IMAGE)),)
-MYST_IMAGE := local/private-onyx-myst:$(shell printf '%s' '$(MYST_NODE_REF)' | cut -c1-12)
-endif
 
 TEEP_REPO ?= https://github.com/13rac1/teep.git
 TEEP_DEFAULT_REF := d9f59d839eb887b50f5afd234e192eac5ec45a2d
@@ -51,17 +48,37 @@ ifeq ($(strip $(TEEP_REF)),)
 TEEP_REF := $(TEEP_DEFAULT_REF)
 endif
 TEEP_DOCKERFILE ?= teep/build/Dockerfile
-TEEP_IMAGE ?= $(call env_value,TEEP_IMAGE)
-ifeq ($(strip $(TEEP_IMAGE)),)
-TEEP_IMAGE := docker.io/13rac1/teep:$(TEEP_REF)
-endif
-TEEP_IMAGE := $(TEEP_IMAGE)
 OS_SECURITY_UPDATE_REVISION ?= $(call env_value,OS_SECURITY_UPDATE_REVISION)
 ifeq ($(strip $(OS_SECURITY_UPDATE_REVISION)),)
 $(error OS_SECURITY_UPDATE_REVISION is not set in $(VERSION_FILE))
 endif
 # Both committed refresh revision and build inputs determine the selected tag.
-os_image_hash = $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(); [h.update(v.encode()+b"\0") for v in sys.argv[1:3]]; [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[3:]]; print(h.hexdigest()[:12])' '$(1)' '$(OS_SECURITY_UPDATE_REVISION)' $(2))
+shell_quote = '$(subst ','"'"',$(1))'
+os_image_hash = $(shell python3 tools/components/identity.py --dockerfile $(call shell_quote,$(firstword $(2))) $(call shell_quote,$(1)|platform=$(DOCKER_DEFAULT_PLATFORM)) $(call shell_quote,$(OS_SECURITY_UPDATE_REVISION)) tools/components/identity.py .dockerignore .containerignore $(2))
+# Source selections and copied inputs are evaluated before derived outputs.
+GO_BUILD_IMAGE ?= $(call env_value,GO_BUILD_IMAGE)
+ALPINE_RUNTIME_IMAGE ?= $(call env_value,ALPINE_RUNTIME_IMAGE)
+SEARXNG_PYTHON_BUILD_IMAGE ?= $(call env_value,SEARXNG_PYTHON_BUILD_IMAGE)
+$(foreach name,GO_BUILD_IMAGE ALPINE_RUNTIME_IMAGE SEARXNG_PYTHON_BUILD_IMAGE,$(if $(strip $($(name))),,$(error $(name) is required in $(VERSION_FILE))))
+MYST_WRAPPER_SOURCE_HASH := $(call os_image_hash,$(MYST_NODE_REPO)|$(MYST_NODE_REF)|$(GO_BUILD_IMAGE)|$(ALPINE_RUNTIME_IMAGE),$(MYST_DOCKERFILE))
+TEEP_WRAPPER_SOURCE_HASH := $(call os_image_hash,$(TEEP_REPO)|$(TEEP_REF)|$(GO_BUILD_IMAGE)|$(ALPINE_RUNTIME_IMAGE),$(TEEP_DOCKERFILE) teep/build/entrypoint.sh)
+ifeq ($(strip $(MYST_WRAPPER_SOURCE_HASH)),)
+$(error could not compute Myst build identity)
+endif
+ifeq ($(strip $(TEEP_WRAPPER_SOURCE_HASH)),)
+$(error could not compute Teep build identity)
+endif
+MYST_IMAGE ?= $(call env_value,MYST_IMAGE)
+ifeq ($(strip $(MYST_IMAGE)),)
+MYST_IMAGE := local/private-onyx-myst:$(MYST_WRAPPER_SOURCE_HASH)
+endif
+MYST_IMAGE := $(MYST_IMAGE)
+TEEP_IMAGE ?= $(call env_value,TEEP_IMAGE)
+ifeq ($(strip $(TEEP_IMAGE)),)
+TEEP_IMAGE := local/private-onyx-teep:$(TEEP_WRAPPER_SOURCE_HASH)
+endif
+TEEP_IMAGE := $(TEEP_IMAGE)
+export MYST_IMAGE
 TAILSCALE_UPSTREAM_IMAGE ?= $(call env_value,TAILSCALE_UPSTREAM_IMAGE)
 ifeq ($(strip $(TAILSCALE_UPSTREAM_IMAGE)),)
 $(error TAILSCALE_UPSTREAM_IMAGE is not set in $(VERSION_FILE))
@@ -182,6 +199,8 @@ ifeq ($(strip $(CONTAINER_BIN)),)
 CONTAINER_BIN := docker
 endif
 PODMAN_SELECTED := $(if $(findstring podman,$(notdir $(CONTAINER_BIN))),true,false)
+BUILD_PULL_FLAG := $(if $(filter true,$(PODMAN_SELECTED)),--pull=always,--pull=true)
+BUILD_PLATFORM_FLAG := $(if $(strip $(DOCKER_DEFAULT_PLATFORM)),--platform=$(DOCKER_DEFAULT_PLATFORM),)
 SHARED_DATA_ENGINE_MARKER := docker-data/host-services/shared-data-engine
 SHARED_DATA_GUARD_ENV := $(if $(filter true,$(PODMAN_SELECTED)),env -u DOCKER_HOST,)
 ifeq ($(PODMAN_SELECTED),true)
@@ -326,8 +345,12 @@ ifeq ($(strip $(TOR_WRAPPER_IMAGE_REPOSITORY)),)
 $(error TOR_WRAPPER_IMAGE_REPOSITORY is not set in $(VERSION_FILE))
 endif
 TOR_DOCKERFILE := tor/Dockerfile
-TOR_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(sys.argv[1].encode()+b"\0"); h.update(pathlib.Path(sys.argv[2]).read_bytes()); print(h.hexdigest()[:12])' '$(TOR_BASE_IMAGE)' '$(TOR_DOCKERFILE)')
-TOR_IMAGE ?= $(TOR_WRAPPER_IMAGE_REPOSITORY):0.4.9.13-$(TOR_WRAPPER_SOURCE_HASH)
+TOR_WRAPPER_SOURCE_HASH := $(call os_image_hash,$(TOR_BASE_IMAGE),$(TOR_DOCKERFILE))
+ifeq ($(strip $(TOR_WRAPPER_SOURCE_HASH)),)
+$(error could not compute Tor build identity)
+endif
+TOR_BASE_VERSION := $(lastword $(subst :, ,$(firstword $(subst @, ,$(TOR_BASE_IMAGE)))))
+TOR_IMAGE ?= $(TOR_WRAPPER_IMAGE_REPOSITORY):$(TOR_BASE_VERSION)-$(TOR_WRAPPER_SOURCE_HASH)
 TOR_IMAGE := $(TOR_IMAGE)
 export TOR_IMAGE
 
@@ -370,8 +393,12 @@ ONYX_IMAGE_TAG ?= $(call env_value,ONYX_IMAGE_TAG)
 ifeq ($(strip $(ONYX_IMAGE_TAG)),)
 $(error ONYX_IMAGE_TAG is not set. Add ONYX_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass ONYX_IMAGE_TAG=... on the make command line)
 endif
-ONYX_BACKEND_IMAGE ?= docker.io/onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)
-ONYX_WEB_SERVER_IMAGE ?= docker.io/onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)
+ONYX_BACKEND_IMAGE ?= $(shell python3 tools/components/manage.py resolve --reference 'docker.io/onyxdotapp/onyx-backend:$(ONYX_IMAGE_TAG)' $(if $(filter $(call version_value,ONYX_IMAGE_TAG),$(ONYX_IMAGE_TAG)),--require-reviewed,))
+ONYX_WEB_SERVER_IMAGE ?= $(shell python3 tools/components/manage.py resolve --reference 'docker.io/onyxdotapp/onyx-web-server:$(ONYX_IMAGE_TAG)' $(if $(filter $(call version_value,ONYX_IMAGE_TAG),$(ONYX_IMAGE_TAG)),--require-reviewed,))
+ONYX_BACKEND_IMAGE := $(ONYX_BACKEND_IMAGE)
+ONYX_WEB_SERVER_IMAGE := $(ONYX_WEB_SERVER_IMAGE)
+$(foreach name,ONYX_BACKEND_IMAGE ONYX_WEB_SERVER_IMAGE,$(if $(strip $($(name))),,$(error could not resolve required $(name))))
+export ONYX_BACKEND_IMAGE ONYX_WEB_SERVER_IMAGE
 NGINX_IMAGE ?= $(call env_value,NGINX_IMAGE)
 ifeq ($(strip $(NGINX_IMAGE)),)
 $(error NGINX_IMAGE is not set. Add NGINX_IMAGE=... to $(VERSION_FILE) or override it on the make command line)
@@ -381,7 +408,11 @@ ifeq ($(strip $(SEARXNG_IMAGE_TAG)),)
 $(error SEARXNG_IMAGE_TAG is not set. Add SEARXNG_IMAGE_TAG=... to $(VERSION_FILE), override it in $(ENV_FILE), or pass SEARXNG_IMAGE_TAG=... on the make command line)
 endif
 SEARXNG_IMAGE_TAG := $(SEARXNG_IMAGE_TAG)
-SEARXNG_IMAGE ?= docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)
+SEARXNG_IMAGE ?= $(shell python3 tools/components/manage.py resolve --reference 'docker.io/searxng/searxng:$(SEARXNG_IMAGE_TAG)' $(if $(filter $(call version_value,SEARXNG_IMAGE_TAG),$(SEARXNG_IMAGE_TAG)),--require-reviewed,))
+SEARXNG_IMAGE := $(SEARXNG_IMAGE)
+ifeq ($(strip $(SEARXNG_IMAGE)),)
+$(error could not resolve the selected SearXNG image)
+endif
 SEARXNG_DOCKERFILE ?= searxng/Dockerfile
 SEARXNG_WRAPPER_IMAGE_REPOSITORY ?= $(call env_value,SEARXNG_WRAPPER_IMAGE_REPOSITORY)
 ifeq ($(strip $(SEARXNG_WRAPPER_IMAGE_REPOSITORY)),)
@@ -391,9 +422,9 @@ SEARXNG_WRAPPER_IMAGE_REPOSITORY := $(SEARXNG_WRAPPER_IMAGE_REPOSITORY)
 SEARXNG_WRAPPER_BUILD_INPUTS := \
 	$(SEARXNG_DOCKERFILE) \
 	searxng/requirements.txt \
-	$(sort $(wildcard browser/obscura_client/private_onyx_obscura/*.py)) \
+	browser/obscura_client/private_onyx_obscura \
 	$(sort $(wildcard searxng/engines/*.py))
-SEARXNG_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(); [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[1:]]; print(h.hexdigest()[:12])' $(SEARXNG_WRAPPER_BUILD_INPUTS))
+SEARXNG_WRAPPER_SOURCE_HASH := $(call os_image_hash,$(SEARXNG_IMAGE)|$(SEARXNG_PYTHON_BUILD_IMAGE),$(SEARXNG_WRAPPER_BUILD_INPUTS))
 ifeq ($(strip $(SEARXNG_WRAPPER_SOURCE_HASH)),)
 $(error could not compute the SearXNG wrapper source hash)
 endif
@@ -407,9 +438,8 @@ SEARXNG_WRAPPER_IMAGE := $(SEARXNG_WRAPPER_IMAGE)
 OBSCURA_WRAPPER_BUILD_INPUTS := \
 	$(OBSCURA_DOCKERFILE) \
 	browser/obscura_image/fetch_source.py \
-	browser/obscura_image/patches/series \
-	$(sort $(wildcard browser/obscura_image/patches/*.patch))
-OBSCURA_WRAPPER_SOURCE_HASH := $(shell python3 -c 'import hashlib,pathlib,sys; h=hashlib.sha256(); [h.update(v.encode()+b"\0") for v in sys.argv[1:5]]; [h.update(p.encode()+b"\0"+pathlib.Path(p).read_bytes()) for p in sys.argv[5:]]; print(h.hexdigest()[:12])' "$(OBSCURA_UPSTREAM_IMAGE)" "$(OBSCURA_BUILDER_IMAGE)" "$(OBSCURA_SOURCE_REF)" "$(OBSCURA_SOURCE_SHA256)" $(OBSCURA_WRAPPER_BUILD_INPUTS))
+	browser/obscura_image/patches
+OBSCURA_WRAPPER_SOURCE_HASH := $(call os_image_hash,$(OBSCURA_UPSTREAM_IMAGE)|$(OBSCURA_BUILDER_IMAGE)|$(OBSCURA_SOURCE_REF)|$(OBSCURA_SOURCE_SHA256)|$(OBSCURA_RELEASE_VERSION),$(OBSCURA_WRAPPER_BUILD_INPUTS))
 ifeq ($(strip $(OBSCURA_WRAPPER_SOURCE_HASH)),)
 $(error could not compute the Obscura wrapper source hash)
 endif
@@ -515,11 +545,8 @@ ONYX_STACK_REQUIRED_IMAGES := $(ONYX_BACKEND_IMAGE) $(ONYX_WEB_SERVER_IMAGE)
 CODE_INTERPRETER_EXECUTOR_TARGETS := code-interpreter-image-ready executor-image-ready
 endif
 ONYX_REQUIRED_IMAGES ?= $(ONYX_STACK_REQUIRED_IMAGES)
-ONYX_INSTALL_SCRIPT ?= ./install.sh
-ONYX_INSTALL_WRAPPER ?= ./install-with-container-bin.sh
 ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
 ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
-ONYX_INSTALL_HOST_PORT_80 ?= 3001
 SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
 MYST_COMPOSE_FILE := myst/docker-compose.yaml
 MYST_VPN_CLI := myst/myst-vpn-cli.sh
@@ -931,15 +958,19 @@ else
 	@echo "SKIP: SEARXNG_X402_PRIVKEY is unset or empty; no paid search was sent."
 endif
 
+PYTHON_DEPS_COMPONENTS ?= embedserv searxng executor
 upgrade-python-deps:
 	@set -eu; \
-	if ! command -v uv >/dev/null 2>&1; then \
-		echo "ERROR: uv is required for upgrade-python-deps"; \
-		exit 1; \
-	fi; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(EMBEDSERV_PYTHON_VERSION)" --upgrade --generate-hashes "$(EMBEDSERV_REQUIREMENTS_IN)" -o "$(EMBEDSERV_REQUIREMENTS)"; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(SEARXNG_PYTHON_VERSION)" --python-platform linux --upgrade --generate-hashes "$(SEARXNG_REQUIREMENTS_IN)" -o "$(SEARXNG_REQUIREMENTS)"; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(PYTHON_EXECUTOR_PYTHON_VERSION)" --python-platform linux --upgrade --generate-hashes "$(PYTHON_EXECUTOR_REQUIREMENTS_IN)" -o "$(PYTHON_EXECUTOR_REQUIREMENTS)"
+	command -v uv >/dev/null || { echo "ERROR: uv is required for upgrade-python-deps" >&2; exit 1; }; \
+	test -n "$(PYTHON_DEPS_COMPONENTS)" || { echo "ERROR: select Python dependency components" >&2; exit 1; }; \
+	for component in $(PYTHON_DEPS_COMPONENTS); do \
+		case "$$component" in \
+			embedserv) UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(EMBEDSERV_PYTHON_VERSION)" --upgrade --generate-hashes "$(EMBEDSERV_REQUIREMENTS_IN)" -o "$(EMBEDSERV_REQUIREMENTS)" ;; \
+			searxng) UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(SEARXNG_PYTHON_VERSION)" --python-platform linux --upgrade --generate-hashes "$(SEARXNG_REQUIREMENTS_IN)" -o "$(SEARXNG_REQUIREMENTS)" ;; \
+			executor) UV_CACHE_DIR="$(UV_CACHE_DIR)" uv pip compile --no-managed-python --python-version "$(PYTHON_EXECUTOR_PYTHON_VERSION)" --python-platform linux --upgrade --generate-hashes "$(PYTHON_EXECUTOR_REQUIREMENTS_IN)" -o "$(PYTHON_EXECUTOR_REQUIREMENTS)" ;; \
+			*) echo "ERROR: unknown Python dependency component: $$component" >&2; exit 1 ;; \
+		esac; \
+	done
 
 tailscale-image-ready: SECURITY_IMAGE=$(TAILSCALE_IMAGE)
 tailscale-image-ready: SECURITY_BUILD_TARGET=tailscale-build
@@ -966,7 +997,7 @@ tailscale-build code-interpreter-build:
 	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
 	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
 	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
-	"$(CONTAINER_BIN)" build --no-cache "$$@" \
+	"$(CONTAINER_BIN)" build $(BUILD_PULL_FLAG) $(BUILD_PLATFORM_FLAG) --no-cache "$$@" \
 		--file "$(SECURITY_DOCKERFILE)" \
 		--build-arg UPSTREAM_IMAGE="$(SECURITY_UPSTREAM_IMAGE)" \
 		--build-arg OS_SECURITY_UPDATE_REVISION="$(OS_SECURITY_UPDATE_REVISION)" \
@@ -989,7 +1020,7 @@ obscura-build:
 	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
 	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
 	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
-	"$(CONTAINER_BIN)" build "$$@" \
+	"$(CONTAINER_BIN)" build $(BUILD_PULL_FLAG) $(BUILD_PLATFORM_FLAG) --no-cache "$$@" \
 		--file "$(OBSCURA_DOCKERFILE)" \
 		--build-arg OBSCURA_UPSTREAM_IMAGE="$(OBSCURA_UPSTREAM_IMAGE)" \
 		--build-arg OBSCURA_BUILDER_IMAGE="$(OBSCURA_BUILDER_IMAGE)" \
@@ -1013,8 +1044,8 @@ tor-image-ready:
 
 tor-build:
 	@echo "Pulling immutable Tor base: $(TOR_BASE_IMAGE)"
-	@"$(CONTAINER_BIN)" pull "$(TOR_BASE_IMAGE)"
-	@"$(CONTAINER_BIN)" build \
+	@"$(CONTAINER_BIN)" pull $(BUILD_PLATFORM_FLAG) "$(TOR_BASE_IMAGE)"
+	@"$(CONTAINER_BIN)" build $(BUILD_PULL_FLAG) $(BUILD_PLATFORM_FLAG) --no-cache \
 		--file "$(TOR_DOCKERFILE)" \
 		--build-arg TOR_BASE_IMAGE="$(TOR_BASE_IMAGE)" \
 		--tag "$(TOR_IMAGE)" \
@@ -1048,9 +1079,10 @@ searxng-build:
 	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
 	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
 	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
-	"$(CONTAINER_BIN)" build "$$@" \
+	"$(CONTAINER_BIN)" build $(BUILD_PULL_FLAG) $(BUILD_PLATFORM_FLAG) --no-cache "$$@" \
 		--file "$(SEARXNG_DOCKERFILE)" \
 		--build-arg SEARXNG_UPSTREAM_IMAGE="$(SEARXNG_IMAGE)" \
+		--build-arg SEARXNG_PYTHON_BUILD_IMAGE="$(SEARXNG_PYTHON_BUILD_IMAGE)" \
 		--tag "$(SEARXNG_WRAPPER_IMAGE)" \
 		.
 
@@ -1070,7 +1102,7 @@ executor-build:
 	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
 	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
 	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
-	"$(CONTAINER_BIN)" build --no-cache "$$@" \
+	"$(CONTAINER_BIN)" build $(BUILD_PULL_FLAG) $(BUILD_PLATFORM_FLAG) --no-cache "$$@" \
 		--file "$(PYTHON_EXECUTOR_DOCKERFILE)" \
 		--build-arg PYTHON_EXECUTOR_UPSTREAM_IMAGE="$(PYTHON_EXECUTOR_UPSTREAM_IMAGE)" \
 		--build-arg OS_SECURITY_UPDATE_REVISION="$(OS_SECURITY_UPDATE_REVISION)" \
@@ -1210,82 +1242,17 @@ embedding-ready-once:
 		python3 -c 'import urllib.request; response = urllib.request.urlopen("http://127.0.0.1:9101/ready", timeout=None); raise SystemExit(0 if response.status == 200 else 1)'
 	@echo "Configured embedding upstream is ready."
 
+ONYX_CONFIGURATION_ARGS = --root "$(CURDIR)" --destination "onyx/onyx_data" --env-file "$(ONYX_ENV_FILE)" --ref "$(ONYX_CONFIG_REF)" --image-tag "$(ONYX_IMAGE_TAG)" --controller-tag "$(CODE_INTERPRETER_IMAGE_TAG)" --revision "$(OS_SECURITY_UPDATE_REVISION)" --container-bin "$(CONTAINER_BIN)" $(if $(filter --lite,$(ONYX_INSTALL_ARGS)),--lite,)
 ensure-onyx-config:
-	@set -eu; \
-	if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
-		echo "$(ONYX_ENV_FILE) missing; downloading deployment files and initializing with install.sh"; \
-		$(MAKE) upgrade-onyx ONYX_CONFIG_REF="$(ONYX_IMAGE_TAG)"; \
-		exit 0; \
-	fi; \
-	current_tag=$$(sed -n 's/^IMAGE_TAG=//p' "$(ONYX_ENV_FILE)" | head -1); \
-	if [ -z "$$current_tag" ]; then \
-		echo "IMAGE_TAG missing in $(ONYX_ENV_FILE); running upgrade-onyx for $(ONYX_IMAGE_TAG)"; \
-		$(MAKE) upgrade-onyx ONYX_CONFIG_REF="$(ONYX_IMAGE_TAG)"; \
-	elif [ "$$current_tag" != "$(ONYX_IMAGE_TAG)" ]; then \
-		echo "IMAGE_TAG mismatch ($$current_tag != $(ONYX_IMAGE_TAG)); running upgrade-onyx"; \
-		$(MAKE) upgrade-onyx ONYX_CONFIG_REF="$(ONYX_IMAGE_TAG)"; \
-	else \
-		echo "Onyx deployment files already match ONYX_IMAGE_TAG=$(ONYX_IMAGE_TAG)"; \
-	fi
+	@python3 -m tools.components.configuration $(ONYX_CONFIGURATION_ARGS)
 
-init-onyx-env:
-	@if [ -f "$(ONYX_ENV_FILE)" ]; then \
-		echo "$(ONYX_ENV_FILE) already exists; skipping install.sh initialization"; \
-		exit 0; \
-	fi
-	@echo "Running Onyx install script to initialize $(ONYX_ENV_FILE)..."
-	@cd onyx && CONTAINER_BIN="$(CONTAINER_BIN)" PODMAN_COMPOSE_PROVIDER="$(PODMAN_COMPOSE_PROVIDER)" ONYX_DESIRED_IMAGE_TAG="$(ONYX_IMAGE_TAG)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)" HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_WRAPPER)" --no-prompt --local $(ONYX_INSTALL_ARGS)
-	@cd onyx && CONTAINER_BIN="$(CONTAINER_BIN)" PODMAN_COMPOSE_PROVIDER="$(PODMAN_COMPOSE_PROVIDER)" ONYX_DESIRED_IMAGE_TAG="$(ONYX_IMAGE_TAG)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)" HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_WRAPPER)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
+init-onyx-env: ensure-onyx-config
 
 sync-onyx-env:
-	@if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
-		echo "ERROR: missing $(ONYX_ENV_FILE)"; \
-		exit 1; \
-	fi
-	@if grep -q '^IMAGE_TAG=' "$(ONYX_ENV_FILE)"; then \
-		sed -i.bak "s|^IMAGE_TAG=.*|IMAGE_TAG=$(ONYX_IMAGE_TAG)|" "$(ONYX_ENV_FILE)"; \
-	else \
-		printf '\nIMAGE_TAG=%s\n' "$(ONYX_IMAGE_TAG)" >> "$(ONYX_ENV_FILE)"; \
-	fi
-	@if grep -q '^CODE_INTERPRETER_IMAGE_TAG=' "$(ONYX_ENV_FILE)"; then \
-		sed -i.bak "s|^CODE_INTERPRETER_IMAGE_TAG=.*|CODE_INTERPRETER_IMAGE_TAG=$(CODE_INTERPRETER_IMAGE_TAG)|" "$(ONYX_ENV_FILE)"; \
-	else \
-		printf '\nCODE_INTERPRETER_IMAGE_TAG=%s\n' "$(CODE_INTERPRETER_IMAGE_TAG)" >> "$(ONYX_ENV_FILE)"; \
-	fi
-	@echo "Synced $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"
+	@python3 -m tools.components.configuration $(ONYX_CONFIGURATION_ARGS) --sync-only
 
 upgrade-onyx:
-	@set -eu; \
-	config_ref="$(ONYX_CONFIG_REF)"; \
-	if [ -z "$$config_ref" ]; then \
-		echo "ERROR: could not determine Onyx config ref"; \
-		exit 1; \
-	fi; \
-	compose_base="https://raw.githubusercontent.com/onyx-dot-app/onyx/$$config_ref/deployment/docker_compose"; \
-	nginx_base="https://raw.githubusercontent.com/onyx-dot-app/onyx/$$config_ref/deployment/data/nginx"; \
-	tmp_dir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmp_dir"' EXIT; \
-	mkdir -p onyx/onyx_data/deployment onyx/onyx_data/data/nginx/local; \
-	echo "Downloading Onyx deployment files for ref $$config_ref..."; \
-	curl -fsSL "$$compose_base/docker-compose.yml" -o "$$tmp_dir/docker-compose.yml"; \
-	curl -fsSL "$$compose_base/docker-compose.onyx-lite.yml" -o "$$tmp_dir/docker-compose.onyx-lite.yml"; \
-	curl -fsSL "$$compose_base/docker-compose.craft.yml" -o "$$tmp_dir/docker-compose.craft.yml"; \
-	curl -fsSL "$$compose_base/env.template" -o "$$tmp_dir/env.template"; \
-	curl -fsSL "$$compose_base/README.md" -o "$$tmp_dir/README.md"; \
-	curl -fsSL "$$nginx_base/app.conf.template" -o "$$tmp_dir/app.conf.template"; \
-	curl -fsSL "$$nginx_base/run-nginx.sh" -o "$$tmp_dir/run-nginx.sh"; \
-	install -m 0644 "$$tmp_dir/docker-compose.yml" onyx/onyx_data/deployment/docker-compose.yml; \
-	install -m 0644 "$$tmp_dir/docker-compose.onyx-lite.yml" onyx/onyx_data/deployment/docker-compose.onyx-lite.yml; \
-	install -m 0644 "$$tmp_dir/docker-compose.craft.yml" onyx/onyx_data/deployment/docker-compose.craft.yml; \
-	install -m 0644 "$$tmp_dir/env.template" onyx/onyx_data/deployment/env.template; \
-	install -m 0644 "$$tmp_dir/README.md" onyx/onyx_data/README.md; \
-	install -m 0644 "$$tmp_dir/app.conf.template" onyx/onyx_data/data/nginx/app.conf.template; \
-	install -m 0755 "$$tmp_dir/run-nginx.sh" onyx/onyx_data/data/nginx/run-nginx.sh; \
-	echo "Downloaded Onyx deployment files for ref $$config_ref"
-	@if [ ! -f "$(ONYX_ENV_FILE)" ]; then \
-		$(MAKE) init-onyx-env ONYX_INSTALL_ARGS="$(ONYX_INSTALL_ARGS)"; \
-	fi
-	@$(MAKE) sync-onyx-env
+	@python3 -m tools.components.configuration $(ONYX_CONFIGURATION_ARGS) --force
 
 down-lite:
 	@COMPOSE_PROFILES=tailscale COMPOSE_FILE=$(LITE_DOWN_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) down --remove-orphans
@@ -1339,37 +1306,17 @@ onyx-image-ready:
 	done; \
 	if [ "$$missing" -eq 1 ]; then \
 		echo "Missing Onyx image(s) detected. Running onyx-build..."; \
-		$(MAKE) onyx-build ONYX_INSTALL_ARGS="$(ONYX_INSTALL_ARGS)" ONYX_REQUIRED_IMAGES="$(ONYX_REQUIRED_IMAGES)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)"; \
+		$(MAKE) onyx-build ONYX_REQUIRED_IMAGES="$(ONYX_REQUIRED_IMAGES)"; \
 	fi; \
 	for image in $(ONYX_REQUIRED_IMAGES); do \
 		"$(CONTAINER_BIN)" image inspect "$$image" >/dev/null 2>&1 || { echo "ERROR: Onyx image still missing after onyx-build: $$image"; exit 1; }; \
 	done
 
 onyx-build:
-ifeq ($(PODMAN_SELECTED),true)
-	@set -eu; \
-	for image in $(ONYX_REQUIRED_IMAGES); do \
-		echo "Pulling required Onyx image directly with Podman: $$image"; \
+	@set -eu; for image in $(ONYX_REQUIRED_IMAGES); do \
+		echo "Pulling selected Onyx image: $$image"; \
 		"$(CONTAINER_BIN)" pull "$$image"; \
 	done
-else
-	@if [ -f "$(ONYX_ENV_FILE)" ]; then \
-		if grep -q '^IMAGE_TAG=' "$(ONYX_ENV_FILE)"; then \
-			sed -i.bak "s|^IMAGE_TAG=.*|IMAGE_TAG=$(ONYX_IMAGE_TAG)|" "$(ONYX_ENV_FILE)"; \
-		else \
-			printf '\nIMAGE_TAG=%s\n' "$(ONYX_IMAGE_TAG)" >> "$(ONYX_ENV_FILE)"; \
-		fi; \
-		echo "Updated $(ONYX_ENV_FILE): IMAGE_TAG=$(ONYX_IMAGE_TAG)"; \
-	fi
-	@echo "Running Onyx install script to prepare images (args: $(ONYX_INSTALL_ARGS))..."
-	@cd onyx && CONTAINER_BIN="$(CONTAINER_BIN)" PODMAN_COMPOSE_PROVIDER="$(PODMAN_COMPOSE_PROVIDER)" ONYX_DESIRED_IMAGE_TAG="$(ONYX_IMAGE_TAG)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)" HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_WRAPPER)" --no-prompt $(ONYX_INSTALL_ARGS)
-	@set -eu; \
-	for image in $(ONYX_REQUIRED_IMAGES); do \
-		echo "Ensuring Onyx image tag is present: $$image"; \
-		"$(CONTAINER_BIN)" pull "$$image"; \
-	done
-	@cd onyx && CONTAINER_BIN="$(CONTAINER_BIN)" PODMAN_COMPOSE_PROVIDER="$(PODMAN_COMPOSE_PROVIDER)" ONYX_DESIRED_IMAGE_TAG="$(ONYX_IMAGE_TAG)" ONYX_INSTALL_SCRIPT="$(ONYX_INSTALL_SCRIPT)" HOST_PORT_80="$(ONYX_INSTALL_HOST_PORT_80)" bash "$(ONYX_INSTALL_WRAPPER)" --shutdown $(ONYX_INSTALL_ARGS) >/dev/null 2>&1 || true
-endif
 
 myst-image-ready:
 	@if "$(CONTAINER_BIN)" image inspect "$(MYST_IMAGE)" >/dev/null 2>&1; then \
@@ -1388,10 +1335,12 @@ myst-build:
 	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
 	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
 	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
-	"$(CONTAINER_BIN)" build "$$@" \
+	"$(CONTAINER_BIN)" build $(BUILD_PULL_FLAG) $(BUILD_PLATFORM_FLAG) --no-cache "$$@" \
 		--file "$(MYST_DOCKERFILE)" \
 		--build-arg MYST_NODE_REPO="$(MYST_NODE_REPO)" \
 		--build-arg MYST_NODE_REF="$(MYST_NODE_REF)" \
+		--build-arg GO_BUILD_IMAGE="$(GO_BUILD_IMAGE)" \
+		--build-arg ALPINE_RUNTIME_IMAGE="$(ALPINE_RUNTIME_IMAGE)" \
 		--tag "$(MYST_IMAGE)" \
 		.
 
@@ -1412,10 +1361,12 @@ teep-build:
 	[ -z "$${http_proxy:-}" ] || set -- "$$@" --build-arg http_proxy; \
 	[ -z "$${https_proxy:-}" ] || set -- "$$@" --build-arg https_proxy; \
 	[ -z "$${no_proxy:-}" ] || set -- "$$@" --build-arg no_proxy; \
-	"$(CONTAINER_BIN)" build "$$@" \
+	"$(CONTAINER_BIN)" build $(BUILD_PULL_FLAG) $(BUILD_PLATFORM_FLAG) --no-cache "$$@" \
 		--file "$(TEEP_DOCKERFILE)" \
 		--build-arg TEEP_REPO="$(TEEP_REPO)" \
 		--build-arg TEEP_REF="$(TEEP_REF)" \
+		--build-arg GO_BUILD_IMAGE="$(GO_BUILD_IMAGE)" \
+		--build-arg ALPINE_RUNTIME_IMAGE="$(ALPINE_RUNTIME_IMAGE)" \
 		--tag "$(TEEP_IMAGE)" \
 		.
 

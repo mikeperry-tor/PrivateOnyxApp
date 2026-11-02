@@ -75,6 +75,33 @@ def repository(image: str) -> str:
     return name.rsplit(":", 1)[0]
 
 
+def reviewed_reference(image: str, inventory: dict, *, required: bool = False) -> str:
+    image = normalized(image)
+    if "@" in image:
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image.split("@", 1)[1]):
+            raise ValueError("invalid image digest")
+        return image
+    digest = inventory.get("registry_digests", {}).get(image)
+    if digest is None:
+        if required:
+            raise ValueError(f"missing reviewed digest for {image}; qualify the owner-selected artifact")
+        return image
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ValueError(f"invalid reviewed registry digest for {image}")
+    return image + "@" + digest
+
+
+def reviewed_onyx_source(ref: str, inventory: dict) -> str:
+    """Use the reviewed commit for its release; retain other explicit refs."""
+    decision = inventory.get("compatibility", {})
+    if ref != decision.get("onyx"):
+        return ref
+    source = decision.get("onyx_source")
+    if not isinstance(source, str) or not re.fullmatch(r"[0-9a-f]{40}", source):
+        raise ValueError("invalid reviewed Onyx source commit")
+    return source
+
+
 def reconcile(model: dict, inventory: dict, pins: dict[str, str]) -> dict[str, str]:
     services = model.get("services", {})
     contracts = inventory["onyx_services"]
@@ -89,6 +116,8 @@ def reconcile(model: dict, inventory: dict, pins: dict[str, str]) -> dict[str, s
             raise ValueError(f"{service}: owner repository changed to {image}; review contract")
         if contract.get("application") and not image.endswith(":" + pins["ONYX_IMAGE_TAG"]):
             raise ValueError(f"{service}: does not select the exact Onyx release")
+        if contract.get("application") or contract.get("inherited"):
+            reviewed_reference(image, inventory, required=True)
         if contract.get("compatibility"):
             decision = inventory["compatibility"]
             if (pins["ONYX_IMAGE_TAG"] != decision["onyx"] or
@@ -177,10 +206,15 @@ def main() -> None:
     commands.add_parser("bump", help="publish the next explicit refresh generation")
     check = commands.add_parser("check-revision")
     check.add_argument("--base", required=True)
+    resolve = commands.add_parser("resolve")
+    resolve.add_argument("--reference", required=True)
+    resolve.add_argument("--require-reviewed", action="store_true")
     args = parser.parse_args()
     pins = read_pins(args.pins)
     try:
-        if args.command == "bump":
+        if args.command == "resolve":
+            print(reviewed_reference(args.reference, json.loads(args.inventory.read_text()), required=args.require_reviewed))
+        elif args.command == "bump":
             revision = next_revision(pins[REVISION], datetime.now(timezone.utc).strftime("%Y%m%d"))
             write_pins(args.pins, {REVISION: revision})
             print(f"{REVISION}={revision}")
@@ -193,13 +227,14 @@ def main() -> None:
                 raise ValueError("Onyx owner requires an explicit release tag")
             if args.compose:
                 source = verify_checkout(args.compose.resolve(), release)
-                if release == inventory["compatibility"]["onyx"] and source != inventory["compatibility"]["onyx_source"]:
+                reviewed = reviewed_onyx_source(release, inventory)
+                if reviewed != release and source != reviewed:
                     raise ValueError("Onyx source changed; repeat bounded compatibility review")
                 model = render_owner(args.compose.resolve(), args.container_bin, release)
             else:
                 with tempfile.TemporaryDirectory(prefix="private-onyx-owner-") as directory:
                     compose = Path(directory) / "docker-compose.yml"
-                    source = inventory["compatibility"]["onyx_source"] if release == inventory["compatibility"]["onyx"] else release
+                    source = reviewed_onyx_source(release, inventory)
                     url = f"https://raw.githubusercontent.com/onyx-dot-app/onyx/{source}/deployment/docker_compose/docker-compose.yml"
                     with urlopen(url, timeout=60) as response:
                         compose.write_bytes(response.read())

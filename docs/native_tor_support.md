@@ -268,7 +268,10 @@ Before changing Tor behavior, read:
 Keep `tor/render_config.py`, the Tor Compose layers, Make selection, docs, and
 the focused tests aligned. Run `make check` for ordinary changes. Run
 `make test-tor-image` with both engines for image, config, mount, ownership, or
-control changes, including Tor-only pin or dependency upgrades. Use
+control changes, including Tor-only pin or dependency upgrades. The image gate
+compares the binary release with the explicit four-part version tag on the
+selected base image; malformed or unversioned selections fail before engine
+actions. Use
 `make check-upgrade` only when the change also spans the patch-image or
 OpenSearch image families, or for a broad release gate. Complete the documented
 Docker/Podman live matrix for Tor runtime changes, including real Tor egress,

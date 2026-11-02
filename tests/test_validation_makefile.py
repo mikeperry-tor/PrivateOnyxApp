@@ -129,33 +129,31 @@ class ValidationMakefileTests(unittest.TestCase):
                                  [" ".join([expected] * len(images))] * len(targets.split()))
                 self.assertEqual((root / "events").read_text().splitlines(), ["bump", "sync", "locks"])
 
-    def test_onyx_download_failure_cannot_keep_a_stale_compose_layer(self) -> None:
-        rule = re.search(r"(?m)^upgrade-onyx:.*(?:\n\t.*)+", MAKEFILE).group(0)
+    def test_configuration_entrypoints_preserve_ref_and_separate_sync(self) -> None:
+        import json
+        args = re.search(r"(?m)^ONYX_CONFIGURATION_ARGS = .*$", MAKEFILE).group(0)
+        rules = "\n".join(re.search(r"(?m)^" + name + r":.*(?:\n\t.*)+", MAKEFILE).group(0)
+                          for name in ("ensure-onyx-config", "sync-onyx-env", "upgrade-onyx"))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            deployment = root / "onyx/onyx_data/deployment"
-            deployment.mkdir(parents=True)
-            craft = deployment / "docker-compose.craft.yml"
-            craft.write_text("stale fixture")
-            (root / "runtime.env").touch()
+            script = root / "tools/components/configuration.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("import json, pathlib, sys\npathlib.Path('args.json').write_text(json.dumps(sys.argv[1:]))\n")
             (root / "Makefile").write_text(
-                "ONYX_CONFIG_REF=fixture\nONYX_ENV_FILE=runtime.env\n" + rule
-                + "\nsync-onyx-env:\n\t@touch synced\n"
-            )
-            curl = root / "curl"
-            curl.write_text(
-                "#!/bin/sh\nset -eu\n"
-                'case "$2" in *docker-compose.craft.yml) exit 22;; esac\n'
-                'printf fresh > "$4"\n'
-            )
-            curl.chmod(0o755)
-            result = subprocess.run(["make", "upgrade-onyx"], cwd=root,
-                                    env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"]),
-                                    capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(craft.read_text(), "stale fixture")
-            self.assertFalse((deployment / "docker-compose.yml").exists())
-            self.assertFalse((root / "synced").exists())
+                'ONYX_CONFIG_REF=exact-config-ref\nONYX_IMAGE_TAG=selected-app\n'
+                'CODE_INTERPRETER_IMAGE_TAG=selected-controller\nONYX_ENV_FILE=synthetic.env\n'
+                'OS_SECURITY_UPDATE_REVISION=fixture-revision\nCONTAINER_BIN=podman\n'
+                'ONYX_INSTALL_ARGS=--lite\n' + args + "\n" + rules + "\n")
+            for target in ("ensure-onyx-config", "sync-onyx-env", "upgrade-onyx"):
+                result = subprocess.run(["make", target], cwd=root, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                argv = json.loads((root / "args.json").read_text())
+                self.assertEqual(argv[argv.index("--ref") + 1], "exact-config-ref")
+                self.assertEqual(argv[argv.index("--image-tag") + 1], "selected-app")
+                self.assertIn("--lite", argv)
+                self.assertEqual("--force" in argv, target == "upgrade-onyx")
+                self.assertEqual("--sync-only" in argv, target == "sync-onyx-env")
+                self.assertNotIn("install.sh", result.stdout)
 
     def test_opensearch_validation_is_container_engine_neutral(self) -> None:
         runtime = (ROOT / "tests" / "opensearch_runtime_validation.py").read_text()

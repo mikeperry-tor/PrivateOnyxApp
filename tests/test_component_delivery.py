@@ -26,6 +26,9 @@ class ComponentOwnershipTests(unittest.TestCase):
             if contract.get("compatibility"):
                 tag = self.inventory["compatibility"]["default"]
             image = contract["repository"] + ":" + tag
+            if contract.get("inherited"):
+                image = next(ref for ref in self.inventory["registry_digests"]
+                             if manage.repository(ref) == contract["repository"])
             if contract.get("copy"):
                 image = self.pins[contract["copy"]]
             self.model["services"][name] = {"image": image}
@@ -77,6 +80,18 @@ class ComponentOwnershipTests(unittest.TestCase):
         self.model["services"]["minio"]["image"] = "onyxdotapp/minio:new@sha256:" + "a" * 64
         with self.assertRaisesRegex(ValueError, "source identity"):
             manage.reconcile(self.model, self.inventory, self.pins)
+
+    def test_owner_selected_registry_defaults_need_qualification(self):
+        for name in ("api_server", "web_server", "relational_db", "cache", "opensearch"):
+            reference = self.model["services"][name]["image"]
+            for missing in (True, False):
+                inventory = copy.deepcopy(self.inventory)
+                if missing:
+                    inventory["registry_digests"].pop(reference)
+                else:
+                    inventory["registry_digests"][reference] = "invalid-digest"
+                with self.subTest(name=name, missing=missing), self.assertRaises(ValueError):
+                    manage.reconcile(self.model, inventory, self.pins)
 
     def test_multiple_refreshes_and_atomic_pin_edit(self):
         self.assertEqual(manage.next_revision("20261101", "20261102"), "20261102.1")

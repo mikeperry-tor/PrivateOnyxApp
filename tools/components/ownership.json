@@ -1,21 +1,85 @@
 {
   "schema": 1,
   "refresh_inputs": {
-    "directories": ["browser/", "executor/", "searxng/", "myst/", "teep/", "tailscale/", "tor/", "embedserv/", "egress/", "onyx/patches/", "onyx/nginx/", "onyx/opensearch/", "onyx/code-interpreter/", "podman/", "compose_overlays/", "tools/components/"],
-    "files": ["Makefile", "stack.versions.env", "docker-compose.yaml", ".dockerignore", ".env.wrapper.example", "onyx/background_entrypoint.py", "onyx/beat_liveness_watchdog.py", "onyx/bootstrap_tokenizer_cache.py", "onyx/doc_drop_webserver.py", "onyx/local_embedding_shim.py", "onyx/helper-egress.env", "onyx/install.sh", "onyx/install-with-container-bin.sh"]
+    "directories": [
+      "browser/",
+      "executor/",
+      "searxng/",
+      "myst/",
+      "teep/",
+      "tailscale/",
+      "tor/",
+      "embedserv/",
+      "egress/",
+      "onyx/patches/",
+      "onyx/nginx/",
+      "onyx/opensearch/",
+      "onyx/code-interpreter/",
+      "podman/",
+      "compose_overlays/",
+      "tools/components/"
+    ],
+    "files": [
+      "Makefile",
+      "stack.versions.env",
+      "docker-compose.yaml",
+      ".dockerignore",
+      ".env.wrapper.example",
+      "onyx/background_entrypoint.py",
+      "onyx/beat_liveness_watchdog.py",
+      "onyx/bootstrap_tokenizer_cache.py",
+      "onyx/doc_drop_webserver.py",
+      "onyx/local_embedding_shim.py",
+      "onyx/helper-egress.env",
+      ".containerignore"
+    ]
   },
   "onyx_services": {
-    "api_server": {"repository": "docker.io/onyxdotapp/onyx-backend", "application": true},
-    "background": {"repository": "docker.io/onyxdotapp/onyx-backend", "application": true},
-    "web_server": {"repository": "docker.io/onyxdotapp/onyx-web-server", "application": true},
-    "inference_model_server": {"repository": "docker.io/onyxdotapp/onyx-model-server", "disabled": true},
-    "indexing_model_server": {"repository": "docker.io/onyxdotapp/onyx-model-server", "disabled": true},
-    "nginx": {"repository": "docker.io/library/nginx", "copy": "NGINX_IMAGE"},
-    "relational_db": {"repository": "docker.io/library/postgres", "inherited": true},
-    "cache": {"repository": "docker.io/library/redis", "inherited": true},
-    "opensearch": {"repository": "docker.io/opensearchproject/opensearch", "inherited": true},
-    "minio": {"repository": "docker.io/onyxdotapp/minio", "copy": "MINIO_IMAGE", "source": "MINIO_SOURCE_REF"},
-    "code-interpreter": {"repository": "docker.io/onyxdotapp/code-interpreter", "compatibility": true}
+    "api_server": {
+      "repository": "docker.io/onyxdotapp/onyx-backend",
+      "application": true
+    },
+    "background": {
+      "repository": "docker.io/onyxdotapp/onyx-backend",
+      "application": true
+    },
+    "web_server": {
+      "repository": "docker.io/onyxdotapp/onyx-web-server",
+      "application": true
+    },
+    "inference_model_server": {
+      "repository": "docker.io/onyxdotapp/onyx-model-server",
+      "disabled": true
+    },
+    "indexing_model_server": {
+      "repository": "docker.io/onyxdotapp/onyx-model-server",
+      "disabled": true
+    },
+    "nginx": {
+      "repository": "docker.io/library/nginx",
+      "copy": "NGINX_IMAGE"
+    },
+    "relational_db": {
+      "repository": "docker.io/library/postgres",
+      "inherited": true
+    },
+    "cache": {
+      "repository": "docker.io/library/redis",
+      "inherited": true
+    },
+    "opensearch": {
+      "repository": "docker.io/opensearchproject/opensearch",
+      "inherited": true
+    },
+    "minio": {
+      "repository": "docker.io/onyxdotapp/minio",
+      "copy": "MINIO_IMAGE",
+      "source": "MINIO_SOURCE_REF"
+    },
+    "code-interpreter": {
+      "repository": "docker.io/onyxdotapp/code-interpreter",
+      "compatibility": true
+    }
   },
   "compatibility": {
     "onyx": "v4.8.8",
@@ -29,19 +93,151 @@
     }
   },
   "components": {
-    "onyx": {"owner": "Onyx release", "selection": ["ONYX_IMAGE_TAG"], "build": []},
-    "controller": {"owner": "code-interpreter release; bounded Onyx compatibility review", "selection": ["CODE_INTERPRETER_IMAGE_TAG", "CODE_INTERPRETER_UPSTREAM_IMAGE"], "build": ["onyx/code-interpreter/Dockerfile", "onyx/code-interpreter/upgrade-os.sh"]},
-    "executor": {"owner": "code-interpreter release; wrapper Python lock", "selection": ["PYTHON_EXECUTOR_IMAGE_TAG", "PYTHON_EXECUTOR_UPSTREAM_IMAGE"], "build": ["executor/Dockerfile", "executor/requirements.txt", "onyx/code-interpreter/upgrade-os.sh"]},
-    "nginx": {"owner": "Onyx release", "selection": ["NGINX_IMAGE"], "build": []},
-    "minio": {"owner": "Onyx release", "selection": ["MINIO_IMAGE", "MINIO_SOURCE_REF"], "build": []},
-    "namespace": {"owner": "wrapper infrastructure", "selection": ["NETNS_HOLDER_IMAGE"], "build": []},
-    "python": {"owner": "wrapper infrastructure; Python and distribution support", "selection": ["PYTHON_SLIM_IMAGE", "PYTHON_ALPINE_IMAGE"], "build": []},
-    "socat": {"owner": "wrapper infrastructure", "selection": ["SOCAT_IMAGE"], "build": []},
-    "tailscale": {"owner": "Tailscale release; wrapper OS refresh", "selection": ["TAILSCALE_UPSTREAM_IMAGE"], "build": ["tailscale/Dockerfile"]},
-    "tor": {"owner": "Tor base release", "selection": ["TOR_BASE_IMAGE"], "build": ["tor/Dockerfile"]},
-    "obscura": {"owner": "Obscura release; wrapper patches", "selection": ["OBSCURA_RELEASE_VERSION", "OBSCURA_UPSTREAM_IMAGE", "OBSCURA_SOURCE_REF", "OBSCURA_SOURCE_SHA256", "OBSCURA_BUILDER_IMAGE"], "build": ["browser/obscura_image/Dockerfile", "browser/obscura_image/fetch_source.py", "browser/obscura_image/patches/series"]},
-    "searxng": {"owner": "SearXNG source release; wrapper Python lock", "selection": ["SEARXNG_IMAGE_TAG"], "build": ["searxng/Dockerfile", "searxng/requirements.txt"], "literal_bases": ["docker.io/library/python:3.14-slim-bookworm"]},
-    "myst": {"owner": "Myst source release; wrapper build/runtime bases", "selection": ["MYST_NODE_REF"], "build": ["myst/build/Dockerfile"], "literal_bases": ["docker.io/library/golang:1.26-alpine", "docker.io/library/alpine:3.22"]},
-    "teep": {"owner": "Teep source release; wrapper build/runtime bases", "selection": ["TEEP_REF"], "build": ["teep/build/Dockerfile", "teep/build/entrypoint.sh"], "literal_bases": ["docker.io/library/golang:1.26-alpine", "docker.io/library/alpine:3.22"]}
+    "onyx": {
+      "owner": "Onyx release",
+      "selection": [
+        "ONYX_IMAGE_TAG"
+      ],
+      "build": []
+    },
+    "controller": {
+      "owner": "code-interpreter release; bounded Onyx compatibility review",
+      "selection": [
+        "CODE_INTERPRETER_IMAGE_TAG",
+        "CODE_INTERPRETER_UPSTREAM_IMAGE"
+      ],
+      "build": [
+        "onyx/code-interpreter/Dockerfile",
+        "onyx/code-interpreter/upgrade-os.sh"
+      ]
+    },
+    "executor": {
+      "owner": "code-interpreter release; wrapper Python lock",
+      "selection": [
+        "PYTHON_EXECUTOR_IMAGE_TAG",
+        "PYTHON_EXECUTOR_UPSTREAM_IMAGE"
+      ],
+      "build": [
+        "executor/Dockerfile",
+        "executor/requirements.txt",
+        "onyx/code-interpreter/upgrade-os.sh"
+      ]
+    },
+    "nginx": {
+      "owner": "Onyx release",
+      "selection": [
+        "NGINX_IMAGE"
+      ],
+      "build": []
+    },
+    "minio": {
+      "owner": "Onyx release",
+      "selection": [
+        "MINIO_IMAGE",
+        "MINIO_SOURCE_REF"
+      ],
+      "build": []
+    },
+    "namespace": {
+      "owner": "wrapper infrastructure",
+      "selection": [
+        "NETNS_HOLDER_IMAGE"
+      ],
+      "build": []
+    },
+    "python": {
+      "owner": "wrapper infrastructure; Python and distribution support",
+      "selection": [
+        "PYTHON_SLIM_IMAGE",
+        "PYTHON_ALPINE_IMAGE"
+      ],
+      "build": []
+    },
+    "socat": {
+      "owner": "wrapper infrastructure",
+      "selection": [
+        "SOCAT_IMAGE"
+      ],
+      "build": []
+    },
+    "tailscale": {
+      "owner": "Tailscale release; wrapper OS refresh",
+      "selection": [
+        "TAILSCALE_UPSTREAM_IMAGE"
+      ],
+      "build": [
+        "tailscale/Dockerfile"
+      ]
+    },
+    "tor": {
+      "owner": "Tor base release",
+      "selection": [
+        "TOR_BASE_IMAGE"
+      ],
+      "build": [
+        "tor/Dockerfile"
+      ]
+    },
+    "obscura": {
+      "owner": "Obscura release; wrapper patches",
+      "selection": [
+        "OBSCURA_RELEASE_VERSION",
+        "OBSCURA_UPSTREAM_IMAGE",
+        "OBSCURA_SOURCE_REF",
+        "OBSCURA_SOURCE_SHA256",
+        "OBSCURA_BUILDER_IMAGE"
+      ],
+      "build": [
+        "browser/obscura_image/Dockerfile",
+        "browser/obscura_image/fetch_source.py",
+        "browser/obscura_image/patches/series"
+      ]
+    },
+    "searxng": {
+      "owner": "SearXNG source release; wrapper Python lock",
+      "selection": [
+        "SEARXNG_IMAGE_TAG"
+      ],
+      "build": [
+        "searxng/Dockerfile",
+        "searxng/requirements.txt"
+      ]
+    },
+    "myst": {
+      "owner": "Myst source release; wrapper build/runtime bases",
+      "selection": [
+        "MYST_NODE_REF"
+      ],
+      "build": [
+        "myst/build/Dockerfile"
+      ]
+    },
+    "teep": {
+      "owner": "Teep source release; wrapper build/runtime bases",
+      "selection": [
+        "TEEP_REF"
+      ],
+      "build": [
+        "teep/build/Dockerfile",
+        "teep/build/entrypoint.sh"
+      ]
+    },
+    "build_bases": {
+      "owner": "wrapper infrastructure; Go/Python/distribution support",
+      "selection": [
+        "GO_BUILD_IMAGE",
+        "ALPINE_RUNTIME_IMAGE",
+        "SEARXNG_PYTHON_BUILD_IMAGE"
+      ],
+      "build": []
+    }
+  },
+  "registry_digests": {
+    "docker.io/onyxdotapp/onyx-backend:v4.8.8": "sha256:4317e6de5e016abdcf92341e8b540f6384e8dd7e790342eefb9e0f222f611c42",
+    "docker.io/onyxdotapp/onyx-web-server:v4.8.8": "sha256:2384a1e2ca7623326427064f7b0da107c091967a272d0052550961ca8865e46b",
+    "docker.io/library/postgres:15.2-alpine": "sha256:d9c304353c031b21e9a7e33dc4781e272a9fa802a2ab9703fe4199d72ba1422c",
+    "docker.io/library/redis:7.4-alpine": "sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f",
+    "docker.io/opensearchproject/opensearch:3.6.0": "sha256:b5dd1512af2a99748c942cfbbd7f32162623336b210667d0fc6333c6321f171d",
+    "docker.io/searxng/searxng:2026.7.15-7b2199ecd": "sha256:268fdb05efbb7b4fdc5957a20c42389bfb1b1b27b5eddeb98f75ec80c45b960f"
   }
 }

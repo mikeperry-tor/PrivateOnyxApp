@@ -357,7 +357,7 @@ services:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: api_server
-    image: docker.io/onyxdotapp/onyx-backend:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
+    image: ${ONYX_BACKEND_IMAGE:?ONYX_BACKEND_IMAGE must be set by Make}
     build: !reset null
     networks:
       [onyx-frontend, onyx-backend, onyx-data, onyx-public-egress, onyx-host-egress, onyx-teep, onyx-obscura-control]
@@ -532,7 +532,7 @@ services:
     extends:
       file: ./onyx/onyx_data/deployment/docker-compose.yml
       service: web_server
-    image: docker.io/onyxdotapp/onyx-web-server:${ONYX_IMAGE_TAG:?ONYX_IMAGE_TAG must be set}
+    image: ${ONYX_WEB_SERVER_IMAGE:?ONYX_WEB_SERVER_IMAGE must be set by Make}
     build: !reset null
     networks: [onyx-frontend]
     environment:

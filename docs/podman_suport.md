@@ -688,16 +688,19 @@ environment and aborts startup before Compose begins.
 
 ## Image preparation
 
-The Podman `onyx-build` branch pulls the exact Makefile-selected Onyx images
-directly. Do not invoke the upstream Onyx bootstrap installer on this path. On
-a clean Podman VM, its noninteractive default selected the wrong stack flavor,
-started a socket-dependent code-interpreter container, and left bootstrap
-containers with incompatible health configuration. The Docker installer flow
-remains separate and unchanged.
+`onyx-build` directly pulls the exact selected application images under both
+engines. Configuration preparation never invokes the upstream bootstrap
+installer: that installer can start stock containers, select another flavor,
+and remove required overlays before wrapper health/routing is applied.
 
-Local component images still use their documented Makefile image targets.
-Never substitute an unpinned image because the Podman store is empty, and do
-not let validation containers pull or use network access implicitly.
+All local builders use native Podman `--pull=always` plus `--no-cache` for an
+explicit build; Docker uses its separate `--pull=true` contract. Both use
+manifest-selected digest-qualified build stages. Matching content-derived
+images are reused by ordinary image-ready checks. Configuration freshness has
+its own locked input/artifact fingerprint, independently of application tags;
+see [identity and preparation](onyx_patches_upgrade.md#image-and-generated-configuration-identities).
+Never substitute another image or enable validation networking because the
+selected store is empty.
 The derived Python executor and its `executor-image-ready` prerequisite remain
 Docker-only because rootless Podman omits the socket-dependent code-interpreter
 service entirely; Podman startup and image validation do not build or store it.

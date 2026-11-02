@@ -60,40 +60,90 @@ paths; documentation inside a component directory conservatively requires a bump
 Normal startup, build, and deterministic test targets do not bump the revision.
 Changing the revision selects new artifacts; it does not qualify their packages.
 
+### Image and generated-configuration identities
+
+All eight local outputs (Myst, Teep, SearXNG, Obscura, Tor, controller, executor,
+and Tailscale) include their effective source/base selections, relevant
+Dockerfiles and copied inputs, build-context exclusions and shared refresh
+revision in their image identity. Myst and Teep include repository URLs as well
+as source refs. Explicit output image overrides remain authoritative build
+destinations. Shared Go/Alpine/SearXNG Python build stages consume the committed
+digest-qualified manifest values through Dockerfile arguments. Copied inputs
+and Dockerfile overrides must use canonical source paths without symlinks.
+Dockerfile-specific ignore policies are rejected because they can replace the
+shared context privacy exclusions. Nested package files and file modes enter
+identity; ignored Python cache directories do not.
+
+Wrapper registry references are pinned by digest in `stack.versions.env`.
+`ownership.json` records reviewed registry digests for inherited Onyx selections,
+application images and the selected SearXNG source tag. These records qualify
+bytes for an owner-selected tag; they do not authorize changing its version.
+A changed owner tag requires a new qualification. `make component-sync` retains
+an existing wrapper digest when upstream still selects its tag. Check actual
+registry/index and platform evidence when qualifying a replacement.
+
+Explicit local builds use Docker `--pull=true` or Podman `--pull=always`, plus
+`--no-cache`, to refresh selected bases and package-installation layers. The broad
+upgrade rebuilds every supported local output, including fixed caller image
+destinations. An explicit `DOCKER_DEFAULT_PLATFORM` enters the identity and is passed through
+native `--platform` flags on both builders, including Tor base preparation. A
+changed output tag alone cannot invalidate those layers. Ordinary image-ready
+checks reuse matching local artifacts. Package repositories remain live,
+not snapshot repositories; a digest-qualified base does not pin packages
+subsequently installed during a build. No service installs dependencies at
+runtime.
+
+`make ensure-onyx-config` prepares the selected `ONYX_CONFIG_REF` without the
+upstream installer. The reviewed release resolves to the same immutable source
+commit used by component synchronization and audit; all configuration downloads
+use that commit. A different explicit ref remains caller-selected and is outside
+the default source qualification. It stages and validates the complete base/lite/craft
+Compose set, environment template, README, nginx template and executable runner
+before installation. Native Compose validation uses explicit public/empty
+settings with `--no-env-resolution --no-interpolate`; nginx runner syntax is
+checked before installation. Preparation creates no application containers and
+pulls no images. `make onyx-build` directly pulls the selected application
+images on both engines.
+
+The generated configuration completion record fingerprints the explicit ref,
+resolved source commit, selected versions, refresh revision, generator and wrapper generation inputs,
+and records every required non-secret artifact's content and mode. Missing,
+changed or stale artifacts trigger complete preparation even when the Onyx
+application version is unchanged. Preparation is locked; each file is installed
+atomically, and completion is recorded only after environment synchronization.
+A partial installation has no valid completion record and must be repaired on
+retry. Existing local nginx files and environment secrets survive. First-time
+environment initialization is owner-only; later synchronization changes only
+the selected application/controller version keys. The environment contents
+never enter a fingerprint or diagnostics. `upgrade-onyx` forces preparation;
+`sync-onyx-env` performs only the locked version synchronization.
+
 ### OS security refreshes
 
 The executor, code-interpreter controller, and Tailscale receive build-time OS
-updates through `executor/Dockerfile`, `onyx/code-interpreter/Dockerfile`, and
-`tailscale/Dockerfile`. The two Debian code-interpreter images share
-`onyx/code-interpreter/upgrade-os.sh`; Tailscale updates Alpine packages directly.
-Pin the upstream images by digest and bump
-`OS_SECURITY_UPDATE_REVISION` in `stack.versions.env` for every published package
-refresh, including refreshes with unchanged upstream pins. The revision, base
-digest, and build inputs determine the local image tag. Explicit
-`make executor-build`, `make code-interpreter-build`, and `make tailscale-build`
-disable Docker/Podman layer-cache reuse; normal startup reuses matching images.
-Rebuilding a tag locally without a committed revision/input change does not
-deliver that refresh to other installations. Package versions resolve from the
-base image's configured repositories at build time, not a snapshot repository.
+updates through their derived Dockerfiles. The Debian images share
+`onyx/code-interpreter/upgrade-os.sh`; Tailscale updates Alpine packages. Bump
+`OS_SECURITY_UPDATE_REVISION` for every component update or published package
+refresh, including unchanged upstream references, and validate the newly
+selected artifacts. Rebuilding an unchanged local tag does not deliver that
+refresh to other installations.
 
 Run `make check`, `make test-patch-images`, and `make test-security-images` for
-this focused refresh. The security image gate requires existing selected images
-and never pulls, builds, or enables networking. It checks the revision label,
-Debian OpenSSL package floor `3.5.7-1~deb13u2`, Alpine OpenSSL floor `3.5.8-r0`,
-Tailscale 1.102.3 and its static TLS binary, plus cryptography 50.0.1/OpenSSL 4.0.2,
-dependency consistency, AES round-tripping, and encrypted PDF extraction.
-Update those assertions deliberately with later pins/advisories. Inspect any
-other upgraded packages, including the controller's Docker CLI, and run the
-existing executor command/network contracts. Tailscale's Go TLS implementation
-is independent of Alpine OpenSSL; a package refresh does not update Go.
+this refresh. The security gate requires selected local images and never pulls,
+builds or enables networking. It checks revision labels, Debian OpenSSL floor
+`3.5.7-1~deb13u3`, Alpine OpenSSL floor `3.5.9-r0`, Tailscale 1.104.4 with Go 1.27.3 or newer and static
+linkage, plus cryptography 50.0.2/bundled OpenSSL 4.0.3, dependency consistency,
+AES round-tripping and encrypted PDF extraction. Review these assertions with
+later advisories and actual packages. Debian packages and wheel-bundled OpenSSL
+are independent. Tailscale's compiled Go TLS and system trust packages also need
+separate review; an OS refresh cannot update its Go dependencies.
 
-Render Docker/Podman lite/full models with Tailscale both enabled and disabled.
-Require the derived controller on Docker, its omission on Podman, the selected
-derived Tailscale image, and unchanged routing/mounts/entrypoints. Run lite
-startup and the enabled ingress checks when credentials are available. Do not
-enable Funnel or read its private credentials merely to validate an image.
-Podman's security gate validates only Tailscale; the controller/executor remain
-Docker-only. `make test-all-images` includes the security gate.
+Render Docker/Podman lite/full models with Tailscale enabled and disabled.
+Require the derived controller on Docker, its omission on Podman, selected
+derived Tailscale, and unchanged routes/mounts/entrypoints. Run startup and enabled
+ingress checks where credentials are available; do not enable Funnel or inspect
+private credentials merely to validate an image. Podman's security gate
+validates Tailscale only. `test-all-images` includes the security gate.
 
 ### General component upgrade
 
@@ -155,7 +205,8 @@ PDF extraction after changing bootstrap or process-isolation behavior.
 Treat every direct dependency in `embedserv/requirements.in`,
 `searxng/requirements.in`, and `executor/requirements.in` as an exact component
 pin. `make upgrade-python-deps` updates transitive packages and hashes around
-those decisions; it must not silently select a new direct component release.
+those decisions; `PYTHON_DEPS_COMPONENTS=executor` (or `searxng`/`embedserv`)
+selects a deliberate component-scoped lock refresh; it must not silently select a new direct component release.
 Edit a direct pin deliberately, audit its source and metadata constraints, and
 validate the affected component before accepting the regenerated lock.
 

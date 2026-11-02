@@ -12,7 +12,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+COMMITTED_PINS = dict(line.split("=", 1) for line in (ROOT / "stack.versions.env").read_text().splitlines()
+                      if line and not line.startswith("#"))
 SECRET_ENV = {
+    "ONYX_BACKEND_IMAGE": "docker.io/onyxdotapp/onyx-backend:v4.8.8",
+    "ONYX_WEB_SERVER_IMAGE": "docker.io/onyxdotapp/onyx-web-server:v4.8.8",
+    "MYST_IMAGE": "local/private-onyx-myst:test-model",
     # Production Make invocations export the content-derived image name before
     # Compose interpolation. Direct Compose-model tests supply an inert value.
     "PRIVATE_ONYX_PUBLIC_PROXY_PEERS": "onyx-public-egress-bridge,obscura-egress-bridge",
@@ -186,7 +191,7 @@ class ComposeOverlayLayoutTests(unittest.TestCase):
             with self.subTest(name=name):
                 services = _compose_model(mode, *overlays)["services"]
                 nginx = services["nginx"]
-                self.assertEqual(nginx["image"], "docker.io/library/nginx:1.25.5-alpine")
+                self.assertEqual(nginx["image"], COMMITTED_PINS["NGINX_IMAGE"])
                 self.assertEqual(nginx["command"], ["/usr/local/bin/run-nginx-wrapper.sh"])
                 mounts = {
                     (mount["source"], mount["target"])
@@ -1022,7 +1027,7 @@ class OnyxNetworkIsolationComposeTests(unittest.TestCase):
         )
         doc_server = linux["services"]["doc-drop-web"]
         self.assertEqual(
-            doc_server["image"], "docker.io/library/python:3.12-alpine"
+            doc_server["image"], COMMITTED_PINS["PYTHON_ALPINE_IMAGE"]
         )
         self.assertIn("/import/docs", doc_server["command"])
         self.assertTrue(

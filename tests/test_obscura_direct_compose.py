@@ -210,7 +210,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         )
         self.assertIsNotNone(image_tag)
         self.assertIn(
-            f"ARG SEARXNG_UPSTREAM_IMAGE=docker.io/searxng/searxng:{image_tag.group(1)}",
+            "ARG SEARXNG_UPSTREAM_IMAGE\n",
             self.searxng_dockerfile,
         )
         self.assertIn(
@@ -227,7 +227,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
     def test_searxng_wrapper_tag_tracks_every_embedded_input(self):
         self.assertIn("SEARXNG_WRAPPER_BUILD_INPUTS :=", self.makefile)
         self.assertIn(
-            "browser/obscura_client/private_onyx_obscura/*.py", self.makefile
+            "browser/obscura_client/private_onyx_obscura", self.makefile
         )
         self.assertIn("searxng/engines/*.py", self.makefile)
         self.assertIn("searxng/requirements.txt", self.makefile)
