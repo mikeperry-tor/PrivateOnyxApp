@@ -92,35 +92,42 @@ class ValidationMakefileTests(unittest.TestCase):
         rule = re.search(r"(?m)^upgrade:.*(?:\n\t.*)+", MAKEFILE).group(0)
         targets = ("myst-build teep-build searxng-build executor-build "
                    "code-interpreter-build tor-build tailscale-build "
-                   "obscura-image-ready upgrade-onyx")
-        images = ("SEARXNG_WRAPPER_IMAGE", "PYTHON_EXECUTOR_IMAGE")
-        for explicit in (False, True):
-            with self.subTest(explicit=explicit), tempfile.TemporaryDirectory() as directory:
+                   "obscura-build upgrade-onyx")
+        images = ("MYST_IMAGE", "TEEP_IMAGE", "TAILSCALE_IMAGE", "TOR_IMAGE", "OBSCURA_IMAGE",
+                  "SEARXNG_WRAPPER_IMAGE", "CODE_INTERPRETER_IMAGE", "PYTHON_EXECUTOR_IMAGE")
+        for override in ("default", "environment", "command-line"):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / "lock").write_text("old")
-                definitions = ""
+                (root / "revision").write_text("old")
+                definitions = "COMPONENT_IMAGE_VARIABLES := " + " ".join(images) + "\n"
                 for image in images:
                     definitions += (
-                        f"{image}_ORIGIN := $(origin {image})\n"
-                        f"{image} ?= fixture:$(shell cat lock)\n"
+                        f"{image}_CALLER_ORIGIN := $(origin {image})\n"
+                        f"{image} ?= fixture:$(shell cat revision)-$(shell cat lock)\n"
                         f"{image} := $({image})\nexport {image}\n"
                     )
+                selected = " ".join(f"$({image})" for image in images)
                 (root / "Makefile").write_text(
                     definitions + rule + "\n"
-                    "upgrade-python-deps:\n\t@echo refreshed > lock\n"
-                    + targets + ":\n\t@echo $(SEARXNG_WRAPPER_IMAGE) $(PYTHON_EXECUTOR_IMAGE) >> images\n"
+                    "component-refresh-revision:\n\t@echo next > revision\n\t@echo bump >> events\n"
+                    "component-sync:\n\t@test '$(WRITE)' = true\n\t@echo sync >> events\n"
+                    "upgrade-python-deps:\n\t@echo refreshed > lock\n\t@echo locks >> events\n"
+                    + targets + ":\n\t@echo " + selected + " >> images\n"
                 )
                 environment = dict(os.environ)
                 for image in images:
                     environment.pop(image, None)
-                    if explicit:
+                    if override == "environment":
                         environment[image] = "fixture:explicit"
-                result = subprocess.run(["make", "upgrade"], cwd=root, env=environment,
+                assignments = [f"{image}=fixture:explicit" for image in images] if override == "command-line" else []
+                result = subprocess.run(["make", "upgrade", *assignments], cwd=root, env=environment,
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                expected = "fixture:explicit" if explicit else "fixture:refreshed"
+                expected = "fixture:next-refreshed" if override == "default" else "fixture:explicit"
                 self.assertEqual((root / "images").read_text().splitlines(),
-                                 [f"{expected} {expected}"] * len(targets.split()))
+                                 [" ".join([expected] * len(images))] * len(targets.split()))
+                self.assertEqual((root / "events").read_text().splitlines(), ["bump", "sync", "locks"])
 
     def test_onyx_download_failure_cannot_keep_a_stale_compose_layer(self) -> None:
         rule = re.search(r"(?m)^upgrade-onyx:.*(?:\n\t.*)+", MAKEFILE).group(0)

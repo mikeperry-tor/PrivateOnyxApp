@@ -82,6 +82,9 @@ residual risks, and validation requirements.
   - `stack.versions.env` - committed source of truth for image tags, source refs,
     and the derived SearXNG image repository. The Makefile includes a digest of
     every embedded SearXNG wrapper input in the derived tag.
+  - `tools/components/ownership.json` and `tools/components/manage.py` -
+    component authority inventory, exact-release reconciliation, and explicit
+    refresh-generation tooling; see `docs/onyx_patches_upgrade.md`.
   - `.env.wrapper.example` - user-facing runtime options. Keep descriptions
     focused on user-visible properties and consequences; do not expose
     developer/debugging controls or deep implementation detail here.

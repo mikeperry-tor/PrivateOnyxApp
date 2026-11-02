@@ -6,6 +6,8 @@ else
 ENV_FILE ?= .env.wrapper
 endif
 VERSION_FILE ?= stack.versions.env
+COMPONENT_IMAGE_VARIABLES := MYST_IMAGE TEEP_IMAGE TAILSCALE_IMAGE TOR_IMAGE OBSCURA_IMAGE SEARXNG_WRAPPER_IMAGE CODE_INTERPRETER_IMAGE PYTHON_EXECUTOR_IMAGE
+$(foreach image,$(COMPONENT_IMAGE_VARIABLES),$(eval $(image)_CALLER_ORIGIN := $(origin $(image))))
 WRAPPER_FILE := docker-compose.yaml
 COMPOSE_OVERLAY_DIR := compose_overlays
 FULL_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.full.yml
@@ -718,7 +720,7 @@ check: test
 		searxng/engines \
 		searxng/patches \
 		searxng/wallet.py \
-		tests
+		tools/components tests
 	git diff --check
 
 .PHONY: integration-network-isolation
@@ -898,9 +900,23 @@ check-upgrade:
 
 # Reparse after lock generation so content-derived image tags match build inputs.
 # Clear only our exported defaults; explicit caller image overrides still win.
-upgrade: upgrade-python-deps
-	@env $(foreach image,SEARXNG_WRAPPER_IMAGE PYTHON_EXECUTOR_IMAGE,$(if $(filter undefined,$($(image)_ORIGIN)),-u $(image))) $(MAKE) --no-print-directory myst-build teep-build searxng-build executor-build code-interpreter-build tor-build tailscale-build obscura-image-ready upgrade-onyx
+upgrade:
+	@$(MAKE) --no-print-directory component-refresh-revision
+	@$(MAKE) --no-print-directory component-sync WRITE=true
+	@$(MAKE) --no-print-directory upgrade-python-deps
+	@env $(foreach image,$(COMPONENT_IMAGE_VARIABLES),$(if $(filter undefined,$($(image)_CALLER_ORIGIN)),-u $(image))) $(MAKE) --no-print-directory myst-build teep-build searxng-build executor-build code-interpreter-build tor-build tailscale-build obscura-build upgrade-onyx
 	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."
+
+.PHONY: component-refresh-revision component-check-revision component-sync
+component-refresh-revision:
+	@python3 tools/components/manage.py --pins "$(VERSION_FILE)" bump
+
+component-check-revision:
+	@test -n "$(REVIEW_BASE)" || { echo 'ERROR: pass REVIEW_BASE=<reviewed-commit>' >&2; exit 1; }
+	@python3 tools/components/manage.py --pins "$(VERSION_FILE)" check-revision --base "$(REVIEW_BASE)"
+
+component-sync:
+	@python3 tools/components/manage.py --pins "$(VERSION_FILE)" sync $(if $(ONYX_OWNER_COMPOSE),--compose "$(ONYX_OWNER_COMPOSE)",) --container-bin "$(CONTAINER_BIN)" $(if $(filter true,$(WRITE)),--write,)
 
 .PHONY: x402-wallet integration-x402exa
 x402-wallet:

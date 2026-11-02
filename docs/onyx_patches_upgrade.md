@@ -8,6 +8,58 @@ contains read-only audit checkouts when present.
 
 ## Upgrade procedure
 
+### Version ownership and reconciliation
+
+`tools/components/ownership.json` names component owners, selected inputs,
+build bases, and the selected Onyx service contracts. Versions remain in
+`stack.versions.env`; inherited PostgreSQL, Redis, and OpenSearch values remain
+owned by the exact selected Onyx deployment. Do not independently advance
+Onyx-owned application or storage versions in response to advisories.
+
+Use `make component-sync ONYX_OWNER_COMPOSE=/path/to/selected/onyx/deployment/docker_compose/docker-compose.yml`
+to check an unmodified checkout at the exact selected release tag. The command
+uses Compose's structured model, includes every upstream profile, and does not
+read operator or service environment files. Changed service sets/repositories
+require ownership review. After reviewing a changed nginx selection, add
+`WRITE=true` to synchronize its wrapper copy. All three nginx consumers use
+`NGINX_IMAGE`. MinIO artifact changes stop synchronization until image/source
+identity is verified and both metadata fields are deliberately updated.
+Inherited selections are reported without introducing duplicate version pins.
+Without `ONYX_OWNER_COMPOSE`, the maintainer command downloads the selected
+release's source (the reviewed immutable source for an existing compatibility
+decision) into a temporary directory. The broad `make upgrade` reconciles it
+before dependency locks and image builds; failure stops the update batch.
+
+Controller/executor selection has a bounded compatibility decision keyed to
+the exact Onyx release, its controller default, and selected paired release.
+Changes to any of those selections require renewed source compatibility review
+and selected-image qualification. Onyx permits a separately released controller;
+that does not grant a general exception for newer Onyx dependencies.
+
+For every component update, review owner/version alignment, concrete advisory
+applicability, distribution support, and actual selected artifact evidence.
+Distinguish distribution packages, wheel-bundled OpenSSL, compiled Go libraries,
+and runtime application dependencies. Check configured modules, protocols,
+privileges, and reachability before describing a finding as applicable or
+excluded. A supported tag, a newer revision, an OS update, or absence of
+published advisories is insufficient security evidence. Report upstream-pending
+exposure and unavailable package/source evidence with named next actions;
+do not silently migrate products, licenses, storage, or dependency majors.
+
+`make component-refresh-revision` publishes the next UTC date-plus-sequence
+`OS_SECURITY_UPDATE_REVISION`, including multiple refreshes per day. The broad
+`make upgrade` invokes it once before refreshing locks and deriving build tags.
+For deliberate updates outside that batch, bump explicitly and run
+`make component-check-revision REVIEW_BASE=<reviewed-commit>`. This offline
+comparison needs an explicit local commit and never guesses a remote branch.
+The inventory's `refresh_inputs` covers build and mounted runtime components,
+Compose, lifecycle helpers, public defaults and build-context policy. Both
+tracked changes and new files in those paths require a bump. Private/generated
+data, reference checkouts, repository documentation and tests are outside those
+paths; documentation inside a component directory conservatively requires a bump.
+Normal startup, build, and deterministic test targets do not bump the revision.
+Changing the revision selects new artifacts; it does not qualify their packages.
+
 ### OS security refreshes
 
 The executor, code-interpreter controller, and Tailscale receive build-time OS

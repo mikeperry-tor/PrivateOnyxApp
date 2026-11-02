@@ -298,7 +298,7 @@ services:
   # Optional fixed HTTP gateway for Tailscale ingress. Profiles keep both the
   # gateway and Funnel container structurally absent when the feature is off.
   tailscale-frontend-gateway:
-    image: ${BASE_IMAGE_REGISTRY:-docker.io}/library/nginx:1.25.5-alpine
+    image: ${NGINX_IMAGE:?NGINX_IMAGE must be set}
     profiles: [tailscale]
     restart: unless-stopped
     user: "101:101"
