@@ -1,6 +1,44 @@
 # Component version ownership and end-user upgrade delivery
 
-Status: proposed; implementation has not started.
+Status: G0 reviewed; C1 in progress. C1-C4 acceptance remains pending.
+
+Implementation baseline: `3f54b2a4d8647047a78ed3eb68f1fb7765aaf0fe`.
+The intervening commits changed contributor instructions and this plan only.
+
+### Accepted G0 decisions (2026-11-02)
+
+Independent reviewer `/root/g0_design` reviewed the implementation baseline;
+`/root/c1_evidence` independently examined the exact Onyx/controller/executor
+compatibility call chain. Retain `OS_SECURITY_UPDATE_REVISION` as the single
+date-plus-sequence refresh generation. Require an explicit review base for
+bump enforcement. Record reviewed multiarchitecture registry digests while
+retaining owner-selected tags; immutable image presence replaces persistent
+pull-completion receipts. Serialize preparation per selected engine/store.
+Generated configuration has its own input fingerprint, completed only after
+installation and environment synchronization. Serialize every startup helper
+that can consume images or create containers behind preparation, including
+tokenizer extraction and Podman storage initialization.
+
+The selected Onyx release explicitly permits the separately released
+code-interpreter selection in
+[its env.template](https://github.com/onyx-dot-app/onyx/blob/f400d3154a13ac1f3ee730896f69fbc25eb5d8f7/deployment/docker_compose/env.template).
+Compatibility selection is bounded to Onyx v4.8.8 (source
+`f400d3154a13ac1f3ee730896f69fbc25eb5d8f7`), its default 0.4.7, and controller
+and executor 0.4.9 (source `e53850d68701e5e62440a36ed311164dafc89465`).
+Independent source review compared the client, routes, schemas, Docker backend,
+and executor: wire schemas are unchanged except optional health fields;
+`StreamStarted` is consumed internally before SSE; 429/503 fail before opening
+SSE and propagate through the client's HTTP error handling and tool error
+results without retry or direct fallback. Executor dependencies are unchanged
+apart from the release version. This accepts source compatibility, not artifact
+qualification: the focused image/network gates remain required. A changed
+Onyx release, default, controller, or executor invalidates this bounded decision.
+There is no general exception allowing newer Onyx-owned dependencies.
+
+Inventory coverage must include hard-coded build stages (SearXNG Python 3.14,
+Myst/Teep Go and Alpine), explicit override acquisition rules, actual base-pull
+and package-layer invalidation, and the misleading Tor output version prefix.
+These findings are assigned to C1-C3 with their phase-local tests and reviews.
 
 Starting baseline: `90f07188cc9da0ffdef9a0bd428c6073450de7ac`. The initial
 plan is already present at that baseline; the changes below are proposed.
