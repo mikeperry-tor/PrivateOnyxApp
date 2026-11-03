@@ -141,6 +141,10 @@ Use the Makefile instead of hand-assembling compose commands unless you are debu
   validate `make help`, and run `git diff --check`. Use this as the normal
   pre-handoff check when implementation, configuration, tests, or build/runtime
   tooling changes.
+- `make component-audit` - explicitly query public owner, registry, advisory,
+  and support evidence for committed selections; missing required evidence is
+  a visible failure. It does not inspect private configuration or establish
+  installed-package safety. See `docs/onyx_patches_upgrade.md`.
 - `make test-patch-images` - install strict runtime patches against the
   already-built pinned Onyx, code-interpreter, and derived SearXNG images,
   then run the SearXNG parser tests that need image dependencies. Use it for a

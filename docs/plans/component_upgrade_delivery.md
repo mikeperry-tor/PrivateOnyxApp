@@ -1,88 +1,156 @@
 # Component version ownership and end-user upgrade delivery
 
-Status: G0 and C1 passed available checks and independent review. C1-C2
-accumulated source review (G1 SOURCE) passed through `64470e1`; selected C2
-artifact qualification remains pending. C3 source implementation and focused
-checks passed accumulated G2 SOURCE review; its final full check passed and the local phase commit is being reviewed. C4 public audit and consumer-coverage drafts are independently
-reviewed; repository integration and G3 remain pending.
+Status: G0 and C1-C4 implementation, branch-review fixes and accumulated source
+reviews passed through `b7c133a9`. Final deterministic validation passed at that
+snapshot. Initial selected-image and native Docker fixture evidence is recorded
+separately below and was not repeated for the branch-review fixes. Podman,
+native Linux/other-architecture and configured operator-stack qualification
+remain incomplete and are not implied by source approvals.
 Implementation baseline: `3f54b2a4d8647047a78ed3eb68f1fb7765aaf0fe`.
-The intervening commits changed contributor instructions and this plan only.
+Commits between that baseline and G0 changed contributor instructions and this
+plan only.
 
-### Consolidated implementation checkpoint
+### Branch-review acceptance (2026-11-04)
 
-Local commits: G0 `d7a03d5e`, C1 `74df89b7`, Make-fixture fixup
-`69c6c553`, and revision-coverage fixup `64689baa`. Independent reviewer
-`/root/g0_design` approved each exact SHA and the accumulated C1 source against
-`3f54b2a4`; no material source findings remain. The coverage fixup moved the
-runtime/build input boundary into the ownership inventory and closed mounted
-proxy/patch, Compose, lifecycle and standalone-sidecar omissions.
+The original implementation and its fixups were reviewed against `main` for
+completeness, correctness, coverage, complexity and canonical-documentation
+handoff. The following additional fixups preserve unsquashed branch history:
 
-Available validation:
+| Fixup | Scope |
+| --- | --- |
+| `619291c3` | Preserve controlled audit CLI failure reasons. |
+| `aed4b67f` | Correct canonical executor library facts and link delivery ownership. |
+| `1d19e8e6` | Deliver the published revision and synchronized selections through actual Make recursion. |
+| `aa80d82a` | Share the reviewed immutable Onyx source across synchronization, audit and configuration. |
+| `75faa1c6` | Acquire full-mode validation prerequisites after builds/configuration, with Docker/Podman separation. |
+| `9e67ffb5` | Remove obsolete upstream installer scripts and their unused settings. |
+| `329a0f7a` | Run full-mode host-data preparation once through the tokenizer prerequisite. |
+| `a9698499` | Rebuild Obscura at fixed caller destinations during broad upgrade. |
+| `0e9f823a` | Remove duplicate cached-image inspections while retaining acquisition verification. |
+| `b7c133a9` | Update the existing lifecycle contract test to follow the tokenizer prerequisite chain. |
 
-- Python 3.14.10 `make check` passed at `69c6c553`: 748 tests, 32 skips, plus
-  compilation, help and diff checks. The skips are 21 SearXNG lxml and 11 selected
-  SDK tests; the separate selected-image gate exercised those dependencies.
-- Final C1 `make check` at `f749d4fd` passed on Python 3.14.10: 748 tests
-  in 344.696 seconds, 32 image-only skips, compilation/help/diff checks.
-  Independent exact-SHA review covers C1 and all three fixups.
-- `make code-interpreter-build executor-build tailscale-build` and
-  `make test-patch-images test-security-images`, with public example settings,
-  passed on Docker Desktop Engine 29.9.2, Linux/arm64. Coverage/test/document
-  fixups do not change those selected image build inputs.
-- Online `make component-sync` and exact-release local checkout reconciliation
-  reported no owner drift. Explicit-base revision enforcement passed.
+Every listed fixup received independent exact-commit review. `/root/fix_design`
+reviewed the scoped designs and first eight fixups. Fresh accumulated reviews by
+`/root/integration_review_1` and `/root/integration_review_2` covered the original
+implementation and fixes through `a9698499`; the former renewed the complete
+upgrade/startup/helper gate through `b7c133a9`. The later two fixups do not change
+the latter's ownership, audit, identity, image-gate or canonical-documentation
+scope. No significant source findings or compelling simplifications remain.
 
-| Qualified C1 artifact (generation 20261102.1) | Exact local image ID | Installed evidence |
-| --- | --- | --- |
-| Controller `local/private-onyx-code-interpreter:0.4.9-73ca55b412f4` | `sha256:dd3d0d7ae90d66c08aac3b666e777b4694571129f7b90ef5cdafbb942a0c61ac` | Debian OpenSSL/provider `3.5.7-1~deb13u3`, CA bundle `20250419+deb13u1`, Docker CLI 29.9.2 |
-| Executor `local/private-onyx-python-executor:0.4.9-3fba8fdac06f` | `sha256:14c6122b20f5df4c6a7a645eaeb2c35750f4a8f953b1f8cda7581a758ff1a803` | Same Debian packages; cryptography 50.0.1 / bundled OpenSSL 4.0.2 remain unchanged and require separate assessment |
-| Tailscale `local/private-onyx-tailscale:e8903407afc7` | `sha256:b991e37a9d74b1eb9548c10fcf966eaf16f42d2e9f6a69e142fae74cb72ec510` | Alpine 3.22.7, OpenSSL `3.5.9-r0`, CA bundles `20261020-r0`; application 1.102.3, compiled Go 1.26.6 |
+`make check ENV_FILE=.env.wrapper.example` passed at `b7c133a9`: 865 tests in
+960.151 seconds with 32 expected image-only skips, compilation, help and diff
+checks. The completed run had permission for the suite's temporary loopback and
+Unix-socket fixtures. The explicit-base revision check against `main` and
+committed-diff whitespace check also passed. New regression coverage exercises
+actual upgrade recursion, fixed output destinations, acquisition failure/retry,
+Podman artifact omission, reviewed-source invalidation and single preparation
+calls. Checks used public settings and disposable fixtures; no operator stack
+or new selected-image/live qualification was performed. Current behavior is
+owned by [the upgrade checklist](../onyx_patches_upgrade.md) and
+[patch information](../onyx_patch_info.md), not this acceptance record.
 
-Unavailable/deferred validation: Podman is not installed; native Linux engine
-and other-architecture qualification are unavailable. No live lite/full,
-Tailscale/onion, VPN/browser/RAG or executor integration was run against
-operator configuration or private document/data stores. Effective-model
-rendering is not engine qualification. Upstream-pending and unresolved advisory
-rows below remain open; passing the existing floors does not close them.
+### Consolidated acceptance evidence (2026-11-02 through 2026-11-04)
 
-C2 commits: `76d30981`, fixture fixup `bc7ebcbb`, recursive Obscura COPY
-identity fixup `d29c4cbd`, and platform-test guard fixup `64470e1`. Each exact
-SHA has independent approval. C2 `make check` passed at `bc7ebcbb`: 779 tests
-in 586.048 seconds, 32 skips, compilation/help/diff checks. The later COPY fix
-passed all 12 identity tests in 157.016 seconds; the guard fix passed 18
-configuration tests and has no supported-platform behavior change.
+Local phase commits: G0 `d7a03d5e`, C1 `74df89b7`, C2 `76d30981`,
+C3 `83a1db94`, C4 `58c15f2e`. Reviewed fixups: C1 `69c6c553`,
+`64689baa`, `f749d4fd`, `fb4c1484`; C2 `bc7ebcbb`, `d29c4cbd`, `64470e1c`,
+`4c95083a`; C4 `306c48da`, `a8db95ee`, `881c835a`. Independent reviewer
+`/root/g0_design` approved each exact SHA and the accumulated implementation
+against the baseline. `/root/c1_evidence` independently examined source
+compatibility and reviewed C4's audit/consumer coverage. No material source
+findings remain. The reviewer renewed accumulated source gates through
+`881c835a` and approved the consolidated image/package/audit/network evidence
+and documentation handoff against the baseline. Exact commit reviews remain
+required for later changes; unavailable qualification is not waived.
 
-C3 focused evidence: 31 preparer tests; 41 lifecycle, 45 Podman startup-health
-and four tokenizer tests. Eight actual Make-entrypoint scenarios passed in
-356.728 seconds; the final strengthened populated-cache failure/retry case
-passed in 54.784 seconds. Independent accumulated G2 SOURCE review covers
-ordering, configuration/store locks, acquisition, exact platforms, Podman
-initialization/health, full readiness, and secret boundaries. A native Docker
-API 1.56 cached-image preparation probe passed with acquisition disabled.
-The isolated full check initially failed because generated public upstream
-Compose/nginx artifacts were absent; it is not a passing check. Seven public
-fixtures were then prepared from exact source `f400d315`; no runtime env was
-copied. The gateway matrix recheck passed six tests (one sandbox Unix-socket
-skip). The main-checkout `make check` passed: 818 tests in 1036.682 seconds, 32
-expected image-only skips, compilation/help/diff checks.
+Review covers owner authority and bounded compatibility; recursive COPY/context
+and immutable base identities; configuration staging and secret preservation;
+Make recursion and explicit overrides; engine/store locking, acquisition and
+platform selection; tokenizer and Podman/full lifecycle; privacy routing;
+public audit authority, evidence gaps and documentation handoff. Complexity
+review retained native identities and narrow state/locks rather than receipts
+or a general workflow framework. Repeated input/authority assumptions produced
+regressions for recursive COPY inputs, exact catalog reconciliation, Tor's
+selected version and public environment propagation. Metadata review also
+distinguished MinIO's official release source from unverified mirror/base labels;
+correcting that metadata changes no selected image or local build identity.
 
-All eight derived references and evaluated base/build-input selections match
-between C2 and C3; the ongoing C2 build inputs are unchanged. Full G1/G2/G3
-acceptance remains pending required artifact/lifecycle evidence. Reversible
-source work proceeds under independently approved source gates; later artifact
-findings reopen affected source reviews and require reviewed fixups.
+Available validation, using public example settings and disposable fixtures:
 
-Next: complete C2 artifact qualification, C3 exact-commit review, and C4 integration. The following accepted design constraints remain in force.
-Its independent design review requires all eight derived identities, native
-base-pull/package-cache policy, and a narrow configuration preparer replacing
-installer initialization. The installer starts stock containers and deletes
-unselected overlays. Preserve the complete seven-file generated set, respect
-`ONYX_CONFIG_REF`, validate staged models without private env resolution, lock
-preparation, preserve existing secrets, and record completion only after atomic
-file installation and selected-version synchronization. Test failure/retry,
-missing/modified files, unchanged-version config refresh and explicit overrides.
-C1's standing behavior is documented in
-[version ownership and reconciliation](../onyx_patches_upgrade.md#version-ownership-and-reconciliation).
+- Final `make check ENV_FILE=.env.wrapper.example` passed at `881c835a` on
+  2026-11-04: 860 tests in 1013.074 seconds, 32 expected image-only skips,
+  compilation, help and diff checks. The selected-image patch gate separately
+  exercised the skipped SearXNG parser and SDK dependencies. After the final
+  metadata/test fixes, all 21 focused validation/recursion/pin/ownership tests
+  and exact-source synchronization/revision checks also passed. Only this
+  evidence-document change follows the full check; it requires diff review.
+- All eight selected local images built successfully with generation
+  `20261102.2` and unchanged committed build inputs during validation.
+  `make test-patch-images`, `make test-obscura-image`, `make test-tor-image`,
+  `make test-security-images`, and `make test-opensearch-image` passed on
+  Docker Desktop Engine 29.9.2, API 1.56, Linux/arm64. The Tor validator's stale
+  version assertion was corrected in reviewed fixup `4c95083a` before rerun.
+  The final OpenSearch gate also passed with a nonexistent generated Onyx env
+  path, proving metadata validation does not require that private file.
+- Ownership/COPY contracts passed across 54 Make-selected effective models
+  (48 macOS combinations and six Linux engine/root combinations). These
+  establish model coverage, not native platform qualification.
+- C3 passed 31 preparer tests and eight actual Make-entrypoint fake-engine
+  scenarios, including parallel Make, cached unchanged tags, failures/retries,
+  pruning, explicit overrides, mode/profile changes and Podman full staging.
+  Native cached-image preparation passed with acquisition disabled. A native
+  four-image registry fixture pulled four images initially and acquired none
+  on repetition; it created no containers.
+- Native `make integration-network-isolation` passed all four disposable cases
+  and two DNS groups on Docker Desktop, including internal IPv4/IPv6,
+  root/nonroot, raw-socket denial and DNS forwarding. This is not native Linux
+  or complete configured-stack qualification.
+- Exact-release `component-sync` reported no owner drift; explicit-base
+  revision enforcement passed. Actual online `make component-audit` completed
+  with `evidence_collected`, all 20 registry records and no missing required
+  or optional public sources. Discovery candidates remain unapproved changes;
+  collected evidence does not establish advisory applicability or cleanliness.
+- Myst/Teep CLI, namespace-holder sleep, Python TLS/CA and socat TCP-copy
+  probes passed against selected images. OpenSearch's disposable workload and
+  restart recovery passed; no operator data or live RAG was used.
+
+| Selected local artifact (Linux/arm64) | Exact local image ID |
+| --- | --- |
+| `local/private-onyx-myst:71672d8a93e6` | `sha256:122d46a8cf7283f83a00ed878324f61c89f9f384bea33267de47ab711b7de6b2` |
+| `local/private-onyx-teep:7aa27982ce9f` | `sha256:2325d91e0b3e88cb0f9b387c0e327e05e97773040d70777f2ec3eacfae382a1f` |
+| `local/private-onyx-tailscale:38ffbc247be3` | `sha256:56d7995b17cf9c896605cd0d2aa711739d4d86e1e8513e68944b70f0e0a81472` |
+| `local/private-onyx-tor:0.4.9.14-d05989d8ca0e` | `sha256:8c9b3c8be78c1437d6d3377bebcfbcbdf84dd18f13592dfe9ad0a2af063f4444` |
+| `local/private-onyx-obscura:0.2.5-stealth-4dae50aa73d8` | `sha256:78b9e1448cc74e44e7f6f51b889fc3b5030fcbad79d5462480019a6bb2c25c60` |
+| `local/private-onyx-searxng:2026.7.15-7b2199ecd-719051487c02` | `sha256:0730bce37492d216e8dcec77b7fb892b3e600d0090deb82c55bcc980ba2a764f` |
+| `local/private-onyx-code-interpreter:0.4.9-b7faa1f50170` | `sha256:ac5ab270a037d0f038b952bc3a34b64d2e05b14fa58f95b093ef2b7276e39daf` |
+| `local/private-onyx-python-executor:0.4.9-57f29c2de069` | `sha256:2f55c883e86b98892261db305eef2e5cdcacef273733bece77dc1fb0d561e0e8` |
+
+Controller/executor contain Debian OpenSSL/provider `3.5.7-1~deb13u3` and
+CA bundle `20250419+deb13u1`; executor cryptography 50.0.2 bundles OpenSSL
+4.0.3 and passed dependency, AES and encrypted-PDF checks. Tailscale reports
+1.104.4 / Go 1.27.3, OpenSSL `3.5.9-r0` and CA `20261020-r0`.
+Tor reports 0.4.9.14; hardened runtime, ownership, Unix socket and authenticated
+control contracts passed. Floors and image gates are regression evidence,
+not a whole-application security assessment.
+
+Validation limitation discovered and fixed: recursive Make validation could
+previously fall back to the default operator env despite a public parent
+setting. Synthetic fixtures reproduced this; `a8db95ee` explicitly forwards
+`ENV_FILE` and removes the generated private env from OpenSearch metadata
+inspection. Earlier helper output was discarded without inspecting private
+values. We cannot assert that the earlier helper never parsed a private file.
+No operator stack was started or private runtime state modified.
+
+Unavailable validation: Podman is not installed; native Linux-host and other
+architecture qualification are unavailable. No configured operator lite/full
+startup, private-document RAG/cache, VPN, live browser/search, Tailscale/onion
+exposure, executor command/network integration or Teep inference was run.
+Those require an available runtime/configured stack and, where applicable,
+credentials, external services or funding. Disposable fixtures and effective
+models do not replace these checks. Upstream-pending advisories, complete
+installed-dependency assessment and MinIO mirror-build provenance remain open below.
+The plan stays active for branch review and outstanding qualification; frozen
+accepted records have not been modified or created.
 
 ### Accepted G0 decisions (2026-11-02)
 
@@ -120,7 +188,7 @@ and package-layer invalidation, and the misleading Tor output version prefix.
 These findings are assigned to C1-C3 with their phase-local tests and reviews.
 
 Starting baseline: `90f07188cc9da0ffdef9a0bd428c6073450de7ac`. The initial
-plan is already present at that baseline; the changes below are proposed.
+plan is already present at that baseline; C1-C4 are now implemented.
 Use the current tree and selected images during implementation, and record
 any intervening changes that affect the baseline evidence.
 
@@ -156,18 +224,18 @@ Existing behavior and standing validation requirements belong in
 Update those authorities alongside implementation, then link to their current
 contracts here rather than retaining duplicate specifications in this plan.
 
-## Gaps to close
+## Starting gaps addressed
 
-The Makefile's broad upgrade flow refreshes locks and builds artifacts without
+At the implementation baseline, the Makefile's broad upgrade flow refreshed locks and built artifacts without
 automatically synchronizing all committed pins. Wrapper nginx and MinIO
-overrides can therefore lag their selected Onyx release. PostgreSQL, Redis,
-and OpenSearch currently inherit upstream deployment values.
+overrides could therefore lag their selected Onyx release. PostgreSQL, Redis,
+and OpenSearch inherited upstream deployment values.
 
-Normal startup reuses existing local image references. That delivers changed
-content-derived tags, but cannot establish freshness behind unchanged registry
-tags. Myst and Teep image selection does not currently cover every local build
-input. Generated Onyx deployment readiness is tied to the application tag,
-which cannot represent every configuration refresh.
+Baseline startup reused existing local image references. That delivered changed
+content-derived tags, but could not establish freshness behind unchanged registry
+tags. Myst and Teep image selection did not cover every local build
+input. Generated Onyx deployment readiness was tied to the application tag,
+which could not represent every configuration refresh.
 
 ## Review sequence and commit boundaries
 
@@ -208,72 +276,43 @@ refreshes.
 
 ## C1: dependency ownership and maintainer synchronization
 
-Introduce a small structured inventory used by upgrade tooling and checks.
-Prefer a narrow extension of existing configuration over a second independent
-version manifest. Every consumed image and build base must have an owner and
-an explicit source of version authority.
-
-| Owner | Review scope |
-| --- | --- |
-| Selected Onyx release | nginx, PostgreSQL, Redis, OpenSearch, MinIO, code-interpreter default, application images |
-| Selected code-interpreter release | Controller/executor pairing and executor image selection |
-| Obscura | Runtime digest, source ref/archive hash, Rust builder, patch series |
-| SearXNG | Upstream image, Python locks, browser-client compatibility |
-| Tor | Base digest, packaged Tor version, derived build inputs |
-| Tailscale | Upstream digest, application/Go dependencies, OS packages |
-| Myst and Teep | Source refs, build/runtime bases, local copied files and dependencies |
-| Wrapper infrastructure | Shared Python bases, namespace-holder Alpine, socat, and all consumers |
-
-Parse the exact selected Onyx release's deployment/configuration sources with
-structured parsers. Synchronize wrapper-owned copies of upstream values and
-verify inherited values without duplicating every inherited pin. Normalize
-registry spelling without weakening tag/digest comparisons. Unknown, missing,
-ambiguous, added, or removed service contracts must produce actionable results.
-Do not use upstream main or latest as the authority for a selected release.
-
-Reconcile the existing controller/executor 0.4.9 selection against Onyx v4.8.8's
-Compose default of 0.4.7 through compatibility review. Do not silently downgrade
-an installed controller or invent a permanent exception to the ownership policy.
-Keep MinIO image/source metadata synchronized with its owner-selected artifact.
-Make the WebUI nginx and both ingress gateways consume the same synchronized
-nginx selection; remove their hard-coded duplicate versions.
-
-Add a shared revision-bump operation for explicit maintainer update workflows.
-Allow multiple refreshes per day, for example `20261031.1`. Run it once per
-update batch before deriving build identities. Enforce bumps for component
-changes made outside that workflow through a check against an explicit review
-base. Ordinary startup, build, and test targets must not bump it.
+The implemented ownership, exact-source reconciliation, compatibility boundary
+and refresh-generation policy are documented in
+[version ownership and reconciliation](../onyx_patches_upgrade.md#version-ownership-and-reconciliation).
+The [inventory](../../tools/components/ownership.json) records consumed owners,
+reviewed registry selections and the explicit revision-input boundary. Phase
+acceptance evidence is consolidated above and in the initial reconciliation.
 
 ### Initial image and library reconciliation
 
-The consolidated acceptance evidence below was checked on **2026-11-02** by
+Initial primary evidence was checked on **2026-11-02** by
 `/root/c1_evidence` (source compatibility, primary advisory/support research)
-and the coordinator (registry resolution and cached-artifact observations).
+and the coordinator (registry resolution). Selected artifact probes and final
+dispositions were updated on **2026-11-03**.
 The exact Onyx owner source is v4.8.8,
 `f400d3154a13ac1f3ee730896f69fbc25eb5d8f7`, specifically its
 [deployment Compose](https://github.com/onyx-dot-app/onyx/blob/f400d3154a13ac1f3ee730896f69fbc25eb5d8f7/deployment/docker_compose/docker-compose.yml).
-Registry digests supplied by the coordinator are resolved multiarchitecture
-selections; cached image observations do not establish that those bytes match
-the resolved selection. Unavailable artifact/package evidence remains
-unresolved. This table is batch acceptance evidence, not a clean security audit.
-C1 source review, final full suite and selected-image contracts passed as
-recorded above. C2 selections require their own artifact qualification.
+Registry digests are resolved multiarchitecture selections; native observations
+below used the exact selected digest on Linux/arm64. Unavailable dependency
+applicability and live evidence remains unresolved. This table is batch acceptance evidence, not a clean security audit.
+Source reviews and selected-image contracts passed as recorded above; unavailable
+platform/live qualification remains explicit.
 
 | ID | Owner and exact selected artifact/source | Primary evidence and applicability (verified 2026-11-02) | Disposition, responsible phase, required checks and current limitation |
 | --- | --- | --- | --- |
-| R1 | Onyx v4.8.8: `docker.io/library/nginx:1.25.5-alpine`; resolved `sha256:516475cc129da42866742567714ddc681e5eed7b9ee0b9e9c015e464b4221a00`. | [nginx advisories](https://nginx.org/en/security_advisories.html) include affected ranges containing 1.25.5. Fixed ingress gateways use HTTP/1.1 TCP backends; no configured TLS/HTTP3/AIO/slice/SSI/DAV handlers. Generated Onyx API configuration uses rewrite. Complete compiled-module/configuration applicability is unresolved. | **Upstream-pending / unresolved applicability.** C1 synchronizes WebUI and both gateways; no independent application upgrade. C1-C3 must render Docker/Podman lite/full with both ingress features and verify selected nginx behavior. Digest resolved; complete artifact/module and live ingress checks pending. |
-| R2 | Onyx v4.8.8: inherited `docker.io/library/postgres:15.2-alpine`; resolved `sha256:d9c304353c031b21e9a7e33dc4781e272a9fa802a2ab9703fe4199d72ba1422c`. | [PostgreSQL 15 security](https://www.postgresql.org/support/security/15/) lists fixes after 15.2, including schema/role/RLS findings fixed in 15.3. Exact role/query prerequisites need deployment assessment. | **Upstream-pending.** C1 verifies inherited lite/full selection; retain owner-selected version and storage major. C1-C3 require effective models and database startup/restart validation if bytes change. Installed package and complete advisory applicability evidence pending. |
-| R3 | Onyx v4.8.8: inherited `docker.io/library/redis:7.4-alpine`; current registry `sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f`. Cached runtime observed Redis 7.4.9 / Alpine 3.21.7; not yet matched to registry digest. | Primary [RESTORE](https://github.com/redis/redis/security/advisories/GHSA-c8h9-259x-jff4), [Lua](https://github.com/redis/redis/security/advisories/GHSA-8ghh-qpmp-7826), and [unblock](https://github.com/redis/redis/security/advisories/GHSA-93m2-935m-8rj3) advisories list relevant affected ranges and no concrete patched version in their current metadata. Cluster is not configured; that does not exclude non-cluster findings. | **Unresolved applicability / upstream-pending.** C1 records owner tag and reviewed digest; C3 must deliver selected bytes despite unchanged tag. Next action: inspect exact selected digest's Redis/APK versions and assess advisory prerequisites. Full-mode cache/startup contracts and fake unchanged-tag refresh tests required; cached version alone cannot close the row. |
-| R4 | Onyx v4.8.8: inherited `docker.io/opensearchproject/opensearch:3.6.0`; resolved `sha256:b5dd1512af2a99748c942cfbbd7f32162623336b210667d0fc6333c6321f171d`. | [October zstd advisory](https://github.com/opensearch-project/OpenSearch/security/advisories/GHSA-68xw-fqpj-h922) explicitly excludes 3.x. Newer releases alone do not establish exposure. Bundled JDK/plugin/dependency applicability remains unverified. | **No applicable finding for the cited zstd advisory; remaining evidence unresolved.** C1 verifies inherited ownership; no independent upgrade. Next action C1-C3: inspect selected artifact's dependency inventory; run `make test-opensearch-image` and affected running RAG/OpenSearch contracts if bytes change. Digest resolved; image/live qualification pending. |
-| R5 | Onyx v4.8.8: `docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5`; manifest source `fe3a1471fda9d8adf275791a8dd3c50091750d0b`. | [Unsigned-trailer signature bypass](https://github.com/minio/minio/security/advisories/GHSA-hv4r-mvr4-25vw) affects all OSS releases; published fix is AIStor. [Session-policy bypass](https://github.com/minio/minio/security/advisories/GHSA-jjjj-jwhf-8rgr) was fixed after the selected July2025 release. Restricted private reachability reduces exposure but does not patch either issue. | **Upstream-pending exposure; mirror/source identity unresolved.** Retain owner artifact without product/license/storage migration. C1 synchronizes image/source metadata. Next action: verify mirror runtime/source identity and session-policy use; C1-C3 require full effective model and affected object-store/RAG checks. No fixed claim or independently selected AIStor replacement. |
-| R6 | Wrapper: `docker.io/library/alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f`. | [Alpine support](https://alpinelinux.org/releases/), verified 2026-11-02: 3.20 regular support ended 2026-04-01; 3.22 main is supported through 2027-05-01. The holder requires `sleep infinity`. | **C2 supported-base remediation selected; qualification pending.** Validate retained namespace/readiness contracts on Docker and available engines; Podman is unavailable. Source support and registry digest were independently verified; model rendering alone is not qualification. |
-| R7 | Wrapper: `docker.io/library/python:3.12-slim-bookworm`, cached digest `sha256:76d4b7b6305788c6b4c6a19d6a22a3921bf802e9af4d5e1e5bd771208dba74bf`; `docker.io/library/python:3.12-alpine`, cached digest `sha256:236173eb74001afe2f60862de935b74fcbd00adfca247b2c27051a70a6a39a2d`. | [Bookworm LTS](https://www.debian.org/releases/bookworm/) continues through June2028 on supported architectures; [Python 3.12 policy](https://www.python.org/downloads/release/python-31212/) is security-only through October2028. Slim serves policy proxies and host-isolation validation; Alpine serves doc-drop, embedding shim and Obscura fixture validation. | **Unresolved actual package/runtime versions.** C1-C3 resolve reviewed current digests, enumerate effective inherited consumers, inspect Python/distribution/package evidence and qualify refresh delivery. Preserve Python major/minor and distribution. Require deterministic proxy/shim tests, affected image gates and full RAG/browser checks; cached digest metadata is not reviewed remote-package evidence. |
-| R8 | Wrapper: `docker.io/alpine/socat:1.8.0.3`; cached digest `sha256:76d1e4fc91bdd9d08f2a72a3fde1776798fd00cc00d3bded940dc154cd7ab6fd`. | [Current publisher Dockerfile](https://raw.githubusercontent.com/alpine-docker/multi-arch-libs/master/socat/Dockerfile) uses moving Alpine and APK installation. Current source cannot prove historical image provenance/package versions. Fixed bridges use TCP and local health commands. | **Unresolved provenance/advisory applicability; C1-C3.** Next action: resolve selected registry digest, inspect socat/APK/base versions and primary application advisories before selecting refresh. Qualify every affected fixed bridge/health command, including Podman/macOS and optional executor/Teep/Exa paths. No newer tag accepted merely because it exists. |
-| R9 | Tailscale: `docker.io/tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c`; source `27047635f237d1f3e0b08c0f487674757f30d2f7`. | Verified 2026-11-02: [TS-2026-013](https://tailscale.com/security-bulletins#ts-2026-013) requires compiled Go certificate distrust; CA-package date alone cannot close it. [Selected release](https://github.com/tailscale/tailscale/releases/tag/v1.104.4) requires Go 1.27.3. Independent exact-source review found unchanged publication builder/Alpine 3.22 base/Serve substitution, existing env contract and unchanged actual platform set. New boot-timeout option retains 60 seconds. Single HTTP mount excludes multi-capability/Unix-backend triggers; operator-enabled SSH needs separate assessment. | **C2 application remediation selected; actual binary/Go/package and live qualification pending.** Run selected security gate, inspect Go and trust separately, retain static linkage/containerboot contracts. Enabled ingress cannot be validated without credentials. No whole-application clean bill of health. |
-| R10 | Wrapper refresh generation `20261102.2` applies to all eight local build identities. C1 generation `.1` artifacts and packages are recorded above; C2 selections require renewed qualification. | [OpenSSL published advisory timeline](https://www.openssl-library.org/news/timeline/) establishes releases after historical package floors; revision labels provide no package evidence. | **C1 generation `.1` qualified on Docker Linux/arm64; C2 generation `.2` qualification remains pending.** Exact artifacts/packages and passing patch/security gates are recorded above. C2-C3 must complete remaining delivery and applicability work; Podman and live qualification remain unavailable. Existing package floors are regression checks, not proof every advisory is fixed. |
-| R11 | Executor `cryptography==50.0.2`, hashed lock regenerated for Python 3.11/Linux through `make upgrade-python-deps PYTHON_DEPS_COMPONENTS=executor`; selected wheel contract is bundled OpenSSL 4.0.3. | Verified 2026-11-02: [cryptography changelog](https://cryptography.io/en/latest/changelog/) and [platform support](https://cryptography.io/en/50.0.2/installation/) support the same Python/runtime line. [OpenSSL advisory](https://mirror.openssl-library.org/news/secadv/20260929.txt) fixes affected 4.0.2 ranges in 4.0.3. Concrete PDF X.509/CRL exploit prerequisites remain unestablished; AES/PDF checks establish compatibility. Debian [CRL fix](https://security-tracker.debian.org/tracker/CVE-2026-35189) needs `3.5.7-1~deb13u3`; Alpine floor is 3.5.9-r0. | **C2 wrapper remediation implemented; selected artifact qualification pending.** Security assertions now target the reviewed packages/wheel; validate actual system and bundled copies, dependency consistency, AES, encrypted PDFs and executor contracts. Changed assertions and regenerated lock alone do not establish artifact remediation. |
-| R12 | Onyx v4.8.8 default 0.4.7; bounded controller/executor selection 0.4.9, source `e53850d68701e5e62440a36ed311164dafc89465`; controller digest `sha256:7626d1f139e56d640cd0e333a90f632e26dc986db8641d6dbce45dc494e03580`; executor digest as R11. | Exact [Onyx env.template](https://github.com/onyx-dot-app/onyx/blob/f400d3154a13ac1f3ee730896f69fbc25eb5d8f7/deployment/docker_compose/env.template) permits a separate release selection. Independent source call-chain review and failure behavior are recorded in the accepted G0 decision above. | **Source compatibility and C1 generation `.1` selected-image contracts passed for the exact tuple; C2 `.2` and live integration pending.** C1 records bounded authority; changes to either owner/default/selected release reopen compatibility review. Selected patch/security image gates passed; retain live executor command/network qualification. No silent downgrade and no permanent allow-newer exception. |
-| R13 | SearXNG `2026.7.15-7b2199ecd`, Python3.14 build stage; Obscura 0.2.5 source `bd9529418b7fa975b50eabeac415cfaaa865a588`, runtime digest `sha256:354c3d2a0fa2dd2939debe6903aa26c35d121329245dfa42aa7d1c292a209814`, Rust1.94.0-bookworm digest `sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f`; Tor0.4.9.14 digest `sha256:38f57fbef35b372f5eac374fa3d44a4edf6c5e2ff2a6883ace851617c09f16bb`; Myst source `74d144d4261adbb9feb84825946078b8161ebe46`; Teep source `d9f59d839eb887b50f5afd234e192eac5ec45a2d`; Myst/Teep Go1.26-alpine and Alpine3.22 build/runtime bases. | [SearXNG](https://github.com/searxng/searxng/security/advisories) and [Obscura](https://github.com/h4ckf0r0day/obscura/security/advisories) currently publish no own advisories; absence does not establish bundled dependency cleanliness. Independent [Tor 0.4.9.15 review](https://lists.torproject.org/mailman3/hyperkitty/list/tor-announce%40lists.torproject.org/thread/WXHTSV43NO5UZQ7Q634S5NS5MIRL5JSJ/) supports retaining 0.4.9.14 for this client-only configuration: relay/directory defenses and unused control commands do not apply; remaining dependency evidence is separate. C2 identities include all source/base/copied/context inputs; native source/runtime review is incomplete. | **Unresolved support/advisory/dependency evidence; identity remediation assigned C2-C3.** Next action: exact-source dependency/SBOM audit, registry/runtime evidence and complete build-input coverage including hard-coded stages. Require affected `make test-patch-images`, `make test-obscura-image`, `make test-tor-image`, browser/search, Myst namespace and Teep inference contracts. No automatic unrelated upgrades authorized; focused gates and live evidence pending. |
+| R1 | Onyx v4.8.8: `docker.io/library/nginx:1.25.5-alpine`; resolved `sha256:516475cc129da42866742567714ddc681e5eed7b9ee0b9e9c015e464b4221a00`. | [nginx advisories](https://nginx.org/en/security_advisories.html) include affected ranges containing 1.25.5. Fixed ingress gateways use HTTP/1.1 TCP backends; no configured TLS/HTTP3/AIO/slice/SSI/DAV handlers. Generated Onyx API configuration uses rewrite. Complete compiled-module/configuration applicability is unresolved. | **Upstream-pending / unresolved applicability.** All three nginx consumers reconcile and effective models pass. Selected binary is nginx 1.25.5, Alpine 3.19.1, compiled OpenSSL 3.1.4 / APK `3.1.4-r6`. No independent application upgrade. Complete module/advisory assessment and live ingress checks remain required at owner update. |
+| R2 | Onyx v4.8.8: inherited `docker.io/library/postgres:15.2-alpine`; resolved `sha256:d9c304353c031b21e9a7e33dc4781e272a9fa802a2ab9703fe4199d72ba1422c`. | [PostgreSQL 15 security](https://www.postgresql.org/support/security/15/) lists fixes after 15.2, including schema/role/RLS findings fixed in 15.3. Exact role/query prerequisites need deployment assessment. | **Upstream-pending.** Effective inherited selections pass. Selected binary is PostgreSQL 15.2, Alpine 3.17.3, OpenSSL APK `3.0.8-r3`; no data-server startup or restart was performed. Retain owner version/storage major; assess role/query prerequisites and live database recovery at the next owner-approved update. |
+| R3 | Onyx v4.8.8: inherited `docker.io/library/redis:7.4-alpine`; current registry `sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f`. | Primary [RESTORE](https://github.com/redis/redis/security/advisories/GHSA-c8h9-259x-jff4), [Lua](https://github.com/redis/redis/security/advisories/GHSA-8ghh-qpmp-7826), and [unblock](https://github.com/redis/redis/security/advisories/GHSA-93m2-935m-8rj3) advisories list relevant affected ranges and no concrete patched version in their current metadata. Cluster is not configured; that does not exclude non-cluster findings. | **Unresolved applicability / upstream-pending.** Exact selected digest reports Redis 7.4.12, Alpine 3.21.9 and OpenSSL `3.3.7-r2`. C3 unchanged-tag refresh and failure/retry fixtures pass. Assess current advisory prerequisites/patched ranges against these exact bytes; configured full-mode cache/startup qualification remains unavailable. |
+| R4 | Onyx v4.8.8: inherited `docker.io/opensearchproject/opensearch:3.6.0`; resolved `sha256:b5dd1512af2a99748c942cfbbd7f32162623336b210667d0fc6333c6321f171d`. | [October zstd advisory](https://github.com/opensearch-project/OpenSearch/security/advisories/GHSA-68xw-fqpj-h922) explicitly excludes 3.x. Newer releases alone do not establish exposure. Bundled JDK/plugin/dependency applicability remains unverified. | **No applicable finding for cited zstd advisory; remaining dependency evidence unresolved.** Exact selected OpenSearch image gate, disposable workload and restart recovery passed (26 plugins, 128-dimensional vector workload). Bundled JDK/plugin advisory inventory and configured Onyx/RAG integration remain required; no independent owner-version upgrade. |
+| R5 | Onyx v4.8.8: `docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5`; official release source `7ced9663e6a791fef9dc6be798ff24cda9c730ac`. | [Unsigned-trailer signature bypass](https://github.com/minio/minio/security/advisories/GHSA-hv4r-mvr4-25vw) affects all OSS releases; published fix is AIStor. [Session-policy bypass](https://github.com/minio/minio/security/advisories/GHSA-jjjj-jwhf-8rgr) was fixed after the selected July2025 release. Restricted private reachability reduces exposure but does not patch either issue. | **Upstream-pending exposure; mirror/source identity unresolved.** Selected binary reports the [official July2025 release](https://github.com/minio/minio/releases/tag/RELEASE.2025-07-23T15-54-02Z), commit [`7ced9663e6a791fef9dc6be798ff24cda9c730ac`](https://github.com/minio/minio/commit/7ced9663e6a791fef9dc6be798ff24cda9c730ac), Go 1.24.5 and RHEL 8.10. The release/commit pair matches upstream; `fb4c1484` corrects prior unverified source metadata to this official release commit. Matching self-report does not establish the mirror build source; verify publisher/source relation before claiming provenance. Retain owner artifact without product/license/storage migration; assess session-policy use and full object-store/RAG integration at owner update. |
+| R6 | Wrapper: `docker.io/library/alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f`. | [Alpine support](https://alpinelinux.org/releases/), verified 2026-11-02: 3.20 regular support ended 2026-04-01; 3.22 main is supported through 2027-05-01. The holder requires `sleep infinity`. | **C2 supported-base remediation qualified on available Docker platform.** Alpine 3.22.7 namespace-holder sleep and disposable network-isolation fixtures passed. Effective models pass; Podman and native Linux/other-architecture lifecycle qualification remain unavailable. |
+| R7 | Wrapper: `docker.io/library/python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337`; `docker.io/library/python:3.12-alpine@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8`. | [Bookworm LTS](https://www.debian.org/releases/bookworm/) continues through June2028 on supported architectures; [Python 3.12 policy](https://www.python.org/downloads/release/python-31212/) is security-only through October2028. Slim serves policy proxies and host-isolation validation; Alpine serves doc-drop, embedding shim and Obscura fixture validation. | **Selected refresh qualified on available Docker platform; complete advisory/live assessment unresolved.** Both report Python 3.12.16; Slim OpenSSL is 3.0.22 (`3.0.22-1~deb12u2`, CA `20250419~deb12u2`), Alpine is 3.23.4 / OpenSSL `3.5.9-r0` / CA `20261020-r0`. Deterministic proxy/shim and affected image/network fixtures passed. Full configured RAG/browser and other-engine checks remain unavailable; no blanket fixed claim. |
+| R8 | Wrapper: `docker.io/alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e`. | [Current publisher Dockerfile](https://raw.githubusercontent.com/alpine-docker/multi-arch-libs/master/socat/Dockerfile) uses moving Alpine and APK installation. Current source cannot prove historical image provenance/package versions. Fixed bridges use TCP and local health commands. | **Provenance/advisory applicability remains unresolved.** Selected digest reports socat 1.8.0.3-r1, Alpine 3.23.4, OpenSSL `3.5.6-r0`, CA bundle `20260413-r0`. Actual TCP-copy and model/health fixtures passed. Complete publisher/application advisory review and every configured fixed bridge on supported engines remain next actions; these TCP fixtures do not establish SSL remediation. |
+| R9 | Tailscale: `docker.io/tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c`; source `27047635f237d1f3e0b08c0f487674757f30d2f7`. | Verified 2026-11-02: [TS-2026-013](https://tailscale.com/security-bulletins#ts-2026-013) requires compiled Go certificate distrust; CA-package date alone cannot close it. [Selected release](https://github.com/tailscale/tailscale/releases/tag/v1.104.4) requires Go 1.27.3. Independent exact-source review found unchanged publication builder/Alpine 3.22 base/Serve substitution, existing env contract and unchanged actual platform set. New boot-timeout option retains 60 seconds. Single HTTP mount excludes multi-capability/Unix-backend triggers; operator-enabled SSH needs separate assessment. | **C2 application remediation qualified on available Docker platform.** Selected security gate, binary Go 1.27.3, static linkage/containerboot and package/trust assertions passed. Enabled ingress needs credentials and was not tested. Operator SSH and complete advisory applicability remain separate; no whole-application clean claim. |
+| R10 | Wrapper refresh generation `20261102.2` applies to all eight selected local build identities recorded above. | [OpenSSL published advisory timeline](https://www.openssl-library.org/news/timeline/) establishes releases after historical package floors; revision labels provide no package evidence. | **Generation `.2` built and qualified on available Docker platform.** All eight selected IDs are recorded above; patch/security and affected image gates passed. Actual package/library versions are recorded rather than inferred from revision labels. Podman/native Linux/other architectures and configured live checks remain unavailable; floors do not prove every advisory fixed. |
+| R11 | Executor `cryptography==50.0.2`, hashed lock regenerated for Python 3.11/Linux through `make upgrade-python-deps PYTHON_DEPS_COMPONENTS=executor`; selected wheel contract is bundled OpenSSL 4.0.3. | Verified 2026-11-02: [cryptography changelog](https://cryptography.io/en/latest/changelog/) and [platform support](https://cryptography.io/en/50.0.2/installation/) support the same Python/runtime line. [OpenSSL advisory](https://mirror.openssl-library.org/news/secadv/20260929.txt) fixes affected 4.0.2 ranges in 4.0.3. Concrete PDF X.509/CRL exploit prerequisites remain unestablished; AES/PDF checks establish compatibility. Debian [CRL fix](https://security-tracker.debian.org/tracker/CVE-2026-35189) needs `3.5.7-1~deb13u3`; Alpine floor is 3.5.9-r0. | **C2 wrapper remediation qualified on available Docker platform.** Exact selected executor passed system OpenSSL/provider `3.5.7-1~deb13u3`, bundled OpenSSL 4.0.3, dependency consistency, AES and encrypted-PDF checks. Live executor command/network qualification remains unavailable; exploit prerequisites and unrelated advisories remain separate. |
+| R12 | Onyx v4.8.8 default 0.4.7; bounded controller/executor selection 0.4.9, source `e53850d68701e5e62440a36ed311164dafc89465`; controller digest `sha256:7626d1f139e56d640cd0e333a90f632e26dc986db8641d6dbce45dc494e03580`; executor upstream digest `sha256:2c605c21ca26f2e25cd1a6d563ca7a3d6ca061b86dec9db0aa0abfd049b06ce9`. | Exact [Onyx env.template](https://github.com/onyx-dot-app/onyx/blob/f400d3154a13ac1f3ee730896f69fbc25eb5d8f7/deployment/docker_compose/env.template) permits a separate release selection. Independent source call-chain review and failure behavior are recorded in the accepted G0 decision above. | **Exact-tuple source compatibility and generation `.2` patch/security image contracts passed.** Changed owner/default/selected releases reopen bounded compatibility review. Live executor command/network qualification remains unavailable. No silent downgrade or permanent allow-newer exception. |
+| R13 | SearXNG `2026.7.15-7b2199ecd`, Python3.14 build stage; Obscura 0.2.5 source `bd9529418b7fa975b50eabeac415cfaaa865a588`, runtime digest `sha256:354c3d2a0fa2dd2939debe6903aa26c35d121329245dfa42aa7d1c292a209814`, Rust1.94.0-bookworm digest `sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f`; Tor0.4.9.14 digest `sha256:38f57fbef35b372f5eac374fa3d44a4edf6c5e2ff2a6883ace851617c09f16bb`; Myst source `74d144d4261adbb9feb84825946078b8161ebe46`; Teep source `d9f59d839eb887b50f5afd234e192eac5ec45a2d`; Myst/Teep Go1.26-alpine and Alpine3.22 build/runtime bases. | [SearXNG](https://github.com/searxng/searxng/security/advisories) and [Obscura](https://github.com/h4ckf0r0day/obscura/security/advisories) currently publish no own advisories; absence does not establish bundled dependency cleanliness. Independent [Tor 0.4.9.15 review](https://lists.torproject.org/mailman3/hyperkitty/list/tor-announce%40lists.torproject.org/thread/WXHTSV43NO5UZQ7Q634S5NS5MIRL5JSJ/) supports retaining 0.4.9.14 for this client-only configuration: relay/directory defenses and unused control commands do not apply; remaining dependency evidence is separate. C2 identities include all source/base/copied/context inputs; native source/runtime review is incomplete. | **Identity remediation and available focused qualification passed; complete dependency/live assessment unresolved.** All selected source builds succeeded; patch/Obscura/Tor gates and Myst/Teep CLI probes passed. Source/base/recursive COPY/context contracts pass. Exact-source SBOM/advisory review and configured browser/search, VPN/Myst namespace and Teep inference remain next actions; no automatic unrelated upgrade. |
 
 C1 establishes a disposition for every row: validated/no applicable finding,
 upstream-pending with residual risk, wrapper remediation assigned to C1-C3,
@@ -313,30 +352,16 @@ and resulting commit before building on its authority decisions.
 
 ## C2: complete identities for local builds and generated files
 
-Include source selection, relevant Dockerfiles, copied files, base selections,
-and applicable refresh revision in every derived image identity. Extend the
-existing pattern to Myst and Teep; audit the other builders for omissions.
-Preserve explicit caller image overrides and report their effective selection.
+Current behavior is documented in
+[image and generated-configuration identities](../onyx_patches_upgrade.md#image-and-generated-configuration-identities),
+[Podman image preparation](../podman_suport.md#image-preparation), and
+[resource policy](../resource_minimization.md#container-health-and-startup).
 
-Deliberately refresh moving build bases and invalidate package installation
-layers when publishing package refreshes. A changed output tag does not by
-itself invalidate Dockerfile layers, and `--no-cache` does not replace base
-image refresh. Use supported Docker and Podman mechanisms separately.
-
-Fingerprint generated Onyx deployment artifacts using the selected configuration
-ref and wrapper generation inputs/revision. Detect missing or stale artifacts
-without relying only on the application tag. Download and validate the complete
-required set before installation; record completion only after installation and
-required synchronization succeed. Preserve existing local secrets.
-
-Acceptance: fixtures change each relevant build input independently and prove
-that selection changes; unchanged inputs remain reusable. Exercise base-pull
-and package-cache policy, explicit overrides, same-Onyx-version configuration
-refresh, missing files, and failed/partial preparation. Run `make check` and
-affected focused image gates against the selected artifacts. Update
-[the upgrade checklist](../onyx_patches_upgrade.md),
-[Podman image preparation](../podman_suport.md), and
-[resource policy](../resource_minimization.md) with implemented behavior.
+Acceptance requires complete committed COPY/base/context identities, preserved
+explicit overrides, native cache/base policy, unchanged-version configuration
+refresh, missing/modified artifact recovery, secret preservation and failure/retry
+coverage. Run `make check` and affected selected-image gates. Source acceptance
+and unavailable or pending artifact evidence remain distinct.
 
 ### G1: authority and artifact selection after C2
 
@@ -352,44 +377,18 @@ assigned remediation, and accompanying upgrade-checklist changes together.
 
 ## C3: deliver reviewed updates through normal startup
 
-Add one ordered image-preparation path to both `make up-*` flows, after engine
-and configuration validation and before any container creation/start that can
-consume the images. Audit the dependency graph rather than relying on sibling
-Make prerequisites, especially under parallel Make.
-
-1. Prepare the selected generated deployment configuration.
-2. Resolve the effective mode/engine/feature-specific model and image selection.
-3. Refresh required registry images when the committed refresh generation or
-   effective selection changes; prepare missing images on ordinary starts.
-4. Build missing selected derived images with the required cache/base policy.
-5. Continue existing engine-specific creation, health configuration, and staged
-   full-mode embedding readiness.
-
-Keep registry pulls separate from local builds. Prepare the executor explicitly
-even though its image is not an ordinary Compose service. Exclude disabled
-optional services and Docker-only controller/executor artifacts on Podman.
-Reuse matching prepared artifacts on unchanged starts without periodic work.
-
-If completion records are needed, scope them to the selected engine/store,
-architecture, effective image selection, refresh generation, and configuration.
-Recheck image presence after store deletion/pruning; a record is not proof an
-artifact still exists. Account for adding full mode or enabling a feature after
-lite preparation. Serialize conflicting preparation, write records atomically,
-and never mark a partial pull/build failure complete. Fail startup visibly on
-required refresh failure, including when an older cached tag remains available.
-
-Acceptance: fake engine/registry tests exercise the actual Make entrypoints
-from populated old stores, including unchanged moving tags, refresh revisions,
-mode/feature transitions, explicit overrides, pruning, failures/retries, and
-parallel-Make ordering. Verify no registry pulls target local derived images
-and no disabled/Docker-only artifacts are prepared on inapplicable paths.
-Run `make check`, render the affected matrix, and exercise available cached-image
-lite/full startups with health and targeted logs. Update
-[README upgrade instructions](../../README.md#upgrading-the-stack),
-[the upgrade checklist](../onyx_patches_upgrade.md),
+Current behavior is documented in
+[ordered startup delivery](../onyx_patches_upgrade.md#ordered-startup-delivery),
+[the unchanged end-user upgrade workflow](../../README.md#upgrading-the-stack),
 [Podman lifecycle](../podman_suport.md), and
-[resource policy](../resource_minimization.md) in this phase. Update other
-owning guides whenever implementation changes their contracts.
+[resource policy](../resource_minimization.md#container-health-and-startup).
+
+Acceptance uses actual Make-entrypoint fake-engine fixtures for populated old
+stores, unchanged-tag digest refreshes and generation changes, optional roles,
+lite/full and engine transitions, explicit overrides, pruning, failures/retries,
+parallel Make, tokenizer platform selection, and Podman staged startup. Render
+native effective models and run available cached-image startup/health/image
+contracts separately. Fixture/model evidence is not live qualification.
 
 ### G2: end-user delivery and lifecycle after C3
 
@@ -405,32 +404,18 @@ explicit; do not present model rendering as engine qualification.
 
 ## C4: freshness reporting and final integration acceptance
 
-Provide an explicit online maintainer audit reporting owner-selected versions,
-resolved registry digests, available updates, advisories, and unresolved
-applicability. Keep it outside deterministic checks and ordinary startup.
-Distinguish system packages from bundled OpenSSL, compiled Go dependencies,
-and Python wheels; an OS refresh cannot update all of these.
+Current audit scope, invocation and limitations are documented in
+[public freshness audit](../onyx_patches_upgrade.md#public-freshness-audit).
+Offline contracts cover ownership, qualified default consumers, build bases and
+recursive COPY inputs; explicit-base revision and actual startup fixtures
+complete the delivery checks. The standalone OpenSearch gate validates the
+reviewed effective reference without acquisition or stale-tag substitution.
 
-Add offline executable checks for ownership coverage, upstream synchronization
-fixtures, consistent image consumers, complete build identities, and revision
-bumps against an explicit review base. Require no private configuration or
-network access. Test the behavior and machine-consumed contracts, not prose.
-
-Use fake engine/registry commands to exercise the README upgrade sequence from
-a populated old image store. Cover changed/unchanged tags, source/build changes,
-OS revision changes, retries after failures, missing images despite completion
-records, mode/feature transitions, engine/store switches, caller overrides,
-configuration refresh with unchanged Onyx version, and preparation ordering.
-This consolidates the phase-local coverage; it does not postpone C1-C3 tests.
-
-Acceptance: use recorded upstream/registry/advisory fixtures to test the online
-audit's report and error behavior without Internet in deterministic checks.
-Distinguish unavailable evidence from a clean audit and upstream-pending
-findings from authorized version changes. Keep audit output free of secrets.
-Run `make check` and complete the applicable integration matrix below. Update
-[the upgrade checklist](../onyx_patches_upgrade.md) with the audit's standing
-usage and validation, and `make help` only if adding a user-facing workflow or
-key diagnostic.
+Acceptance requires recorded public-response fixtures, visible incomplete
+coverage, `make check`, applicable image/live checks, and a final disposition for
+each initial reconciliation row. Security assessment and installed dependencies
+remain unresolved when evidence is unavailable; discovery never authorizes an
+independent owner-version change.
 
 ### G3: final accumulated review and documentation handoff
 
@@ -454,20 +439,11 @@ After review/merge, preserve the accepted plan under `docs/plans/implemented/`
 according to repository policy; review the final move snapshot and resulting
 commit and combined changes as well. Do not edit earlier frozen plans.
 
-## Design choices to resolve before implementation
+## Accepted design choices
 
-- Choose whether to retain `OS_SECURITY_UPDATE_REVISION` as the shared refresh
-  generation or introduce a clearer shared name with no redundant counters.
-- Decide how registry digests are recorded. An explicit pull of the same
-  upstream-selected moving tag preserves version authority but can deliver
-  different bytes from those reviewed. Recording multi-architecture digests
-  would deliver reviewed bytes while retaining upstream's selected tag; assess
-  that option without independently advancing upstream application versions.
-- Choose the minimum local completion-record format and engine/store identity.
-  Keep disposable preparation state out of committed pins and private data.
-- Define the review-base input and component-input coverage for bump checks;
-  ordinary `make check` must work without assuming a particular remote branch
-  or a complete Git history.
+The accepted G0 decisions above resolve the original generation, immutable
+registry selection, native presence, locking and explicit review-base choices.
+Standing behavior is maintained in the linked owning guides.
 
 ## Validation and documentation acceptance
 

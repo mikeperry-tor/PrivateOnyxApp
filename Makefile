@@ -1,6 +1,6 @@
-# Deterministic checks must not parse or inherit selections from the operator's
+# Public maintainer audits and deterministic checks must not parse the operator's
 # private runtime configuration. Apply this before any settings are read.
-ifneq ($(strip $(filter test check check-upgrade,$(MAKECMDGOALS))),)
+ifneq ($(strip $(filter test check check-upgrade component-audit,$(MAKECMDGOALS))),)
 override ENV_FILE := .env.wrapper.example
 else
 ENV_FILE ?= .env.wrapper
@@ -207,7 +207,7 @@ SHARED_DATA_ENGINE_MARKER := docker-data/host-services/shared-data-engine
 SHARED_DATA_GUARD_ENV := $(if $(filter true,$(PODMAN_SELECTED)),env -u DOCKER_HOST,)
 ifeq ($(PODMAN_SELECTED),true)
 PRIVATE_ONYX_DOCKER_ENGINE_MODE := podman
-else ifneq ($(strip $(filter test check check-upgrade,$(MAKECMDGOALS))),)
+else ifneq ($(strip $(filter test check check-upgrade component-audit,$(MAKECMDGOALS))),)
 # Deterministic checks render both engine variants explicitly and must not
 # depend on whichever Docker daemon happens to be active on the test host.
 PRIVATE_ONYX_DOCKER_ENGINE_MODE ?= rootful
@@ -221,7 +221,7 @@ endif
 # discovery retains the restrictive model; startup rejects unknown selection.
 ifeq ($(PODMAN_SELECTED),true)
 PRIVATE_ONYX_DOCKER_GATEWAY_MODE := podman
-else ifneq ($(strip $(filter test check check-upgrade,$(MAKECMDGOALS))),)
+else ifneq ($(strip $(filter test check check-upgrade component-audit,$(MAKECMDGOALS))),)
 PRIVATE_ONYX_DOCKER_GATEWAY_MODE ?= isolated
 else
 PRIVATE_ONYX_DOCKER_GATEWAY_MODE ?= $(strip $(shell python3 podman/startup_health.py docker-gateway-mode --container-bin "$(CONTAINER_BIN)" 2>/dev/null))
@@ -733,6 +733,7 @@ help:
 	@echo "  make check                     # Run the normal deterministic pre-handoff checks"
 	@echo "  make upgrade                   # Upgrade Python locks, pull changed image tags, rebuild containers, prepare Onyx deployment"
 	@echo "  make check-upgrade             # Run broad post-upgrade deterministic and image validation"
+	@echo "  make component-audit           # Query public component freshness and advisory evidence"
 	@echo "  make adopt-shared-data-engine  # Repair Docker vs Podman data-dir owner based on CONTAINER_BIN env value"
 	@echo ""
 	@echo "Configuration:"
@@ -747,7 +748,7 @@ test:
 	python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 check: test
-	@$(MAKE) --no-print-directory help >/dev/null
+	@$(MAKE) --no-print-directory help ENV_FILE="$(ENV_FILE)" >/dev/null
 	python3 -m compileall -q \
 		browser/obscura_client/private_onyx_obscura \
 		egress \
@@ -878,8 +879,9 @@ test-tor-image:
 
 test-opensearch-image:
 	@set -eu; \
-	image=$$(COMPOSE_FILE="$(FULL_FILES)" "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) config --format json \
-		| python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["opensearch"]["image"])'); \
+	model=$$(COMPOSE_FILE="$(FULL_FILES)" "$(CONTAINER_BIN)" compose $(COMPOSE_ENV_FILES) config --no-env-resolution --format json); \
+	image=$$(printf '%s\n' "$$model" | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["opensearch"]["image"])'); \
+	image=$$(python3 tools/components/manage.py resolve --reference "$$image" --require-reviewed); \
 	"$(CONTAINER_BIN)" image inspect "$$image" >/dev/null; \
 	python3 tests/run_opensearch_image_validation.py \
 		--container-bin "$(CONTAINER_BIN)" \
@@ -940,8 +942,8 @@ integration-opensearch-onyx:
 		--api-container "$(OPENSEARCH_VALIDATION_API_CONTAINER)"
 
 check-upgrade:
-	@$(MAKE) --no-print-directory check
-	@$(MAKE) --no-print-directory test-all-images
+	@$(MAKE) --no-print-directory check ENV_FILE="$(ENV_FILE)"
+	@$(MAKE) --no-print-directory test-all-images ENV_FILE="$(ENV_FILE)"
 
 # Reparse after lock generation so content-derived image tags match build inputs.
 # Clear only our exported image defaults; explicit caller images still win.
@@ -961,7 +963,10 @@ _upgrade-artifacts:
 	@$(MAKE) --no-print-directory myst-build teep-build searxng-build $(if $(filter false,$(PODMAN_SELECTED)),executor-build code-interpreter-build,) tor-build tailscale-build obscura-build upgrade-onyx
 	@COMPOSE_FILE=$(FULL_FILES) python3 -m tools.components.preparation $(COMPONENT_PREPARATION_ARGS) -- $(COMPOSE_ENV_FILES)
 
-.PHONY: component-refresh-revision component-check-revision component-sync
+.PHONY: component-refresh-revision component-check-revision component-sync component-audit
+component-audit:
+	@python3 -m tools.components.audit --online --container-bin "$(CONTAINER_BIN)"
+
 component-refresh-revision:
 	@python3 tools/components/manage.py --pins "$(VERSION_FILE)" bump
 

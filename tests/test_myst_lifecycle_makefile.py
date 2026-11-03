@@ -104,7 +104,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
                 for key, value in os.environ.items()
                 if not key.startswith("ONYX_RAG_EMBEDDING_")
             }
-            for goal in ("test", "check", "check-upgrade"):
+            for goal in ("test", "check", "check-upgrade", "component-audit"):
                 with self.subTest(goal=goal):
                     result = subprocess.run(
                         [

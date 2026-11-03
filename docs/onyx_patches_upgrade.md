@@ -78,6 +78,13 @@ Dockerfile-specific ignore policies are rejected because they can replace the
 shared context privacy exclusions. Nested package files and file modes enter
 identity; ignored Python cache directories do not.
 
+Coverage of copied files applies to the committed recipes and their declared
+input sets. Canonical custom Dockerfile overrides remain supported, but their
+additional dependencies are not discovered automatically. If a custom recipe
+copies additional files, extend its declared build inputs or use an explicitly
+managed output reference and deliberately rebuild/select it when those files
+change. Arbitrary custom recipes are not qualified default artifacts.
+
 Wrapper registry references are pinned by digest in `stack.versions.env`.
 `ownership.json` records reviewed registry digests for inherited Onyx selections,
 application images and the selected SearXNG source tag. These records qualify
@@ -191,6 +198,46 @@ Render the affected native Compose matrix separately and run available engine
 startup, health and image contracts; fixture/model evidence is not live
 qualification. Do not read private configuration or start an operator stack
 merely to exercise delivery tooling.
+
+### Public freshness audit
+
+`make component-audit` explicitly queries public owner sources, registry indexes,
+advisories and support pages for the committed selections. It is excluded from
+ordinary startup and deterministic checks. The command uses public example
+settings; it does not read operator configuration, credentials, document data
+or installed package inventories. The direct interface is
+`python3 -m tools.components.audit --online --container-bin docker` (select the
+native Compose parser with `--container-bin`).
+
+The JSON report distinguishes committed selections, current registry evidence,
+owner update candidates, advisory identifiers and unresolved applicability.
+Registry digest/index verification does not establish that a running platform
+uses those bytes. If a tag moved, the previously reviewed selection remains
+unverified until checked separately; the audit never edits pins or authorizes
+an independent upgrade. Candidate differences do not establish version ordering
+or compatibility. Empty advisory lists do not establish a clean dependency tree.
+
+Missing required evidence returns nonzero with explicit coverage gaps. Optional
+sources and unqueried advisory families are also reported. Review actual system
+packages, wheel-bundled OpenSSL and compiled Go metadata with the selected image
+contracts and source dependency review. The report leaves these installed and
+applicability assessments unresolved; an OS refresh cannot replace them.
+
+Recorded public-response fixtures exercise the report deterministically with
+`--fixture <file>`. Offline tests separately verify owner synchronization,
+qualified default consumers, Dockerfile build-base and COPY-input coverage,
+normal stop/update/start delivery and failure paths. Run the explicit-base
+revision check as part of component review, then the normal deterministic and
+applicable image/live checks. Neither a successful evidence retrieval nor a
+passing model fixture substitutes for native engine or service qualification.
+
+Public validation settings propagate explicitly through recursive `make check`
+and `make check-upgrade` helpers, including when the caller supplied a different
+`ENV_FILE`; other explicit image overrides remain intact. The OpenSearch image
+gate extracts its selected reference using only the version manifest and chosen
+wrapper settings. It does not load the generated private Onyx environment or
+resolve service environment files. Normal stack startup still uses its selected
+runtime configuration.
 
 ### OS security refreshes
 

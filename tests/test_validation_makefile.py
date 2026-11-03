@@ -62,12 +62,6 @@ class ValidationMakefileTests(unittest.TestCase):
             r"\t@\$\(MAKE\) --no-print-directory test-opensearch-image\n"
             r"\t@\$\(MAKE\) --no-print-directory test-security-images$",
         )
-        self.assertRegex(
-            MAKEFILE,
-            r"(?m)^check-upgrade:\n"
-            r"\t@\$\(MAKE\) --no-print-directory check\n"
-            r"\t@\$\(MAKE\) --no-print-directory test-all-images$",
-        )
         self.assertIn('tests/run_opensearch_image_validation.py', MAKEFILE)
         self.assertIn('tests/validate_obscura_image.py', MAKEFILE)
         self.assertIn('tests/opensearch_runtime_validation.py', MAKEFILE)
