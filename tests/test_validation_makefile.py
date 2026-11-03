@@ -88,47 +88,6 @@ class ValidationMakefileTests(unittest.TestCase):
             r"\t\tpython - redis < tests/validate_chat_stream_cache_backend.py$",
         )
 
-    def test_upgrade_builds_use_refreshed_locks_and_preserve_explicit_images(self) -> None:
-        rule = re.search(r"(?m)^upgrade:.*(?:\n\t.*)+", MAKEFILE).group(0)
-        targets = ("myst-build teep-build searxng-build executor-build "
-                   "code-interpreter-build tor-build tailscale-build "
-                   "obscura-build upgrade-onyx")
-        images = ("MYST_IMAGE", "TEEP_IMAGE", "TAILSCALE_IMAGE", "TOR_IMAGE", "OBSCURA_IMAGE",
-                  "SEARXNG_WRAPPER_IMAGE", "CODE_INTERPRETER_IMAGE", "PYTHON_EXECUTOR_IMAGE")
-        for override in ("default", "environment", "command-line"):
-            with self.subTest(override=override), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                (root / "lock").write_text("old")
-                (root / "revision").write_text("old")
-                definitions = "COMPONENT_IMAGE_VARIABLES := " + " ".join(images) + "\n"
-                for image in images:
-                    definitions += (
-                        f"{image}_CALLER_ORIGIN := $(origin {image})\n"
-                        f"{image} ?= fixture:$(shell cat revision)-$(shell cat lock)\n"
-                        f"{image} := $({image})\nexport {image}\n"
-                    )
-                selected = " ".join(f"$({image})" for image in images)
-                (root / "Makefile").write_text(
-                    definitions + rule + "\n"
-                    "component-refresh-revision:\n\t@echo next > revision\n\t@echo bump >> events\n"
-                    "component-sync:\n\t@test '$(WRITE)' = true\n\t@echo sync >> events\n"
-                    "upgrade-python-deps:\n\t@echo refreshed > lock\n\t@echo locks >> events\n"
-                    + targets + ":\n\t@echo " + selected + " >> images\n"
-                )
-                environment = dict(os.environ)
-                for image in images:
-                    environment.pop(image, None)
-                    if override == "environment":
-                        environment[image] = "fixture:explicit"
-                assignments = [f"{image}=fixture:explicit" for image in images] if override == "command-line" else []
-                result = subprocess.run(["make", "upgrade", *assignments], cwd=root, env=environment,
-                                        capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                expected = "fixture:next-refreshed" if override == "default" else "fixture:explicit"
-                self.assertEqual((root / "images").read_text().splitlines(),
-                                 [" ".join([expected] * len(images))] * len(targets.split()))
-                self.assertEqual((root / "events").read_text().splitlines(), ["bump", "sync", "locks"])
-
     def test_configuration_entrypoints_preserve_ref_and_separate_sync(self) -> None:
         import json
         args = re.search(r"(?m)^ONYX_CONFIGURATION_ARGS = .*$", MAKEFILE).group(0)

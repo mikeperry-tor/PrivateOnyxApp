@@ -51,10 +51,10 @@ def atomic_write(path: Path, content: bytes, mode: int) -> None:
 
 
 @contextmanager
-def preparation_lock(destination: Path):
+def preparation_lock(destination: Path, *, shared: bool = False):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with (destination.parent / ("." + destination.name + ".configuration.lock")).open("a+b") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
+        fcntl.flock(stream, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
         yield
 
 

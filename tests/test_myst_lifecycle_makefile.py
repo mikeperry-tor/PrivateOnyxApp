@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MystLifecycleMakefileTests(unittest.TestCase):
+    @staticmethod
+    def _recipe(makefile: str, target: str) -> str:
+        return makefile.split(f"\n{target}:\n", 1)[1].split("\n\n", 1)[0]
+
     def _make_database(
         self,
         env_file: Path,
@@ -354,9 +358,9 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_full_start_stages_one_embedding_readiness_call(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        full_start = makefile.split("up-full:", 2)[2].split("\n\n", 1)[0]
+        full_start = self._recipe(makefile, "_start-full")
         self.assertIn(
-            "up -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)",
+            "up --pull never --no-build -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)",
             full_start,
         )
         self.assertIn(
@@ -369,7 +373,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )
         self.assertIn("embedding-ready-once", full_start)
         self.assertTrue(
-            full_start.rstrip().endswith("up -d --wait --wait-timeout 420")
+            full_start.rstrip().endswith("up --pull never --no-build -d --wait --wait-timeout 420")
         )
         self.assertLess(
             full_start.index("$(EMBEDDING_STAGE_SERVICES)"),
@@ -389,7 +393,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )
         self.assertIn("Press Ctrl-C to stop waiting", ready_recipe)
         self.assertNotIn("-T 35", ready_recipe)
-        lite_start = makefile.split("up-lite:", 2)[2].split("\n\n", 1)[0]
+        lite_start = self._recipe(makefile, "_start-lite")
         self.assertNotIn("embedding-ready-once", lite_start)
         self.assertNotIn("/ready", lite_start)
 
@@ -458,44 +462,31 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )
         self.assertNotIn("Podman startup-health has not passed", makefile)
         for target in ("up-lite:", "up-full:"):
-            definitions = [
-                line for line in makefile.splitlines()
-                if line.startswith(target)
-            ]
-            self.assertTrue(
-                any("check-container-health-capability" in line for line in definitions)
-            )
+            recipe = self._recipe(makefile, target.removesuffix(":"))
+            self.assertLess(recipe.index("check-container-health-capability"), recipe.index("tools.components.preparation"))
 
     def test_podman_create_configure_start_sequence_is_explicit(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        lite_definition = next(
-            line for line in makefile.splitlines()
-            if line.startswith("up-lite: wrapper-config-preflight")
-        )
-        lite_start = makefile.split(lite_definition, 1)[1].split("\n\n", 1)[0]
+        lite_start = self._recipe(makefile, "_start-lite")
         self.assertLess(lite_start.index(" compose "), lite_start.index("startup_health.py configure"))
-        self.assertLess(lite_start.index("startup_health.py configure"), lite_start.index("up -d --wait"))
+        self.assertLess(lite_start.index("startup_health.py configure"), lite_start.index("up --pull never --no-build -d --wait"))
         self.assertLess(
-            lite_start.index("up --no-start --no-deps netns-holder"),
+            lite_start.index("up --pull never --no-build --no-start --no-deps netns-holder"),
             lite_start.index(
-                "up --no-start --no-deps --force-recreate "
+                "up --pull never --no-build --no-start --no-deps --force-recreate "
                 "onyx-host-egress-proxy onyx-host-egress-bridge"
             ),
         )
 
-        full_definition = next(
-            line for line in makefile.splitlines()
-            if line.startswith("up-full: wrapper-config-preflight")
-        )
-        full_start = makefile.split(full_definition, 1)[1].split("\n\n", 1)[0]
+        full_start = self._recipe(makefile, "_start-full")
         self.assertEqual(full_start.count("startup_health.py configure"), 2)
         self.assertEqual(full_start.count("--skip-capability-check"), 2)
         self.assertEqual(lite_start.count("--skip-capability-check"), 1)
-        self.assertIn("create $(EMBEDDING_STAGE_SERVICES)", full_start)
+        self.assertIn("create --pull never --no-build $(EMBEDDING_STAGE_SERVICES)", full_start)
         self.assertLess(
-            full_start.index("create $(EMBEDDING_STAGE_SERVICES)"),
+            full_start.index("create --pull never --no-build $(EMBEDDING_STAGE_SERVICES)"),
             full_start.index(
-                "up -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)"
+                "up --pull never --no-build -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)"
             ),
         )
         self.assertEqual(lite_start.count("--wait-timeout 420"), 1)
@@ -505,9 +496,9 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         for start in (lite_start, full_start):
             self.assertIn("--service onyx-host-egress-bridge", start)
         self.assertLess(
-            full_start.index("up --no-start --no-deps netns-holder"),
+            full_start.index("up --pull never --no-build --no-start --no-deps netns-holder"),
             full_start.index(
-                "up --no-start --no-deps --force-recreate "
+                "up --pull never --no-build --no-start --no-deps --force-recreate "
                 "onyx-host-egress-proxy onyx-host-egress-bridge"
             ),
         )
@@ -558,12 +549,8 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_podman_full_start_manages_host_document_server(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        full_prerequisites = next(
-            line
-            for line in makefile.splitlines()
-            if line.startswith("up-full: wrapper-config-preflight")
-        )
-        self.assertIn("$(FULL_MODE_HOST_PROCESS_TARGETS)", full_prerequisites)
+        full_start = self._recipe(makefile, "_start-full")
+        self.assertIn("$(FULL_MODE_HOST_PROCESS_TARGETS)", full_start)
         selection = makefile.split(
             "FULL_MODE_HOST_PROCESS_TARGETS :=", 1
         )[1].split(".PHONY:", 1)[0]
@@ -807,14 +794,10 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_lite_and_custom_embedding_skip_unused_host_manager(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        lite_prerequisites = next(
-            line
-            for line in makefile.splitlines()
-            if line.startswith("up-lite: wrapper-config-preflight")
-        )
-        self.assertNotIn("FULL_MODE_HOST_PROCESS_TARGETS", lite_prerequisites)
-        self.assertNotIn("embedserv-start-if-installed", lite_prerequisites)
-        self.assertNotIn("podman-doc-server-start", lite_prerequisites)
+        lite_start = self._recipe(makefile, "_start-lite")
+        self.assertNotIn("FULL_MODE_HOST_PROCESS_TARGETS", lite_start)
+        self.assertNotIn("embedserv-start-if-installed", lite_start)
+        self.assertNotIn("podman-doc-server-start", lite_start)
 
         start = makefile.split("embedserv-start-if-installed:", 1)[1].split(
             "embedserv-stop-if-started:", 1
@@ -824,9 +807,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         )[1].split("\tfi; \\\n", 1)[0]
         self.assertNotIn("embedserv-stop-if-started", custom_branch)
         self.assertNotIn('"$(PWD)/$(HOST_PROCESS_MANAGER)" start', custom_branch)
-        full = makefile.split(
-            "up-full: wrapper-config-preflight", 1
-        )[1].split("embedding-ready-once:", 1)[0]
+        full = self._recipe(makefile, "_start-full")
         full_lines = [
             line.strip()
             for line in full.splitlines()
@@ -835,7 +816,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         staged_start = next(
             line
             for line in full_lines
-            if "up -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)"
+            if "up --pull never --no-build -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)"
             in line
         )
         readiness = next(
@@ -870,12 +851,8 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertNotIn("EGRESS_PROXY_BUNDLED_MLX_HOST_ACCESS", makefile)
         self.assertNotIn("FULL_BUNDLED_MLX_HOST_ACCESS", makefile)
         self.assertIn("export ONYX_RAG_EMBEDDING_SHIM_UPSTREAM_URL", makefile)
-        full_prerequisites = next(
-            line
-            for line in makefile.splitlines()
-            if line.startswith("up-full: wrapper-config-preflight")
-        )
-        self.assertIn("$(FULL_MODE_HOST_PROCESS_TARGETS)", full_prerequisites)
+        full_start = self._recipe(makefile, "_start-full")
+        self.assertIn("$(FULL_MODE_HOST_PROCESS_TARGETS)", full_start)
 
     def test_clean_teep_start_does_not_execute_host_manager(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1118,28 +1095,20 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_podman_shared_database_preflights_are_unconditional(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        lite_prerequisites = next(
-            line
-            for line in makefile.splitlines()
-            if line.startswith("up-lite: wrapper-config-preflight")
-        )
-        full_prerequisites = next(
-            line
-            for line in makefile.splitlines()
-            if line.startswith("up-full: wrapper-config-preflight")
-        )
-        self.assertIn("prepare-podman-postgres-data", lite_prerequisites)
-        self.assertIn("prepare-podman-postgres-data", full_prerequisites)
-        self.assertIn("prepare-podman-opensearch-data", full_prerequisites)
-        self.assertNotIn("prepare-podman-opensearch-data", lite_prerequisites)
+        lite_start = self._recipe(makefile, "_start-lite")
+        full_start = self._recipe(makefile, "_start-full")
+        self.assertIn("prepare-podman-postgres-data", lite_start)
+        self.assertIn("prepare-podman-postgres-data", full_start)
+        self.assertIn("prepare-podman-opensearch-data", full_start)
+        self.assertNotIn("prepare-podman-opensearch-data", lite_start)
         self.assertNotIn("PODMAN_SHARE_DOCKER_", makefile)
         self.assertLess(
-            lite_prerequisites.index("onyx-image-ready"),
-            lite_prerequisites.index("prepare-podman-postgres-data"),
+            lite_start.index("PREPARED_IMAGES_FILE"),
+            lite_start.index("prepare-podman-postgres-data"),
         )
         self.assertLess(
-            full_prerequisites.index("onyx-image-ready"),
-            full_prerequisites.index("prepare-podman-postgres-data"),
+            full_start.index("PREPARED_IMAGES_FILE"),
+            full_start.index("prepare-podman-postgres-data"),
         )
         self.assertIn("up-lite: PODMAN_START_FILES=$(LITE_FILES)", makefile)
         self.assertIn("up-full: PODMAN_START_FILES=$(FULL_FILES)", makefile)
@@ -1155,37 +1124,31 @@ class MystLifecycleMakefileTests(unittest.TestCase):
         self.assertIn("COMPOSE_FILE=$(PODMAN_START_FILES)", opensearch_preflight)
         self.assertIn("--audit-config onyx/opensearch/audit.yml", opensearch_preflight)
 
-    def test_host_bind_roots_are_prepared_before_image_or_compose_mutation(
+    def test_host_bind_roots_are_prepared_before_compose_mutation(
         self,
     ) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        lite_prerequisites = next(
-            line
-            for line in makefile.splitlines()
-            if line.startswith("up-lite: wrapper-config-preflight")
-        )
-        full_prerequisites = next(
-            line
-            for line in makefile.splitlines()
-            if line.startswith("up-full: wrapper-config-preflight")
-        )
+        lite_start = self._recipe(makefile, "_start-lite")
+        full_start = self._recipe(makefile, "_start-full")
 
         self.assertLess(
-            lite_prerequisites.index("claim-shared-data-engine"),
-            lite_prerequisites.index("prepare-lite-host-data"),
+            lite_start.index("claim-shared-data-engine"),
+            lite_start.index("prepare-lite-host-data"),
         )
         self.assertLess(
-            lite_prerequisites.index("prepare-lite-host-data"),
-            lite_prerequisites.index("onyx-image-ready"),
+            lite_start.index("prepare-lite-host-data"),
+            lite_start.index(" compose "),
         )
         self.assertLess(
-            full_prerequisites.index("claim-shared-data-engine"),
-            full_prerequisites.index("prepare-full-host-data"),
+            full_start.index("claim-shared-data-engine"),
+            full_start.index("prepare-onyx-tokenizer"),
         )
         self.assertLess(
-            full_prerequisites.index("prepare-full-host-data"),
-            full_prerequisites.index("onyx-image-ready"),
+            full_start.index("prepare-onyx-tokenizer"),
+            full_start.index(" compose "),
         )
+        tokenizer_prerequisites = makefile.split("prepare-onyx-tokenizer:", 1)[1].splitlines()[0].split()
+        self.assertIn("prepare-full-host-data", tokenizer_prerequisites)
 
         lite_target = makefile.split("prepare-lite-host-data:", 1)[1].split(
             "\n\n", 1
@@ -1201,24 +1164,20 @@ class MystLifecycleMakefileTests(unittest.TestCase):
 
     def test_podman_keep_id_containers_are_created_serially(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        lite_recipe = makefile.split(
-            "up-lite: wrapper-config-preflight", 1
-        )[1].split("\n\nup-full:", 1)[0]
-        full_recipe = makefile.split(
-            "up-full: wrapper-config-preflight", 1
-        )[1].split("\n\nembedding-ready-once:", 1)[0]
+        lite_recipe = self._recipe(makefile, "_start-lite")
+        full_recipe = self._recipe(makefile, "_start-full")
 
-        lite_postgres = 'up --no-start --no-deps relational_db'
-        lite_tor = 'up --no-start --no-deps tor'
-        lite_graph = 'compose $(ONYX_COMPOSE_ENV_FILES) create\n'
+        lite_postgres = 'up --pull never --no-build --no-start --no-deps relational_db'
+        lite_tor = 'up --pull never --no-build --no-start --no-deps tor'
+        lite_graph = 'compose $(ONYX_COMPOSE_ENV_FILES) create --pull never --no-build\n'
         self.assertLess(lite_recipe.index(lite_postgres), lite_recipe.index(lite_tor))
         self.assertLess(lite_recipe.index(lite_tor), lite_recipe.index(lite_graph))
 
-        full_postgres = 'up --no-start --no-deps relational_db'
-        full_opensearch = 'up --no-start --no-deps opensearch'
-        full_tor = 'up --no-start --no-deps tor'
-        full_shim = 'create $(EMBEDDING_STAGE_SERVICES)'
-        full_graph = 'compose $(ONYX_COMPOSE_ENV_FILES) create\n'
+        full_postgres = 'up --pull never --no-build --no-start --no-deps relational_db'
+        full_opensearch = 'up --pull never --no-build --no-start --no-deps opensearch'
+        full_tor = 'up --pull never --no-build --no-start --no-deps tor'
+        full_shim = 'create --pull never --no-build $(EMBEDDING_STAGE_SERVICES)'
+        full_graph = 'compose $(ONYX_COMPOSE_ENV_FILES) create --pull never --no-build\n'
         self.assertLess(
             full_recipe.index(full_postgres), full_recipe.index(full_opensearch)
         )
@@ -1241,15 +1200,11 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             makefile,
         )
         for target in ("up-lite:", "up-full:"):
-            definitions = [
-                line for line in makefile.splitlines() if line.startswith(target)
-            ]
-            self.assertTrue(
-                any("claim-shared-data-engine" in line for line in definitions)
-            )
-            self.assertTrue(
-                any("wrapper-config-preflight" in line for line in definitions)
-            )
+            public_recipe = self._recipe(makefile, target.removesuffix(":"))
+            startup_recipe = self._recipe(makefile, target.replace("up-", "_start-").removesuffix(":"))
+            self.assertIn("claim-shared-data-engine", startup_recipe)
+            self.assertLess(startup_recipe.index("PREPARED_IMAGES_FILE"), startup_recipe.index("claim-shared-data-engine"))
+            self.assertLess(public_recipe.index("wrapper-config-preflight"), public_recipe.index("tools.components.preparation"))
         for target in ("down-lite:", "down-full:"):
             recipe = makefile.split(target, 1)[1].split("\n\n", 1)[0]
             self.assertIn("release-shared-data-engine", recipe)
@@ -1302,7 +1257,7 @@ class MystLifecycleMakefileTests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("for image in example/backend:pinned example/web:pinned;", result.stdout)
-        self.assertIn('"podman" pull "$image"', result.stdout)
+        self.assertRegex(result.stdout, r'"podman" pull\s+"\$image"')
 
 
 if __name__ == "__main__":

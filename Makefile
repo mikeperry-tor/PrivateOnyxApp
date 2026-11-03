@@ -7,7 +7,9 @@ ENV_FILE ?= .env.wrapper
 endif
 VERSION_FILE ?= stack.versions.env
 COMPONENT_IMAGE_VARIABLES := MYST_IMAGE TEEP_IMAGE TAILSCALE_IMAGE TOR_IMAGE OBSCURA_IMAGE SEARXNG_WRAPPER_IMAGE CODE_INTERPRETER_IMAGE PYTHON_EXECUTOR_IMAGE
-$(foreach image,$(COMPONENT_IMAGE_VARIABLES),$(eval $(image)_CALLER_ORIGIN := $(origin $(image))))
+REGISTRY_IMAGE_VARIABLES := NGINX_IMAGE NETNS_HOLDER_IMAGE PYTHON_SLIM_IMAGE PYTHON_ALPINE_IMAGE SOCAT_IMAGE MINIO_IMAGE
+UPGRADE_REPARSE_VARIABLES := $(COMPONENT_IMAGE_VARIABLES) $(REGISTRY_IMAGE_VARIABLES)
+$(foreach name,$(UPGRADE_REPARSE_VARIABLES),$(eval $(name)_CALLER_ORIGIN := $(origin $(name))))
 WRAPPER_FILE := docker-compose.yaml
 COMPOSE_OVERLAY_DIR := compose_overlays
 FULL_OVERRIDE_FILE := $(COMPOSE_OVERLAY_DIR)/docker-compose.full.yml
@@ -547,6 +549,22 @@ endif
 ONYX_REQUIRED_IMAGES ?= $(ONYX_STACK_REQUIRED_IMAGES)
 ONYX_ENV_FILE ?= onyx/onyx_data/deployment/.env
 ONYX_CONFIG_REF ?= $(ONYX_IMAGE_TAG)
+ONYX_CONFIG_REF := $(ONYX_CONFIG_REF)
+ONYX_IMAGE_TAG := $(ONYX_IMAGE_TAG)
+ONYX_ENV_FILE := $(ONYX_ENV_FILE)
+OS_SECURITY_UPDATE_REVISION := $(OS_SECURITY_UPDATE_REVISION)
+export ONYX_CONFIG_REF ONYX_IMAGE_TAG ONYX_ENV_FILE OS_SECURITY_UPDATE_REVISION ONYX_INSTALL_ARGS
+$(foreach name,NETNS_HOLDER_IMAGE SOCAT_IMAGE MINIO_IMAGE,$(eval $(name) ?= $(call env_value,$(name))))
+$(foreach name,$(REGISTRY_IMAGE_VARIABLES),$(eval $(name) := $($(name))))
+export $(REGISTRY_IMAGE_VARIABLES)
+COMPONENT_PREPARATION_STATE_DIR ?= $(shell python3 -c 'import os,pathlib,tempfile; print(pathlib.Path(tempfile.gettempdir()) / ("private-onyx-artifacts-"+str(os.getuid())))')
+PREPARED_PLATFORM_ARGS = $(if $(PRIVATE_ONYX_PREPARED_PLATFORM),--platform "$(PRIVATE_ONYX_PREPARED_PLATFORM)",$(if $(DOCKER_DEFAULT_PLATFORM),--platform "$(DOCKER_DEFAULT_PLATFORM)",))
+ONYX_COMMITTED_BACKEND = $(shell python3 tools/components/manage.py resolve --reference 'docker.io/onyxdotapp/onyx-backend:$(call version_value,ONYX_IMAGE_TAG)')
+ONYX_COMMITTED_WEB = $(shell python3 tools/components/manage.py resolve --reference 'docker.io/onyxdotapp/onyx-web-server:$(call version_value,ONYX_IMAGE_TAG)')
+REGISTRY_CALLER_ARGS = $(foreach name,$(REGISTRY_IMAGE_VARIABLES),$(if $(filter $(call version_value,$(name)),$($(name))),,--caller-owned "$($(name))")) $(if $(filter $(ONYX_COMMITTED_BACKEND),$(ONYX_BACKEND_IMAGE)),,--caller-owned "$(ONYX_BACKEND_IMAGE)") $(if $(filter $(ONYX_COMMITTED_WEB),$(ONYX_WEB_SERVER_IMAGE)),,--caller-owned "$(ONYX_WEB_SERVER_IMAGE)")
+LOCAL_COMPONENT_ARGS = --local "$(MYST_IMAGE)=myst-build" --local "$(TEEP_IMAGE)=teep-build" --local "$(SEARXNG_WRAPPER_IMAGE)=searxng-build" --local "$(OBSCURA_IMAGE)=obscura-build" --local "$(TOR_IMAGE)=tor-build" --local "$(TAILSCALE_IMAGE)=tailscale-build" $(if $(filter false,$(PODMAN_SELECTED)),--local "$(CODE_INTERPRETER_IMAGE)=code-interpreter-build" --local "$(PYTHON_EXECUTOR_IMAGE)=executor-build" --executor "$(PYTHON_EXECUTOR_IMAGE)",)
+COMPONENT_PREPARATION_ARGS = --container-bin "$(CONTAINER_BIN)" --inventory tools/components/ownership.json --pins "$(VERSION_FILE)" --state-dir "$(COMPONENT_PREPARATION_STATE_DIR)" --revision "$(OS_SECURITY_UPDATE_REVISION)" --configuration-stamp onyx/onyx_data/.private-onyx-configuration.json --make-command "$(MAKE) --no-print-directory" $(LOCAL_COMPONENT_ARGS) $(REGISTRY_CALLER_ARGS)
+
 SEARXNG_COMPOSE_FILE := searxng/docker-compose.yml
 MYST_COMPOSE_FILE := myst/docker-compose.yaml
 MYST_VPN_CLI := myst/myst-vpn-cli.sh
@@ -657,8 +675,8 @@ override PRIVATE_ONYX_PUBLIC_PROXY_PEERS := $(PRIVATE_ONYX_PUBLIC_PROXY_PEERS),s
 endif
 export PRIVATE_ONYX_PUBLIC_PROXY_PEERS
 
-LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)$(DOCKER_NETWORK_SUFFIX)$(X402_SUFFIX)
-FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_MACOS_FULL_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_LINUX_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_TEEP_EMBEDDING_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)$(DOCKER_NETWORK_SUFFIX)$(X402_SUFFIX)
+LITE_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)$(DOCKER_NETWORK_SUFFIX)$(X402_SUFFIX)$(if $(PREPARED_IMAGES_FILE),:$(PREPARED_IMAGES_FILE),)
+FULL_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_MACOS_FULL_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_LINUX_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_TEEP_EMBEDDING_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_SUFFIX)$(DOCKER_NETWORK_SUFFIX)$(X402_SUFFIX)$(if $(PREPARED_IMAGES_FILE),:$(PREPARED_IMAGES_FILE),)
 LITE_DOWN_FILES := $(WRAPPER_FILE):$(LITE_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)$(X402_DOWN_SUFFIX)$(DOCKER_NETWORK_SUFFIX)
 FULL_DOWN_FILES := $(WRAPPER_FILE):$(FULL_OVERRIDE_FILE)$(PODMAN_COMPOSE_SUFFIX)$(PODMAN_FULL_COMPOSE_SUFFIX)$(PODMAN_MACOS_FULL_COMPOSE_SUFFIX)$(DOCKER_LINUX_COMPOSE_SUFFIX)$(DOCKER_LINUX_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_FULL_COMPOSE_SUFFIX)$(DOCKER_ROOTLESS_TEEP_EMBEDDING_COMPOSE_SUFFIX)$(TEEP_VPN_SUFFIX)$(TAILSCALE_VPN_SUFFIX)$(CODE_INTERPRETER_NETWORK_SUFFIX)$(TOR_DOWN_SUFFIX)$(X402_DOWN_SUFFIX)$(DOCKER_NETWORK_SUFFIX)
 
@@ -713,7 +731,7 @@ help:
 	@echo "Development and maintenance:"
 	@echo "  make test                      # Run the complete deterministic Python test suite"
 	@echo "  make check                     # Run the normal deterministic pre-handoff checks"
-	@echo "  make upgrade                   # Upgrade Python locks, pull changed image tags, rebuild containers, run Onyx deployment"
+	@echo "  make upgrade                   # Upgrade Python locks, pull changed image tags, rebuild containers, prepare Onyx deployment"
 	@echo "  make check-upgrade             # Run broad post-upgrade deterministic and image validation"
 	@echo "  make adopt-shared-data-engine  # Repair Docker vs Podman data-dir owner based on CONTAINER_BIN env value"
 	@echo ""
@@ -809,10 +827,10 @@ prepare-full-host-data:
 		--doc-source "$(ONYX_RAG_DOC_SOURCE_DIR)" \
 		--default-doc-source ./doc-drop
 
-prepare-onyx-tokenizer: onyx-image-ready prepare-full-host-data
+prepare-onyx-tokenizer: prepare-full-host-data
 	@python3 onyx/bootstrap_tokenizer_cache.py \
 		--container-bin "$(CONTAINER_BIN)" \
-		--image "$(ONYX_BACKEND_IMAGE)" \
+		--image "$(ONYX_BACKEND_IMAGE)" $(if $(PRIVATE_ONYX_PREPARED_BACKEND_PLATFORM),--platform "$(PRIVATE_ONYX_PREPARED_BACKEND_PLATFORM)",$(PREPARED_PLATFORM_ARGS)) \
 		--output "$(ONYX_TOKENIZER_CACHE_FILE)"
 
 test-patch-images:
@@ -926,13 +944,22 @@ check-upgrade:
 	@$(MAKE) --no-print-directory test-all-images
 
 # Reparse after lock generation so content-derived image tags match build inputs.
-# Clear only our exported defaults; explicit caller image overrides still win.
+# Clear only our exported image defaults; explicit caller images still win.
+# A broad upgrade always builds the generation it just published, including
+# when the caller selected a revision for individual component builds.
 upgrade:
 	@$(MAKE) --no-print-directory component-refresh-revision
 	@$(MAKE) --no-print-directory component-sync WRITE=true
 	@$(MAKE) --no-print-directory upgrade-python-deps
-	@env $(foreach image,$(COMPONENT_IMAGE_VARIABLES),$(if $(filter undefined,$($(image)_CALLER_ORIGIN)),-u $(image))) $(MAKE) --no-print-directory myst-build teep-build searxng-build executor-build code-interpreter-build tor-build tailscale-build obscura-build upgrade-onyx
+	@set -eu; \
+	revision=$$(python3 -c 'from pathlib import Path; from tools.components.manage import read_pins; import sys; print(read_pins(Path(sys.argv[1]))["OS_SECURITY_UPDATE_REVISION"])' "$(VERSION_FILE)"); \
+	env $(foreach name,$(UPGRADE_REPARSE_VARIABLES),$(if $(filter undefined,$($(name)_CALLER_ORIGIN)),-u $(name))) $(MAKE) --no-print-directory _upgrade-artifacts OS_SECURITY_UPDATE_REVISION="$$revision"
 	@echo "Upgrade artifacts are ready. Run 'make check-upgrade', then complete the documented live validation matrix."
+
+.PHONY: _upgrade-artifacts
+_upgrade-artifacts:
+	@$(MAKE) --no-print-directory myst-build teep-build searxng-build $(if $(filter false,$(PODMAN_SELECTED)),executor-build code-interpreter-build,) tor-build tailscale-build obscura-build upgrade-onyx
+	@COMPOSE_FILE=$(FULL_FILES) python3 -m tools.components.preparation $(COMPONENT_PREPARATION_ARGS) -- $(COMPOSE_ENV_FILES)
 
 .PHONY: component-refresh-revision component-check-revision component-sync
 component-refresh-revision:
@@ -1185,18 +1212,30 @@ ifeq ($(PODMAN_SELECTED),true)
 		$(ONYX_COMPOSE_ENV_FILES)
 endif
 
-up-lite: wrapper-config-preflight check-container-health-capability claim-shared-data-engine prepare-lite-host-data ensure-onyx-config sync-onyx-env onyx-image-ready prepare-podman-postgres-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(if $(filter true,$(TAILSCALE_FUNNEL_ENABLED)),tailscale-image-ready)
+up-lite:
+	@$(MAKE) --no-print-directory wrapper-config-preflight
+	@$(MAKE) --no-print-directory check-container-health-capability
+	@$(MAKE) --no-print-directory ensure-onyx-config
+	@COMPOSE_FILE=$(LITE_FILES) python3 -m tools.components.preparation $(COMPONENT_PREPARATION_ARGS) --start-target _start-lite -- $(ONYX_COMPOSE_ENV_FILES)
+
+_start-lite:
+	@test -n "$(PREPARED_IMAGES_FILE)" && test -f "$(PREPARED_IMAGES_FILE)" || { echo "ERROR: startup requires prepared images" >&2; exit 1; }
+	@$(MAKE) --no-print-directory claim-shared-data-engine
+	@$(MAKE) --no-print-directory prepare-lite-host-data
+	@$(MAKE) --no-print-directory prepare-podman-postgres-data PODMAN_START_FILES="$(LITE_FILES)"
+	@$(MAKE) --no-print-directory ensure-myst-funded
+	@$(MAKE) --no-print-directory tor-config-ready
 ifeq ($(PODMAN_SELECTED),true)
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build --no-start --no-deps relational_db
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps tor
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build --no-start --no-deps tor
 endif
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps netns-holder
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps --force-recreate onyx-host-egress-proxy onyx-host-egress-bridge
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build --no-start --no-deps netns-holder
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build --no-start --no-deps --force-recreate onyx-host-egress-proxy onyx-host-egress-bridge
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create --pull never --no-build
 	@COMPOSE_FILE=$(LITE_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
-	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420
+	@COMPOSE_FILE=$(LITE_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build -d --wait --wait-timeout 420
 ifeq ($(PODMAN_SELECTED),true)
 	@python3 podman/startup_health.py assert-healthy --container-bin "$(CONTAINER_BIN)" --project onyx \
 		--service onyx-host-egress-bridge
@@ -1205,19 +1244,33 @@ endif
 up-full: ONYX_INSTALL_ARGS=
 up-full: ONYX_REQUIRED_IMAGES=$(ONYX_STACK_REQUIRED_IMAGES)
 up-full: PODMAN_START_FILES=$(FULL_FILES)
-up-full: wrapper-config-preflight check-container-health-capability claim-shared-data-engine prepare-full-host-data ensure-onyx-config sync-onyx-env onyx-image-ready prepare-onyx-tokenizer prepare-podman-postgres-data prepare-podman-opensearch-data ensure-myst-funded $(CODE_INTERPRETER_EXECUTOR_TARGETS) myst-image-ready teep-image-ready searxng-image-ready obscura-image-ready tor-image-ready tor-config-ready $(FULL_MODE_HOST_PROCESS_TARGETS) $(if $(filter true,$(TAILSCALE_FUNNEL_ENABLED)),tailscale-image-ready)
+up-full:
+	@$(MAKE) --no-print-directory wrapper-config-preflight
+	@$(MAKE) --no-print-directory check-container-health-capability
+	@$(MAKE) --no-print-directory ensure-onyx-config
+	@COMPOSE_FILE=$(FULL_FILES) python3 -m tools.components.preparation $(COMPONENT_PREPARATION_ARGS) --start-target _start-full -- $(ONYX_COMPOSE_ENV_FILES)
+
+_start-full:
+	@test -n "$(PREPARED_IMAGES_FILE)" && test -f "$(PREPARED_IMAGES_FILE)" || { echo "ERROR: startup requires prepared images" >&2; exit 1; }
+	@$(MAKE) --no-print-directory claim-shared-data-engine
+	@$(MAKE) --no-print-directory prepare-onyx-tokenizer
+	@$(MAKE) --no-print-directory prepare-podman-postgres-data PODMAN_START_FILES="$(FULL_FILES)"
+	@$(MAKE) --no-print-directory prepare-podman-opensearch-data PODMAN_START_FILES="$(FULL_FILES)"
+	@$(MAKE) --no-print-directory ensure-myst-funded
+	@$(MAKE) --no-print-directory tor-config-ready
+	@set -eu; for target in $(FULL_MODE_HOST_PROCESS_TARGETS); do $(MAKE) --no-print-directory $$target; done
 ifeq ($(PODMAN_SELECTED),true)
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps relational_db
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps opensearch
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build --no-start --no-deps relational_db
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build --no-start --no-deps opensearch
 ifneq ($(filter true,$(TOR_EGRESS_ENABLED) $(TOR_ONION_SERVICE_ENABLED)),)
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps tor
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build --no-start --no-deps tor
 endif
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps netns-holder
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --no-start --no-deps --force-recreate onyx-host-egress-proxy onyx-host-egress-bridge
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create $(EMBEDDING_STAGE_SERVICES)
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build --no-start --no-deps netns-holder
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build --no-start --no-deps --force-recreate onyx-host-egress-proxy onyx-host-egress-bridge
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create --pull never --no-build $(EMBEDDING_STAGE_SERVICES)
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build -d --wait --wait-timeout 420 $(EMBEDDING_STAGE_SERVICES)
 ifeq ($(PODMAN_SELECTED),true)
 	@python3 podman/startup_health.py assert-healthy --container-bin "$(CONTAINER_BIN)" --project onyx \
 		--service onyx-host-egress-bridge
@@ -1225,10 +1278,10 @@ endif
 	@$(MAKE) --no-print-directory embedding-ready-once
 	@$(MAKE) --no-print-directory embedserv-stop-after-custom-ready
 ifeq ($(PODMAN_SELECTED),true)
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) create --pull never --no-build
 	@COMPOSE_FILE=$(FULL_FILES) python3 podman/startup_health.py configure --skip-capability-check --container-bin "$(CONTAINER_BIN)" --project onyx $(ONYX_COMPOSE_ENV_FILES)
 endif
-	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up -d --wait --wait-timeout 420
+	@COMPOSE_FILE=$(FULL_FILES) "$(CONTAINER_BIN)" compose $(ONYX_COMPOSE_ENV_FILES) up --pull never --no-build -d --wait --wait-timeout 420
 
 embedding-ready-once:
 	@if [ "$(EMBEDSERV_MODE)" = "bundled" ]; then \
@@ -1315,7 +1368,7 @@ onyx-image-ready:
 onyx-build:
 	@set -eu; for image in $(ONYX_REQUIRED_IMAGES); do \
 		echo "Pulling selected Onyx image: $$image"; \
-		"$(CONTAINER_BIN)" pull "$$image"; \
+		"$(CONTAINER_BIN)" pull $(BUILD_PLATFORM_FLAG) "$$image"; \
 	done
 
 myst-image-ready:
@@ -1646,3 +1699,5 @@ ensure-myst-funded:
 	else \
 		echo "Myst identity found in $(MYST_DATA_DIR)/keystore/ — proceeding."; \
 	fi
+
+.PHONY: _start-lite _start-full

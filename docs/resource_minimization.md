@@ -29,8 +29,11 @@ fallbacks, retries, migrations, or weaker ownership checks.
 ### Container health and startup
 
 - All eight local component images use complete input-derived identities and a
-  committed refresh generation. Matching image-ready checks reuse local
-  artifacts; explicit builds refresh bases and package layers. No service
+  committed refresh generation. Normal startup verifies selected artifacts in
+  the native store, reuses matches and acquires only missing selections before
+  creating containers. Pruned images are repaired without completion receipts;
+  preparation is serialized through readiness. Explicit builds refresh bases
+  and package layers. No service
   updater, periodic rebuild, or timer is added. Generated Onyx configuration has
   a separate input/artifact fingerprint and is prepared only when stale or
   explicitly forced. Preparation never starts the upstream installer or a

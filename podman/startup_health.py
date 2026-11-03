@@ -370,6 +370,8 @@ def initialize_postgres_data(
                 [
                     *compose_command,
                     "run",
+                    "--pull",
+                    "never",
                     "--detach",
                     "--name",
                     init_container,
@@ -404,6 +406,8 @@ def initialize_postgres_data(
                 [
                     *compose_command,
                     "run",
+                    "--pull",
+                    "never",
                     "--rm",
                     "--no-deps",
                     "--volume",
@@ -513,6 +517,8 @@ def initialize_opensearch_data(
                 [
                     *compose_command,
                     "run",
+                    "--pull",
+                    "never",
                     "--detach",
                     "--name",
                     init_container,
@@ -570,6 +576,8 @@ def initialize_opensearch_data(
                 [
                     *compose_command,
                     "run",
+                    "--pull",
+                    "never",
                     "--rm",
                     "--no-deps",
                     "--volume",

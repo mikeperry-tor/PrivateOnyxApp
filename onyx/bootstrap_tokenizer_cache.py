@@ -48,11 +48,14 @@ def _validate_tokenizer(data: bytes) -> None:
         raise BootstrapError("bundled tokenizer JSON has no model object")
 
 
-def extract_tokenizer(container_bin: str, image: str) -> bytes:
+def extract_tokenizer(container_bin: str, image: str, platform: str | None = None) -> bytes:
     command = [
         container_bin,
         "run",
         "--rm",
+        "--pull",
+        "never",
+        *(["--platform", platform] if platform else []),
         "--network",
         "none",
         "--entrypoint",
@@ -122,6 +125,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--container-bin", required=True)
     parser.add_argument("--image", required=True)
+    parser.add_argument("--platform")
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -129,7 +133,7 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = _parser().parse_args()
     try:
-        data = extract_tokenizer(args.container_bin, args.image)
+        data = extract_tokenizer(args.container_bin, args.image, args.platform)
         changed = install_tokenizer(data, args.output)
     except BootstrapError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

@@ -1,8 +1,10 @@
 # Component version ownership and end-user upgrade delivery
 
-Status: G0 and C1 passed available checks and independent source review.
-C2 implementation and artifact qualification are in progress; G1-G3 remain
-pending. C3-C4 implementation has not started.
+Status: G0 and C1 passed available checks and independent review. C1-C2
+accumulated source review (G1 SOURCE) passed through `64470e1`; selected C2
+artifact qualification remains pending. C3 source implementation and focused
+checks passed accumulated G2 SOURCE review; its final full check passed and the local phase commit is being reviewed. C4 public audit and consumer-coverage drafts are independently
+reviewed; repository integration and G3 remain pending.
 Implementation baseline: `3f54b2a4d8647047a78ed3eb68f1fb7765aaf0fe`.
 The intervening commits changed contributor instructions and this plan only.
 
@@ -43,7 +45,34 @@ operator configuration or private document/data stores. Effective-model
 rendering is not engine qualification. Upstream-pending and unresolved advisory
 rows below remain open; passing the existing floors does not close them.
 
-Next: complete C2 qualification and G1 before implementing C3.
+C2 commits: `76d30981`, fixture fixup `bc7ebcbb`, recursive Obscura COPY
+identity fixup `d29c4cbd`, and platform-test guard fixup `64470e1`. Each exact
+SHA has independent approval. C2 `make check` passed at `bc7ebcbb`: 779 tests
+in 586.048 seconds, 32 skips, compilation/help/diff checks. The later COPY fix
+passed all 12 identity tests in 157.016 seconds; the guard fix passed 18
+configuration tests and has no supported-platform behavior change.
+
+C3 focused evidence: 31 preparer tests; 41 lifecycle, 45 Podman startup-health
+and four tokenizer tests. Eight actual Make-entrypoint scenarios passed in
+356.728 seconds; the final strengthened populated-cache failure/retry case
+passed in 54.784 seconds. Independent accumulated G2 SOURCE review covers
+ordering, configuration/store locks, acquisition, exact platforms, Podman
+initialization/health, full readiness, and secret boundaries. A native Docker
+API 1.56 cached-image preparation probe passed with acquisition disabled.
+The isolated full check initially failed because generated public upstream
+Compose/nginx artifacts were absent; it is not a passing check. Seven public
+fixtures were then prepared from exact source `f400d315`; no runtime env was
+copied. The gateway matrix recheck passed six tests (one sandbox Unix-socket
+skip). The main-checkout `make check` passed: 818 tests in 1036.682 seconds, 32
+expected image-only skips, compilation/help/diff checks.
+
+All eight derived references and evaluated base/build-input selections match
+between C2 and C3; the ongoing C2 build inputs are unchanged. Full G1/G2/G3
+acceptance remains pending required artifact/lifecycle evidence. Reversible
+source work proceeds under independently approved source gates; later artifact
+findings reopen affected source reviews and require reviewed fixups.
+
+Next: complete C2 artifact qualification, C3 exact-commit review, and C4 integration. The following accepted design constraints remain in force.
 Its independent design review requires all eight derived identities, native
 base-pull/package-cache policy, and a narrow configuration preparer replacing
 installer initialization. The installer starts stock containers and deletes
@@ -241,7 +270,7 @@ recorded above. C2 selections require their own artifact qualification.
 | R7 | Wrapper: `docker.io/library/python:3.12-slim-bookworm`, cached digest `sha256:76d4b7b6305788c6b4c6a19d6a22a3921bf802e9af4d5e1e5bd771208dba74bf`; `docker.io/library/python:3.12-alpine`, cached digest `sha256:236173eb74001afe2f60862de935b74fcbd00adfca247b2c27051a70a6a39a2d`. | [Bookworm LTS](https://www.debian.org/releases/bookworm/) continues through June2028 on supported architectures; [Python 3.12 policy](https://www.python.org/downloads/release/python-31212/) is security-only through October2028. Slim serves policy proxies and host-isolation validation; Alpine serves doc-drop, embedding shim and Obscura fixture validation. | **Unresolved actual package/runtime versions.** C1-C3 resolve reviewed current digests, enumerate effective inherited consumers, inspect Python/distribution/package evidence and qualify refresh delivery. Preserve Python major/minor and distribution. Require deterministic proxy/shim tests, affected image gates and full RAG/browser checks; cached digest metadata is not reviewed remote-package evidence. |
 | R8 | Wrapper: `docker.io/alpine/socat:1.8.0.3`; cached digest `sha256:76d1e4fc91bdd9d08f2a72a3fde1776798fd00cc00d3bded940dc154cd7ab6fd`. | [Current publisher Dockerfile](https://raw.githubusercontent.com/alpine-docker/multi-arch-libs/master/socat/Dockerfile) uses moving Alpine and APK installation. Current source cannot prove historical image provenance/package versions. Fixed bridges use TCP and local health commands. | **Unresolved provenance/advisory applicability; C1-C3.** Next action: resolve selected registry digest, inspect socat/APK/base versions and primary application advisories before selecting refresh. Qualify every affected fixed bridge/health command, including Podman/macOS and optional executor/Teep/Exa paths. No newer tag accepted merely because it exists. |
 | R9 | Tailscale: `docker.io/tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c`; source `27047635f237d1f3e0b08c0f487674757f30d2f7`. | Verified 2026-11-02: [TS-2026-013](https://tailscale.com/security-bulletins#ts-2026-013) requires compiled Go certificate distrust; CA-package date alone cannot close it. [Selected release](https://github.com/tailscale/tailscale/releases/tag/v1.104.4) requires Go 1.27.3. Independent exact-source review found unchanged publication builder/Alpine 3.22 base/Serve substitution, existing env contract and unchanged actual platform set. New boot-timeout option retains 60 seconds. Single HTTP mount excludes multi-capability/Unix-backend triggers; operator-enabled SSH needs separate assessment. | **C2 application remediation selected; actual binary/Go/package and live qualification pending.** Run selected security gate, inspect Go and trust separately, retain static linkage/containerboot contracts. Enabled ingress cannot be validated without credentials. No whole-application clean bill of health. |
-| R10 | Wrapper refresh generation `20261102.2` applies to all eight local build identities. C1 generation `.1` artifacts and packages are recorded above; C2 selections require renewed qualification. | [OpenSSL published advisory timeline](https://www.openssl-library.org/news/timeline/) establishes releases after historical package floors; revision labels provide no package evidence. | **Selected OS refresh built and contract-qualified on Docker Linux/arm64; broader assessment remains open.** Exact artifacts/packages and passing patch/security gates are recorded above. C2-C3 must complete remaining delivery and applicability work; Podman and live qualification remain unavailable. Existing package floors are regression checks, not proof every advisory is fixed. |
+| R10 | Wrapper refresh generation `20261102.2` applies to all eight local build identities. C1 generation `.1` artifacts and packages are recorded above; C2 selections require renewed qualification. | [OpenSSL published advisory timeline](https://www.openssl-library.org/news/timeline/) establishes releases after historical package floors; revision labels provide no package evidence. | **C1 generation `.1` qualified on Docker Linux/arm64; C2 generation `.2` qualification remains pending.** Exact artifacts/packages and passing patch/security gates are recorded above. C2-C3 must complete remaining delivery and applicability work; Podman and live qualification remain unavailable. Existing package floors are regression checks, not proof every advisory is fixed. |
 | R11 | Executor `cryptography==50.0.2`, hashed lock regenerated for Python 3.11/Linux through `make upgrade-python-deps PYTHON_DEPS_COMPONENTS=executor`; selected wheel contract is bundled OpenSSL 4.0.3. | Verified 2026-11-02: [cryptography changelog](https://cryptography.io/en/latest/changelog/) and [platform support](https://cryptography.io/en/50.0.2/installation/) support the same Python/runtime line. [OpenSSL advisory](https://mirror.openssl-library.org/news/secadv/20260929.txt) fixes affected 4.0.2 ranges in 4.0.3. Concrete PDF X.509/CRL exploit prerequisites remain unestablished; AES/PDF checks establish compatibility. Debian [CRL fix](https://security-tracker.debian.org/tracker/CVE-2026-35189) needs `3.5.7-1~deb13u3`; Alpine floor is 3.5.9-r0. | **C2 wrapper remediation implemented; selected artifact qualification pending.** Security assertions now target the reviewed packages/wheel; validate actual system and bundled copies, dependency consistency, AES, encrypted PDFs and executor contracts. Changed assertions and regenerated lock alone do not establish artifact remediation. |
 | R12 | Onyx v4.8.8 default 0.4.7; bounded controller/executor selection 0.4.9, source `e53850d68701e5e62440a36ed311164dafc89465`; controller digest `sha256:7626d1f139e56d640cd0e333a90f632e26dc986db8641d6dbce45dc494e03580`; executor digest as R11. | Exact [Onyx env.template](https://github.com/onyx-dot-app/onyx/blob/f400d3154a13ac1f3ee730896f69fbc25eb5d8f7/deployment/docker_compose/env.template) permits a separate release selection. Independent source call-chain review and failure behavior are recorded in the accepted G0 decision above. | **Source compatibility and C1 generation `.1` selected-image contracts passed for the exact tuple; C2 `.2` and live integration pending.** C1 records bounded authority; changes to either owner/default/selected release reopen compatibility review. Selected patch/security image gates passed; retain live executor command/network qualification. No silent downgrade and no permanent allow-newer exception. |
 | R13 | SearXNG `2026.7.15-7b2199ecd`, Python3.14 build stage; Obscura 0.2.5 source `bd9529418b7fa975b50eabeac415cfaaa865a588`, runtime digest `sha256:354c3d2a0fa2dd2939debe6903aa26c35d121329245dfa42aa7d1c292a209814`, Rust1.94.0-bookworm digest `sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f`; Tor0.4.9.14 digest `sha256:38f57fbef35b372f5eac374fa3d44a4edf6c5e2ff2a6883ace851617c09f16bb`; Myst source `74d144d4261adbb9feb84825946078b8161ebe46`; Teep source `d9f59d839eb887b50f5afd234e192eac5ec45a2d`; Myst/Teep Go1.26-alpine and Alpine3.22 build/runtime bases. | [SearXNG](https://github.com/searxng/searxng/security/advisories) and [Obscura](https://github.com/h4ckf0r0day/obscura/security/advisories) currently publish no own advisories; absence does not establish bundled dependency cleanliness. Independent [Tor 0.4.9.15 review](https://lists.torproject.org/mailman3/hyperkitty/list/tor-announce%40lists.torproject.org/thread/WXHTSV43NO5UZQ7Q634S5NS5MIRL5JSJ/) supports retaining 0.4.9.14 for this client-only configuration: relay/directory defenses and unused control commands do not apply; remaining dependency evidence is separate. C2 identities include all source/base/copied/context inputs; native source/runtime review is incomplete. | **Unresolved support/advisory/dependency evidence; identity remediation assigned C2-C3.** Next action: exact-source dependency/SBOM audit, registry/runtime evidence and complete build-input coverage including hard-coded stages. Require affected `make test-patch-images`, `make test-obscura-image`, `make test-tor-image`, browser/search, Myst namespace and Teep inference contracts. No automatic unrelated upgrades authorized; focused gates and live evidence pending. |

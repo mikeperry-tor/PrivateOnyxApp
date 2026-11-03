@@ -83,8 +83,8 @@ residual risks, and validation requirements.
     and the derived SearXNG image repository. The Makefile includes a digest of
     every embedded SearXNG wrapper input in the derived tag.
   - `tools/components/` - component authority inventory, exact-release
-    reconciliation, complete build identities, generated configuration
-    preparation, and explicit refresh-generation tooling; see
+    reconciliation, complete build identities, generated configuration and
+    ordered image preparation, and explicit refresh-generation tooling; see
     `docs/onyx_patches_upgrade.md`.
   - `.env.wrapper.example` - user-facing runtime options. Keep descriptions
     focused on user-visible properties and consequences; do not expose

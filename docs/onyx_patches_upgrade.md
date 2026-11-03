@@ -49,6 +49,10 @@ do not silently migrate products, licenses, storage, or dependency majors.
 `make component-refresh-revision` publishes the next UTC date-plus-sequence
 `OS_SECURITY_UPDATE_REVISION`, including multiple refreshes per day. The broad
 `make upgrade` invokes it once before refreshing locks and deriving build tags.
+The build/configuration batch reparses synchronized manifest selections and
+uses that newly published generation, including when a revision override was
+supplied. Explicit image destinations remain authoritative; use individual
+component build targets for a deliberately overridden refresh revision.
 For deliberate updates outside that batch, bump explicitly and run
 `make component-check-revision REVIEW_BASE=<reviewed-commit>`. This offline
 comparison needs an explicit local commit and never guesses a remote branch.
@@ -117,6 +121,76 @@ environment initialization is owner-only; later synchronization changes only
 the selected application/controller version keys. The environment contents
 never enter a fingerprint or diagnostics. `upgrade-onyx` forces preparation;
 `sync-onyx-env` performs only the locked version synchronization.
+
+After its build/configuration batch completes, broad `make upgrade` uses the
+same image preparer as startup against the full-mode model. It acquires missing
+application and support images, including the image-gate fixtures, before
+reporting artifacts ready for offline `make check-upgrade`. This preparation
+uses the selected version/wrapper settings without resolving service environment
+files or loading the generated Onyx environment. It starts no containers or host
+services. Podman omits the Docker-only controller and executor builds and
+acquisition; the other local image families are prepared for their image gates
+even when their optional runtime features are disabled.
+
+### Ordered startup delivery
+
+`make up-lite` and `make up-full` run wrapper/engine preflight, prepare generated
+configuration, then invoke `tools.components.preparation`. This resolves the
+active native Compose service selection without resolving service environment
+files. Disabled profiles are excluded. Reviewed registry selections become
+immutable digest references; every selected image is checked in the native
+store for its OS, architecture and variant before any startup container is
+created. Missing registry images are pulled by digest; missing declared local
+outputs use their component build target. The Docker executor is prepared
+explicitly even though it is not a Compose service. Podman excludes both it
+and the socket-dependent controller.
+
+Explicit registry overrides retain their chosen reference. A known tag uses its
+reviewed digest; an unreviewed caller tag uses native pull-if-missing and is
+reported as mutable. This does not promise freshness for an operator-selected
+mutable tag. Local output overrides remain destinations for their declared
+builder, never registry-pull candidates. Changing the committed reviewed digest
+selects new bytes even when its owner-selected tag is unchanged.
+
+A per-user owner-only temporary directory holds a lock per native engine/store
+and immutable image/platform Compose overlays. It contains no environment
+contents, credentials or complete Compose model. Image presence is checked on
+every start, so pruning is repaired regardless of an existing overlay. The
+store lock covers preparation through container creation and readiness. A shared
+configuration lock prevents configuration replacement during this interval;
+if another preparation changed the selection first, startup fails visibly and
+must be rerun. There is no pull-completion database or periodic refresh.
+
+All image-consuming startup helpers follow preparation, including tokenizer
+extraction and Podman database initialization. They use the prepared overlay or
+exact backend image/platform and prohibit implicit pulls. Compose creation and
+startup prohibit implicit pulls/builds. A failed required pull, build or native
+platform verification prevents creation, including when older cached images
+exist. Full-mode embedding readiness and Podman stopped-container/native-health
+staging retain their separate checks and waits.
+
+Docker image inspection selects the exact platform when both the client and
+server API support `image inspect --platform` (API 1.49+). The existing Docker
+25.0.5/API 1.44 minimum remains supported for native-platform startup. Older
+APIs reject foreign global or service platforms before acquisition because
+inspection cannot reliably select one variant from a multiplatform store.
+An explicit client API cap also controls this capability.
+
+An explicit `DOCKER_DEFAULT_PLATFORM` selects acquisition/build platforms as
+well as image identity. Service-specific registry platforms are retained in
+the prepared overlay and tokenizer extraction uses the backend service's exact
+platform. Supported Podman image inspection cannot verify non-default variants;
+those selections fail before artifact actions. Canonical Linux arm64/v8 is
+arm64. Platform availability in a registry index does not qualify execution on
+that platform or substitute for native engine validation.
+
+Use deterministic helper and actual Make-entrypoint fake-engine fixtures for
+reuse, changed digests/generations, pruning, optional services, mode/store
+transitions, caller overrides, failures/retries and parallel Make ordering.
+Render the affected native Compose matrix separately and run available engine
+startup, health and image contracts; fixture/model evidence is not live
+qualification. Do not read private configuration or start an operator stack
+merely to exercise delivery tooling.
 
 ### OS security refreshes
 

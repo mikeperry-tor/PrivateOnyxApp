@@ -269,11 +269,12 @@ host-access protection. Restarting Docker alone is insufficient.
 
 If shutdown or startup fails, see the [network recovery guidance](docs/internal_network_security.md#docker-gateway-and-controller-boundary).
 
-The start command prepares any images selected by the updated
-[`stack.versions.env`](stack.versions.env) or changed content-addressed build
-inputs, refreshes an existing bundled MLX environment when its committed
-dependency/runtime fingerprint changes, reuses artifacts that already match,
-and recreates affected services.
+The start command prepares the reviewed images selected by the update before
+creating containers, including when an upstream tag stays unchanged. Missing
+images are pulled or built; matching local artifacts are reused. A failed pull
+or build stops startup. It also refreshes an existing bundled MLX environment
+when its committed dependency/runtime fingerprint changes and recreates
+affected services. Explicit image overrides remain operator-selected.
 
 Published security refreshes also rebuild the affected executor,
 code-interpreter, and Tailscale images. Their OS packages are updated during

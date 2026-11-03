@@ -701,9 +701,20 @@ its own locked input/artifact fingerprint, independently of application tags;
 see [identity and preparation](onyx_patches_upgrade.md#image-and-generated-configuration-identities).
 Never substitute another image or enable validation networking because the
 selected store is empty.
-The derived Python executor and its `executor-image-ready` prerequisite remain
-Docker-only because rootless Podman omits the socket-dependent code-interpreter
-service entirely; Podman startup and image validation do not build or store it.
+Normal `up-*` preparation resolves only active services and checks native image
+presence before tokenizer extraction, database initialization or stopped-container
+creation. It supplies a final image/platform overlay and holds the store lock
+through startup health staging. Container helpers prohibit implicit pulls;
+Compose create/up also prohibit implicit builds. Pruning causes preparation on
+the next start. See [ordered delivery](onyx_patches_upgrade.md#ordered-startup-delivery).
+Podman image inspection does not expose a verifiable non-default variant;
+startup rejects such a selection before pulls/builds. Linux arm64/v8 is
+canonicalized to arm64. This restriction requires native validation when the
+supported Podman inspection contract changes.
+
+The derived Python executor remains Docker-only because rootless Podman omits
+the socket-dependent controller service entirely; Podman startup and image
+validation do not build or store either artifact.
 
 Root-context Podman builds use `.containerignore`; Docker uses the matching
 `.dockerignore`. They exclude private bind data, the document source, generated

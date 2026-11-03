@@ -284,7 +284,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[0][0:3], ["podman", "volume", "create"])
         self.assertEqual(
-            commands[1][0:7],
+            commands[1][0:9],
             [
                 "podman",
                 "compose",
@@ -293,12 +293,15 @@ class PodmanStartupHealthTests(unittest.TestCase):
                 "--env-file",
                 "two.env",
                 "run",
+                "--pull",
+                "never",
             ],
         )
         self.assertIn(startup_health.POSTGRES_ENTRYPOINT, commands[1])
         self.assertEqual(commands[1][-2:], ["relational_db", "postgres"])
         self.assertEqual(commands[2][0:2], ["podman", "exec"])
         self.assertEqual(commands[2][-1], "pg_isready")
+        self.assertEqual(commands[4][commands[4].index("run"):][:3], ["run", "--pull", "never"])
         self.assertEqual(commands[3][0:3], ["podman", "stop", "--time"])
         self.assertEqual(
             commands[4][-3:],
@@ -402,7 +405,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[0][0:3], ["podman", "volume", "create"])
         self.assertEqual(
-            commands[1][0:7],
+            commands[1][0:9],
             [
                 "podman",
                 "compose",
@@ -411,6 +414,8 @@ class PodmanStartupHealthTests(unittest.TestCase):
                 "--env-file",
                 "two.env",
                 "run",
+                "--pull",
+                "never",
             ],
         )
         self.assertEqual(commands[1][-1], "opensearch")
@@ -426,6 +431,7 @@ class PodmanStartupHealthTests(unittest.TestCase):
             commands[3][-1], startup_health.OPENSEARCH_AUDIT_BOOTSTRAP_COMMAND
         )
         self.assertEqual(commands[4][0:3], ["podman", "stop", "--time"])
+        self.assertEqual(commands[5][commands[5].index("run"):][:3], ["run", "--pull", "never"])
         self.assertEqual(
             commands[5][-3:],
             [
