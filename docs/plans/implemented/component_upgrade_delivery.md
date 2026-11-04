@@ -1,9 +1,10 @@
 # Component version ownership and end-user upgrade delivery
 
-Status: G0 and C1-C4 implementation, branch-review fixes and accumulated source
-reviews passed through `b7c133a9`. Final deterministic validation passed at that
-snapshot. Initial selected-image and native Docker fixture evidence is recorded
-separately below and was not repeated for the branch-review fixes. Podman,
+Status: Implemented and archived on 2026-11-04 after user-requested branch
+review. G0 and C1-C4 implementation, branch-review fixes and accumulated source
+reviews passed through `b7c133a9`; final documentation review passed through
+`43c97714`. Final deterministic validation passed at `b7c133a9`. Initial
+selected-image and native Docker fixture evidence is recorded separately below and was not repeated for the branch-review fixes. Podman,
 native Linux/other-architecture and configured operator-stack qualification
 remain incomplete and are not implied by source approvals.
 Implementation baseline: `3f54b2a4d8647047a78ed3eb68f1fb7765aaf0fe`.
@@ -46,8 +47,8 @@ actual upgrade recursion, fixed output destinations, acquisition failure/retry,
 Podman artifact omission, reviewed-source invalidation and single preparation
 calls. Checks used public settings and disposable fixtures; no operator stack
 or new selected-image/live qualification was performed. Current behavior is
-owned by [the upgrade checklist](../onyx_patches_upgrade.md) and
-[patch information](../onyx_patch_info.md), not this acceptance record.
+owned by [the upgrade checklist](../../onyx_patches_upgrade.md) and
+[patch information](../../onyx_patch_info.md), not this acceptance record.
 
 ### Consolidated acceptance evidence (2026-11-02 through 2026-11-04)
 
@@ -149,8 +150,10 @@ Those require an available runtime/configured stack and, where applicable,
 credentials, external services or funding. Disposable fixtures and effective
 models do not replace these checks. Upstream-pending advisories, complete
 installed-dependency assessment and MinIO mirror-build provenance remain open below.
-The plan stays active for branch review and outstanding qualification; frozen
-accepted records have not been modified or created.
+Implementation and branch review are complete. This accepted record is archived
+at the user's request; outstanding qualification and dependency assessments above
+remain open and are not prerequisites newly satisfied by archiving. Standing
+upgrade and qualification requirements remain in the canonical owning guides.
 
 ### Accepted G0 decisions (2026-11-02)
 
@@ -214,13 +217,13 @@ manual pulls, cache deletion, or image validation commands.
   routing, fail-closed behavior, and existing full-mode readiness staging.
 
 Existing behavior and standing validation requirements belong in
-[the upgrade checklist](../onyx_patches_upgrade.md),
-[Podman support](../podman_suport.md),
-[resource minimization](../resource_minimization.md),
-[internal network security](../internal_network_security.md), and
-[routing](../vpn_routing_and_proxies.md). Consult
-[native Tor](../native_tor_support.md) and
-[local RAG](../local_docs_rag_search.md) for affected lifecycle paths.
+[the upgrade checklist](../../onyx_patches_upgrade.md),
+[Podman support](../../podman_suport.md),
+[resource minimization](../../resource_minimization.md),
+[internal network security](../../internal_network_security.md), and
+[routing](../../vpn_routing_and_proxies.md). Consult
+[native Tor](../../native_tor_support.md) and
+[local RAG](../../local_docs_rag_search.md) for affected lifecycle paths.
 Update those authorities alongside implementation, then link to their current
 contracts here rather than retaining duplicate specifications in this plan.
 
@@ -239,7 +242,7 @@ which could not represent every configuration refresh.
 
 ## Review sequence and commit boundaries
 
-Follow [independent workflows and plan structure](../../AGENTS.md#independent-subagent-workflows).
+Follow [independent workflows and plan structure](../../../AGENTS.md#independent-subagent-workflows).
 The coordinating agent owns implementation and integration. Independent
 reviewers remain read-only, verify evidence, and challenge unnecessary
 responsibilities. Delegate distinct concerns when useful: version authority
@@ -278,8 +281,8 @@ refreshes.
 
 The implemented ownership, exact-source reconciliation, compatibility boundary
 and refresh-generation policy are documented in
-[version ownership and reconciliation](../onyx_patches_upgrade.md#version-ownership-and-reconciliation).
-The [inventory](../../tools/components/ownership.json) records consumed owners,
+[version ownership and reconciliation](../../onyx_patches_upgrade.md#version-ownership-and-reconciliation).
+The [inventory](../../../tools/components/ownership.json) records consumed owners,
 reviewed registry selections and the explicit revision-input boundary. Phase
 acceptance evidence is consolidated above and in the initial reconciliation.
 
@@ -329,7 +332,7 @@ validation. Carry upstream-pending findings and unavailable evidence into the
 final handoff without describing them as fixed.
 
 Add the standing reconciliation requirements to
-[the upgrade checklist](../onyx_patches_upgrade.md) in C1: owner/version
+[the upgrade checklist](../../onyx_patches_upgrade.md) in C1: owner/version
 alignment, advisory applicability, distribution support, system versus bundled
 libraries, and residual-risk reporting. Update its OS/package/library floors
 and component-specific review instructions alongside the relevant C1-C3
@@ -345,17 +348,17 @@ Establish the per-row reconciliation dispositions and evidence above; recurring
 upgrade tooling alone does not satisfy this initial acceptance requirement.
 Run `make check`, inspect affected effective Compose models, and run affected
 image contracts if selected artifacts change. Update
-[the upgrade procedure](../onyx_patches_upgrade.md) and applicable
-[AGENTS.md workflow guidance](../../AGENTS.md) in this phase; update README only
+[the upgrade procedure](../../onyx_patches_upgrade.md) and applicable
+[AGENTS.md workflow guidance](../../../AGENTS.md) in this phase; update README only
 for lasting user-facing consequences. Independently review C1's exact snapshot
 and resulting commit before building on its authority decisions.
 
 ## C2: complete identities for local builds and generated files
 
 Current behavior is documented in
-[image and generated-configuration identities](../onyx_patches_upgrade.md#image-and-generated-configuration-identities),
-[Podman image preparation](../podman_suport.md#image-preparation), and
-[resource policy](../resource_minimization.md#container-health-and-startup).
+[image and generated-configuration identities](../../onyx_patches_upgrade.md#image-and-generated-configuration-identities),
+[Podman image preparation](../../podman_suport.md#image-preparation), and
+[resource policy](../../resource_minimization.md#container-health-and-startup).
 
 Acceptance requires complete committed COPY/base/context identities, preserved
 explicit overrides, native cache/base policy, unchanged-version configuration
@@ -378,10 +381,10 @@ assigned remediation, and accompanying upgrade-checklist changes together.
 ## C3: deliver reviewed updates through normal startup
 
 Current behavior is documented in
-[ordered startup delivery](../onyx_patches_upgrade.md#ordered-startup-delivery),
-[the unchanged end-user upgrade workflow](../../README.md#upgrading-the-stack),
-[Podman lifecycle](../podman_suport.md), and
-[resource policy](../resource_minimization.md#container-health-and-startup).
+[ordered startup delivery](../../onyx_patches_upgrade.md#ordered-startup-delivery),
+[the unchanged end-user upgrade workflow](../../../README.md#upgrading-the-stack),
+[Podman lifecycle](../../podman_suport.md), and
+[resource policy](../../resource_minimization.md#container-health-and-startup).
 
 Acceptance uses actual Make-entrypoint fake-engine fixtures for populated old
 stores, unchanged-tag digest refreshes and generation changes, optional roles,
@@ -405,7 +408,7 @@ explicit; do not present model rendering as engine qualification.
 ## C4: freshness reporting and final integration acceptance
 
 Current audit scope, invocation and limitations are documented in
-[public freshness audit](../onyx_patches_upgrade.md#public-freshness-audit).
+[public freshness audit](../../onyx_patches_upgrade.md#public-freshness-audit).
 Offline contracts cover ownership, qualified default consumers, build bases and
 recursive COPY inputs; explicit-base revision and actual startup fixtures
 complete the delivery checks. The standalone OpenSearch gate validates the
