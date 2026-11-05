@@ -4,8 +4,8 @@
 The stock ``duckduckgo`` engine hits captchas on most exit IPs.  This stub uses
 DuckDuckGo's JavaScript-rendered No-AI endpoint (``noai.duckduckgo.com``)
 through Obscura.  No-AI still loads web results from DuckDuckGo's ``d.js``
-endpoint, so this engine waits for network idle before parsing the hydrated
-organic-result DOM.
+endpoint. Homepage navigation uses ``domcontentloaded``; the shared client
+waits for the homepage form and result DOM markers before parsing organic rows.
 """
 
 import typing as t

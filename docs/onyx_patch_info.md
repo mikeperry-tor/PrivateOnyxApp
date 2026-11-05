@@ -370,9 +370,10 @@ mismatch is an unresponsive failure, not empty success, including during that
 second page.
 
 `duckduckgo2` uses DuckDuckGo's JavaScript-rendered No-AI search surface at
-`noai.duckduckgo.com`, not the CAPTCHA-prone HTML endpoint. Search navigation
-defaults to `networkidle2` so its `d.js` payload can hydrate organic semantic
-rows. The engine unwraps only recognized DuckDuckGo `/l/?uddg=...` redirects,
+`noai.duckduckgo.com`, not the CAPTCHA-prone HTML endpoint. Search homepages
+always use `domcontentloaded`; the shared client then waits for the homepage
+form and provider result markers instead of relying on a network-idle event.
+The engine unwraps only recognized DuckDuckGo `/l/?uddg=...` redirects,
 decodes the destination once, and treats an unfinished deep-result preload as
 a verification failure.
 

@@ -476,6 +476,8 @@ class SearxngObscuraSchedulingTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "<html>result</html>")
+        self.assertEqual(captured["wait_until"], "domcontentloaded")
+        self.assertEqual(self.module.WAIT_UNTIL, "domcontentloaded")
         self.assertGreater(captured["request_timeout_seconds"], 6.0)
         self.assertLessEqual(captured["request_timeout_seconds"], 7.0)
         self.assertEqual(

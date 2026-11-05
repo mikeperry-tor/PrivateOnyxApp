@@ -276,21 +276,26 @@ labels, so only the main-request alias can satisfy that requirement. A reset
 that produces no main Document response expires at the
 existing result-navigation deadline and discards the provider generation.
 
-Search uses `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` (default `networkidle2`) so
-JavaScript result payloads have time to hydrate after the page load event.
-Built-in `open_url` uses `OBSCURA_BROWSER_WAIT_UNTIL_WEB` (default
-`domcontentloaded`). Accepted values are the finite Obscura lifecycle values
-validated by the shared client. Network-idle settling looks for 500 ms with
-at most two active requests (`networkidle2`) or none (`networkidle0`). It does
-not report success on a fixed five-second cutoff: the navigation continues
-until the page's `OBSCURA_NAV_TIMEOUT_MS` deadline (90 seconds here) and fails
-if requests remain active, so the caller's shorter search or `open_url`
-attempt deadline normally bounds the wait first. These lifecycle boundaries
-do not guarantee application DOM readiness. Lowering the search wait to
-`load` or `domcontentloaded` can capture DuckDuckGo No-AI's shell before its
-organic rows exist; `networkidle0` waits more strictly and can add substantial
-latency without proving that application JavaScript has committed its result
-DOM.
+Search uses `domcontentloaded` for the provider homepage and then relies on
+the shared client's homepage-form and result-DOM readiness checks described
+below. It does not use network-idle waits. Built-in `open_url` uses
+`OBSCURA_BROWSER_WAIT_UNTIL_WEB` (default `domcontentloaded`). Accepted values
+are the finite Obscura lifecycle values validated by the shared client.
+
+Network-idle settling looks for 500 ms with at most two active requests
+(`networkidle2`) or none (`networkidle0`), counting both ordinary and stealth
+requests. It does not report success on a fixed five-second cutoff: the
+navigation runs to the page's `OBSCURA_NAV_TIMEOUT_MS` deadline (90 seconds
+here) and, if requests remain active at the deadline, fails without returning
+the loaded DOM. A caller that selects a network-idle wait must therefore keep
+the Obscura page deadline below its own per-navigation command budget so the
+browser failure and target cleanup complete before the client deadline. The
+setting is process-wide, so lowering it also reduces the hard navigation
+ceiling for `domcontentloaded` and `load` paths.
+
+These lifecycle boundaries do not guarantee application DOM readiness. Search
+therefore waits for the provider's form and result markers instead of
+inferring readiness from a navigation event or an idle network.
 
 Before query entry, the shared client polls the declared homepage query control
 every 100 ms while it is absent, within the existing absolute transaction
@@ -601,7 +606,7 @@ fields fail visibly.
 Provider result URLs retain their complete query strings and fragments.
 `duckduckgo2` starts at `https://noai.duckduckgo.com/`, submits its homepage
 form, and parses organic `data-layout` / `data-testid` rows rather than
-generated class names. Obscura's network-idle lifecycle can complete after a
+generated class names. The result document can reach its load event after a
 successful `d.js` response but before DuckDuckGo commits those rows. While the
 `deep_preload` marker is present without organic, no-results, or explicit
 challenge structure, the shared client therefore waits through the remaining
@@ -1079,8 +1084,7 @@ without moving an application onto a public network.
 
 Relevant controls are documented in `.env.wrapper.example`:
 
-- `OBSCURA_BROWSER_WAIT_UNTIL_SEARCH` and
-  `OBSCURA_BROWSER_WAIT_UNTIL_WEB`;
+- `OBSCURA_BROWSER_WAIT_UNTIL_WEB`;
 - `ONYX_AGENT_USE_OBSCURA_BROWSER`;
 - `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB`;
 - `EGRESS_ALLOW_HTTP_URLS`;

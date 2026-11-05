@@ -25,7 +25,6 @@ from private_onyx_obscura import (
     abort_anubis_pow as abort_anubis_pow_async,
     resume_anubis_pow as resume_anubis_pow_async,
     solve_anubis_fast,
-    validate_wait_until,
 )
 
 logger = logging.getLogger("searx.engines._obscura")
@@ -37,9 +36,7 @@ logging.getLogger("private_onyx_obscura").setLevel(logging.INFO)
 CDP_URL = os.environ.get(
     "SEARXNG_OBSCURA_CDP_URL", "ws://obscura:9222/devtools/browser"
 )
-WAIT_UNTIL = validate_wait_until(
-    os.environ.get("OBSCURA_BROWSER_WAIT_UNTIL_SEARCH", "networkidle2")
-)
+WAIT_UNTIL = "domcontentloaded"
 SEARCH_DOM_LIMIT = 20 * 1024 * 1024
 SEARCH_BROWSER_ATTEMPT_TIMEOUT_SECONDS = 50.0
 SEARCH_PRE_NAVIGATION_TIMEOUT_SECONDS = 45.0
