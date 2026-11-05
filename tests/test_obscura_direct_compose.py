@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -34,7 +37,6 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         cls.example_env = (ROOT / ".env.wrapper.example").read_text()
 
     def test_selected_image_gate_runs_native_frame_contracts(self):
-        self.assertIn("-- --list | grep -q ': test$'", self.obscura_dockerfile)
         self.assertIn(
             "run_gate stealth obscura-browser", self.obscura_dockerfile
         )
@@ -46,6 +48,60 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             "navigating_a_frame_from_the_page_keeps_the_top_document",
             self.obscura_dockerfile,
         )
+        self.assertIn(
+            "fetch_abort_accepts_cross_realm_signals_but_rejects_forged_prototypes",
+            self.obscura_dockerfile,
+        )
+
+    @unittest.skipUnless(os.name == "posix", "native build gates use POSIX shell")
+    def test_native_gate_rejects_listing_and_execution_failures(self):
+        # Exercise the Dockerfile's shell gate itself, without Cargo or images.
+        gate = self.obscura_dockerfile.split("RUN set -eu; \\\n    run_gate()", 1)[1]
+        gate = "set -eu;\nrun_gate()" + gate.split("    run_gate stealth obscura-net", 1)[0]
+        gate = gate.replace("\\\n", "\n")
+        cargo = """#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_CARGO_LOG"
+case "$*" in
+  *'-- --list')
+    if [ "$FAKE_CARGO_CASE" = no-tests ]; then exit 0; fi
+    printf 'fixture::contract: test\\n'
+    if [ "$FAKE_CARGO_CASE" = list-failure ]; then exit 7; fi
+    ;;
+  *)
+    if [ "$FAKE_CARGO_CASE" = zero-passed ]; then
+      printf 'test result: ok. 0 passed; 0 failed\\n'
+    else
+      printf 'test result: ok. 1 passed; 0 failed\\n'
+    fi
+    if [ "$FAKE_CARGO_CASE" = test-failure ]; then exit 8; fi
+    ;;
+esac
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "cargo"
+            binary.write_text(cargo)
+            binary.chmod(0o755)
+            log = Path(directory) / "calls"
+            for mode in ("plain", "stealth", "invalid"):
+                for scenario in ("success", "no-tests", "list-failure", "test-failure", "zero-passed"):
+                    with self.subTest(mode=mode, scenario=scenario):
+                        log.write_text("")
+                        result = subprocess.run(
+                            ["/bin/sh", "-c", gate + f"\nrun_gate {mode} fixture-package contract\n"],
+                            env=os.environ | {
+                                "PATH": directory + os.pathsep + os.defpath,
+                                "FAKE_CARGO_CASE": scenario, "FAKE_CARGO_LOG": str(log),
+                            }, text=True, capture_output=True,
+                        )
+                        success = mode != "invalid" and scenario == "success"
+                        self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+                        calls = log.read_text().splitlines()
+                        count = 0 if mode == "invalid" else 1 if scenario in ("no-tests", "list-failure") else 2
+                        self.assertEqual(len(calls), count, calls)
+                        for call in calls:
+                            self.assertIn("--locked --no-default-features -p fixture-package", call)
+                            self.assertEqual("--features stealth" in call, mode == "stealth")
 
     def test_direct_topology_literals(self):
         self.assertIn(

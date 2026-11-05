@@ -81,10 +81,45 @@ diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
 index ec53424..e455cd2 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -4615,6 +4615,55 @@ impl Default for ObscuraJsRuntime {
+@@ -4615,6 +4615,90 @@ impl Default for ObscuraJsRuntime {
 
  #[cfg(test)]
  mod tests {
++    #[test]
++    fn private_onyx_parent_calls_queue_navigation_on_receiver_frame() {
++        let cases = [
++            ("child.location = '/next'", "/next", "GET", ""),
++            ("child.document.location = '/next'", "/next", "GET", ""),
++            ("child.location.href = '/next'", "/next", "GET", ""),
++            ("child.location.assign('/next')", "/next", "GET", ""),
++            ("child.location.replace('/next')", "/next", "GET", ""),
++            ("child.document.location.replace('/next')", "/next", "GET", ""),
++            ("child.location.reload()", "/child", "GET", ""),
++            ("child.document.querySelector('form').requestSubmit()", "/next", "POST", "q=child+fixture"),
++            ("child.document.querySelector('form').method='get'; child.document.querySelector('form').requestSubmit()",
++             "/next?q=child+fixture", "GET", ""),
++        ];
++        for (expression, path, method, body) in cases {
++            let mut parent = setup_runtime("<html><body></body></html>");
++            let _frame = crate::frame::FrameRealm::new(
++                &mut parent, 1, 0, "http://example.com/child",
++                "<html><body><form action='/next' method='post'><input name='q' value='child fixture'></form></body></html>",
++            ).unwrap();
++            parent.evaluate(&format!(
++                "(() => {{ const child = globalThis.__obscura_frameObjects[1].window; {expression}; return true; }})()",
++            )).unwrap();
++            assert_eq!(parent.take_pending_navigation(), None, "{expression}");
++            let child_state = crate::ops::frame_state(&parent.js_runtime.op_state().borrow(), 1);
++            assert!(!std::rc::Rc::ptr_eq(&child_state, &parent.state));
++            let child_state = child_state.borrow();
++            assert_eq!(child_state.pending_navigation, Some((
++                format!("http://example.com{path}"), method.to_string(), body.to_string(),
++            )), "{expression}");
++            assert_eq!(child_state.url, "http://example.com/child", "{expression}");
++            assert_eq!(parent.state.borrow().url, "http://example.com/test", "{expression}");
++        }
++    }
++
 +    #[test]
 +    fn private_onyx_window_named_property_assignment_shadows_the_element_alias() {
 +        let mut rt = setup_runtime(
@@ -137,7 +172,7 @@ index ec53424..e455cd2 100644
      #[cfg(obscura_external_bootstrap)]
      #[test]
      fn snapshot_core_methods_have_bytecode_before_first_use() {
-@@ -23736,6 +23785,39 @@ mod tests {
+@@ -23736,6 +23820,39 @@ mod tests {
          );
      }
 

@@ -259,10 +259,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/cross-realm-child":
             self._send(
-                b"<html><body><form action='/static' method='post'>"
+                b"<html><body><form action='/cross-realm-result' method='post'>"
                 b"<input name='q' value='child fixture'></form></body></html>",
                 content_type="text/html; charset=utf-8",
             )
+            return
+        if path == "/cross-realm-result":
+            self._search_result(method="GET")
             return
         if path == "/frame-navigation":
             self._send(
@@ -557,6 +560,9 @@ class Handler(BaseHTTPRequestHandler):
         if self._observe_request(body):
             return
         if self._navigation_security(body):
+            return
+        if path == "/cross-realm-result":
+            self._search_result(method="POST")
             return
         if path == "/search-post-result":
             self._search_result(method="POST")

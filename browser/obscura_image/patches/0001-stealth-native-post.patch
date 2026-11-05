@@ -192,7 +192,7 @@ index 4831405..f351fed 100644
                  tracing::info!("Stealth mode enabled (tracker blocking)");
              }
 diff --git a/crates/obscura-net/src/client.rs b/crates/obscura-net/src/client.rs
-index 64aa618..4cecd30 100644
+index 64aa618..062b0f3 100644
 --- a/crates/obscura-net/src/client.rs
 +++ b/crates/obscura-net/src/client.rs
 @@ -198,6 +198,8 @@ pub struct ResourceRequest {
@@ -228,7 +228,7 @@ index 64aa618..4cecd30 100644
              mode: RequestMode::Cors,
              credentials: RequestCredentials::SameOrigin,
              // OBSCURA_FETCH_MAX_BODY_BYTES (the fetch()/XHR override from #581)
-@@ -435,17 +440,123 @@ pub(crate) fn response_too_large(url: &Url, limit: usize) -> ObscuraNetError {
+@@ -435,17 +440,118 @@ pub(crate) fn response_too_large(url: &Url, limit: usize) -> ObscuraNetError {
      }
  }
 
@@ -251,12 +251,7 @@ index 64aa618..4cecd30 100644
 -        "cross-site"
 +    let mut site = "same-origin";
 +    for hop in redirects.iter().chain(std::iter::once(target)) {
-+        // PSL suffixes describe domain names, not IP literals. Different IPs
-+        // must never become same-site merely because their final octets match.
-+        let different_ip_hosts = initiator.host() != hop.host()
-+            && (!matches!(initiator.host(), Some(url::Host::Domain(_)))
-+                || !matches!(hop.host(), Some(url::Host::Domain(_))));
-+        if different_ip_hosts || !same_site(initiator, hop) {
++        if !same_site(initiator, hop) {
 +            return "cross-site";
 +        }
 +        if initiator.origin() != hop.origin() {
@@ -360,7 +355,7 @@ index 64aa618..4cecd30 100644
      }
  }
 
-@@ -466,6 +577,27 @@ pub(crate) fn same_site_context(
+@@ -466,6 +572,27 @@ pub(crate) fn same_site_context(
      }
  }
 
@@ -388,7 +383,7 @@ index 64aa618..4cecd30 100644
  pub(crate) fn request_referrer(request: &ResourceRequest, target: &Url) -> Option<String> {
      let source = request
          .referrer
-@@ -1163,6 +1295,24 @@ impl ObscuraHttpClient {
+@@ -1163,6 +1290,24 @@ impl ObscuraHttpClient {
              .await
      }
 
@@ -413,7 +408,7 @@ index 64aa618..4cecd30 100644
      pub async fn fetch_with_method(
          &self,
          initial_method: Method,
-@@ -1399,7 +1549,9 @@ impl ObscuraHttpClient {
+@@ -1399,7 +1544,9 @@ impl ObscuraHttpClient {
          callbacks: Option<&CallbackRegistry>,
          request: ResourceRequest,
      ) -> Result<Response, ObscuraNetError> {
@@ -424,7 +419,7 @@ index 64aa618..4cecd30 100644
      }
 
      /// A navigation continued by an interceptor uses request-local overrides.
-@@ -1409,19 +1561,23 @@ impl ObscuraHttpClient {
+@@ -1409,19 +1556,23 @@ impl ObscuraHttpClient {
      ) -> Result<Response, ObscuraNetError> {
          let method = Method::from_bytes(method.as_bytes())
              .map_err(|error| ObscuraNetError::Network(error.to_string()))?;
@@ -451,7 +446,7 @@ index 64aa618..4cecd30 100644
          }
 
          let mut method = initial_method;
-@@ -1430,18 +1586,20 @@ impl ObscuraHttpClient {
+@@ -1430,18 +1581,20 @@ impl ObscuraHttpClient {
              if let Some(host) = url.host_str() {
                  if crate::blocklist::is_blocked(host) {
                      tracing::debug!("Blocked tracker: {}", url);
@@ -474,7 +469,7 @@ index 64aa618..4cecd30 100644
          let mut redirects = Vec::new();
          // Follow up to 20 redirects, matching the Fetch spec and the fetch()/XHR
          // path in obscura-js. `0..=max_redirects` makes max_redirects+1 requests
-@@ -1468,7 +1626,7 @@ impl ObscuraHttpClient {
+@@ -1468,7 +1621,7 @@ impl ObscuraHttpClient {
                          return Err(ObscuraNetError::Blocked(current_url.to_string()));
                      }
                      InterceptAction::Fulfill(response) => {
@@ -483,7 +478,7 @@ index 64aa618..4cecd30 100644
                      }
                      InterceptAction::ModifyHeaders(headers) => {
                          let mut extra = self.extra_headers.write().await;
-@@ -1513,7 +1671,7 @@ impl ObscuraHttpClient {
+@@ -1513,7 +1666,7 @@ impl ObscuraHttpClient {
              );
              headers.insert(
                  HeaderName::from_static("sec-fetch-site"),
@@ -492,7 +487,7 @@ index 64aa618..4cecd30 100644
              );
              headers.insert(
                  HeaderName::from_static("sec-fetch-mode"),
-@@ -1526,7 +1684,7 @@ impl ObscuraHttpClient {
+@@ -1526,7 +1679,7 @@ impl ObscuraHttpClient {
                  HeaderName::from_static("sec-fetch-dest"),
                  HeaderValue::from_static(request.destination()),
              );
@@ -501,7 +496,7 @@ index 64aa618..4cecd30 100644
                  if let Ok(value) = HeaderValue::from_str(&referer) {
                      headers.insert(reqwest::header::REFERER, value);
                  }
-@@ -1542,10 +1700,12 @@ impl ObscuraHttpClient {
+@@ -1542,10 +1695,12 @@ impl ObscuraHttpClient {
              let cookie_header = if request.sends_credentials_to(&current_url) {
                  self.cookie_jar.get_cookie_header_in_context(
                      &current_url,
@@ -515,7 +510,7 @@ index 64aa618..4cecd30 100644
                      ),
                  )
              } else {
-@@ -1647,6 +1807,7 @@ impl ObscuraHttpClient {
+@@ -1647,6 +1802,7 @@ impl ObscuraHttpClient {
              }
 
              if status.is_redirection() {
@@ -523,7 +518,7 @@ index 64aa618..4cecd30 100644
                  if let Some(location) = resp.headers().get(reqwest::header::LOCATION) {
                      let location_str = location.to_str().map_err(|_| {
                          ObscuraNetError::Network("Invalid redirect Location header".into())
-@@ -1699,7 +1860,7 @@ impl ObscuraHttpClient {
+@@ -1699,7 +1855,7 @@ impl ObscuraHttpClient {
                  cbs.fire_response(&request_info, &response).await;
              }
 
@@ -532,7 +527,7 @@ index 64aa618..4cecd30 100644
          }
 
          Err(ObscuraNetError::TooManyRedirects(current_url.to_string()))
-@@ -1844,7 +2005,8 @@ mod resource_cache_tests {
+@@ -1844,7 +2000,8 @@ mod resource_cache_tests {
  #[cfg(test)]
  mod ssrf_tests {
      use super::{
@@ -542,10 +537,40 @@ index 64aa618..4cecd30 100644
          CallbackRegistry, ObscuraHttpClient, ObscuraNetError, RequestCredentials, RequestMode,
          ResourceRequest, ResourceType, SsrfGuardResolver,
      };
-@@ -1862,6 +2024,72 @@ mod ssrf_tests {
+@@ -1862,6 +2019,102 @@ mod ssrf_tests {
          IpAddr::from_str(s).unwrap()
      }
 
++    #[test]
++    fn private_onyx_stealth_ip_cookie_context_agrees_with_fetch_metadata() {
++        use super::{navigation_cookie_context, same_site_context};
++        use crate::cookies::{CookieJar, SameSiteContext};
++        let source = Url::parse("https://1.1.1.1/source").unwrap();
++        let target = Url::parse("https://8.8.1.1/result").unwrap();
++        let jar = CookieJar::new();
++        jar.set_cookie("strict=secret; Path=/; Secure; SameSite=Strict", &target);
++        jar.set_cookie("lax=visible; Path=/; Secure; SameSite=Lax", &target);
++        let mut request = ResourceRequest::navigation();
++        request.initiator = Some(source.clone());
++        for (safe, expected, header) in [
++            (false, SameSiteContext::CrossSite, ""),
++            (true, SameSiteContext::CrossSiteTopLevelSafe, "lax=visible"),
++        ] {
++            let mut crossed_site = false;
++            let context = navigation_cookie_context(&request, &target, &target, safe, &mut crossed_site);
++            assert_eq!(context, expected);
++            assert!(crossed_site);
++            assert_eq!(jar.get_cookie_header_in_context(&target, context), header);
++            assert_eq!(request_fetch_site_with_redirects(&request, &target, &[]), "cross-site");
++            assert_eq!(navigation_cookie_context(&request, &target, &source, safe, &mut crossed_site), expected);
++        }
++        request.mode = RequestMode::Cors;
++        assert_eq!(same_site_context(&request, &target, true), SameSiteContext::CrossSite);
++        request.initiator = Some(Url::parse("https://8.8.1.1:8443/source").unwrap());
++        assert_eq!(same_site_context(&request, &target, false), SameSiteContext::SameSite);
++        assert_eq!(request_fetch_site_with_redirects(&request, &target, &[]), "same-site");
++    }
++
 +    #[test]
 +    fn private_onyx_stealth_navigation_referrer_policies() {
 +        use super::{NavigationReferrer, ReferrerPolicy};
@@ -615,7 +640,7 @@ index 64aa618..4cecd30 100644
      // A response that repeats a header name (Link, Via, WWW-Authenticate, ...)
      // must not lose all but the last line. See #913.
      #[test]
-@@ -2119,8 +2347,14 @@ mod ssrf_tests {
+@@ -2119,8 +2372,14 @@ mod ssrf_tests {
          let cross_origin = Url::parse("https://cdn.example/image.png").unwrap();
          let downgrade = Url::parse("http://cdn.example/image.png").unwrap();
 
@@ -632,6 +657,49 @@ index 64aa618..4cecd30 100644
          assert_eq!(
              request_referrer(&request, &same_origin).as_deref(),
              Some("https://app.example/path?q=1")
+diff --git a/crates/obscura-net/src/cookies.rs b/crates/obscura-net/src/cookies.rs
+index f5e35f5..6b75fb4 100644
+--- a/crates/obscura-net/src/cookies.rs
++++ b/crates/obscura-net/src/cookies.rs
+@@ -806,6 +806,13 @@ pub fn same_site(source: &Url, target: &Url) -> bool {
+     let (Some(source_host), Some(target_host)) = (source.host_str(), target.host_str()) else {
+         return false;
+     };
++    // Public suffixes apply only to DNS names. Literal addresses are sites
++    // in their own right, even when different IPv4 hosts share final octets.
++    if !matches!(source.host(), Some(url::Host::Domain(_)))
++        || !matches!(target.host(), Some(url::Host::Domain(_)))
++    {
++        return source.host() == target.host();
++    }
+     let source_site = psl::domain_str(source_host).unwrap_or(source_host);
+     let target_site = psl::domain_str(target_host).unwrap_or(target_host);
+     source_site.eq_ignore_ascii_case(target_site)
+@@ -882,6 +889,24 @@ fn host_is_ip_address(host: &str) -> bool {
+
+ #[cfg(test)]
+ mod tests {
++    #[test]
++    fn private_onyx_literal_ip_site_classification() {
++        for (source, target, expected) in [
++            ("https://1.1.1.1/", "https://8.8.1.1/", false),
++            ("https://1.1.1.1/", "https://1.1.1.1:8443/", true),
++            ("http://1.1.1.1/", "https://1.1.1.1/", false),
++            ("https://[2001:4860::1]/", "https://[2001:4860::2]/", false),
++            ("https://[2001:4860::1]/", "https://[2001:4860::1]:8443/", true),
++            ("https://example.com/", "https://1.1.1.1/", false),
++            ("https://1.1.1.1/", "https://example.com/", false),
++            ("https://example.com/", "https://sub.example.com/", true),
++            ("https://example.com/", "https://other.test/", false),
++        ] {
++            assert_eq!(same_site(&Url::parse(source).unwrap(), &Url::parse(target).unwrap()),
++                       expected, "{source} -> {target}");
++        }
++    }
++
+     use super::*;
+
+     #[test]
 diff --git a/crates/obscura-net/src/lib.rs b/crates/obscura-net/src/lib.rs
 index 75661e5..0d7dd7d 100644
 --- a/crates/obscura-net/src/lib.rs

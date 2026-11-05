@@ -1198,34 +1198,33 @@ async def validate_mixed_retained_and_request_scoped_capacity() -> None:
 
 
 async def validate_cross_realm_navigation_ownership() -> None:
-    # Upstream build-time Rust tests also cover receiver-frame ownership and
-    # child-document loading. These CDP checks cover committed-origin and
-    # parent-navigation safety; unchanged URLs alone cannot distinguish a
-    # queued navigation from a no-op. Calling a child-owned method from the
-    # parent must select the receiver's frame, not the entered caller realm. A
-    # fresh document for every case prevents a previous virtual URL from
-    # masking a missing navigation op.
+    # Native Rust assertions cover exact pending method/body and committed
+    # origin before consumption. These CDP fixtures require actual child loads,
+    # including same-URL reloads, without moving the parent.
+    child_path = "/cross-realm-child"
+    result_path = "/cross-realm-result"
     cases = (
-        ("child.location = '/static'", "/static"),
-        ("child.document.location = '/static'", "/static"),
-        ("child.location.href = '/static'", "/static"),
-        ("child.location.assign('/static')", "/static"),
-        ("child.location.replace('/static')", "/static"),
-        ("child.document.location.replace('/static')", "/static"),
-        ("child.location.reload()", "/cross-realm-child"),
-        ("child.document.querySelector('form').requestSubmit()", "/cross-realm-child"),
+        ("child.location = '/static'", "/static", ("GET", "/static", "")),
+        ("child.document.location = '/static'", "/static", ("GET", "/static", "")),
+        ("child.location.href = '/static'", "/static", ("GET", "/static", "")),
+        ("child.location.assign('/static')", "/static", ("GET", "/static", "")),
+        ("child.location.replace('/static')", "/static", ("GET", "/static", "")),
+        ("child.document.location.replace('/static')", "/static", ("GET", "/static", "")),
+        ("child.location.reload()", child_path, ("GET", child_path, "")),
+        ("child.document.querySelector('form').requestSubmit()", child_path,
+         ("POST", result_path, "q=child+fixture")),
         ("child.document.querySelector('form').method = 'get'; "
-         "child.document.querySelector('form').requestSubmit()",
-         "/cross-realm-child"),
+         "child.document.querySelector('form').requestSubmit()", child_path,
+         ("GET", result_path + "?q=child+fixture", "")),
         ("new DOMParser().parseFromString('<html><body>inert</body></html>', "
-         "'text/html').location = '/static'", "/cross-realm-child"),
+         "'text/html').location = '/static'", child_path, None),
     )
     websocket = await connect(CDP_URL, proxy=None, additional_headers=cdp_auth_headers())
     cdp = _RawCdp(websocket)
     target_id = ""
     try:
         target_id, session_id = await create_target(cdp)
-        for expression, child_path in cases:
+        for expression, virtual_path, request in cases:
             cdp.events.clear()
             await cdp.send(
                 "Page.navigate",
@@ -1233,6 +1232,7 @@ async def validate_cross_realm_navigation_ownership() -> None:
                 session_id=session_id,
                 timeout_seconds=15,
             )
+            fixture_get("/requests/reset")
             result = await cdp.send(
                 "Runtime.evaluate",
                 {"expression": "(() => { const child = "
@@ -1243,53 +1243,30 @@ async def validate_cross_realm_navigation_ownership() -> None:
                 timeout_seconds=5,
             )
             assert "exceptionDetails" not in result, (expression, result)
-            assert result["result"].get("value") == BASE_URL + child_path, (
+            assert result["result"].get("value") == BASE_URL + virtual_path, (
                 expression, result,
             )
-            # A child Location operation stays in that child. The runtime may
-            # still be holding the pending navigation or may already have loaded
-            # the requested child document; it must never move the parent.
-            child_url = BASE_URL + "/cross-realm-child"
+            expected_requests = []
             target_url = BASE_URL + child_path
-            committed = await cdp.send(
-                "Runtime.evaluate",
-                {"expression": "document.querySelector('iframe').contentDocument.URL",
-                 "returnByValue": True},
-                session_id=session_id, timeout_seconds=5,
-            )
-            committed_url = committed["result"].get("value")
-            # Replacing or reloading the child document passes through its
-            # transient about:blank state before the fetched document is
-            # installed. The inert detached-document case stays in the child.
-            assert committed_url in {child_url, target_url, "about:blank"}, (
-                expression, committed,
-            )
-            # A child form submission is owned by the child frame. A POST may
-            # leave the child reset/pending without touching the parent, but a
-            # no-op must not pass. A GET submission must load in the child.
-            if "requestSubmit" in expression:
-                form_target = BASE_URL + "/static"
-                if "method = 'get'" in expression:
-                    target_url = form_target + "?q=child+fixture"
-                else:
-                    assert committed_url in {"about:blank", form_target}, (
-                        expression, committed,
-                    )
-                    target_url = None
-            if target_url is not None:
-                deadline = time.monotonic() + 5
-                while committed_url != target_url and time.monotonic() < deadline:
-                    await asyncio.sleep(0.05)
-                    committed = await cdp.send(
-                        "Runtime.evaluate",
-                        {"expression": "document.querySelector('iframe').contentDocument.URL",
-                         "returnByValue": True},
-                        session_id=session_id, timeout_seconds=5,
-                    )
-                    committed_url = committed["result"].get("value")
-                assert committed_url == target_url, (expression, committed)
-            # A subsequent frame-tree command observes any incorrectly queued
-            # parent move.
+            if request is not None:
+                method, path, body = request
+                expected_requests = [{"method": method, "path": path, "body": body}]
+                target_url = BASE_URL + path
+            deadline = time.monotonic() + 5
+            while True:
+                committed = await cdp.send(
+                    "Runtime.evaluate",
+                    {"expression": "document.querySelector('iframe').contentDocument.URL",
+                     "returnByValue": True},
+                    session_id=session_id, timeout_seconds=5,
+                )
+                observed = json.loads(fixture_get("/requests/observations"))
+                if committed["result"].get("value") == target_url and observed == expected_requests:
+                    break
+                assert time.monotonic() < deadline, (expression, committed, observed, expected_requests)
+                await asyncio.sleep(0.05)
+            # Flush subsequent server work before checking parent ownership and
+            # wire uniqueness. A no-op reload or POST cannot pass on URL alone.
             tree = await cdp.send(
                 "Page.getFrameTree", session_id=session_id, timeout_seconds=5,
             )
@@ -1297,6 +1274,8 @@ async def validate_cross_realm_navigation_ownership() -> None:
                 f"{BASE_URL}/cross-realm-navigation"
             ), (expression, tree)
             assert len(tree["frameTree"].get("childFrames", [])) == 1, tree
+            observed = json.loads(fixture_get("/requests/observations"))
+            assert observed == expected_requests, (expression, observed, expected_requests)
     finally:
         try:
             if target_id:

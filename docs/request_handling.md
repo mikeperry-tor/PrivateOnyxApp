@@ -152,7 +152,10 @@ Native v0.2.6 cookie handling applies host-only scope, PSL-based domain
 validation, and secure/HttpOnly write protection. Its SameSite filtering needs
 the caller's navigation context. The wrapper source patch captures the initiating
 document before changing the page URL and supplies that context for main-document
-GET and POST. Cross-site navigation excludes Strict cookies; unsafe POST also
+GET and POST. Cookies and fetch metadata share one schemeful site classifier:
+DNS hosts use the public suffix list, while IP literals require exact address
+equality regardless of port. Distinct IPs cannot become same-site because their
+trailing octets match. Cross-site navigation excludes Strict cookies; unsafe POST also
 excludes Lax cookies. Redirects preserve cross-site history even when returning
 to the initiating site, while 301/302/303 conversion to GET permits Lax cookies.
 The navigation request profile derives `Sec-Fetch-Site` from the initiator and
@@ -277,8 +280,8 @@ that produces no main Document response expires at the
 existing result-navigation deadline and discards the provider generation.
 
 Search uses `domcontentloaded` for the provider homepage and then relies on
-the shared client's homepage-form and result-DOM readiness checks described
-below. It does not use network-idle waits. Built-in `open_url` uses
+the shared client's homepage-form readiness and, where declared, result-DOM
+readiness checks described below. It does not use network-idle waits. Built-in `open_url` uses
 `OBSCURA_BROWSER_WAIT_UNTIL_WEB` (default `domcontentloaded`). Accepted values
 are the finite Obscura lifecycle values validated by the shared client.
 
@@ -294,8 +297,9 @@ setting is process-wide, so lowering it also reduces the hard navigation
 ceiling for `domcontentloaded` and `load` paths.
 
 These lifecycle boundaries do not guarantee application DOM readiness. Search
-therefore waits for the provider's form and result markers instead of
-inferring readiness from a navigation event or an idle network.
+therefore waits for the provider homepage form and, for DuckDuckGo, its
+result-marker pair; the other providers rely on the distinct-document
+completion gate and their own terminal/no-results markers at parse time.
 
 Before query entry, the shared client polls the declared homepage query control
 every 100 ms while it is absent, within the existing absolute transaction
@@ -320,10 +324,13 @@ outcome recording still receive their reserved engine-window headroom.
 The wrapper raises Obscura's populated-page ES-module active-work budget from
 three to twenty seconds. DuckDuckGo's result module graph can exceed the
 upstream default and the previous ten-second wrapper value on cold Tor
-circuits, stranding result hydration while the complete page still fits the
-30-second script deadline and the caller's 50-second attempt deadline. This is
-not an added sleep: fast module graphs return immediately, and all enclosing
-deadlines remain authoritative.
+circuits, stranding result hydration. The configured value is a cap within
+Obscura's 30-second script phase; graph loading and evaluation share that
+phase, and a host-call grace can extend a near-limit evaluation. The client's
+50-second attempt and SearXNG's 60-second engine window remain authoritative,
+including Bing's sparse second-page transaction. This is not an added sleep:
+fast module graphs return immediately. Live validation must cover the slowest
+supported Tor route rather than treating the configured value as a guarantee.
 
 Connection, target creation, attachment, and CDP domain setup share one
 absolute 45-second pre-navigation deadline. It is not a fresh 45-second

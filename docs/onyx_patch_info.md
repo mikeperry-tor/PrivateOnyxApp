@@ -286,7 +286,9 @@ binaries with the no-render `stealth` feature set:
   target-owned stealth client used by GET, preserves its cookies, proxy,
   TLS-emulation profile and pool, supplies the initiating document for
   navigation SameSite filtering, and retains cross-site redirect history for
-  cookies and fetch metadata. Upstream's redirect method changes and GET-only
+  cookies and fetch metadata. Their shared site classifier applies PSL rules
+  only to DNS hosts and exact address equality to IP literals, including for
+  subresource cookie admission. Upstream's redirect method changes and GET-only
   reset recovery remain authoritative; POST is never replayed.
   Main-document GET/POST keeps normal form referrers while honoring HTTP and
   live-DOM meta referrer policies; redirect policies cannot recover previously
@@ -325,8 +327,10 @@ Native v0.2.6 binds form submission and every document/window/global
 `location` operation to the receiver frame, including parent-to-child calls,
 and loads a child Location navigation in that child. Detached frame windows
 cannot queue a parent navigation. Pending navigation preserves the committed
-realm URL and cookie origin until commit. Selected-image fixtures cover
-top-level POST body and location-replacement behavior. See
+realm URL and cookie origin until commit. Native build assertions cover exact
+pending child URL/method/body and committed realm URLs. Selected-image fixtures
+cover top-level and child GET/POST requests, child reload and location loads,
+inert documents, and parent-navigation safety. See
 [request handling](request_handling.md).
 
 The v0.2.6 release supplies no-render stealth archives as well as render-enabled
@@ -372,7 +376,8 @@ second page.
 `duckduckgo2` uses DuckDuckGo's JavaScript-rendered No-AI search surface at
 `noai.duckduckgo.com`, not the CAPTCHA-prone HTML endpoint. Search homepages
 always use `domcontentloaded`; the shared client then waits for the homepage
-form and provider result markers instead of relying on a network-idle event.
+form. DuckDuckGo additionally polls its result markers, while the other
+providers rely on document completion instead of a network-idle event.
 The engine unwraps only recognized DuckDuckGo `/l/?uddg=...` redirects,
 decodes the destination once, and treats an unfinished deep-result preload as
 a verification failure.

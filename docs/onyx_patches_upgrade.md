@@ -788,10 +788,12 @@ Audit these current Obscura areas:
   debug test to pass without skipping it. Require parent-to-child location
   setters, `assign`, `replace`, `reload`, and child GET/POST form submission in
   the selected-image gate, with a subsequent CDP barrier proving the parent did
-  not navigate. Location navigations must load in the child; a child form
-  submission remains child-owned and may remain pending without moving the
-  parent. A no-op child operation must fail those assertions even though it
-  leaves both CDP URLs unchanged. Re-audit native commit-time realm URL/cookie-origin protection and
+  not navigate. Location and form navigations must load in the child. Fixture
+  observations must prove the exact child GET/POST URL and body, one request
+  for reload, and no request for an inert document. Preserve native assertions
+  of the exact pending child URL/method/body and unchanged committed realm
+  URL before consumption. A no-op child operation must fail those assertions
+  even though it leaves both CDP URLs unchanged. Re-audit native commit-time realm URL/cookie-origin protection and
   the detached-window inertness boundary documented in
   [request handling](request_handling.md);
 - process-wide classic-script compilation-cache partitioning and lifetime:
@@ -2173,6 +2175,11 @@ locked stealth build, and exact patch-series application; then run
 `make obscura-build`. Native cookie and CDP cookie-parameter regressions must
 pass alongside the wrapper tests; preserve the upstream host-only, PSL,
 SameSite, and secure-cookie rules when rebasing stealth POST.
+Require shared cookie/Fetch-Site classification for literal IPs: distinct IPv4
+addresses with equal trailing octets and DNS/IP pairs are cross-site; the same
+IPv4 or IPv6 address across ports is same-site only when the scheme matches.
+Cover Strict/Lax admission for unsafe POST, safe top-level GET, subresources,
+and redirect history as well as the header value.
 Rebuild the derived SearXNG image only when its embedded shared client changed,
 then run `make check`, `make test-obscura-image`, and
 `make test-patch-images`. The image test must observe Obscura's full

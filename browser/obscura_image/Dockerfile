@@ -53,17 +53,21 @@ WORKDIR /build
 RUN set -eu; \
     run_gate() { \
         mode="$1"; package="$2"; shift 2; \
-        if [ "$mode" = stealth ]; then \
-            cargo test --locked --no-default-features --features stealth \
-                -p "$package" "$@" -- --list | grep -q ': test$'; \
-            cargo test --locked --no-default-features --features stealth \
-                -p "$package" "$@"; \
-        else \
-            cargo test --locked --no-default-features \
-                -p "$package" "$@" -- --list | grep -q ': test$'; \
-            cargo test --locked --no-default-features \
-                -p "$package" "$@"; \
+        case "$mode" in \
+            stealth) set -- --features stealth "$@" ;; \
+            plain) ;; \
+            *) echo "unknown test mode: $mode" >&2; return 1 ;; \
+        esac; \
+        set -- cargo test --locked --no-default-features -p "$package" "$@"; \
+        if ! listing=$("$@" -- --list); then \
+            printf '%s\n' "$listing"; return 1; \
         fi; \
+        printf '%s\n' "$listing" | grep ': test$' >/dev/null; \
+        if ! output=$("$@"); then \
+            printf '%s\n' "$output"; return 1; \
+        fi; \
+        printf '%s\n' "$output"; \
+        printf '%s\n' "$output" | grep -E 'test result: ok\. [1-9][0-9]* passed' >/dev/null; \
     }; \
     run_gate stealth obscura-net private_onyx_stealth_; \
     run_gate stealth obscura-net stealth_resolver_; \
@@ -79,6 +83,8 @@ RUN set -eu; \
         repeated_fetch_clone_cancellation cancelling_all_fetch_clones; do \
         run_gate stealth obscura-js "$check"; \
     done; \
+    run_gate stealth obscura-js \
+        fetch_abort_accepts_cross_realm_signals_but_rejects_forged_prototypes; \
     run_gate stealth obscura-browser private_onyx_; \
     run_gate stealth obscura-browser \
         frame_location_navigation_loads_the_child_and_ignores_detached_windows; \
