@@ -1,5 +1,5 @@
 ARG OBSCURA_BUILDER_IMAGE=docker.io/library/rust:1.94.0-bookworm@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f
-ARG OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.5@sha256:354c3d2a0fa2dd2939debe6903aa26c35d121329245dfa42aa7d1c292a209814
+ARG OBSCURA_UPSTREAM_IMAGE=docker.io/h4ckf0r0day/obscura:0.2.6@sha256:76522dd288b0c0186b360fd6e6133ef55908e1fc3b9c4b7ad6240bf8682d998c
 
 FROM ${OBSCURA_BUILDER_IMAGE} AS builder
 
@@ -29,19 +29,17 @@ RUN set -eu; \
         --ref "${OBSCURA_SOURCE_REF}" \
         --sha256 "${OBSCURA_SOURCE_SHA256}" \
         --output-dir /build \
-    && test "$(cat /wrapper/patches/series)" = "$(printf '%s\n%s\n%s\n%s\n%s' \
+    && test "$(cat /wrapper/patches/series)" = "$(printf '%s\n%s\n%s\n%s' \
         0001-stealth-native-post.patch \
         0002-target-fingerprint-seed.patch \
         0003-search-runtime-compatibility.patch \
-        0004-explicit-navigation-realm.patch \
-        0005-connection-storage-isolation.patch)" \
+        0004-connection-storage-isolation.patch)" \
     && test "$(find /wrapper/patches -maxdepth 1 -type f -name '*.patch' \
-        -exec basename {} \; | LC_ALL=C sort)" = "$(printf '%s\n%s\n%s\n%s\n%s' \
+        -exec basename {} \; | LC_ALL=C sort)" = "$(printf '%s\n%s\n%s\n%s' \
         0001-stealth-native-post.patch \
         0002-target-fingerprint-seed.patch \
         0003-search-runtime-compatibility.patch \
-        0004-explicit-navigation-realm.patch \
-        0005-connection-storage-isolation.patch)" \
+        0004-connection-storage-isolation.patch)" \
     && while IFS= read -r patch; do \
         git -C /build apply --check "/wrapper/patches/${patch}"; \
         git -C /build apply "/wrapper/patches/${patch}"; \

@@ -22,7 +22,7 @@ apply in every selected mode.
 | optional `tor` | `tor-ingress` only when onion ingress is enabled; private control tmpfs and optional SOCKS runtime volume are mounts, not networks | dedicated `tor-uplink`; applications never join it |
 | optional `tor-frontend-gateway` | spans only `tor-ingress` and `onyx-frontend`, with fixed nginx forwarding | none |
 
-CDP is powerful browser authority. The derived Obscura v0.2.5 runtime gives
+CDP is powerful browser authority. The derived Obscura v0.2.6 runtime gives
 every WebSocket its own browser context, HTTP client, cookie jar, targets,
 headers, User-Agent state, renderer and socket-I/O threads, and V8 isolates. Mutable page state,
 HTTP caches, and cookies are isolated across request connections. A process-wide

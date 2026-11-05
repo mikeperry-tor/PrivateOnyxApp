@@ -712,13 +712,12 @@ async def validate_patched_search_runtime() -> None:
             "document.querySelector('form').action = "
             "'https://policy-bypass.invalid/search-get-result',true)"
         )
-        try:
-            await form_call_result("validate", "fixture")
-        except ObscuraClientError as exc:
-            assert exc.category is FetchFailure.PROTOCOL, exc.category
-            assert exc.stage == "cdp-command", exc.stage
-        else:
-            raise AssertionError("prototype tampering bypassed search form policy")
+        tampered = await form_call_result("validate", "fixture")
+        exception = tampered.get("exceptionDetails") or {}
+        description = (exception.get("exception") or {}).get("description", "")
+        assert "form-policy" in description, (
+            "prototype tampering bypassed search form policy", tampered,
+        )
 
         # Execute the actual wrapper function in V8: absence is pending, but
         # ambiguity and policy changes must never turn into readiness retries.
@@ -1179,15 +1178,16 @@ async def validate_mixed_retained_and_request_scoped_capacity() -> None:
 
 
 async def validate_cross_realm_navigation_ownership() -> None:
-    # The build-time Rust test also inspects the child's pending URL/method/body.
-    # These CDP checks cover committed-origin and parent-navigation safety;
-    # unchanged URLs alone cannot distinguish a queued navigation from a no-op.
-    # Calling a child-owned method from the parent must select the receiver's
-    # frame, not the entered caller realm. A fresh document for every case
-    # prevents a previous virtual URL from masking a missing navigation op.
+    # Upstream build-time Rust tests also cover receiver-frame ownership and
+    # child-document loading. These CDP checks cover committed-origin and
+    # parent-navigation safety; unchanged URLs alone cannot distinguish a
+    # queued navigation from a no-op. Calling a child-owned method from the
+    # parent must select the receiver's frame, not the entered caller realm. A
+    # fresh document for every case prevents a previous virtual URL from
+    # masking a missing navigation op.
     cases = (
         ("child.location = '/static'", "/static"),
-        ("child.document.location = '/static'", "/cross-realm-child"),
+        ("child.document.location = '/static'", "/static"),
         ("child.location.href = '/static'", "/static"),
         ("child.location.assign('/static')", "/static"),
         ("child.location.replace('/static')", "/static"),
@@ -1226,17 +1226,45 @@ async def validate_cross_realm_navigation_ownership() -> None:
             assert result["result"].get("value") == BASE_URL + child_path, (
                 expression, result,
             )
-            # Pending navigation must not change the committed document origin.
-            # v0.2.5 keeps cookie authority on the loaded document until commit.
+            # A child Location operation stays in that child. The runtime may
+            # still be holding the pending navigation or may already have loaded
+            # the requested child document; it must never move the parent.
+            child_url = BASE_URL + "/cross-realm-child"
+            target_url = BASE_URL + child_path
             committed = await cdp.send(
                 "Runtime.evaluate",
                 {"expression": "document.querySelector('iframe').contentDocument.URL",
                  "returnByValue": True},
                 session_id=session_id, timeout_seconds=5,
             )
-            assert committed["result"].get("value") == BASE_URL + "/cross-realm-child"
-            # The command reply can precede navigation processing. A subsequent
-            # frame-tree command observes any incorrectly queued parent move.
+            committed_url = committed["result"].get("value")
+            # Replacing or reloading the child document passes through its
+            # transient about:blank state before the fetched document is
+            # installed. The inert detached-document case stays in the child.
+            assert committed_url in {child_url, target_url, "about:blank"}, (
+                expression, committed,
+            )
+            # A child form submission is owned by the child frame; it may
+            # replace that child document or leave it pending without touching
+            # the parent. Location navigations must load in the child.
+            if "requestSubmit" in expression:
+                assert committed_url in {child_url, target_url, "about:blank"}, (
+                    expression, committed,
+                )
+            else:
+                deadline = time.monotonic() + 5
+                while committed_url != target_url and time.monotonic() < deadline:
+                    await asyncio.sleep(0.05)
+                    committed = await cdp.send(
+                        "Runtime.evaluate",
+                        {"expression": "document.querySelector('iframe').contentDocument.URL",
+                         "returnByValue": True},
+                        session_id=session_id, timeout_seconds=5,
+                    )
+                    committed_url = committed["result"].get("value")
+                assert committed_url == target_url, (expression, committed)
+            # A subsequent frame-tree command observes any incorrectly queued
+            # parent move.
             tree = await cdp.send(
                 "Page.getFrameTree", session_id=session_id, timeout_seconds=5,
             )

@@ -118,7 +118,7 @@ connection paths send it as an Authorization header, never in a URL. Missing
 or malformed credentials fail closed; browser-origin handshakes are rejected.
 The token grants shared browser control, not per-provider or per-user authority.
 
-The derived Obscura v0.2.5 runtime gives every WebSocket connection its own
+The derived Obscura v0.2.6 runtime gives every WebSocket connection its own
 browser context, HTTP client, cookie jar, targets, headers, User-Agent state, renderer and socket-I/O
 threads, and V8 isolates. A process-wide classic-script compilation cache is
 an exception: it retains source and compiled bytes across connection closure,
@@ -148,7 +148,7 @@ the owning provider generation and disappear when its connection closes;
 fresh `open_url` connections do not inherit them. No `--storage-dir` is enabled.
 IndexedDB commits transactions atomically and rolls back aborted writes.
 
-Native v0.2.5 cookie handling applies host-only scope, PSL-based domain
+Native v0.2.6 cookie handling applies host-only scope, PSL-based domain
 validation, and secure/HttpOnly write protection. Its SameSite filtering needs
 the caller's navigation context. The wrapper source patch captures the initiating
 document before changing the page URL and supplies that context for main-document
@@ -189,15 +189,17 @@ receive HTTP 503 instead of entering a server queue as a fail-closed guard
 against a changed worker/process model or another unexpected CDP caller; normal
 Onyx tool execution is expected to remain within the 15-slot composition.
 
-In the stealth-feature build, upstream v0.2.5 accepts
-`Network.setExtraHTTPHeaders` and `Network.setUserAgentOverride` but applies
-them to the ordinary context HTTP client while navigation uses its separate
-wreq client, so those overrides do not reach the wire. The wrapper does not
-call either command; its isolation contract therefore covers the cookie jar,
-targets, contexts, V8 state, and connection cleanup actually used by this
-stack. Re-audit this upstream split before depending on either override.
+In the stealth-feature build, CDP `Network.setExtraHTTPHeaders` and
+`Network.setUserAgentOverride` still update only the ordinary context HTTP
+client, while navigation uses the separate wreq client. A context or CLI
+User-Agent override is passed to that stealth client when it is created. The
+wrapper calls none of these commands; its isolation contract therefore covers
+the cookie jar, targets, contexts, V8 state, and connection cleanup actually
+used by this stack. Re-audit this upstream split before depending on either
+CDP override.
 
-Obscura v0.2.5 supplies native SVG interfaces, User Timing, fetch/XHR
+Obscura v0.2.6 supplies native SVG interfaces, writable Window named-element
+properties, User Timing, and supplied-`Response` stream bodies, fetch/XHR
 cancellation, and frame teardown. The compatibility patch extends native
 `PerformanceEntry` with resource/navigation timing constructors and suppresses
 `nomodule` scripts; it does not replace native marks, measures, or observers.
@@ -210,14 +212,14 @@ provider hydration can depend on frame messaging. Native `srcdoc` documents
 inherit the creator's base URL and honor sandbox restrictions; their author
 scripts finish before the iframe load event. The fingerprint patch seeds both
 fetched frame realms and synchronously created blank/`srcdoc` realms before
-initialization. The explicit navigation-realm
-patch binds form submission and `location` operations to the receiver's frame,
-including when the parent calls a child's method or setter. Native caller-realm
-inference would move the parent instead. Pending navigation preserves the
-committed realm URL and cookie origin until commit. Child navigation records
-the request on that frame without moving the parent, but the native runtime
-does not consume the child's pending navigation to load a new document. The
-search contract requires main-frame forms and results. Its stealth transport
+initialization. Native behavior binds form submission and `location`
+operations to the receiver's frame, including when the parent calls a child's
+method or setter, so a parent cannot navigate itself by operating on a child.
+A child Location navigation is consumed by that frame: its URL loads in the
+child while the top document keeps its own URL and title. Detached frame
+windows cannot queue a parent navigation. Pending navigation preserves the
+committed realm URL and cookie origin until commit. The search contract
+requires main-frame forms and results. Its stealth transport
 also applies the upstream DNS SSRF resolver guard and redirect validation,
 including embedded-IPv4 IPv6, CGNAT, and special-purpose address denial. The
 `--allow-private-network` setting reaches both URL validation and the stealth
@@ -279,9 +281,12 @@ JavaScript result payloads have time to hydrate after the page load event.
 Built-in `open_url` uses `OBSCURA_BROWSER_WAIT_UNTIL_WEB` (default
 `domcontentloaded`). Accepted values are the finite Obscura lifecycle values
 validated by the shared client. Network-idle settling looks for 500 ms with
-at most two active requests (`networkidle2`) or none (`networkidle0`), but
-returns after five seconds even if that condition is unmet. These lifecycle
-boundaries do not guarantee application DOM readiness. Lowering the search wait to
+at most two active requests (`networkidle2`) or none (`networkidle0`). It does
+not report success on a fixed five-second cutoff: the navigation continues
+until the page's `OBSCURA_NAV_TIMEOUT_MS` deadline (90 seconds here) and fails
+if requests remain active, so the caller's shorter search or `open_url`
+attempt deadline normally bounds the wait first. These lifecycle boundaries
+do not guarantee application DOM readiness. Lowering the search wait to
 `load` or `domcontentloaded` can capture DuckDuckGo No-AI's shell before its
 organic rows exist; `networkidle0` waits more strictly and can add substantial
 latency without proving that application JavaScript has committed its result
@@ -784,7 +789,7 @@ standard `application/x-www-form-urlencoded` default; any explicit different
 encoding remains a policy failure.
 
 Instant query entry is the default. It uses the control prototype's native
-value setter followed by one bubbling `input` and `change` event. Obscura v0.2.5
+value setter followed by one bubbling `input` and `change` event. Obscura v0.2.6
 also supports native `Input.insertText` and Playwright label-based `fill()`.
 The wrapper retains its atomic instant-entry form validation and explicit
 change event; the CDP command alone neither enforces that policy nor emits
@@ -999,16 +1004,17 @@ for wreq/BoringSSL TLS fingerprint impersonation and for the target-scoped
 fingerprint seed, stealth-native form POST, and focused provider JavaScript
 runtime-compatibility contracts. The stack
 consumes DOM and response-body CDP surfaces, not screenshots, screencasts, or PDF
-export, so it does not compile the v0.2.5 raster renderer or incur its image,
+export, so it does not compile the v0.2.6 raster renderer or incur its image,
 font, layout, and capture resource work. JavaScript, DOM, module, charset, and
 compressed-stealth-response improvements remain present in the no-render
 build.
-The explicit navigation-realm patch covers form GET/POST plus document,
-window, and global `location` assignment, `href`, `assign()`, `reload()`, and
-`replace()`. Startpage's Anubis proof-pass navigation depends on
-`location.replace()` and is part of the selected-image and live-provider gates.
-The patch removes the submitted URL and body from Obscura's JS-triggered
-main-navigation diagnostics so search queries are not written there. Obscura
+Native v0.2.6 binds form GET/POST plus document, window, and global `location`
+assignment, `href`, `assign()`, `reload()`, and `replace()` to the receiver
+frame, and loads a child Location navigation in that child. Startpage's Anubis
+proof-pass navigation depends on `location.replace()` and is part of the
+selected-image and live-provider gates. The native runtime removes the
+submitted URL and body from its JS-triggered main-navigation diagnostics so
+search queries are not written there. Obscura
 does not offer equivalent end-to-end redaction for every upstream subresource
 diagnostic and may still log other full URLs. Treat its logs as private
 browsing data.

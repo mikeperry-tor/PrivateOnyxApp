@@ -276,9 +276,9 @@ retained-body, deadline, redaction, and cleanup contracts directly. Tagged-image
 validation separately proves Playwright's public page-session attachment path.
 
 The Obscura image is built from the digest-verified archive for exact commit
-`bd9529418b7fa975b50eabeac415cfaaa865a588`, using a digest-pinned Rust/Debian
+`f3765e183b2570e7532519f1cdabf4354e911322`, using a digest-pinned Rust/Debian
 builder and the upstream locked dependency graph. The build applies exactly
-five ordered patches with `git apply --check` before compiling both runtime
+four ordered patches with `git apply --check` before compiling both runtime
 binaries with the no-render `stealth` feature set:
 
 - `0001-stealth-native-post.patch` routes native form POST through the
@@ -306,29 +306,11 @@ binaries with the no-render `stealth` feature set:
   constructors as subclasses of native `PerformanceEntry`, preserving native
   User Timing marks, measures, and observers, and suppresses
   parser-discovered and dynamic `nomodule` scripts in the module-capable runtime.
-  Native SVG interfaces, including `SVGAElement`, and writable Window named
-  properties need no wrapper implementation. Native `Response.body` supplies
-  the readable stream used by provider hydration. Selected-image regressions
-  cover these native surfaces and User Timing alongside the patched hierarchy.
-- `0004-explicit-navigation-realm.patch` passes the receiver's bootstrap frame
-  ID into form GET/POST and every document/window/global `location` operation.
-  Native v0.2.5 instead infers the entered caller realm, which incorrectly
-  navigates the parent when it calls a child's location method or submits the
-  child's form. The patch preserves top-level submission and binds cross-realm
-  navigation to the receiver. Selected-image tests cover location setters,
-  `assign`, `replace`, `reload`, and child GET/POST submission from the parent.
-  Build-time Rust tests additionally assert the child's exact pending URL,
-  method, and body, the unchanged committed document URL, and the absence of
-  pending parent navigation; unchanged CDP URLs alone cannot prove submission.
-  The patch also marks synchronous initial iframe creation as reentrant:
-  its JavaScript initializer invokes native realm-registration operations for
-  blank and `srcdoc` documents. Detached documents retain native inert location
-  behavior; setting their location cannot queue a page navigation.
-  The native cross-realm AbortSignal regression runs in the debug build gate,
-  where deno_core enforces this contract. The gate additionally covers native
-  fetch cancellation/streaming, compilation-cache page-state isolation, and
-  shared-watchdog cancellation and recovery.
-- `0005-connection-storage-isolation.patch` creates each CDP connection's
+  Native SVG interfaces, including `SVGAElement`, writable Window named-element
+  properties, and supplied-`Response` stream bodies need no wrapper
+  implementation. Selected-image regressions cover these native surfaces and
+  User Timing alongside the patched hierarchy.
+- `0004-connection-storage-isolation.patch` creates each CDP connection's
   default context as a native nonpersistent isolated copy. Native persistent
   copies share localStorage and IndexedDB backing stores, including without a
   storage directory. Disposable copies retain native per-context storage
@@ -339,15 +321,17 @@ binaries with the no-render `stealth` feature set:
   connection isolation, replacement disposal, origin separation, parking
   continuity, and transaction rollback.
 
-Pending navigation preserves the committed realm URL and cookie origin until
-commit. Pending child-frame navigation does not load a new child document; see
-[request handling](request_handling.md). Receiver ownership and child-document
-loading are separate contracts. The existing top-level POST-body and
-location-replacement regression tests remain in the compatibility patch.
+Native v0.2.6 binds form submission and every document/window/global
+`location` operation to the receiver frame, including parent-to-child calls,
+and loads a child Location navigation in that child. Detached frame windows
+cannot queue a parent navigation. Pending navigation preserves the committed
+realm URL and cookie origin until commit. The existing top-level POST-body and
+location-replacement regression tests remain in the compatibility patch. See
+[request handling](request_handling.md).
 
-The v0.2.5 release supplies no-render stealth archives as well as render-enabled
+The v0.2.6 release supplies no-render stealth archives as well as render-enabled
 archives; its container image builds with rendering and without stealth.
-The wrapper needs a source build for the five patches above. This stack
+The wrapper needs a source build for the four patches above. This stack
 does not expose screenshot, screencast, or PDF-export features. Its derived
 binary omits rendering so browser searches and direct `open_url` do not add
 renderer-only image, font, layout, or capture work. The no-render feature set
@@ -1445,7 +1429,7 @@ background supervisor, so neither setting creates a bot process there.
 
 The base wrapper adds the hardened single-process Obscura service, direct
 control networks, API-only CDP gateway, derived SearXNG service, distinct fixed
-egress bridges, and shared public/host final-hop policies. Obscura v0.2.5
+egress bridges, and shared public/host final-hop policies. Obscura v0.2.6
 isolates every live WebSocket browser context and rejects connections above the
 aggregate capacity of 15. Direct `open_url` connections remain request-scoped;
 each SearXNG provider instead lazily retains one connection for one hour after

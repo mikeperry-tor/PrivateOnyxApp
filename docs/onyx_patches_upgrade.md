@@ -760,7 +760,7 @@ Audit these current Obscura areas:
   context-owned state. Parking must still stop provider autonomous work;
   retain the native IndexedDB transaction/quota/teardown and Web Storage
   origin/quota debug-build gates alongside these selected-image checks;
-  `0005-connection-storage-isolation.patch` selects native nonpersistent copies
+  `0004-connection-storage-isolation.patch` selects native nonpersistent copies
   for the connection default context. Remove it only when upstream CDP
   connections isolate localStorage and IndexedDB without sharing the mutable
   startup template, and the selected-image storage gates pass unpatched;
@@ -770,33 +770,29 @@ Audit these current Obscura areas:
 - native writable shadowing of legacy Window named-element properties; the
   `PerformanceEntry`/`PerformanceResourceTiming`/`PerformanceNavigationTiming`
   constructor hierarchy extending native `PerformanceEntry` without replacing
-  User Timing marks, measures, or observers; native `SVGAElement` and its
-  SVG-anchor wrapper; and module-capable `nomodule` suppression for
-  parser-discovered and dynamic scripts. Remove
-  `0003-search-runtime-compatibility.patch` only when the tagged upstream runtime
-  provides the timing, SVG, and nomodule contracts and the focused
-  provider fixtures pass without it. Native v0.2.5 `Response.body` must continue
-  to pass the retained `pipeThrough()` regression without a wrapper implementation;
+  User Timing marks, measures, or observers; native `SVGAElement`; and
+  module-capable `nomodule` suppression for parser-discovered and dynamic
+  scripts. Remove `0003-search-runtime-compatibility.patch` only when the
+  tagged upstream runtime provides the timing and nomodule contracts and the
+  focused provider fixtures pass without it. Native `Response.body` must
+  continue to pass the retained `pipeThrough()` regression without a wrapper
+  implementation;
 - explicit main- versus child-frame ownership for script-triggered navigation,
   including a top-level `requestSubmit()` POST with its encoded form body and
   every document/window/global `location` navigation entry point. Require a
   top-level `location.replace()` regression because the Startpage Anubis pass
-  uses it.
-  Keep `0004-explicit-navigation-realm.patch` until upstream binds navigation to
-  the receiver's frame rather than inferring the entered caller realm and marks
-  synchronous initial iframe creation as reentrant. Require the native
+  uses it. Native v0.2.6 binds cross-realm navigation to the receiver frame and
+  loads a child Location navigation in that child rather than the parent.
+  Require the native
   `fetch_abort_accepts_cross_realm_signals_but_rejects_forged_prototypes`
-  debug test to pass without skipping it: iframe initialization calls back into
-  native realm registration. Require
-  parent-to-child location setters, `assign`, `replace`, `reload`, and child
-  GET/POST form submission in the selected-image gate, with a subsequent CDP
-  barrier proving the parent did not navigate. Also require build-time assertions
-  on the child's exact pending URL/method/body and unchanged committed URL,
-  with no parent pending navigation. A no-op child operation must fail those
-  assertions even though it leaves both CDP URLs unchanged. Ordinary top-level
-  and child-to-self tests alone do not establish equivalence. Re-audit
-  native commit-time realm URL/cookie-origin protection and the separate
-  pending-child-navigation limitation documented in
+  debug test to pass without skipping it. Require parent-to-child location
+  setters, `assign`, `replace`, `reload`, and child GET/POST form submission in
+  the selected-image gate, with a subsequent CDP barrier proving the parent did
+  not navigate. Location navigations must load in the child; a child form
+  submission remains child-owned and may remain pending without moving the
+  parent. A no-op child operation must fail those assertions even though it
+  leaves both CDP URLs unchanged. Re-audit native commit-time realm URL/cookie-origin protection and
+  the detached-window inertness boundary documented in
   [request handling](request_handling.md);
 - process-wide classic-script compilation-cache partitioning and lifetime:
   retain the native `classic_code_cache_reuses_compilation_not_page_state`
@@ -814,7 +810,12 @@ Audit these current Obscura areas:
 - caller-specific absolute attempt deadlines covering navigation, event wait,
   DOM commands, body-stream creation and reads; exact post-navigation expiry
   stages; and the five-second-before-outer-deadline Onyx partial collector that
-  finalizes queued work, preserves ordered completions, and does not retry;
+  finalizes queued work, preserves ordered completions, and does not retry.
+  A network-idle navigation now runs to the configured page deadline
+  (`OBSCURA_NAV_TIMEOUT_MS`, 90 seconds here) and fails if requests remain
+  active instead of returning success after a fixed five-second cutoff. Keep
+  the search and `open_url` attempt deadlines shorter than that page deadline
+  and retain typed timeout behavior;
 - the common `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` ceiling on both retained
   main-resource body and serialized rendered DOM, while SearXNG retains its
   independent fixed 20 MiB search-DOM ceiling;

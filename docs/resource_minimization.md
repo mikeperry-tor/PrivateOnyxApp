@@ -354,7 +354,7 @@ are owned by [internal network security](internal_network_security.md#docker-gat
   Bing's pagination cooldown uses an asynchronous wait on that loop, within
   the existing browser deadline; it neither blocks other providers nor
   allocates a worker thread for the delay.
-- The derived Obscura v0.2.5 binary selects the upstream release variant's
+- The derived Obscura v0.2.6 binary selects the upstream release variant's
   explicit `--no-default-features --features stealth` no-render feature set.
   Search and direct `open_url` consume DOM and response-body CDP surfaces, so
   screenshot, screencast, PDF-export, raster layout, image/font capture, and
@@ -377,7 +377,7 @@ are owned by [internal network security](internal_network_security.md#docker-gat
   connections remain live, coordinated to at most once per five seconds while
   busy; the last connection always permits trimming. This needs no wrapper
   recycler or periodic timer and does not release live provider storage.
-- The native v0.2.5 runtime clamps deeply nested timers and caps the fetched-URL
+- The native v0.2.6 runtime clamps deeply nested timers and caps the fetched-URL
   bookkeeping list at 16,384 entries. V8 deadlines use one lazily started,
   process-long watchdog thread; dropping a command's watchdog token disarms
   its slot, rather than terminating a per-command thread.
