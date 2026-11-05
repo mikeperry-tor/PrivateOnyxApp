@@ -10,17 +10,17 @@
 > [Request handling](../../request_handling.md) until this plan is implemented,
 > validated, documented, and moved to `docs/plans/implemented/`.
 >
-> **Feasibility with v0.2.5: conditional.** The design is technically feasible
+> **Feasibility with v0.2.6: conditional.** The design is technically feasible
 > through the verified-source image pipeline. It requires the
 > lossless-cookie wrapper patch and black-box gate described below, plus
 > acceptance of the separate service-global/non-per-user privacy limitation.
 >
 > Do not enable the Obscura part of this plan against the currently selected
-> image. Obscura v0.2.5 preserves host-only URL-based CDP imports, validates
+> image. Obscura v0.2.6 preserves host-only URL-based CDP imports, validates
 > domains with a PSL, and distinguishes an explicit exact-origin Domain cookie.
 > CDP export still omits host-only scope and partition provenance. Re-importing
 > an exported host-only cookie with its domain can widen it to subdomains.
-> None of the five current wrapper patches changes that path. Implementation
+> None of the four current wrapper patches changes that path. Implementation
 > requires a separately reviewed lossless-cookie patch and capability gate.
 
 ## Goal
@@ -107,7 +107,7 @@ specified below.
 
 | Component | Consulted version | Why it matters for this plan |
 | --- | --- | --- |
-| Obscura | Derived v0.2.5 image; `reference_repos/obscura` at `v0.2.5`; five wrapper patches | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, context-scoped cookie clearing, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. The current patches preserve stealth GET/POST cookie-jar identity, target fingerprint state, and search-runtime compatibility; navigation ownership uses explicit receiver frame IDs. The patches do not change cookie serialization or CDP transfer. |
+| Obscura | Derived v0.2.6 image; `reference_repos/obscura` at `v0.2.6`; four wrapper patches | Owns per-WebSocket state isolation, the fifteen-connection cap, CDP cookie import/export, context-scoped cookie clearing, cookie-domain validation, target lifecycle, and optional storage persistence. Its lossy host-only round trip is the principal implementation blocker. The current patches preserve stealth GET/POST cookie-jar identity, target fingerprint state, and search-runtime compatibility; native v0.2.6 binds navigation to the receiver frame and loads child Location navigations in that child. The patches do not change cookie serialization or CDP transfer. |
 | Onyx application | `ONYX_IMAGE_TAG=v4.8.8`; matching `reference_repos/onyx` checkout | Owns `open_url()` orchestration, the stock Requests-first/Playwright-fallback flow, the five-worker stock crawler, the 120-second tool deadline, and the runtime symbols wrapped by both Onyx patches. |
 | Onyx crawler libraries | Requests `2.33.0`, Playwright `1.58.0`, and `publicsuffix2` `2.20191221` in the Onyx `uv.lock` | Determine Requests cookie-jar metadata, Chromium context cookie conversion, and the parser available to runtime patches. The old parser package's implicit PSL data is not accepted as the shared current snapshot proposed here. |
 | Egress identity components | `MYST_IMAGE=local/private-onyx-myst:74d144d4261a-20260812` and `TOR_BASE_IMAGE=docker.io/dockurr/tor:0.4.9.13@sha256:1ada8797bf79181fc993befa5e9a74242e2208195c87f8f41007e735cd5884df` | Myst reconnects and Tor circuit/exit changes can separate a retained cookie from the public IP that established it. Neither currently supplies an authoritative route-generation signal to the cookie store, so this plan deliberately relies on the fixed one-hour ceiling instead of heuristic route coupling. |
@@ -144,9 +144,9 @@ Those capabilities are enough to inject a cookie snapshot into one isolated
 navigation and extract its final cookie state. They are not enough to persist
 that state safely between connections.
 
-### Obscura v0.2.5 feasibility
+### Obscura v0.2.6 feasibility
 
-The v0.2.5 cookie-transfer contract is owned by:
+The v0.2.6 cookie-transfer contract is owned by:
 
 - `crates/obscura-net/src/cookies.rs`;
 - `crates/obscura-cdp/src/cookie_params.rs`; and
@@ -165,11 +165,11 @@ CDP imports as deletion; omits expired entries from export; and implements
 context-scoped `Storage.clearCookies`. These contracts require coverage but
 do not make the export/import representation lossless.
 
-Of the five selected wrapper patches, patch 0001 keeps native stealth GET and
+Of the four selected wrapper patches, patch 0001 keeps native stealth GET and
 POST on the same target cookie jar during one navigation. Patches 0002 and 0003
 own fingerprint stability and search-page runtime compatibility; patch 0004
-binds navigation to the receiver's frame. Patch 0005 gives each connection
-native nonpersistent isolated storage. None changes
+gives each connection native nonpersistent isolated storage. Native navigation
+binds form submission and location operations to the receiver's frame. None changes
 `CookieInfo`, `Network.getCookies`, `Network.setCookies`, or domain validation.
 
 This plan requires one narrow Obscura cookie-transfer patch that preserves an
@@ -181,13 +181,14 @@ its pinned PSL policy across both transports before retention. This
 is a security-critical patch and permanent upgrade obligation. Until it passes
 the gate, the feature remains deferred.
 
-### Native v0.2.5 support and validation boundary
+### Native v0.2.6 support and validation boundary
 
-The selected source is `bd9529418b7fa975b50eabeac415cfaaa865a588`.
+The selected source is `f3765e183b2570e7532519f1cdabf4354e911322`.
 Its CDP execution contexts belong to their sessions, evaluation handles survive
 tab switches, and target closure detaches the actual attached sessions. The
-explicit navigation-realm patch preserves receiver ownership for form
-submission and location operations, including cross-realm calls. The current
+native frame navigation preserves receiver ownership for form submission and
+location operations, including cross-realm calls, and loads a child Location
+navigation in that child. The current
 navigation contract is documented in [Request handling](../../request_handling.md).
 These capabilities support reliable isolated attempts; they do not supply a
 lossless cookie transfer representation.
@@ -787,7 +788,7 @@ Do the work in these bounded phases. Stop if any gate fails.
      partitioned cookies for exclusion.
    - Run it against the selected Obscura image.
    - Add the narrow, reviewed lossless-cookie patch through
-     `browser/obscura_image/patches/series`, rebuild the derived v0.2.5 image,
+     `browser/obscura_image/patches/series`, rebuild the derived v0.2.6 image,
      and require the black-box gate to pass. Never patch
      `reference_repos/obscura/` or waive a failed gate.
 2. **Store**

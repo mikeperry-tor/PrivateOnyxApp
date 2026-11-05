@@ -1,8 +1,8 @@
 diff --git a/crates/obscura-cdp/src/server.rs b/crates/obscura-cdp/src/server.rs
-index 93fd8f8..611719e 100644
+index 009ee81..1001a9f 100644
 --- a/crates/obscura-cdp/src/server.rs
 +++ b/crates/obscura-cdp/src/server.rs
-@@ -827,7 +827,9 @@ fn run_connection(
+@@ -834,7 +834,9 @@ fn run_connection(
          .spawn(move || {
              let mut slot_guard = SlotGuard(Some(slot));
              let default_context = Arc::new(

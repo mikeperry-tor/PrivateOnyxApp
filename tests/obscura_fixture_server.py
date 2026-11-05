@@ -26,6 +26,7 @@ _CAPACITY_ACTIVE = 0
 _CONNECTION_IDS: dict[int, int] = {}
 _NEXT_CONNECTION_ID = 0
 _NAVIGATION_REQUESTS: list[dict[str, str]] = []
+_REQUEST_OBSERVATIONS: list[dict[str, str]] = []
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -33,6 +34,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
+
+    def _observe_request(self, body: bytes = b"") -> bool:
+        """Count wire requests independently of Obscura's CDP loader aliases."""
+        path = urlsplit(self.path).path
+        if path == "/requests/reset":
+            with _COUNTS_LOCK:
+                _REQUEST_OBSERVATIONS.clear()
+            self._send(b"ok", content_type="text/plain")
+            return True
+        if path == "/requests/observations":
+            with _COUNTS_LOCK:
+                data = json.dumps(_REQUEST_OBSERVATIONS).encode()
+            self._send(data, content_type="application/json")
+            return True
+        with _COUNTS_LOCK:
+            _REQUEST_OBSERVATIONS.append({
+                "method": self.command, "path": self.path,
+                "body": body.decode("utf-8"),
+            })
+        return False
 
     def _navigation_security(self, body: bytes = b"") -> bool:
         parsed = urlsplit(self.path)
@@ -143,6 +164,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         global _BARRIER_ACTIVE, _CAPACITY_ACTIVE, _STRESS_ACTIVE
 
+        if self._observe_request():
+            return
         if self._navigation_security():
             return
         path = urlsplit(self.path).path
@@ -531,6 +554,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length else b""
+        if self._observe_request(body):
+            return
         if self._navigation_security(body):
             return
         if path == "/search-post-result":
