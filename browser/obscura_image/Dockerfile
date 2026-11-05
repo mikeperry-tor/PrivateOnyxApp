@@ -47,43 +47,43 @@ RUN set -eu; \
 
 WORKDIR /build
 
-RUN cargo test --locked --no-default-features --features stealth \
-        -p obscura-net private_onyx_stealth_
-
-RUN cargo test --locked --no-default-features --features stealth \
-        -p obscura-net stealth_resolver_
-
-RUN cargo test --locked --no-default-features --features stealth \
-        -p obscura-net cookies::tests
-
-RUN cargo test --locked --no-default-features \
-        -p obscura-cdp clear_cookies_
-
-RUN cargo test --locked --no-default-features \
-        -p obscura-cdp cookie_params::tests
-
-RUN cargo test --locked --no-default-features --features stealth \
-        -p obscura-js private_onyx_
-
-# Native upgrade contracts are not selected by the wrapper's private_onyx_ filter.
-RUN set -eu; for check in \
+# Cargo exits successfully when a test filter matches no tests. Enumerate the
+# selected tests first so a renamed or removed upstream contract fails the
+# build instead of silently disabling its gate.
+RUN set -eu; \
+    run_gate() { \
+        mode="$1"; package="$2"; shift 2; \
+        if [ "$mode" = stealth ]; then \
+            cargo test --locked --no-default-features --features stealth \
+                -p "$package" "$@" -- --list | grep -q ': test$'; \
+            cargo test --locked --no-default-features --features stealth \
+                -p "$package" "$@"; \
+        else \
+            cargo test --locked --no-default-features \
+                -p "$package" "$@" -- --list | grep -q ': test$'; \
+            cargo test --locked --no-default-features \
+                -p "$package" "$@"; \
+        fi; \
+    }; \
+    run_gate stealth obscura-net private_onyx_stealth_; \
+    run_gate stealth obscura-net stealth_resolver_; \
+    run_gate stealth obscura-net cookies::tests; \
+    run_gate plain obscura-cdp clear_cookies_; \
+    run_gate plain obscura-cdp cookie_params::tests; \
+    run_gate stealth obscura-js private_onyx_; \
+    for check in \
         classic_code_cache_reuses_compilation_not_page_state \
         indexed_db::tests indexeddb_ origin_storage_ web_storage_ \
         watchdog fetch_abort \
         fetch_resolves_headers_before_the_response_body_finishes \
         repeated_fetch_clone_cancellation cancelling_all_fetch_clones; do \
-        cargo test --locked --no-default-features --features stealth \
-            -p obscura-js "$check"; \
-    done
-
-RUN cargo test --locked --no-default-features --features stealth \
-        -p obscura-browser private_onyx_
-
-RUN cargo test --locked --no-default-features --features stealth \
-        -p obscura-browser frame_location_navigation_loads_the_child_and_ignores_detached_windows
-
-RUN cargo test --locked --no-default-features --features stealth \
-        -p obscura-browser navigating_a_frame_from_the_page_keeps_the_top_document
+        run_gate stealth obscura-js "$check"; \
+    done; \
+    run_gate stealth obscura-browser private_onyx_; \
+    run_gate stealth obscura-browser \
+        frame_location_navigation_loads_the_child_and_ignores_detached_windows; \
+    run_gate stealth obscura-browser \
+        navigating_a_frame_from_the_page_keeps_the_top_document
 
 RUN OBSCURA_VERSION="${OBSCURA_RELEASE_VERSION}-private-onyx-search-v1" \
         cargo build --release --locked --no-default-features --features stealth \

@@ -15,13 +15,13 @@ index bba1766..a7b4fa7 100644
 +                            {
 +                                continue;
 +                            }
- 
+
                              let inline_code = if src.is_none() {
                                  dom.text_content(sid)
 @@ -8567,6 +8576,32 @@ mod tests {
          page
      }
- 
+
 +    #[tokio::test(flavor = "current_thread")]
 +    async fn private_onyx_module_capable_runtime_skips_parser_nomodule_fallback() {
 +        let mut page = import_map_test_page(
@@ -68,7 +68,7 @@ index 60f8d61..c2f858d 100644
 @@ -13086,6 +13089,11 @@ globalThis.performance = globalThis.performance || {
    }
  })();
- 
+
 +// Provider feature detection needs the navigation timing hierarchy. Reuse
 +// native PerformanceEntry without replacing its User Timing implementation.
 +globalThis.PerformanceResourceTiming = class PerformanceResourceTiming extends PerformanceEntry {};
@@ -78,13 +78,36 @@ index 60f8d61..c2f858d 100644
    'Arial', 'Arial Black', 'Arial Narrow',
    'Baskerville', 'Book Antiqua',
 diff --git a/crates/obscura-js/src/runtime.rs b/crates/obscura-js/src/runtime.rs
-index ec53424..0d35c94 100644
+index ec53424..e455cd2 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
-@@ -4615,6 +4615,32 @@ impl Default for ObscuraJsRuntime {
- 
+@@ -4615,6 +4615,55 @@ impl Default for ObscuraJsRuntime {
+
  #[cfg(test)]
  mod tests {
++    #[test]
++    fn private_onyx_window_named_property_assignment_shadows_the_element_alias() {
++        let mut rt = setup_runtime(
++            r#"<html><body><script id="__NEXT_DATA__" type="application/json">{}</script></body></html>"#,
++        );
++        let result = rt
++            .evaluate(
++                r#"
++                const element = document.getElementById("__NEXT_DATA__");
++                const exposedBefore = window.__NEXT_DATA__ === element;
++                window.__NEXT_DATA__ = { ready: true };
++                return [
++                    exposedBefore,
++                    window.__NEXT_DATA__.ready,
++                    document.getElementById("__NEXT_DATA__") === element,
++                    Object.getOwnPropertyDescriptor(window, "__NEXT_DATA__").writable
++                ];
++                "#,
++            )
++            .unwrap();
++        assert_eq!(result, serde_json::json!([true, true, true, true]));
++    }
++
 +    #[test]
 +    fn private_onyx_navigation_timing_constructor_surface_is_available() {
 +        let mut rt = setup_runtime("<html><body></body></html>");
@@ -114,10 +137,10 @@ index ec53424..0d35c94 100644
      #[cfg(obscura_external_bootstrap)]
      #[test]
      fn snapshot_core_methods_have_bytecode_before_first_use() {
-@@ -23736,6 +23762,39 @@ mod tests {
+@@ -23736,6 +23785,39 @@ mod tests {
          );
      }
- 
+
 +    #[tokio::test(flavor = "current_thread")]
 +    async fn private_onyx_module_capable_runtime_skips_dynamic_nomodule_fallback() {
 +        let mut rt = setup_runtime("<html><head></head><body></body></html>");

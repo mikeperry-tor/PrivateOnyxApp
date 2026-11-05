@@ -10,7 +10,7 @@ index 6b7f15d..110867c 100644
 +    ReferrerPolicy, ResourceType, Response, ResponseCallback,
  };
  use url::Url;
- 
+
 @@ -274,6 +274,7 @@ pub struct Page {
      /// separate from `url`: direct automation navigations have no referrer,
      /// while a navigation requested by page script uses the previous document.
@@ -39,7 +39,7 @@ index 6b7f15d..110867c 100644
 @@ -1880,19 +1882,41 @@ impl Page {
          Ok(Some(response))
      }
- 
+
 -    async fn do_fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
 +    async fn do_fetch(
 +        &self,
@@ -96,7 +96,7 @@ index 6b7f15d..110867c 100644
 @@ -3528,6 +3550,26 @@ impl Page {
          let url = Url::parse(url_str).map_err(|e| PageError::InvalidUrl(e.to_string()))?;
          self.navigation_timing = NavigationTiming::default();
- 
+
 +        // Capture the initiating document before replacing self.url. Parking on
 +        // about:blank is a fresh browser-initiated navigation, not a web origin.
 +        let mut navigation_request = ResourceRequest::navigation();
@@ -122,7 +122,7 @@ index 6b7f15d..110867c 100644
          self.lifecycle = LifecycleState::Loading;
 @@ -3595,6 +3637,7 @@ impl Page {
          }
- 
+
          self.navigation_timing.record("fetchStart");
 +        let mut document_method = method.to_string();
          let intercepted = self.intercept_navigation(&url, method, body).await.map_err(|error| {
@@ -151,7 +151,7 @@ index 6b7f15d..110867c 100644
 +        // Each committed document owns its HTTP referrer policy.
 +        self.navigation_referrer_policy = response.headers.get("referrer-policy")
 +            .and_then(|value| ReferrerPolicy::from_header(value)).unwrap_or_default();
- 
+
          // Store binary main resources (images, PDFs, octet-stream) base64 so
          // Network.getResponseBody returns intact bytes. A UTF-8-lossy text store
 @@ -3637,7 +3684,7 @@ impl Page {
@@ -165,7 +165,7 @@ index 6b7f15d..110867c 100644
              &response.headers,
 @@ -3925,6 +3972,7 @@ impl Page {
      }
- 
+
      pub fn navigate_blank(&mut self) {
 +        self.navigation_referrer_policy = ReferrerPolicy::default();
          self.navigation_timing = NavigationTiming::default();
@@ -191,18 +191,6 @@ index 4831405..f351fed 100644
                  #[cfg(not(feature = "stealth"))]
                  tracing::info!("Stealth mode enabled (tracker blocking)");
              }
-diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index da3d704..5710bf3 100644
---- a/crates/obscura-js/js/bootstrap.js
-+++ b/crates/obscura-js/js/bootstrap.js
-@@ -18668,7 +18668,6 @@ globalThis.__obscura_init = (function() {
-     _realmFrameId);
-   _browserPostedTaskWakePending = false;
-   for (const queue of _browserPostedTaskQueues) _browserPostedTaskDiscardQueue(queue);
--  _fpSeed = Date.now() ^ (Math.random() * 0xFFFFFFFF >>> 0);
-   _fpCache = null;
-   // A real navigation just completed (this runs after set_url), so drop any
-   // URL a location setter previewed synchronously and let document_url drive
 diff --git a/crates/obscura-net/src/client.rs b/crates/obscura-net/src/client.rs
 index 64aa618..4cecd30 100644
 --- a/crates/obscura-net/src/client.rs
@@ -243,7 +231,7 @@ index 64aa618..4cecd30 100644
 @@ -435,17 +440,123 @@ pub(crate) fn response_too_large(url: &Url, limit: usize) -> ObscuraNetError {
      }
  }
- 
+
 -pub(crate) fn request_fetch_site(request: &ResourceRequest, target: &Url) -> &'static str {
 +pub(crate) fn request_fetch_site_with_redirects(
 +    request: &ResourceRequest,
@@ -371,11 +359,11 @@ index 64aa618..4cecd30 100644
 +        }
      }
  }
- 
+
 @@ -466,6 +577,27 @@ pub(crate) fn same_site_context(
      }
  }
- 
+
 +pub(crate) fn navigation_cookie_context(
 +    request: &ResourceRequest,
 +    initial_url: &Url,
@@ -403,7 +391,7 @@ index 64aa618..4cecd30 100644
 @@ -1163,6 +1295,24 @@ impl ObscuraHttpClient {
              .await
      }
- 
+
 +    pub async fn post_form_with_request(
 +        &self,
 +        url: &Url,
@@ -434,7 +422,7 @@ index 64aa618..4cecd30 100644
 +            .await
 +            .map(|(response, _)| response)
      }
- 
+
      /// A navigation continued by an interceptor uses request-local overrides.
 @@ -1409,19 +1561,23 @@ impl ObscuraHttpClient {
      ) -> Result<Response, ObscuraNetError> {
@@ -445,7 +433,7 @@ index 64aa618..4cecd30 100644
 +            .await
 +            .map(|(response, _)| response)
      }
- 
+
      async fn fetch_request_uncached(
          &self, initial_method: Method, url: &Url, initial_body: Option<Vec<u8>>,
          callbacks: Option<&CallbackRegistry>, request: ResourceRequest,
@@ -454,14 +442,14 @@ index 64aa618..4cecd30 100644
 +    ) -> Result<(Response, Method), ObscuraNetError> {
          validate_url(url, self.allow_private_network)?;
          validate_request_mode(&request, url)?;
- 
+
          if url.scheme() == "file" {
 -            return fetch_file_url(url, request.max_response_bytes, self.allow_file_access()).await;
 +            return fetch_file_url(url, request.max_response_bytes, self.allow_file_access())
 +                .await
 +                .map(|response| (response, initial_method));
          }
- 
+
          let mut method = initial_method;
 @@ -1430,18 +1586,20 @@ impl ObscuraHttpClient {
              if let Some(host) = url.host_str() {
@@ -479,7 +467,7 @@ index 64aa618..4cecd30 100644
                  }
              }
          }
- 
+
          let mut current_url = url.clone();
 +        let mut crossed_site = false;
 +        let mut navigation_referrer = NavigationReferrer::new(&request);
@@ -529,7 +517,7 @@ index 64aa618..4cecd30 100644
              } else {
 @@ -1647,6 +1807,7 @@ impl ObscuraHttpClient {
              }
- 
+
              if status.is_redirection() {
 +                navigation_referrer.redirect(&response_headers);
                  if let Some(location) = resp.headers().get(reqwest::header::LOCATION) {
@@ -538,11 +526,11 @@ index 64aa618..4cecd30 100644
 @@ -1699,7 +1860,7 @@ impl ObscuraHttpClient {
                  cbs.fire_response(&request_info, &response).await;
              }
- 
+
 -            return Ok(response);
 +            return Ok((response, method));
          }
- 
+
          Err(ObscuraNetError::TooManyRedirects(current_url.to_string()))
 @@ -1844,7 +2005,8 @@ mod resource_cache_tests {
  #[cfg(test)]
@@ -557,7 +545,7 @@ index 64aa618..4cecd30 100644
 @@ -1862,6 +2024,72 @@ mod ssrf_tests {
          IpAddr::from_str(s).unwrap()
      }
- 
+
 +    #[test]
 +    fn private_onyx_stealth_navigation_referrer_policies() {
 +        use super::{NavigationReferrer, ReferrerPolicy};
@@ -630,7 +618,7 @@ index 64aa618..4cecd30 100644
 @@ -2119,8 +2347,14 @@ mod ssrf_tests {
          let cross_origin = Url::parse("https://cdn.example/image.png").unwrap();
          let downgrade = Url::parse("http://cdn.example/image.png").unwrap();
- 
+
 -        assert_eq!(request_fetch_site(&request, &same_origin), "same-origin");
 -        assert_eq!(request_fetch_site(&request, &cross_origin), "cross-site");
 +        assert_eq!(
@@ -706,7 +694,7 @@ index e58b71f..36e8a98 100644
 +        .await
 +        .map(|(response, method)| (response, method.to_string()))
      }
- 
+
      pub async fn fetch_resource_with_callbacks(
 @@ -320,16 +345,22 @@ impl StealthHttpClient {
          request: ResourceRequest,
@@ -717,7 +705,7 @@ index e58b71f..36e8a98 100644
 +            .await
 +            .map(|(response, _)| response)
      }
- 
+
 -    async fn fetch_with_profile(
 +    async fn navigate_with_profile(
          &self,
@@ -733,7 +721,7 @@ index e58b71f..36e8a98 100644
 +        self.fetch_request(url, request, callbacks, &method, initial_body, None)
 +            .await
      }
- 
+
      /// Continue a navigation without changing another page's headers or pool.
 @@ -337,35 +368,41 @@ impl StealthHttpClient {
          &self, url: &Url, method: &str, body: Option<Vec<u8>>,
@@ -744,7 +732,7 @@ index e58b71f..36e8a98 100644
 +            .await
 +            .map(|(response, _)| response)
      }
- 
+
      async fn fetch_request(
          &self, url: &Url, request: ResourceRequest, callbacks: Option<&CallbackRegistry>,
          method: &str, mut body: Option<Vec<u8>>, mut request_headers: Option<HashMap<String, String>>,
@@ -760,9 +748,9 @@ index e58b71f..36e8a98 100644
 +                .await
 +                .map(|response| (response, method));
          }
- 
+
          let mut current_url = url.clone();
- 
+
          if is_tracker_blocked(&current_url, self.block_trackers) {
              tracing::debug!("Blocked tracker: {}", current_url);
 -            return Ok(Response {
@@ -775,15 +763,15 @@ index e58b71f..36e8a98 100644
 -            });
 +            }, method));
          }
- 
+
          let mut redirects = Vec::new();
 +        let mut crossed_site = false;
 +        let mut navigation_referrer = NavigationReferrer::new(&request);
          let mut redirect_tainted = false;
          let mut request_callback_fired = false;
- 
+
 @@ -377,7 +414,7 @@ impl StealthHttpClient {
- 
+
              req = req
                  .header("accept", request.accept())
 -                .header("sec-fetch-site", request_fetch_site(&request, &current_url))
@@ -817,7 +805,7 @@ index e58b71f..36e8a98 100644
              } else {
 @@ -479,6 +518,7 @@ impl StealthHttpClient {
              }
- 
+
              if status.is_redirection() {
 +                navigation_referrer.redirect(&response_headers);
                  if let Some(location) = resp.headers().get("location") {
@@ -830,7 +818,7 @@ index e58b71f..36e8a98 100644
 -            return Ok(response);
 +            return Ok((response, method));
          }
- 
+
          Err(ObscuraNetError::TooManyRedirects(url.to_string()))
 @@ -1051,4 +1091,62 @@ mod tests {
              .expect("loopback hostname must be reachable with the opt-in");

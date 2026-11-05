@@ -31,14 +31,19 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         }
         cls.searxng_compose = (ROOT / "searxng/docker-compose.yml").read_text()
         cls.makefile = (ROOT / "Makefile").read_text()
+        cls.example_env = (ROOT / ".env.wrapper.example").read_text()
 
     def test_selected_image_gate_runs_native_frame_contracts(self):
+        self.assertIn("-- --list | grep -q ': test$'", self.obscura_dockerfile)
         self.assertIn(
-            "-p obscura-browser frame_location_navigation_loads_the_child_and_ignores_detached_windows",
+            "run_gate stealth obscura-browser", self.obscura_dockerfile
+        )
+        self.assertIn(
+            "frame_location_navigation_loads_the_child_and_ignores_detached_windows",
             self.obscura_dockerfile,
         )
         self.assertIn(
-            "-p obscura-browser navigating_a_frame_from_the_page_keeps_the_top_document",
+            "navigating_a_frame_from_the_page_keeps_the_top_document",
             self.obscura_dockerfile,
         )
 
@@ -49,6 +54,11 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         )
         self.assertIn('ONYX_OBSCURA_CDP_URL: "ws://obscura-cdp-gateway:9222/devtools/browser"', self.compose)
         self.assertIn('SEARXNG_OBSCURA_CDP_URL: "ws://obscura:9222/devtools/browser"', self.compose)
+        self.assertNotIn("OBSCURA_BROWSER_WAIT_UNTIL_SEARCH", self.compose)
+        self.assertNotIn("OBSCURA_BROWSER_WAIT_UNTIL_SEARCH", self.example_env)
+        self.assertIn(
+            "OBSCURA_BROWSER_WAIT_UNTIL_WEB=domcontentloaded", self.example_env
+        )
         self.assertIn('networks: [onyx-obscura-control, obscura-control]', self.compose)
         self.assertIn('[searxng-api, obscura-control]', self.compose)
 
@@ -147,8 +157,8 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             "cargo build --release --locked --no-default-features --features stealth",
             self.obscura_dockerfile,
         )
-        self.assertIn("-p obscura-net stealth_resolver_", self.obscura_dockerfile)
-        self.assertIn("-p obscura-cdp clear_cookies_", self.obscura_dockerfile)
+        self.assertIn("run_gate stealth obscura-net stealth_resolver_", self.obscura_dockerfile)
+        self.assertIn("run_gate plain obscura-cdp clear_cookies_", self.obscura_dockerfile)
         self.assertNotIn("--features render", self.obscura_dockerfile)
         self.assertNotIn("--features render,stealth", self.obscura_dockerfile)
         self.assertIn("--bin obscura --bin obscura-worker", self.obscura_dockerfile)
@@ -159,10 +169,12 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertIn("navigate_with_profile", native_post)
         self.assertIn("post_form_with_callbacks", native_post)
         self.assertIn("response.url.as_str()", native_post)
+        self.assertNotIn("_fpSeed = Date.now()", native_post)
         fingerprint = self.obscura_patches["0002-target-fingerprint-seed.patch"]
         self.assertIn("__obscura_core_handoff", fingerprint)
         self.assertIn("__obscura_set_fingerprint_seed", fingerprint)
         self.assertIn("set_fingerprint_seed(self.fingerprint_seed)", fingerprint)
+        self.assertIn("_fpSeed = Date.now()", fingerprint)
         compatibility = self.obscura_patches[
             "0003-search-runtime-compatibility.patch"
         ]
@@ -182,7 +194,10 @@ class ObscuraDirectComposeTests(unittest.TestCase):
         self.assertNotIn("_windowNamedPropertyNames.delete(name)", compatibility)
         self.assertNotIn("private_onyx_request_submit_queues", compatibility)
         self.assertNotIn("private_onyx_location_replace_queues", compatibility)
-        self.assertNotIn("private_onyx_window_named_property_assignment", compatibility)
+        self.assertIn(
+            "private_onyx_window_named_property_assignment_shadows_the_element_alias",
+            compatibility,
+        )
         self.assertIn('OBSCURA_MODULE_BUDGET_MS: "10000"', self.compose)
 
     def test_new_manifest_and_no_proxy_names(self):

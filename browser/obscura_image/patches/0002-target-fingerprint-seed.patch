@@ -8,7 +8,7 @@ index cba49c8..f4abba9 100644
   "url",
 + "uuid",
  ]
- 
+
  [[package]]
 diff --git a/crates/obscura-browser/Cargo.toml b/crates/obscura-browser/Cargo.toml
 index 05bf742..35cc3e1 100644
@@ -19,7 +19,7 @@ index 05bf742..35cc3e1 100644
  base64 = { workspace = true }
  image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
 +uuid = { workspace = true }
- 
+
  [dev-dependencies]
  tokio = { workspace = true, features = ["test-util"] }
 diff --git a/crates/obscura-browser/src/page.rs b/crates/obscura-browser/src/page.rs
@@ -32,7 +32,7 @@ index 110867c..bba1766 100644
      pub stealth_client: Option<Arc<StealthHttpClient>>,
 +    fingerprint_seed: u32,
  }
- 
+
  const MAX_STYLESHEET_IMPORT_DEPTH: u8 = 4;
 @@ -1119,6 +1120,13 @@ impl Page {
          } else {
@@ -45,7 +45,7 @@ index 110867c..bba1766 100644
 +                break seed;
 +            }
 +        };
- 
+
          Page {
              id,
 @@ -1171,6 +1179,7 @@ impl Page {
@@ -55,9 +55,9 @@ index 110867c..bba1766 100644
 +            fingerprint_seed,
          }
      }
- 
+
 @@ -2033,6 +2042,7 @@ impl Page {
- 
+
          rt.set_navigation_timing(self.navigation_timing.clone());
          rt.set_frame_preload_scripts(&self.preload_scripts);
 +        rt.set_fingerprint_seed(self.fingerprint_seed);
@@ -65,7 +65,7 @@ index 110867c..bba1766 100644
          rt.set_media_preferences(self.reduced_motion, self.dark_color_scheme);
          let _ = rt.execute_script(
 diff --git a/crates/obscura-js/js/bootstrap.js b/crates/obscura-js/js/bootstrap.js
-index 5710bf3..60f8d61 100644
+index da3d704..60f8d61 100644
 --- a/crates/obscura-js/js/bootstrap.js
 +++ b/crates/obscura-js/js/bootstrap.js
 @@ -21,7 +21,8 @@ const __obscuraCore = globalThis.Deno.core;
@@ -80,7 +80,7 @@ index 5710bf3..60f8d61 100644
      '__obscura_await_rejected', '__obscura_click_target',
 @@ -300,6 +301,9 @@ if (_origStackDesc && _origStackDesc.get) {
  }
- 
+
  let _fpSeed = 0;
 +globalThis.__obscura_set_fingerprint_seed = function(seed) {
 +  _fpSeed = seed >>> 0;
@@ -97,6 +97,14 @@ index 5710bf3..60f8d61 100644
      child.__obscura_frameId = id;
      child.__obscura_parentFrameId = _realmFrameId;
      child.__obscura_init();
+@@ -18668,7 +18674,6 @@ globalThis.__obscura_init = (function() {
+     _realmFrameId);
+   _browserPostedTaskWakePending = false;
+   for (const queue of _browserPostedTaskQueues) _browserPostedTaskDiscardQueue(queue);
+-  _fpSeed = Date.now() ^ (Math.random() * 0xFFFFFFFF >>> 0);
+   _fpCache = null;
+   // A real navigation just completed (this runs after set_url), so drop any
+   // URL a location setter previewed synchronously and let document_url drive
 diff --git a/crates/obscura-js/src/frame.rs b/crates/obscura-js/src/frame.rs
 index 26853b7..f8914b7 100644
 --- a/crates/obscura-js/src/frame.rs
@@ -117,7 +125,7 @@ index 26853b7..f8914b7 100644
 @@ -842,6 +845,40 @@ mod tests {
          );
      }
- 
+
 +    #[test]
 +    fn private_onyx_frame_inherits_the_parent_fingerprint_seed() {
 +        let mut parent = ObscuraJsRuntime::new();
@@ -160,7 +168,7 @@ index 7ef5adb..ec53424 100644
 --- a/crates/obscura-js/src/runtime.rs
 +++ b/crates/obscura-js/src/runtime.rs
 @@ -257,6 +257,7 @@ pub struct CdpObjectState {
- 
+
  pub struct ObscuraJsRuntime {
      state: Rc<RefCell<ObscuraState>>,
 +    fingerprint_seed: u32,
@@ -168,7 +176,7 @@ index 7ef5adb..ec53424 100644
      evaluation_recipes: HashMap<String, String>,
      object_counter: u64,
 @@ -725,6 +726,7 @@ impl ObscuraJsRuntime {
- 
+
          let mut instance = ObscuraJsRuntime {
              state,
 +            fingerprint_seed: 0,
@@ -178,7 +186,7 @@ index 7ef5adb..ec53424 100644
 @@ -1670,6 +1672,23 @@ impl ObscuraJsRuntime {
          let _ = self.execute_runtime_script("<set-screen-size>", script);
      }
- 
+
 +    pub fn set_fingerprint_seed(&mut self, seed: u32) {
 +        debug_assert_ne!(seed, 0);
 +        self.fingerprint_seed = seed;
@@ -202,7 +210,7 @@ index 7ef5adb..ec53424 100644
 @@ -5347,6 +5366,52 @@ mod tests {
          );
      }
- 
+
 +    #[test]
 +    fn private_onyx_initial_frame_inherits_target_fingerprint_seed() {
 +        let mut rt = ObscuraJsRuntime::new();

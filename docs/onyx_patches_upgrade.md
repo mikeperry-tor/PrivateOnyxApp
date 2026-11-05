@@ -812,10 +812,13 @@ Audit these current Obscura areas:
   stages; and the five-second-before-outer-deadline Onyx partial collector that
   finalizes queued work, preserves ordered completions, and does not retry.
   A network-idle navigation now runs to the configured page deadline
-  (`OBSCURA_NAV_TIMEOUT_MS`, 90 seconds here) and fails if requests remain
-  active instead of returning success after a fixed five-second cutoff. Keep
-  the search and `open_url` attempt deadlines shorter than that page deadline
-  and retain typed timeout behavior;
+  (`OBSCURA_NAV_TIMEOUT_MS`, 90 seconds here) and fails without returning the
+  loaded DOM if requests remain active instead of returning success after a
+  fixed five-second cutoff. When a caller selects a network-idle wait, keep
+  the page deadline below that caller's per-navigation command budget, with
+  room for target cleanup, so the browser failure is observed first. The
+  setting is process-wide, so lowering it also caps `domcontentloaded` and
+  `load` navigations; retain typed timeout behavior.
 - the common `ONYX_OPEN_URL_MAX_DOCUMENT_SIZE_MB` ceiling on both retained
   main-resource body and serialized rendered DOM, while SearXNG retains its
   independent fixed 20 MiB search-DOM ceiling;
@@ -1144,8 +1147,9 @@ For every custom browser engine verify:
 - sanitized selector fixtures, normalization, explicit no-results marker,
   parser mismatch, exact terminal hosts, and shared block markers;
 - DuckDuckGo No-AI query construction (`noai.duckduckgo.com`, `ia=web`),
-  semantic organic-row/title/snippet selectors, the `networkidle2` search
-  default, and unfinished deep-result preloads mapping to unresponsive
+  semantic organic-row/title/snippet selectors, the fixed
+  `domcontentloaded` homepage wait with homepage-form and result-marker
+  polling, and unfinished deep-result preloads mapping to unresponsive
   parser/runtime failure;
 - complete result query/fragment preservation; DuckDuckGo `uddg` wrapper
   admission only for relative or recognized DuckDuckGo `/l/` links and
