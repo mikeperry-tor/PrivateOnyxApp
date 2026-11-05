@@ -1012,11 +1012,10 @@ Native v0.2.6 binds form GET/POST plus document, window, and global `location`
 assignment, `href`, `assign()`, `reload()`, and `replace()` to the receiver
 frame, and loads a child Location navigation in that child. Startpage's Anubis
 proof-pass navigation depends on `location.replace()` and is part of the
-selected-image and live-provider gates. The native runtime removes the
-submitted URL and body from its JS-triggered main-navigation diagnostics so
-search queries are not written there. Obscura
-does not offer equivalent end-to-end redaction for every upstream subresource
-diagnostic and may still log other full URLs. Treat its logs as private
+selected-image and live-provider gates. The runtime does not log the
+JS-triggered submitted URL or body, so search queries are not written in that
+diagnostic. Obscura does not offer end-to-end redaction for every upstream
+subresource diagnostic and may still log other full URLs. Treat its logs as private
 browsing data.
 
 Obscura is run as UID/GID 65534, read-only, capability-free, without browser
