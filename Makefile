@@ -638,13 +638,13 @@ ifneq ($(PRIVATE_ONYX_DOCKER_GATEWAY_MODE),ordinary)
 X402_DOWN_SUFFIX := $(X402_DOWN_SUFFIX):$(X402_DOCKER_FILE)
 endif
 endif
-ifneq ($(filter up up-lite up-full down-lite down-full ps-lite ps-full logs-lite logs-full health-inventory wrapper-config-preflight integration-x402exa,$(MAKECMDGOALS)),)
+ifneq ($(filter up up-lite up-full _start-lite _start-full down-lite down-full ps-lite ps-full logs-lite logs-full health-inventory wrapper-config-preflight integration-x402exa,$(MAKECMDGOALS)),)
 ifeq ($(X402_KEY_ORIGIN),command line)
 # Make 3.81's parse-time shell does not receive updated command-line exports.
 # Select by presence here; validate the actual exported value before any action.
 override X402_SELECTED := $(if $(SEARXNG_X402_PRIVKEY),true,false)
 # Startup and wrapper-config-preflight already validate the complete settings.
-down-lite down-full ps-lite ps-full logs-lite logs-full health-inventory integration-x402exa: x402-config-preflight
+_start-lite _start-full down-lite down-full ps-lite ps-full logs-lite logs-full health-inventory integration-x402exa: x402-config-preflight
 x402-config-preflight:
 	@python3 tor/render_config.py x402-enabled --settings-file "$(ENV_FILE)" >/dev/null
 else

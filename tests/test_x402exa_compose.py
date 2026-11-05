@@ -63,6 +63,19 @@ class ComposeTests(unittest.TestCase):
                     peers = services["onyx-public-egress-proxy"]["environment"]["EGRESS_PROXY_ALLOWED_CLIENT_HOSTS"].split(",")
                     self.assertEqual("searxng-x402-egress-bridge" in peers, selected)
 
+    def test_prepared_start_goals_keep_the_full_x402_service_definition(self):
+        env = _wrapper_neutral_environment() | SECRET_ENV | {"SEARXNG_X402_PRIVKEY": KEY}
+        for goal in ("_start-lite", "_start-full"):
+            with self.subTest(goal=goal):
+                result = subprocess.run([
+                    "make", "-n", goal, "ENV_FILE=.env.wrapper.example",
+                    "CONTAINER_BIN=docker", "DOCKER_SOCK_PATH=/tmp/fixture.sock",
+                    "PRIVATE_ONYX_DOCKER_ENGINE_MODE=rootful",
+                    "PRIVATE_ONYX_DOCKER_GATEWAY_MODE=isolated",
+                    "PREPARED_IMAGES_FILE=/tmp/prepared-images.json",
+                ], cwd=ROOT, env=env, text=True, capture_output=True, check=True)
+                self.assertIn("docker-compose.searxng-x402.yml", result.stdout)
+
     def test_invalid_command_line_key_fails_before_diagnostic_or_teardown_action(self):
         for goal in ("up-lite", "up-full", "ps-lite", "logs-full", "down-lite", "down-full", "health-inventory", "integration-x402exa", "wrapper-config-preflight"):
             with self.subTest(goal=goal), tempfile.TemporaryDirectory() as directory:
