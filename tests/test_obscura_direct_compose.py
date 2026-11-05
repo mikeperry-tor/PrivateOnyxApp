@@ -198,7 +198,7 @@ class ObscuraDirectComposeTests(unittest.TestCase):
             "private_onyx_window_named_property_assignment_shadows_the_element_alias",
             compatibility,
         )
-        self.assertIn('OBSCURA_MODULE_BUDGET_MS: "10000"', self.compose)
+        self.assertIn('OBSCURA_MODULE_BUDGET_MS: "20000"', self.compose)
 
     def test_new_manifest_and_no_proxy_names(self):
         self.assertIn("SEARXNG_WRAPPER_IMAGE_REPOSITORY=", self.manifest)

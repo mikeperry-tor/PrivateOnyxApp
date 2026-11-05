@@ -318,8 +318,9 @@ deadline returns the already-captured pending DOM so provider parsing and
 outcome recording still receive their reserved engine-window headroom.
 
 The wrapper raises Obscura's populated-page ES-module active-work budget from
-three to ten seconds. DuckDuckGo's result module graph can exceed the upstream
-default over Tor even while the complete page remains within Obscura's
+three to twenty seconds. DuckDuckGo's result module graph can exceed the
+upstream default and the previous ten-second wrapper value on cold Tor
+circuits, stranding result hydration while the complete page still fits the
 30-second script deadline and the caller's 50-second attempt deadline. This is
 not an added sleep: fast module graphs return immediately, and all enclosing
 deadlines remain authoritative.
